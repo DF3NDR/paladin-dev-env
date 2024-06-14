@@ -3,11 +3,11 @@ use std::sync::Mutex;
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize)]
-struct SummaryResponse {
-    summaries: Vec<String>,
+pub struct SummaryResponse {
+    pub summaries: Vec<String>,
 }
 
-async fn get_content(data: web::Data<AppState>) -> impl Responder {
+pub async fn get_content(data: web::Data<AppState>) -> impl Responder {
     let summaries = data.summaries.lock().unwrap();
     HttpResponse::Ok().json(SummaryResponse {
         summaries: summaries.clone(),

@@ -615,6 +615,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenv"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
+
+[[package]]
 name = "dtoa"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1129,22 +1135,6 @@ dependencies = [
  "icu_properties",
  "smallvec",
  "utf8_iter",
-]
-
-[[package]]
-name = "in4me"
-version = "0.1.0"
-dependencies = [
- "actix-web",
- "reqwest",
- "rss",
- "scraper",
- "serde",
- "serde_json",
- "serde_yaml",
- "structopt",
- "thiserror",
- "tokio",
 ]
 
 [[package]]
@@ -1981,6 +1971,23 @@ name = "smallvec"
 version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c5e1a9a646d36c3599cd173a41282daf47c44583ad367b8e6837255952e5c67"
+
+[[package]]
+name = "smartcontent_aggregator"
+version = "0.1.0"
+dependencies = [
+ "actix-web",
+ "dotenv",
+ "reqwest",
+ "rss",
+ "scraper",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "structopt",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "socket2"

@@ -1,5 +1,5 @@
 [package]
-name = "in4me"
+name = "smartcontent_aggregator"
 version = "0.1.0"
 edition = "2021"
 
@@ -16,3 +16,4 @@ scraper ="0.19"
 actix-web = "4.0"
 structopt = "0.3"
 tokio = { version = "1.0", features = ["full"] }
+dotenv = "0.15.0"

@@ -17,13 +17,26 @@ pub async fn analyze_data(data: &str, prompt: &str, config: &LlmConfig) -> Resul
                 .json::<Value>()
                 .await?
         }
-        "other_llm" => {
-            // Example for another LLM provider
+        "huggingface" => {
             client.post(&config.url)
                 .header("Authorization", format!("Bearer {}", config.api_key))
                 .json(&serde_json::json!({
-                    "prompt": format!("{}: {}", prompt, data),
-                    "max_tokens": 150,
+                    "inputs": format!("{}: {}", prompt, data),
+                }))
+                .send()
+                .await?
+                .json::<Value>()
+                .await?
+        }
+        "azure" => {
+            client.post(&config.url)
+                .header("Ocp-Apim-Subscription-Key", &config.api_key)
+                .json(&serde_json::json!({
+                    "documents": [{
+                        "language": "en",
+                        "id": "1",
+                        "text": format!("{}: {}", prompt, data),
+                    }]
                 }))
                 .send()
                 .await?
@@ -38,7 +51,7 @@ pub async fn analyze_data(data: &str, prompt: &str, config: &LlmConfig) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::common::get_llm_config;
+    use crate::test_utils::common::{get_env_value, get_llm_config};
 
     #[tokio::test]
     #[ignore]  // This will make sure the test is ignored by default

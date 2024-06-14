@@ -1,8 +1,8 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use std::sync::Mutex;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct SummaryResponse {
     summaries: Vec<String>,
 }

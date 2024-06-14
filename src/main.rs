@@ -2,12 +2,15 @@ use smartcontent_aggregator::*;
 use structopt::StructOpt;
 use actix_web::web;
 use std::sync::Mutex;
+use log::info;
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+    
     let args = Cli::from_args();
     let config = load_config(&args.config).unwrap();
-    println!("{:?}", config);
+    info!("Loaded configuration: {:?}", config);
 
     let data = web::Data::new(AppState {
         summaries: Mutex::new(Vec::new()),
@@ -25,7 +28,7 @@ async fn main() {
             "rss" => {
                 match fetch_rss_feed(&source.url).await {
                     Ok(channel) => {
-                        println!("Title: {}", channel.title());
+                        info!("Fetched RSS feed: {}", channel.title());
                         analyze_data(&channel.title(), &source.prompt, &llm_config).await
                     }
                     Err(e) => Err(e.into()),
@@ -34,7 +37,7 @@ async fn main() {
             "api" => {
                 match fetch_api_data(&source.url).await {
                     Ok(data) => {
-                        println!("Data: {:?}", data);
+                        info!("Fetched API data: {:?}", data);
                         analyze_data(&data.to_string(), &source.prompt, &llm_config).await
                     }
                     Err(e) => Err(e.into()),
@@ -43,7 +46,7 @@ async fn main() {
             "web" => {
                 match scrape_web_page(&source.url).await {
                     Ok(titles) => {
-                        println!("Titles: {:?}", titles);
+                        info!("Scraped web page titles: {:?}", titles);
                         analyze_data(&titles.join(", "), &source.prompt, &llm_config).await
                     }
                     Err(e) => Err(e.into()),
@@ -54,7 +57,7 @@ async fn main() {
 
         match result {
             Ok(summary) => {
-                println!("Summary: {:?}", summary);
+                info!("Analysis summary: {:?}", summary);
                 data.summaries.lock().unwrap().push(summary.to_string());
             }
             Err(e) => eprintln!("Error processing data: {}", e),

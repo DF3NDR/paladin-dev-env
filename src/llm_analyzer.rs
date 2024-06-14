@@ -51,7 +51,7 @@ pub async fn analyze_data(data: &str, prompt: &str, config: &LlmConfig) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::common::{get_env_value, get_llm_config};
+    use crate::test_utils::common::get_llm_config;
 
     #[tokio::test]
     #[ignore]  // This will make sure the test is ignored by default

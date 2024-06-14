@@ -30,7 +30,8 @@ pub fn get_env_value(name: &str) -> String {
 }
 
 pub fn get_llm_config() -> LlmConfig {
+    let llm_type = get_env_value("LLM_TYPE");
     let url = get_env_value("LLM_URL");
     let api_key = get_env_value("LLM_API_KEY");
-    LlmConfig::new(url, api_key)
+    LlmConfig::new(llm_type, url, api_key)
 }

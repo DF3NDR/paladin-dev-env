@@ -16,23 +16,33 @@ async fn test_end_to_end() -> Result<(), FetchError> {
     for source in &config.sources {
         let result = match source.source_type.as_str() {
             "rss" => {
-                let channel = rss_fetcher::fetch_rss_feed(&source.url).await?;
-                let title = channel.title(); 
-                llm_analyzer::analyze_data(title, &source.prompt, &config).await
+                let items = rss_fetcher::fetch_rss_feed(&source.url).await?;
+                let mut summaries = Vec::new();
+                for item in items {
+                    let summary = llm_analyzer::analyze_data(&item.title, &source.prompt, &config).await?;
+                    summaries.push(summary);
+                }
+                Ok(summaries)
             }
             "api" => {
                 let data = api_integrator::fetch_api_data(&source.url).await?;
-                llm_analyzer::analyze_data(&data.to_string(), &source.prompt, &config).await
+                let titles: Vec<String> = data.iter().map(|item| item.title.clone()).collect();
+                let summary = llm_analyzer::analyze_data(&titles.join(", "), &source.prompt, &config).await?;
+                Ok(vec![summary])
             }
             "web" => {
-                let titles = web_scraper::scrape_web_page(&source.url).await?;
-                llm_analyzer::analyze_data(&titles.join(", "), &source.prompt, &config).await
+                let items = web_scraper::scrape_web_page(&source.url).await?;
+                let titles: Vec<String> = items.iter().map(|item| item.title.clone()).collect();
+                let summary = llm_analyzer::analyze_data(&titles.join(", "), &source.prompt, &config).await?;
+                Ok(vec![summary])
             }
             _ => Err(FetchError::Custom("Unknown source type".into())),
         };
 
-        if let Ok(summary) = result {
-            data.summaries.lock().unwrap().push(summary.to_string());
+        if let Ok(summaries) = result {
+            for summary in summaries {
+                data.summaries.lock().unwrap().push(summary.to_string());
+            }
         }
     }
 

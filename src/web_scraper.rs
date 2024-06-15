@@ -1,15 +1,23 @@
-use reqwest::Error;
 use scraper::{Html, Selector};
+use crate::error::FetchError;
+use crate::data::NormalizedData;
 
-pub async fn scrape_web_page(url: &str) -> Result<Vec<String>, Error> {
+pub async fn scrape_web_page(url: &str) -> Result<Vec<NormalizedData>, FetchError> {
     let content = reqwest::get(url).await?.text().await?;
     let document = Html::parse_document(&content);
-    let selector = Selector::parse("h1").unwrap();
-    let titles: Vec<String> = document
-        .select(&selector)
-        .map(|element| element.inner_html())
-        .collect();
-    Ok(titles)
+    let selector = Selector::parse("css-selector-for-target-elements").unwrap();
+
+    let mut normalized_data = Vec::new();
+    for element in document.select(&selector) {
+        let title = element.text().collect::<Vec<_>>().concat();
+        normalized_data.push(NormalizedData {
+            title,
+            link: url.to_string(), // Use the URL as a link
+            description: String::new(), // Add description if available
+        });
+    }
+
+    Ok(normalized_data)
 }
 
 #[cfg(test)]

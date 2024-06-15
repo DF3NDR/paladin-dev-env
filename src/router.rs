@@ -1,22 +1,27 @@
 use actix_web::{web, HttpResponse, Responder};
 use crate::configuration::Settings;
-use crate::rss_fetcher::{fetch_rss_feed, normalize_rss_data};
+use crate::rss_fetcher::fetch_rss_feed;
+use crate::api_integrator::fetch_api_data;
+use crate::web_scraper::scrape_web_page;
 use crate::llm_analyzer::analyze_data;
 use std::sync::Arc;
+use crate::error::FetchError;
 
-async fn fetch_and_analyze_data(config: web::Data<Arc<Settings>>) -> impl Responder {
-    let rss_url = "https://example.com/rss"; // Replace with actual URL
-    match fetch_rss_feed(rss_url).await {
-        Ok(channel) => {
-            let normalized_data = normalize_rss_data(&channel);
-            let data_str = serde_json::to_string(&normalized_data).unwrap();
-            match analyze_data(&data_str, "Summarize the main points", &config).await {
-                Ok(summary) => HttpResponse::Ok().json(summary),
-                Err(e) => HttpResponse::InternalServerError().body(format!("Error analyzing data: {:?}", e)),
-            }
-        }
-        Err(e) => HttpResponse::InternalServerError().body(format!("Error fetching RSS feed: {:?}", e)),
+async fn fetch_and_analyze_data(config: web::Data<Arc<Settings>>, source_type: String, url: String, prompt: String) -> Result<impl Responder, FetchError> {
+    let normalized_data = match source_type.as_str() {
+        "rss" => fetch_rss_feed(&url).await?,
+        "api" => fetch_api_data(&url).await?,
+        "web" => scrape_web_page(&url).await?,
+        _ => return Err(FetchError::Custom("Unknown source type".into())),
+    };
+
+    let mut summaries = Vec::new();
+    for item in normalized_data {
+        let summary = analyze_data(&item.title, &prompt, &config).await?;
+        summaries.push(summary);
     }
+
+    Ok(HttpResponse::Ok().json(summaries))
 }
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
@@ -25,4 +30,3 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route(web::get().to(fetch_and_analyze_data))
     );
 }
-

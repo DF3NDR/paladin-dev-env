@@ -1,4 +1,5 @@
 use thiserror::Error;
+use actix_web::{HttpResponse, ResponseError};
 
 #[derive(Error, Debug)]
 pub enum FetchError {
@@ -13,4 +14,23 @@ pub enum FetchError {
 
     #[error("Custom error: {0}")]
     Custom(String),
+}
+
+impl ResponseError for FetchError {
+    fn error_response(&self) -> HttpResponse {
+        match *self {
+            FetchError::RequestError(ref e) => {
+                HttpResponse::BadRequest().body(format!("Request error: {}", e))
+            }
+            FetchError::ParsingError(ref e) => {
+                HttpResponse::InternalServerError().body(format!("Parsing error: {}", e))
+            }
+            FetchError::Rss(ref e) => {
+                HttpResponse::InternalServerError().body(format!("RSS parse error: {}", e))
+            }
+            FetchError::Custom(ref message) => {
+                HttpResponse::BadRequest().body(message.clone())
+            }
+        }
+    }
 }

@@ -8,10 +8,11 @@ async fn test_fetch_and_analyze_rss() -> Result<(), FetchError> {
     let source = &config.sources[0];
     let prompt = &source.prompt;
 
-    let channel = rss_fetcher::fetch_rss_feed(&source.url).await?;
-    let title = channel.title();
-    let summary = llm_analyzer::analyze_data(title, prompt, &config).await?;
+    let items = rss_fetcher::fetch_rss_feed(&source.url).await?;
+    for item in items {
+        let summary = llm_analyzer::analyze_data(&item.title, prompt, &config).await?;
+        assert!(summary.is_object()); // Assuming the LLM returns a JSON object.
+    }
 
-    assert!(summary.is_object()); // Assuming the LLM returns a JSON object.
     Ok(())
 }

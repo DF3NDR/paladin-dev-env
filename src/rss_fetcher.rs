@@ -3,10 +3,10 @@ use reqwest;
 use crate::error::FetchError;
 use crate::data::NormalizedData;
 
-pub async fn fetch_rss_feed(url: &str) -> Result<Channel, FetchError> {
+pub async fn fetch_rss_feed(url: &str) -> Result<Vec<NormalizedData>, FetchError> {
     let content = reqwest::get(url).await?.text().await?;
     let channel = content.parse::<Channel>()?;
-    Ok(channel)
+    Ok(normalize_rss_data(&channel))
 }
 
 pub fn normalize_rss_data(channel: &Channel) -> Vec<NormalizedData> {
@@ -17,18 +17,4 @@ pub fn normalize_rss_data(channel: &Channel) -> Vec<NormalizedData> {
             description: item.description().unwrap_or_default().to_string(),
         }
     }).collect()
-}
-
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_fetch_rss_feed() {
-        let url = "https://caitlin-long.com/feed/";
-        let result = fetch_rss_feed(url).await;
-        assert!(result.is_ok());
-    }
 }

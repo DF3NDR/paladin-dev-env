@@ -1,13 +1,17 @@
-use dotenv::dotenv;
 use std::env;
 use std::fs;
-use crate::config::{Config, load_config};
+use crate::configuration::Settings;
 use crate::llm_config::LlmConfig;
 
-pub fn setup_test_config() -> Config {
-    dotenv().ok();
-
+pub fn setup_test_config() -> Settings {
     let yaml_content = r#"
+    server:
+      host: "127.0.0.1"
+      port: 8080
+    rust_log: "info"
+    llm_type: "openai"
+    llm_url: "https://api.openai.com/v1/engines/davinci-codex/completions"
+    llm_api_key: "your_test_api_key"
     sources:
       - url: "https://example.com/rss"
         source_type: "rss"
@@ -22,7 +26,7 @@ pub fn setup_test_config() -> Config {
     fs::write(temp_file_path, yaml_content).expect("Unable to write test config file");
 
     // Load the configuration
-    load_config(temp_file_path).expect("Failed to load config")
+    Settings::load_from_file(temp_file_path).expect("Failed to load config")
 }
 
 pub fn get_env_value(name: &str) -> String {

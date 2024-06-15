@@ -1,69 +1,51 @@
 use smartcontent_aggregator::*;
 use structopt::StructOpt;
-use actix_web::web;
+use actix_web::{web, App, HttpServer};
 use std::sync::Mutex;
 use log::info;
+use std::sync::Arc;
+use env_logger::Env;
+
+#[derive(StructOpt, Debug)]
+#[structopt(name = "smartcontent-aggregator")]
+struct Opt {
+    #[structopt(short, long, default_value = "config.yml")]
+    config: String,
+}
 
 #[tokio::main]
-async fn main() {
-    env_logger::init();
+async fn main() -> std::io::Result<()> {
+    env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
+
+    let opt = Opt::from_args();
+    // let config = Settings::load_from_file(&opt.config).expect("Failed to load configuration");
+    let config = match Settings::load_from_file(&opt.config) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("Failed to load configuration: {:?}", e);
+            std::process::exit(1);
+        }
+    };
     
-    let args = Cli::from_args();
-    let config = load_config(&args.config).unwrap();
     info!("Loaded configuration: {:?}", config);
 
     let data = web::Data::new(AppState {
         summaries: Mutex::new(Vec::new()),
     });
 
-    let llm_config = LlmConfig::new(
-        std::env::var("LLM_TYPE").expect("LLM_TYPE must be set"),
-        std::env::var("LLM_URL").expect("LLM_URL must be set"),
-        std::env::var("LLM_API_KEY").expect("LLM_API_KEY must be set"),
-    );
+    // Clone config for use in the closure
+    let server_config = config.clone(); // Ensure Settings implements Clone
 
-    // Example usage of modules
-    for source in &config.sources {
-        let result = match source.source_type.as_str() {
-            "rss" => {
-                match fetch_rss_feed(&source.url).await {
-                    Ok(channel) => {
-                        info!("Fetched RSS feed: {}", channel.title());
-                        analyze_data(&channel.title(), &source.prompt, &llm_config).await
-                    }
-                    Err(e) => Err(e.into()),
-                }
-            }
-            "api" => {
-                match fetch_api_data(&source.url).await {
-                    Ok(data) => {
-                        info!("Fetched API data: {:?}", data);
-                        analyze_data(&data.to_string(), &source.prompt, &llm_config).await
-                    }
-                    Err(e) => Err(e.into()),
-                }
-            }
-            "web" => {
-                match scrape_web_page(&source.url).await {
-                    Ok(titles) => {
-                        info!("Scraped web page titles: {:?}", titles);
-                        analyze_data(&titles.join(", "), &source.prompt, &llm_config).await
-                    }
-                    Err(e) => Err(e.into()),
-                }
-            }
-            _ => Err(FetchError::Custom("Unknown source type".into())),
-        };
+    // Use Arc to avoid multiple clones if the clone is expensive
+    let config = Arc::new(config);
 
-        match result {
-            Ok(summary) => {
-                info!("Analysis summary: {:?}", summary);
-                data.summaries.lock().unwrap().push(summary.to_string());
-            }
-            Err(e) => eprintln!("Error processing data: {}", e),
-        }
-    }
-
-    // Start the API server
-    run_server().await.unwrap();
+    HttpServer::new(move || {
+        App::new()
+            .app_data(data.clone())
+            .app_data(web::Data::new(config.clone())) // Use Arc::clone, which is cheap
+            .configure(router::configure) // Configure routes
+    })
+    .bind(format!("{}:{}", server_config.server.host, server_config.server.port))?
+    .run()
+    .await
 }

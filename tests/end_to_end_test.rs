@@ -1,13 +1,12 @@
 use actix_web::{test, App};
-use smartcontent_aggregator::test_utils::common::{setup_test_config, get_llm_config};
+use smartcontent_aggregator::test_utils::common::load_test_config;
 use smartcontent_aggregator::{api_server, error::FetchError, rss_fetcher, web_scraper, api_integrator, llm_analyzer};
 use std::sync::Mutex;
 
 #[actix_web::test]
 #[ignore] // Ignoring the test as it requires an external API that costs money
 async fn test_end_to_end() -> Result<(), FetchError> {
-    let config = setup_test_config();
-    let llm_config = get_llm_config();
+    let config = load_test_config();
 
     let data = actix_web::web::Data::new(api_server::AppState {
         summaries: Mutex::new(Vec::new()),
@@ -18,15 +17,16 @@ async fn test_end_to_end() -> Result<(), FetchError> {
         let result = match source.source_type.as_str() {
             "rss" => {
                 let channel = rss_fetcher::fetch_rss_feed(&source.url).await?;
-                llm_analyzer::analyze_data(&channel.title(), &source.prompt, &llm_config).await
+                let title = channel.title(); 
+                llm_analyzer::analyze_data(title, &source.prompt, &config).await
             }
             "api" => {
                 let data = api_integrator::fetch_api_data(&source.url).await?;
-                llm_analyzer::analyze_data(&data.to_string(), &source.prompt, &llm_config).await
+                llm_analyzer::analyze_data(&data.to_string(), &source.prompt, &config).await
             }
             "web" => {
                 let titles = web_scraper::scrape_web_page(&source.url).await?;
-                llm_analyzer::analyze_data(&titles.join(", "), &source.prompt, &llm_config).await
+                llm_analyzer::analyze_data(&titles.join(", "), &source.prompt, &config).await
             }
             _ => Err(FetchError::Custom("Unknown source type".into())),
         };

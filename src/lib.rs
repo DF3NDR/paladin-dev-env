@@ -9,6 +9,7 @@ pub mod llm_config;
 pub mod test_utils;
 pub mod configuration;
 pub mod router;
+pub mod data;
 
 pub use rss_fetcher::*;
 pub use api_integrator::*;
@@ -21,3 +22,4 @@ pub use llm_config::*;
 pub use test_utils::*;
 pub use configuration::*;
 pub use router::*;
+pub use data::*;

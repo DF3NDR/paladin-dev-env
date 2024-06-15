@@ -4,14 +4,17 @@ use std::fs;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SourceConfig {
-    pub url: String,
+    pub name: String,
     pub source_type: String,
+    pub url: String,
     pub prompt: String,
     pub tags: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserPreferences {
+    pub theme: String,
+    pub notifications_enabled: bool,
     pub summary_format: String,
 }
 
@@ -23,11 +26,10 @@ pub struct ServerConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
-    pub rust_log: Option<String>,
-    pub server: ServerConfig,
     pub llm_type: String,
     pub llm_url: String,
     pub llm_api_key: String,
+    pub server: ServerConfig,
     pub sources: Vec<SourceConfig>,
     pub user_preferences: UserPreferences,
 }

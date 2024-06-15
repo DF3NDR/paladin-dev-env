@@ -1,64 +1,34 @@
 use serde_json::Value;
 use crate::error::FetchError;
-use crate::llm_config::LlmConfig;
+use crate::configuration::Settings;
+use reqwest::Client;
 
-pub async fn analyze_data(data: &str, prompt: &str, config: &LlmConfig) -> Result<Value, FetchError> {
-    let client = reqwest::Client::new();
-    let response = match config.llm_type.as_str() {
-        "openai" => {
-            client.post(&config.url)
-                .header("Authorization", format!("Bearer {}", config.api_key))
-                .json(&serde_json::json!({
-                    "prompt": format!("{}: {}", prompt, data),
-                    "max_tokens": 150,
-                }))
-                .send()
-                .await?
-                .json::<Value>()
-                .await?
-        }
-        "huggingface" => {
-            client.post(&config.url)
-                .header("Authorization", format!("Bearer {}", config.api_key))
-                .json(&serde_json::json!({
-                    "inputs": format!("{}: {}", prompt, data),
-                }))
-                .send()
-                .await?
-                .json::<Value>()
-                .await?
-        }
-        "azure" => {
-            client.post(&config.url)
-                .header("Ocp-Apim-Subscription-Key", &config.api_key)
-                .json(&serde_json::json!({
-                    "documents": [{
-                        "language": "en",
-                        "id": "1",
-                        "text": format!("{}: {}", prompt, data),
-                    }]
-                }))
-                .send()
-                .await?
-                .json::<Value>()
-                .await?
-        }
-        _ => return Err(FetchError::Custom("Unsupported LLM type".into())),
-    };
+pub async fn analyze_data(data: &str, prompt: &str, config: &Settings) -> Result<Value, FetchError> {
+    let client = Client::new();
+    let response = client.post(&config.llm_url)
+        .header("Authorization", format!("Bearer {}", config.llm_api_key))
+        .json(&serde_json::json!({
+            "prompt": format!("{}: {}", prompt, data),
+            "max_tokens": 150,
+        }))
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
     Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::common::get_llm_config;
+    use crate::test_utils::common::load_test_config;
 
     #[tokio::test]
     #[ignore]  // This will make sure the test is ignored by default
     async fn test_analyze_data() {
         let data = "Sample data to analyze";
         let prompt = "Summarize";
-        let config = get_llm_config();
+        let config = load_test_config();
         let result = analyze_data(data, prompt, &config).await;
         assert!(result.is_ok());
     }

@@ -18,3 +18,16 @@ pub fn normalize_rss_data(channel: &Channel) -> Vec<NormalizedData> {
         }
     }).collect()
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_fetch_rss_feed() {
+        let url = "https://caitlin-long.com/feed/";
+        let result = fetch_rss_feed(url).await;
+        assert!(result.is_ok());
+    }
+}

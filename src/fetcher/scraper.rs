@@ -1,3 +1,4 @@
+// src/fetcher/scraper.rs
 use scraper::{Html, Selector};
 use crate::error::FetchError;
 use crate::data::NormalizedData;

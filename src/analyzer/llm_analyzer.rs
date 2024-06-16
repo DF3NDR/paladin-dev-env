@@ -1,6 +1,7 @@
+// src/llm_analyzer.rs
 use serde_json::Value;
 use crate::error::FetchError;
-use crate::configuration::Settings;
+use crate::config::Settings;
 use reqwest::Client;
 
 pub async fn analyze_data(data: &str, prompt: &str, config: &Settings) -> Result<Value, FetchError> {

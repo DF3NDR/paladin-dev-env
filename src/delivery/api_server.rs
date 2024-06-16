@@ -1,6 +1,7 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use std::sync::Mutex;
 use serde::{Serialize, Deserialize};
+use crate::config::Settings;
 
 #[derive(Serialize, Deserialize)]
 pub struct SummaryResponse {
@@ -18,17 +19,21 @@ pub struct AppState {
     pub summaries: Mutex<Vec<String>>,
 }
 
-pub async fn run_server() -> std::io::Result<()> {
+pub async fn run_server(config: Settings) -> std::io::Result<()> {
     let data = web::Data::new(AppState {
         summaries: Mutex::new(Vec::new()),
     });
 
+    let server_config = config.server.clone();
+    let config = std::sync::Arc::new(config);
+
     HttpServer::new(move || {
         App::new()
             .app_data(data.clone())
-            .route("/content", web::get().to(get_content))
+            .app_data(web::Data::new(config.clone()))
+            .configure(crate::delivery::router::configure)
     })
-    .bind("127.0.0.1:8080")?
+    .bind(format!("{}:{}", server_config.host, server_config.port))?
     .run()
     .await
 }

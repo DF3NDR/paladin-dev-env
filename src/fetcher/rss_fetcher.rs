@@ -1,3 +1,4 @@
+// src/fetcher/rss.rs
 use rss::Channel;
 use reqwest;
 use crate::error::FetchError;
@@ -18,7 +19,6 @@ pub fn normalize_rss_data(channel: &Channel) -> Vec<NormalizedData> {
         }
     }).collect()
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -1,6 +1,6 @@
 use actix_web::{test, App};
 use smartcontent_aggregator::test_utils::common::load_test_config;
-use smartcontent_aggregator::{api_server, error::FetchError, rss_fetcher, web_scraper, api_integrator, llm_analyzer};
+use smartcontent_aggregator::{api_server, error::FetchError, rss_fetcher, scraper, api_fetcher, llm_analyzer};
 use std::sync::Mutex;
 
 #[actix_web::test]
@@ -25,13 +25,13 @@ async fn test_end_to_end() -> Result<(), FetchError> {
                 Ok(summaries)
             }
             "api" => {
-                let data = api_integrator::fetch_api_data(&source.url).await?;
+                let data = api_fetcher::fetch_api_data(&source.url).await?;
                 let titles: Vec<String> = data.iter().map(|item| item.title.clone()).collect();
                 let summary = llm_analyzer::analyze_data(&titles.join(", "), &source.prompt, &config).await?;
                 Ok(vec![summary])
             }
             "web" => {
-                let items = web_scraper::scrape_web_page(&source.url).await?;
+                let items = scraper::scrape_web_page(&source.url).await?;
                 let titles: Vec<String> = items.iter().map(|item| item.title.clone()).collect();
                 let summary = llm_analyzer::analyze_data(&titles.join(", "), &source.prompt, &config).await?;
                 Ok(vec![summary])

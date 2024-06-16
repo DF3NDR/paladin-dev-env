@@ -1,3 +1,4 @@
+// src/llm_config.rs
 #[derive(Debug, Clone)]
 pub struct LlmConfig {
     pub llm_type: String,

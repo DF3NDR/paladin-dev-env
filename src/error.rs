@@ -1,3 +1,4 @@
+// src/error.rs
 use thiserror::Error;
 use actix_web::{HttpResponse, ResponseError};
 

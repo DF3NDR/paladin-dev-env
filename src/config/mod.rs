@@ -1,6 +1,8 @@
+// src/configuration.rs
 use serde::{Deserialize, Serialize};
 use config::{Config, ConfigError, File, Environment};
 use std::fs;
+use crate::user::UserPreferences;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SourceConfig {
@@ -9,13 +11,6 @@ pub struct SourceConfig {
     pub url: String,
     pub prompt: String,
     pub tags: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct UserPreferences {
-    pub theme: String,
-    pub notifications_enabled: bool,
-    pub summary_format: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

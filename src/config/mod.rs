@@ -1,8 +1,7 @@
-// src/configuration.rs
 use serde::{Deserialize, Serialize};
 use config::{Config, ConfigError, File, Environment};
 use std::fs;
-use crate::user::UserPreferences;
+use crate::domain::entities::user_preferences::UserPreferences;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SourceConfig {

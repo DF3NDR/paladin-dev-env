@@ -11,6 +11,8 @@ pub mod user;
 pub mod storage;
 pub mod test_utils;
 pub mod ui;
+pub mod queue;
+pub mod scheduler;
 
 pub use aggregator::*;
 pub use analyzer::*;
@@ -24,3 +26,5 @@ pub use user::*;
 pub use storage::*;
 pub use test_utils::*;
 pub use ui::*;
+pub use queue::*;
+pub use scheduler::*;

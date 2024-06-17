@@ -2858,6 +2858,7 @@ dependencies = [
  "config",
  "dotenv",
  "env_logger",
+ "lazy_static",
  "log",
  "reqwest",
  "rss",

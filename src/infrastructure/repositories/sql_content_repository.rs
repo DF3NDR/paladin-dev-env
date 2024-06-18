@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection, Result};
-use crate::domain::entities::NormalizedData;
-use crate::domain::services::ContentFetchingService;
+use crate::domain::entities::normalized_data::NormalizedData;
+use crate::domain::services::content_fetching_service::ContentFetchingService;
 
 pub struct SqlContentRepository;
 

@@ -6,6 +6,7 @@ pub mod domain;
 pub mod application;
 pub mod infrastructure;
 pub mod adapters;
+pub mod setup;
 
 pub use test_utils::*;
 pub use domain::*;
@@ -14,3 +15,4 @@ pub use infrastructure::*;
 pub use adapters::*;
 pub use config::*;
 pub use cli::*;
+pub use setup::*;

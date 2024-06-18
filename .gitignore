@@ -3,3 +3,4 @@
 .env
 config.yml
 config.test.yml
+flattenrs

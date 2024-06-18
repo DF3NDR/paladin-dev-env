@@ -1,0 +1,7 @@
+flattenrs*
+Cargo.toml
+Cargo.lock
+config.*
+Dockerfile
+docker-compose.yml
+tests

@@ -1,5 +1,5 @@
 use crate::domain::services::content_fetching_service::ContentFetchingService;
-
+use crate::domain::entities::normalized_data::NormalizedData;
 pub struct FetchContentUseCase<T: ContentFetchingService> {
     service: T,
 }
@@ -9,8 +9,8 @@ impl<T: ContentFetchingService> FetchContentUseCase<T> {
         Self { service }
     }
 
-    pub fn execute(&self, url: &str) {
-        self.service.fetch_content(url);
+    pub fn execute(&self, url: &str) -> Vec<NormalizedData> {
+        self.service.fetch_content(url)
     }
 }
 

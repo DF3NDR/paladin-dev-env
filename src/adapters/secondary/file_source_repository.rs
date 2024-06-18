@@ -1,3 +1,4 @@
+// src/adapters/secondary/file_source_repository.rs
 use crate::config::Settings;
 use std::fs::File;
 use std::io::{self, BufReader};
@@ -9,7 +10,7 @@ impl FileSourceRepository {
     pub fn load_sources(filename: &str) -> io::Result<Settings> {
         let file = File::open(filename)?;
         let reader = BufReader::new(file);
-        let config: Settings = from_reader(reader)?;
+        let config: Settings = from_reader(reader).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         Ok(config)
     }
 }

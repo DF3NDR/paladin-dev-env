@@ -4,7 +4,7 @@ use crate::domain::services::content_fetching_service::ContentFetchingService;
 pub struct HttpContentFetcher;
 
 impl ContentFetchingService for HttpContentFetcher {
-    fn fetch_content(&self) -> Vec<NormalizedData> {
+    fn fetch_content(&self, url: &str) -> Vec<NormalizedData> {
         // Implementation here
         vec![]
     }

@@ -1,5 +1,5 @@
-// use smartcontent_aggregator::test_utils::common::load_test_config;
-// use smartcontent_aggregator::{rss_fetcher, llm_analyzer, error::FetchError};
+// use in4me::test_utils::common::load_test_config;
+// use in4me::{rss_fetcher, llm_analyzer, error::FetchError};
 
 // #[tokio::test]
 // #[ignore] // Ignoring the test as it requires an external API that costs money

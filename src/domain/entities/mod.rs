@@ -1,3 +1,4 @@
-pub mod normalized_data;
-pub mod source_config;
-pub mod user_preferences;
+pub mod content_item;
+pub mod source;
+pub mod content_list;
+pub mod notification;

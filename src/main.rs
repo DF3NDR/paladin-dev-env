@@ -1,8 +1,8 @@
 use structopt::StructOpt;
 use env_logger::Env;
 use log::info;
-use smartcontent_aggregator::config::Settings;
-use smartcontent_aggregator::setup::setup_and_run;
+use in4me::config::Settings;
+use in4me::setup::setup_and_run;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "smartcontent-aggregator")]

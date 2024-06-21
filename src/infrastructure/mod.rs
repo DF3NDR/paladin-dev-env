@@ -1,3 +1,2 @@
-pub mod repositories;
-pub mod external_apis;
-pub mod notifications;
+pub mod adapters;
+pub mod config;

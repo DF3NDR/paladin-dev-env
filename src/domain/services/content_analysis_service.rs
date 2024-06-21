@@ -1,6 +1,7 @@
 use serde_json::Value;
-use crate::entities::normalized_data::NormalizedData;
+use crate::entities::content_item::ContentItem;
 
 pub trait ContentAnalysisService {
-    fn analyze_content(&self, content: &NormalizedData) -> Result<Value, String>;
+    // Todo - Result and Error should be a custom types
+    fn analyze_content(&self, content: &ContentItem) -> Result<Value, String>;
 }

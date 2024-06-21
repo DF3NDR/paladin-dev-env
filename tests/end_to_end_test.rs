@@ -1,6 +1,6 @@
 // use actix_web::{test, App};
-// use smartcontent_aggregator::test_utils::common::load_test_config;
-// use smartcontent_aggregator::{api_server, error::FetchError, rss_fetcher, scraper, api_fetcher, llm_analyzer};
+// use in4me::test_utils::common::load_test_config;
+// use in4me::{api_server, error::FetchError, rss_fetcher, scraper, api_fetcher, llm_analyzer};
 // use std::sync::Mutex;
 
 // #[actix_web::test]

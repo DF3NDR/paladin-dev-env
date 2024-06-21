@@ -1,5 +1,5 @@
 [package]
-name = "smartcontent_aggregator"
+name = "in4me"
 version = "0.1.0"
 edition = "2021"
 
@@ -23,3 +23,7 @@ config = "0.14.0"
 yew = "0.21.0"
 rusqlite = "0.31.0"
 lazy_static = "1.4.0"
+tempfile = "3.10.1"
+uuid = {version = "1.8.0", features = ["v4", "fast-rng", "macro-diagnostics", "serde"]}
+url = {version = "2.5.2", features = ["serde"]}
+chrono = {version = "0.4.38", features = ["serde"]}

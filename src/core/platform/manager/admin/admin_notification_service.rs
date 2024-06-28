@@ -1,0 +1,5 @@
+/*
+Admin Notification Service
+
+This service provides an interface for sending notifications to admins.
+*/

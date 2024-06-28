@@ -1,0 +1,5 @@
+/*
+Admin Logging Service
+
+This service provides an interface for logging admin actions.
+*/

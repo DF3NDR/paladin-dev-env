@@ -6,7 +6,6 @@ Notification Type is a Message Type.
 
 */
 use crate::core::base::entity::message::{Message, Location};
-use crate::core::platform::manager::notification_manager::*;
 
 use chrono::Utc;
 
@@ -33,8 +32,10 @@ impl Notification {
         }
     }
     
-    pub fn send(&self) {
-        println!("Notification Sent: {:?}", self);
-        NotificationManager::send(self);
-    }
+    // ToDo Create NotificationManger 
+    // pub fn send(&self) {
+    //     println!("Notification Sent: {:?}", self);
+    //     NotificationManager::send(self);
+    // }
 }
+

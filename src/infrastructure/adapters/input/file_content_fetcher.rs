@@ -1,23 +1,44 @@
-// src/adapters/primary/file_content_fetcher.rs
+/*
+File Content Fetcher Adapter
+
+This adapter fetches content from an external file system location and creates a ContentItem object from it.
+It implements the ContentIngestionPort trait.
+*/
 use std::fs;
 use std::io::Read;
-use crate::domain::entities::content_item::ContentItem;
-use crate::domain::services::content_fetching_service::ContentFetchingService;
+use crate::ports::input::content_input_port::ContentIngestionPort;
+use crate::core::platform::container::content::ContentItem;
 
 pub struct FileContentFetcher;
 
-impl ContentFetchingService for FileContentFetcher {
-    fn fetch_content(&self, location: &str) -> Result<ContentItem, String> {
-        let mut file = fs::File::open(location).map_err(|e| e.to_string())?;
+impl ContentIngestionPort for FileContentFetcher {
+    fn fetch_content(&self, content: ContentItem) -> Result<ContentItem, String> {
+        let mut url = content.url.clone().to_path_buf();
+        let mut file = fs::File::open(url).map_err(|e| e.to_string())?;
         let mut data = String::new();
         file.read_to_string(&mut data).map_err(|e| e.to_string())?;
         Ok(ContentItem {
             uuid: todo!(),
             created: todo!(),
             modified: todo!(),
-            source_data: todo!(),
             content: todo!(),
+            url,
+            hash: todo!(),
+            source_id: todo!(),
+            source_url: todo!(),
+            title: todo!(),
+            description: todo!(),
+            tags: todo!(),
+            source: todo!(),
+            author: todo!(),
+            pub_date: todo!(),
+            mod_date: todo!(),
         })
+    }
+    
+    fn ingest_content(&self, content: ContentItem) -> Result<(), String> {
+        todo!()
+    
     }
 }
 

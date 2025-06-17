@@ -30,8 +30,8 @@ pub struct Message<T> {
 
 impl<T> Message<T> {
     pub fn new(
-        source: Source,
-        destination: Destination,
+        source: Location,
+        destination: Location,
         message: T,
     ) -> Self {
         Self {

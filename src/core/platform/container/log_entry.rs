@@ -16,7 +16,7 @@ log message, the log level, and the timestamp when the log entry was created.
 
 The Config Service Settings requires at least one log location to be defined.
 */
-use crate::core::base::entity::message::{Message, Source, Destination};
+use crate::core::base::entity::message::{Message, Location};
 use chrono::Utc;
 
 #[derive(Debug, Clone)]
@@ -43,7 +43,7 @@ pub type LogEntry = Message<LogMessage>;
 
 impl LogEntry {
     pub fn new(
-        source: Source,
+        source: Location,
         destination: LogDestination,
         level: String,
         message: LogMessage,

@@ -2,7 +2,7 @@
 Node
 
 A Node is the most fundamental type in the Core. It is a type that is used to build most 
-other types. It is a type that is created with  UUID, a created timestamp, a modified 
+other types. It is a type that is created with UUID, a created timestamp, a modified 
 timestamp, and a generic type that for the node itself. It also has a name and version, a
 boolean value for versioning.
 
@@ -14,6 +14,28 @@ previous version of the Node in the repository.
 */
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum NodeError {
+    NotFound,
+    InvalidData,
+    DatabaseError(String),
+}
+
+impl fmt::Display for NodeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            NodeError::NotFound => write!(f, "Node not found"),
+            NodeError::InvalidData => write!(f, "Invalid node data"),
+            NodeError::DatabaseError(msg) => write!(f, "Database error: {}", msg),
+        }
+    }
+}
+
+impl Error for NodeError {}
+
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Node<T> {
@@ -40,4 +62,18 @@ impl<T> Node<T> {
             version: true,
         }
     }
+}
+
+pub trait NodeService<T> {
+    // Creates a new node item.
+    fn create_node(&self, node: Node<T>) -> Result<Node<T>, NodeError>;
+
+    // Updates an existing node item.
+    fn update_node(&self, node: Node<T>) -> Result<Node<T>, NodeError>;
+
+    // Fetches a node item by its hash.
+    fn get_node_by_hash(&self, hash: &str) -> Result<Option<Node<T>>, NodeError>;
+
+    // Fetches a node item by its type.
+    fn get_node_by_type(&self, node_type: &str) -> Result<Vec<Node<T>>, NodeError>;
 }

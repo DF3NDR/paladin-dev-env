@@ -5,3 +5,6 @@ pub mod job;
 pub mod task;
 pub mod user;
 pub mod log_entry;
+pub mod content;
+pub mod content_list;
+pub mod prompt;

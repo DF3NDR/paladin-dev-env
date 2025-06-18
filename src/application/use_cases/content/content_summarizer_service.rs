@@ -304,7 +304,19 @@ mod tests {
     }
 
     fn create_test_video_content() -> Result<ContentItem, Box<dyn std::error::Error>> {
-        let video_content = VideoContent::new(Some("/path/to/video.mp4".to_string()), 3600)?;
+        // Use None for path to avoid file existence check in tests
+        let video_content = VideoContent::new(None, 3600)?;
+        Ok(ContentItem::new(ContentType::Video(video_content))?)
+    }
+
+    fn create_test_video_content_with_path() -> Result<ContentItem, Box<dyn std::error::Error>> {
+        // Create a temporary file for testing file path functionality
+        use tempfile::NamedTempFile;
+        
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path().to_string_lossy().to_string();
+        
+        let video_content = VideoContent::new(Some(path), 3600)?;
         Ok(ContentItem::new(ContentType::Video(video_content))?)
     }
 
@@ -331,6 +343,21 @@ mod tests {
         let summary = summarizer.summarize_content(&content, 100);
         
         assert_eq!(summary.content_type, "Video");
+        assert!(summary.summary.contains("Duration: 3600s"));
+        assert_eq!(summary.metadata.duration, Some(3600));
+        
+        Ok(())
+    }
+
+    #[test]
+    fn test_summarize_video_content_with_path() -> Result<(), Box<dyn std::error::Error>> {
+        let content = create_test_video_content_with_path()?;
+        let summarizer = ContentSummarizer::new();
+        
+        let summary = summarizer.summarize_content(&content, 100);
+        
+        assert_eq!(summary.content_type, "Video");
+        assert!(summary.summary.contains("Video:"));
         assert!(summary.summary.contains("Duration: 3600s"));
         assert_eq!(summary.metadata.duration, Some(3600));
         
@@ -411,19 +438,19 @@ mod tests {
         let text_summary = summarizer.summarize_content(&text_item, 100);
         assert_eq!(text_summary.content_type, "Text");
         
-        // Video
+        // Video - use None for path in tests
         let video_content = VideoContent::new(None, 100)?;
         let video_item = ContentItem::new(ContentType::Video(video_content))?;
         let video_summary = summarizer.summarize_content(&video_item, 100);
         assert_eq!(video_summary.content_type, "Video");
         
-        // Audio
+        // Audio - use None for path in tests
         let audio_content = AudioContent::new(None, 200)?;
         let audio_item = ContentItem::new(ContentType::Audio(audio_content))?;
         let audio_summary = summarizer.summarize_content(&audio_item, 100);
         assert_eq!(audio_summary.content_type, "Audio");
         
-        // Image
+        // Image - use None for path in tests
         let image_content = ImageContent::new(None, (800, 600))?;
         let image_item = ContentItem::new(ContentType::Image(image_content))?;
         let image_summary = summarizer.summarize_content(&image_item, 100);

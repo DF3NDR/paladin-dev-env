@@ -5,10 +5,8 @@ It reads files from the specified directory and creates ContentItem objects for 
 */
 use std::fs;
 use std::path::Path;
-use chrono::Utc;
-use uuid::Uuid;
 use crate::core::platform::container::content::{ContentItem, ContentType, TextContent, ImageContent, VideoContent, AudioContent};
-use crate::core::platform::container::content_list::ContentList;
+use crate::core::platform::container::content_list::{ContentList, ContentListItem};
 use crate::application::use_cases::content::content_list_fetching_service::ContentListFetchingService;
 use url::Url;
 
@@ -59,7 +57,7 @@ impl FileContentListFetcher {
 
 impl ContentListFetchingService for FileContentListFetcher {
     fn fetch_content_list(&self, directory: &str) -> Result<ContentList, String> {
-        let mut list = Vec::new();
+        let mut list: Vec<ContentListItem> = Vec::new();
         
         if let Ok(entries) = fs::read_dir(directory) {
             for entry in entries {
@@ -81,7 +79,9 @@ impl ContentListFetchingService for FileContentListFetcher {
                                     .map(|s| s.to_string());
                                 content_item.tags = Some(Vec::new());
                                 
-                                list.push(content_item);
+                                // Convert ContentItem to ContentListItem
+                                let content_list_item = ContentListItem::Item(content_item);
+                                list.push(content_list_item);
                             },
                             Err(e) => {
                                 eprintln!("Failed to create content item for {}: {}", path.display(), e);
@@ -126,9 +126,13 @@ mod tests {
         assert_eq!(list.list_items.len(), 1);
         
         let item = &list.list_items[0];
-        assert!(item.title.is_some());
-        assert_eq!(item.title.as_ref().unwrap(), "test.txt");
-        assert!(matches!(item.content, ContentType::Text(_)));
+        if let ContentListItem::Item(content_item) = item {
+            assert!(content_item.title.is_some());
+            assert_eq!(content_item.title.as_ref().unwrap(), "test.txt");
+            assert!(matches!(content_item.content, ContentType::Text(_)));
+        } else {
+            panic!("Expected ContentListItem::Item");
+        }
     }
 
     #[test]
@@ -153,8 +157,12 @@ mod tests {
         
         // Both should be text content types
         for item in &list.list_items {
-            assert!(matches!(item.content, ContentType::Text(_)));
-            assert!(item.title.is_some());
+            if let ContentListItem::Item(content_item) = item {
+                assert!(matches!(content_item.content, ContentType::Text(_)));
+                assert!(content_item.title.is_some());
+            } else {
+                panic!("Expected ContentListItem::Item");
+            }
         }
     }
 

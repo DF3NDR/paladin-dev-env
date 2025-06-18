@@ -1,11 +1,12 @@
 use super::content::ContentItem;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use url::Url;
 use chrono::prelude::*;
 use thiserror::Error;
 use std::collections::HashSet;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ContentList {
     pub uuid: Uuid,
     pub name: String,
@@ -50,7 +51,7 @@ impl ContentList {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ContentListItem {
     Fetch(ContentItemToFetch),
     Item(ContentItem),
@@ -65,7 +66,7 @@ impl ContentListItem {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ContentItemToFetch {
     pub uuid: Uuid,
     pub url: ContentItemToFetchUrl,
@@ -74,7 +75,7 @@ pub struct ContentItemToFetch {
     pub content_item: ContentItem,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Error, Serialize, Deserialize)]
 #[error("Content item to fetch URL cannot be empty")]
 pub struct ContentItemToFetchUrl(Url);
 

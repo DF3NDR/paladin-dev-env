@@ -9,7 +9,6 @@ use crate::core::platform::container::content_list::{ContentList, ContentItemToF
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Error)]
 pub enum RepositoryError {

@@ -58,7 +58,7 @@ impl<T> Node<T> {
             created: Utc::now(),
             modified: Utc::now(),
             node,
-            name: None,
+            name:  name,
             version: true,
         }
     }

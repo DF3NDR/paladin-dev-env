@@ -20,11 +20,8 @@ available over the internet and uses the standard `http://` or `https://` scheme
 */
 
 use uuid::Uuid;
-use url::Url;
 use chrono::{DateTime, Utc};
-use std::{hash::{Hash, Hasher}, task::ready};
-use fasthash::{murmur3::Hash128_x64, FastHash};
-use thiserror::Error;
+use std::hash::Hash;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Resource<T>{

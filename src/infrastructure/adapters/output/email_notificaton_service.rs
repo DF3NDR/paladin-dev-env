@@ -14,7 +14,7 @@ use crate::application::ports::output::notification_publisher_port::{
     NotificationPublisherService, NotificationTemplateService, BulkNotificationService,
     NotificationRequest, NotificationResponse, NotificationRecipient, NotificationChannel,
     NotificationContent, NotificationTemplate, NotificationStats, NotificationStatus,
-    NotificationError, NotificationPriority
+    NotificationError
 };
 use lettre::{
     Message, SmtpTransport, Transport, 
@@ -22,7 +22,6 @@ use lettre::{
     transport::smtp::authentication::Credentials,
 };
 use handlebars::Handlebars;
-use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -33,7 +32,7 @@ pub struct EmailNotificationService {
     smtp_transport: SmtpTransport,
     from_address: String,
     from_name: Option<String>,
-    template_engine: Arc<Handlebars<'static>>,
+    template_engine: Arc<Mutex<Handlebars<'static>>>,
     notification_history: Arc<Mutex<HashMap<Uuid, NotificationResponse>>>,
     templates: Arc<Mutex<HashMap<String, NotificationTemplate>>>,
 }
@@ -73,7 +72,7 @@ impl EmailNotificationService {
             smtp_transport,
             from_address: config.from_address,
             from_name: config.from_name,
-            template_engine: Arc::new(handlebars),
+            template_engine: Arc::new(Mutex::new(handlebars)),
             notification_history: Arc::new(Mutex::new(HashMap::new())),
             templates: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -95,7 +94,7 @@ impl EmailNotificationService {
             self.from_address.clone()
         };
 
-        let mut message_builder = Message::builder()
+        let message_builder = Message::builder()
             .from(from_address.parse().map_err(|e| {
                 NotificationError::ConfigurationError(format!("Invalid from address: {}", e))
             })?)
@@ -143,13 +142,14 @@ impl EmailNotificationService {
             .ok_or_else(|| NotificationError::TemplateNotFound(template_id.to_string()))?;
 
         let subject = if let Some(ref subject_template) = template.subject_template {
-            self.template_engine.render_template(subject_template, variables)
+            self.template_engine.lock().map_err(|_| NotificationError::ServiceUnavailable)?
+                .render_template(subject_template, variables)
                 .map_err(|e| NotificationError::TemplateRenderingFailed(e.to_string()))?
         } else {
             template.name.clone()
         };
-
-        let body = self.template_engine.render_template(&template.body_template, variables)
+        let body = self.template_engine.lock().map_err(|_| NotificationError::ServiceUnavailable)?
+            .render_template(&template.body_template, variables)
             .map_err(|e| NotificationError::TemplateRenderingFailed(e.to_string()))?;
 
         Ok(NotificationContent {
@@ -164,11 +164,14 @@ impl EmailNotificationService {
     }
 
     fn create_notification_response(&self, notification_id: Uuid, status: NotificationStatus, error: Option<&NotificationError>) -> NotificationResponse {
+        let sent_at = if matches!(status, NotificationStatus::Sent | NotificationStatus::Delivered) { Some(Utc::now()) } else { None };
+        let delivered_at = if matches!(status, NotificationStatus::Delivered) { Some(Utc::now()) } else { None };
+        
         NotificationResponse {
             id: notification_id,
             status,
-            sent_at: if matches!(status, NotificationStatus::Sent | NotificationStatus::Delivered) { Some(Utc::now()) } else { None },
-            delivered_at: if matches!(status, NotificationStatus::Delivered) { Some(Utc::now()) } else { None },
+            sent_at,
+            delivered_at,
             read_at: None,
             error_message: error.map(|e| e.to_string()),
             retry_count: 0,
@@ -327,13 +330,16 @@ impl NotificationTemplateService for EmailNotificationService {
         }
 
         // Register template with handlebars
-        self.template_engine.register_template_string(&template.id, &template.body_template)
-            .map_err(|e| NotificationError::TemplateRenderingFailed(e.to_string()))?;
-
-        if let Some(ref subject_template) = template.subject_template {
-            let subject_template_id = format!("{}_subject", template.id);
-            self.template_engine.register_template_string(&subject_template_id, subject_template)
+        {
+            let mut engine = self.template_engine.lock().map_err(|_| NotificationError::ServiceUnavailable)?;
+            engine.register_template_string(&template.id, &template.body_template)
                 .map_err(|e| NotificationError::TemplateRenderingFailed(e.to_string()))?;
+
+            if let Some(ref subject_template) = template.subject_template {
+                let subject_template_id = format!("{}_subject", template.id);
+                engine.register_template_string(&subject_template_id, subject_template)
+                    .map_err(|e| NotificationError::TemplateRenderingFailed(e.to_string()))?;
+            }
         }
 
         // Store template
@@ -345,12 +351,37 @@ impl NotificationTemplateService for EmailNotificationService {
     }
 
     fn update_template(&self, template: NotificationTemplate) -> Result<(), NotificationError> {
-        self.create_template(template)?;
+        if template.channel != NotificationChannel::Email {
+            return Err(NotificationError::InvalidChannel(
+                "Email service only supports Email templates".to_string()
+            ));
+        }
+
+        // Update template in handlebars
+        {
+            let mut engine = self.template_engine.lock().map_err(|_| NotificationError::ServiceUnavailable)?;
+            engine.register_template_string(&template.id, &template.body_template)
+                .map_err(|e| NotificationError::TemplateRenderingFailed(e.to_string()))?;
+
+            if let Some(ref subject_template) = template.subject_template {
+                let subject_template_id = format!("{}_subject", template.id);
+                engine.register_template_string(&subject_template_id, subject_template)
+                    .map_err(|e| NotificationError::TemplateRenderingFailed(e.to_string()))?;
+            }
+        }
+
+        // Update stored template
+        if let Ok(mut templates) = self.templates.lock() {
+            templates.insert(template.id.clone(), template);
+        }
+
         Ok(())
     }
 
     fn delete_template(&self, template_id: &str) -> Result<(), NotificationError> {
-        self.template_engine.unregister_template(template_id);
+        if let Ok(mut engine) = self.template_engine.lock() {
+            engine.unregister_template(template_id);
+        }
         
         if let Ok(mut templates) = self.templates.lock() {
             templates.remove(template_id);
@@ -386,7 +417,6 @@ impl NotificationTemplateService for EmailNotificationService {
         self.render_content_with_template(template_id, &variables)
     }
 }
-
 impl BulkNotificationService for EmailNotificationService {
     fn send_bulk_notifications(&self, requests: Vec<NotificationRequest>) -> Result<Vec<NotificationResponse>, NotificationError> {
         let mut responses = Vec::new();

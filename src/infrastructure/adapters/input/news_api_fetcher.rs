@@ -2,8 +2,9 @@ use crate::core::platform::container::content_list::{ContentList, ContentListIte
 use crate::core::platform::container::content::{ContentItem, ContentType, TextContent};
 use crate::application::use_cases::content::content_list_fetching_service::ContentListFetchingService;
 use crate::infrastructure::adapters::input::http_content_fetcher::HttpContentFetcher;
+use crate::application::use_cases::content::content_fetching_service::ContentFetchingService;
 use url::Url;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use chrono::{DateTime, Utc};
 use urlencoding;
 
@@ -18,6 +19,7 @@ pub struct NewsApiFetcher {
 struct NewsApiResponse {
     status: String,
     #[serde(rename = "totalResults")]
+    #[allow(dead_code)]
     total_results: u32,
     articles: Vec<NewsArticle>,
 }
@@ -30,6 +32,7 @@ struct NewsArticle {
     description: Option<String>,
     url: String,
     #[serde(rename = "urlToImage")]
+    #[allow(dead_code)]
     url_to_image: Option<String>,
     #[serde(rename = "publishedAt")]
     published_at: String,
@@ -242,7 +245,7 @@ mod tests {
             .create();
 
         // Create fetcher with mock server URL as base (in real implementation, you'd inject the base URL)
-        let fetcher = NewsApiFetcher::new("test-api-key".to_string());
+        let _fetcher = NewsApiFetcher::new("test-api-key".to_string());
         
         // Note: This test would need the fetcher to accept a base URL for the API
         // For now, we'll test the parsing logic separately

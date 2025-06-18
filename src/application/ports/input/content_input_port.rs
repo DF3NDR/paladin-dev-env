@@ -8,7 +8,6 @@ or any other source of content.
 
 */
 use crate::core::platform::container::content::ContentItem;
-use url::Url;
 
 pub trait ContentIngestionPort {
     fn fetch_content(&self, content: ContentItem) -> Result<ContentItem, String>;

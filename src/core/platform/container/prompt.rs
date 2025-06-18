@@ -1,10 +1,10 @@
 /*
-Prompt Item Domain Entity
+PromptItem Platform Container
 
-PromptItem represents a piece of prompt in the system. It can be of various types such as text, video, audio, or image.
+`PromptItem` represents a prompt used for LLM input. It is is container that is a specialized extension of a `ContentListItem` container which always has a text contentItem and can also contain any number of content including text composite type files (e.g. doc, pdf, csv, etc), videos files, audio files, or image files.  Basically anything that can be used as a prompt for an LLM.
 It contains metadata such as UUID, creation and modification timestamps, prompt type, URL, hash, source information, title, description, tags, author, and publication/modification dates.
 It also provides methods to create a new prompt item, update its prompt, and generate a hash for the prompt.
-PromptItem is a type of Node in the Hexagonal Architecture, meaning it is a core domain entity that should not have direct knowledge of the repository.
+PromptItem is a type of ContentList which is a type of Collection  in the Hexagonal Architecture, meaning it is a core domain entity that should not have direct knowledge of the repository.
 
 ToDo this is a placeholder for the actual implementation of the PromptItem domain entity. It is a copy of the ContentItem.
 
@@ -13,10 +13,11 @@ ToDo this is a placeholder for the actual implementation of the PromptItem domai
 use uuid::Uuid;
 use url::Url;
 use chrono::{DateTime, Utc};
-use std::hash::{Hasher, Hash};
+use std::hash::Hash;
 use fasthash::{murmur3::Hash128_x64, FastHash};
 
 use thiserror::Error;
+use std::io::Read;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PromptItem {
     pub uuid: Uuid,
@@ -42,7 +43,7 @@ impl PromptItem {
         prompt: PromptType, 
         // repository: &impl PromptRepository
     ) -> Result<Self, PromptItemError> {
-        let mut prompt_item = PromptItem {
+        let prompt_item = PromptItem {
             uuid: Uuid::new_v4(),
             created: Utc::now(),
             modified: Utc::now(),
@@ -77,6 +78,7 @@ impl PromptItem {
     }
 
     // Being a Domain Entity in Hexagonal Architecture the PromptItem should not have any knowledge of the repository
+    #[allow(dead_code)]
     fn update_hash(
         &mut self, 
         // repository: &impl PromptRepository
@@ -192,7 +194,6 @@ impl ImagePrompt {
         Ok(ImagePrompt { path, resolution, filesize })
     }
 }
-
 #[derive(Debug, Clone, Error)]
 pub enum PromptItemError {
     #[error("File not found")]
@@ -205,15 +206,27 @@ pub enum PromptItemError {
     HashAlreadyExists(Uuid),
     #[error("No prompt item exists for that hash")]
     NoPromptForHash,
+    #[error("IO error: {0}")]
+    IoError(String),
 }
 
+impl From<std::io::Error> for PromptItemError {
+    fn from(error: std::io::Error) -> Self {
+        match error.kind() {
+            std::io::ErrorKind::NotFound => PromptItemError::FileNotFound,
+            _ => PromptItemError::IoError(error.to_string()),
+        }
+    }
+}
+#[allow(dead_code)]
 fn generate_file_hash(path: &str) -> Result<String, PromptItemError> {
     let mut file = std::fs::File::open(path).map_err(|_| PromptItemError::FileNotFound)?;
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).map_err(|_| PromptItemError::FileReadError)?;
-    // not sure this will even work. Source for hash is supposed to be bytes not a Vec<u8>
-    let hash = Hash128_x64::hash(buffer).to_string();
-    Ok(format!("{:x}", hash))
+    
+    // Fix: Hash128_x64::hash expects a slice, and we need to format the hash value properly
+    let hash_value = Hash128_x64::hash(&buffer);
+    Ok(format!("{:x}", hash_value))
 }
 
 fn check_filesize(filesize: u64) -> Result<(), PromptItemError> {

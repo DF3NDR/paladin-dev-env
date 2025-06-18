@@ -15,14 +15,13 @@ use crate::application::storage::sql_store::{
     TransactionManager, MigrationManager, SqlStore, RepositoryError, RepositoryStats
 };
 use crate::core::platform::container::content::{ContentItem, ContentType, TextContent, VideoContent, AudioContent, ImageContent};
-use crate::core::platform::container::content_list::{ContentList, ContentListItem, ContentItemToFetch};
+use crate::core::platform::container::content_list::{ContentList, ContentItemToFetch};
 
-use sqlx::{MySql, MySqlPool, Row, Transaction, Executor};
+use sqlx::{MySqlPool, Row, mysql::MySqlPoolOptions};
 use serde_json;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use url::Url;
-use std::collections::HashMap;
 use std::str::FromStr;
 
 #[derive(Debug, Clone)]
@@ -53,10 +52,10 @@ impl Default for MySqlConfig {
 
 impl MySqlContentRepository {
     pub async fn new(config: MySqlConfig) -> Result<Self, RepositoryError> {
-        let pool = MySqlPool::builder()
+        let pool = MySqlPoolOptions::new()
             .max_connections(config.max_connections)
             .min_connections(config.min_connections)
-            .build(&config.database_url)
+            .connect(&config.database_url)
             .await
             .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
 
@@ -606,32 +605,32 @@ impl MigrationManager for MySqlContentRepository {
 
 // Implement other traits with similar patterns...
 impl ContentListRepository for MySqlContentRepository {
-    fn get_by_id(&self, id: Uuid) -> Result<Option<ContentList>, RepositoryError> {
+    fn get_by_id(&self, _id: Uuid) -> Result<Option<ContentList>, RepositoryError> {
         // Implementation similar to content items
         todo!("Implement content list retrieval")
     }
 
-    fn get_by_name(&self, name: &str) -> Result<Option<ContentList>, RepositoryError> {
+    fn get_by_name(&self, _name: &str) -> Result<Option<ContentList>, RepositoryError> {
         todo!("Implement content list retrieval by name")
     }
 
-    fn save(&self, content_list: &ContentList) -> Result<(), RepositoryError> {
+    fn save(&self, _content_list: &ContentList) -> Result<(), RepositoryError> {
         todo!("Implement content list saving")
     }
 
-    fn update(&self, content_list: &ContentList) -> Result<(), RepositoryError> {
+    fn update(&self, _content_list: &ContentList) -> Result<(), RepositoryError> {
         todo!("Implement content list updating")
     }
 
-    fn delete(&self, id: Uuid) -> Result<(), RepositoryError> {
+    fn delete(&self, _id: Uuid) -> Result<(), RepositoryError> {
         todo!("Implement content list deletion")
     }
 
-    fn find_all(&self, limit: Option<u32>, offset: Option<u32>) -> Result<Vec<ContentList>, RepositoryError> {
+    fn find_all(&self, _limit: Option<u32>, _offset: Option<u32>) -> Result<Vec<ContentList>, RepositoryError> {
         todo!("Implement content list finding")
     }
 
-    fn find_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<ContentList>, RepositoryError> {
+    fn find_by_date_range(&self, _start: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<ContentList>, RepositoryError> {
         todo!("Implement content list date range finding")
     }
 
@@ -639,34 +638,34 @@ impl ContentListRepository for MySqlContentRepository {
         todo!("Implement content list counting")
     }
 
-    fn add_item_to_list(&self, list_id: Uuid, item: &ContentItem) -> Result<(), RepositoryError> {
+    fn add_item_to_list(&self, _list_id: Uuid, _item: &ContentItem) -> Result<(), RepositoryError> {
         todo!("Implement adding item to list")
     }
 
-    fn remove_item_from_list(&self, list_id: Uuid, item_id: Uuid) -> Result<(), RepositoryError> {
+    fn remove_item_from_list(&self, _list_id: Uuid, _item_id: Uuid) -> Result<(), RepositoryError> {
         todo!("Implement removing item from list")
     }
 }
 
 impl ContentItemToFetchRepository for MySqlContentRepository {
     // Similar implementations for items to fetch...
-    fn get_by_id(&self, id: Uuid) -> Result<Option<ContentItemToFetch>, RepositoryError> {
+    fn get_by_id(&self, _id: Uuid) -> Result<Option<ContentItemToFetch>, RepositoryError> {
         todo!("Implement item to fetch retrieval")
     }
 
-    fn save(&self, item_to_fetch: &ContentItemToFetch) -> Result<(), RepositoryError> {
+    fn save(&self, _item_to_fetch: &ContentItemToFetch) -> Result<(), RepositoryError> {
         todo!("Implement item to fetch saving")
     }
 
-    fn delete(&self, id: Uuid) -> Result<(), RepositoryError> {
+    fn delete(&self, _id: Uuid) -> Result<(), RepositoryError> {
         todo!("Implement item to fetch deletion")
     }
 
-    fn get_pending(&self, limit: Option<u32>) -> Result<Vec<ContentItemToFetch>, RepositoryError> {
+    fn get_pending(&self, _limit: Option<u32>) -> Result<Vec<ContentItemToFetch>, RepositoryError> {
         todo!("Implement pending items retrieval")
     }
 
-    fn mark_as_fetched(&self, id: Uuid, content_item: &ContentItem) -> Result<(), RepositoryError> {
+    fn mark_as_fetched(&self, _id: Uuid, _content_item: &ContentItem) -> Result<(), RepositoryError> {
         todo!("Implement mark as fetched")
     }
 }
@@ -687,7 +686,7 @@ impl SqlStore for MySqlContentRepository {
             .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
         
         rt.block_on(async {
-            let content_items_count = self.count()?;
+            let content_items_count = ContentRepository::count(self)?;
             
             Ok(RepositoryStats {
                 total_content_items: content_items_count,
@@ -732,7 +731,6 @@ impl SqlStore for MySqlContentRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::platform::container::content::{ContentType, TextContent};
 
     #[tokio::test]
     async fn test_mysql_repository_creation() {
@@ -743,8 +741,8 @@ mod tests {
 
     #[test]
     fn test_content_type_serialization() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let config = MySqlConfig::default();
+        let _rt = tokio::runtime::Runtime::new().unwrap();
+        let _config = MySqlConfig::default();
         
         // This would normally require database connection
         // For unit tests, you'd extract the serialization logic to separate functions

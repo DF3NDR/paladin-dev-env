@@ -10,6 +10,7 @@ use crate::core::platform::container::content_list::ContentList;
 
 pub trait ContentListService {
     fn fetch_content_list(&self, url: &str) -> Result<ContentList, String>;
+    fn aggregate_content(&self, data: Vec<Value>) -> Value;
 }
 
 pub struct AggregateContent<T: ContentListService> {

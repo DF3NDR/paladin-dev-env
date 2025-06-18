@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 /*
 Content Item Domain Entity
 
@@ -11,12 +12,12 @@ ContentItem is a type of Node in the Hexagonal Architecture, meaning it is a cor
 use uuid::Uuid;
 use url::Url;
 use chrono::{DateTime, Utc};
-use std::hash::{Hasher, Hash};
+use std::hash::Hash;
 use std::io::Read;
 use fasthash::{murmur3::Hash128_x64, FastHash};
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ContentItem {
     pub uuid: Uuid,
     pub created: DateTime<Utc>,
@@ -78,7 +79,7 @@ impl ContentItem {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ContentType {
     Text(TextContent),
     Video(VideoContent),
@@ -97,7 +98,7 @@ impl ContentType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TextContent {
     pub path: Option<String>,
     pub content: Option<String>,
@@ -124,7 +125,7 @@ impl TextContent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct VideoContent {
     pub path: Option<String>,
     pub duration: u64,
@@ -151,7 +152,7 @@ impl VideoContent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AudioContent {
     pub path: Option<String>,
     pub duration: u64,
@@ -178,7 +179,7 @@ impl AudioContent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ImageContent {
     pub path: Option<String>,
     pub resolution: (u32, u32),

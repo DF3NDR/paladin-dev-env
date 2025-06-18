@@ -11,10 +11,9 @@ It can be used to deliver notifications, alerts, or any other type of content th
 
 use crate::application::ports::output::content_delivery_port::{
     ContentDeliveryService, BatchContentDeliveryService, DeliveryRequest, DeliveryResponse,
-    DeliveryMethod, ContentPayload, DeliveryStatus, DeliveryStats, ContentDeliveryError,
-    DeliveryPriority
+    DeliveryMethod, ContentPayload, DeliveryStatus, DeliveryStats, ContentDeliveryError
 };
-use actix_web::{web, HttpResponse, Responder, Result as ActixResult};
+use actix_web::{web, HttpResponse, Result as ActixResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -170,10 +169,11 @@ impl ApiContentDeliverer {
     }
 
     fn create_delivery_response(&self, delivery_id: Uuid, status: DeliveryStatus, attempt_count: u32, error: Option<&ContentDeliveryError>) -> DeliveryResponse {
+        let delivered_at = if matches!(status, DeliveryStatus::Delivered) { Some(Utc::now()) } else { None };
         DeliveryResponse {
             delivery_id,
             status,
-            delivered_at: if matches!(status, DeliveryStatus::Delivered) { Some(Utc::now()) } else { None },
+            delivered_at,
             attempt_count,
             error_message: error.map(|e| e.to_string()),
             metadata: None,
@@ -199,7 +199,7 @@ impl ContentDeliveryService for ApiContentDeliverer {
         
         // For synchronous trait, we need to use a runtime
         let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| ContentDeliveryError::ServiceUnavailable)?;
+            .map_err(|_e| ContentDeliveryError::ServiceUnavailable)?;
 
         let result = rt.block_on(async {
             self.delivery_with_retry(&request).await
@@ -219,7 +219,7 @@ impl ContentDeliveryService for ApiContentDeliverer {
         }
     }
 
-    fn schedule_delivery(&self, request: DeliveryRequest) -> Result<DeliveryResponse, ContentDeliveryError> {
+    fn schedule_delivery(&self, _request: DeliveryRequest) -> Result<DeliveryResponse, ContentDeliveryError> {
         let delivery_id = Uuid::new_v4();
         
         // For demo purposes, we'll just mark it as scheduled
@@ -255,7 +255,7 @@ impl ContentDeliveryService for ApiContentDeliverer {
         }
     }
 
-    fn list_deliveries(&self, recipient_id: &str, limit: Option<u32>) -> Result<Vec<DeliveryResponse>, ContentDeliveryError> {
+    fn list_deliveries(&self, _recipient_id: &str, limit: Option<u32>) -> Result<Vec<DeliveryResponse>, ContentDeliveryError> {
         if let Ok(history) = self.delivery_history.lock() {
             let mut deliveries: Vec<DeliveryResponse> = history.values()
                 .cloned()
@@ -409,6 +409,7 @@ async fn get_delivery_stats_handler(
 mod tests {
     use super::*;
     use crate::core::platform::container::content::{ContentItem, ContentType, TextContent};
+    use crate::application::ports::output::content_delivery_port::DeliveryPriority;
     use mockito::Server;
 
     #[tokio::test]

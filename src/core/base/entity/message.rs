@@ -29,7 +29,7 @@ pub struct Message<T> {
 }
 
 impl<T> Message<T> {
-    pub fn new(
+    pub fn create(
         source: Location,
         destination: Location,
         message: T,

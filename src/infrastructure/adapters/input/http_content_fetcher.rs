@@ -1,8 +1,8 @@
-use std::io::Read;
 use crate::core::platform::container::content::{ContentItem, ContentType, TextContent};
 use crate::application::use_cases::content::content_fetching_service::ContentFetchingService;
 use url::Url;
 
+#[derive(Debug, Clone)]
 pub struct HttpContentFetcher {
     client: reqwest::blocking::Client,
 }
@@ -11,35 +11,6 @@ impl HttpContentFetcher {
     pub fn new() -> Self {
         Self {
             client: reqwest::blocking::Client::new(),
-        }
-    }
-
-    fn determine_content_type_from_response(&self, response: &reqwest::blocking::Response) -> ContentType {
-        let content_type_header = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|ct| ct.to_str().ok())
-            .unwrap_or("");
-
-        // For now, we'll primarily handle text content from web pages
-        // Could be extended to handle images, videos, etc. based on content-type header
-        match content_type_header {
-            ct if ct.starts_with("text/") || ct.starts_with("application/json") || ct.starts_with("application/xml") => {
-                // We'll store the content directly rather than as a file path
-                ContentType::Text(TextContent {
-                    path: None,
-                    content: None, // Will be set after we read the response body
-                    filesize: 0,   // Will be calculated from content length
-                })
-            },
-            _ => {
-                // Default to text for unknown content types
-                ContentType::Text(TextContent {
-                    path: None,
-                    content: None,
-                    filesize: 0,
-                })
-            }
         }
     }
 }

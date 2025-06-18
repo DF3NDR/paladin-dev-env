@@ -56,7 +56,7 @@ pub struct NotificationAttachment {
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq, Hash)]
 pub enum NotificationChannel {
     Email,
     Sms,

@@ -2,11 +2,10 @@ use crate::application::ports::input::ml_port::{
     MlPort, MlPredictionRequest, MlPredictionResponse, MlPortError, MlModelInfo,
     MlInputData, MlPrediction
 };
-use crate::core::platform::container::content::{ContentItem, ContentType, TextContent};
+use crate::core::platform::container::content::ContentItem;
 use std::collections::HashMap;
 use std::time::Instant;
 use std::path::Path;
-use serde_json;
 
 /// TensorFlow Adapter
 /// An implementation of the ML Port using TensorFlow.
@@ -20,10 +19,12 @@ pub struct TensorFlowAdapter {
 #[derive(Debug, Clone)]
 struct TensorFlowModel {
     name: String,
+    #[allow(dead_code)]
     path: String,
     version: String,
     input_types: Vec<String>,
     output_types: Vec<String>,
+    #[allow(dead_code)]
     loaded: bool,
 }
 
@@ -52,6 +53,7 @@ impl TensorFlowAdapter {
         self
     }
 
+    #[allow(dead_code)]
     fn load_model(&mut self, model_name: &str) -> Result<(), MlPortError> {
         if self.loaded_models.contains_key(model_name) {
             return Ok(());
@@ -321,6 +323,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use std::fs;
+    use crate::core::platform::container::content::{ContentType, TextContent};
 
     fn create_test_adapter() -> TensorFlowAdapter {
         let temp_dir = tempdir().unwrap();
@@ -389,8 +392,8 @@ mod tests {
     #[test]
     fn test_list_models() {
         let adapter = create_test_adapter();
-        let models = adapter.list_models().unwrap();
-        assert!(models.len() >= 0); // Should return empty list or discovered models
+        let _models = adapter.list_models().unwrap();
+        // Should return empty list or discovered models - no assertion needed as unwrap() handles errors
     }
 
     #[test]

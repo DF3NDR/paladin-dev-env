@@ -15,19 +15,17 @@ or for debugging and auditing purposes in the information gathering and delivery
 
 use crate::application::ports::output::content_delivery_port::{
     ContentDeliveryService, BatchContentDeliveryService, DeliveryRequest, DeliveryResponse,
-    DeliveryMethod, ContentPayload, DeliveryStatus, DeliveryStats, ContentDeliveryError,
-    DeliveryPriority
+    DeliveryMethod, ContentPayload, DeliveryStatus, DeliveryStats, ContentDeliveryError
 };
-use crate::core::platform::container::content::{ContentItem, ContentType};
-use crate::core::platform::container::content_list::ContentList;
+use crate::core::platform::container::content::ContentType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 
 #[derive(Debug, Clone)]
 pub struct FileStorageClient {
@@ -355,8 +353,8 @@ impl FileStorageClient {
 
         DeliveryResponse {
             delivery_id,
-            status,
             delivered_at: if matches!(status, DeliveryStatus::Delivered) { Some(Utc::now()) } else { None },
+            status,
             attempt_count: 1,
             error_message: error.map(|e| e.to_string()),
             metadata: if metadata.is_empty() { None } else { Some(metadata) },
@@ -414,7 +412,7 @@ impl ContentDeliveryService for FileStorageClient {
         }
     }
 
-    fn schedule_delivery(&self, request: DeliveryRequest) -> Result<DeliveryResponse, ContentDeliveryError> {
+    fn schedule_delivery(&self, _request: DeliveryRequest) -> Result<DeliveryResponse, ContentDeliveryError> {
         // For file storage, we'll just mark as scheduled and store the request
         let delivery_id = Uuid::new_v4();
         let response = self.create_delivery_response(delivery_id, DeliveryStatus::Scheduled, None, None);
@@ -520,6 +518,8 @@ impl BatchContentDeliveryService for FileStorageClient {
 mod tests {
     use super::*;
     use crate::core::platform::container::content::{TextContent, ContentType};
+    use crate::core::platform::container::content::ContentItem;
+    use crate::application::ports::output::content_delivery_port::DeliveryPriority;
     use tempfile::tempdir;
 
     fn create_test_config() -> FileStorageConfig {

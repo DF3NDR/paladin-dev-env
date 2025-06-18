@@ -5,7 +5,7 @@ A Trigger is a message element sent to a manager service to take action. Trigger
 used to respond to Events. This module contains the Trigger Component and its related traits
 and implementations.
 */
-use super::action::Action;
+use crate::core::base::component::action::Action;
 use chrono::{DateTime, Utc};
 
 pub struct Trigger {

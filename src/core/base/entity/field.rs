@@ -22,7 +22,7 @@ impl<T> Field<T> {
     pub fn new(value: T) -> Self {
         Self {
             fid: Uuid::new_v4(),
-            nid:
+            nid: Uuid::new_v4(),
             value,
         }
     }

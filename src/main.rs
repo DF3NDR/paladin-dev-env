@@ -1,8 +1,8 @@
 use structopt::StructOpt;
 use env_logger::Env;
 use log::info;
-use in4me::config::Settings;
-use in4me::setup::setup_and_run;
+use in4me::config::application_settings::Settings;
+use in4me::config::setup::setup_and_run;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "smartcontent-aggregator")]
@@ -12,7 +12,7 @@ struct Opt {
 }
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
 
     let opt = Opt::from_args();

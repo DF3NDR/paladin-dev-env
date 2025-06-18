@@ -232,7 +232,7 @@ impl MlPort for TensorFlowAdapter {
         let response = self.predict(request)?;
         
         // Enrich content item with ML predictions
-        let mut tags = content.tags.unwrap_or_default();
+        let mut tags = content.tags().cloned().unwrap_or_default();
         
         for prediction in &response.predictions {
             match prediction {
@@ -252,10 +252,10 @@ impl MlPort for TensorFlowAdapter {
             }
         }
         
-        content.tags = Some(tags);
+        content.set_tags(Some(tags));
         
         // Add ML metadata to description if not present
-        if content.description.is_none() {
+        if content.description().is_none() {
             let ml_summary: Vec<String> = response.predictions.iter()
                 .filter_map(|p| match p {
                     MlPrediction::TextGeneration { text } => Some(text.clone()),
@@ -264,7 +264,7 @@ impl MlPort for TensorFlowAdapter {
                 .collect();
             
             if !ml_summary.is_empty() {
-                content.description = Some(ml_summary.join("; "));
+                content.set_description(Some(ml_summary.join("; ")));
             }
         }
 
@@ -384,8 +384,8 @@ mod tests {
         assert!(result.is_ok());
         
         let enriched_content = result.unwrap();
-        assert!(enriched_content.tags.is_some());
-        let tags = enriched_content.tags.unwrap();
+        assert!(enriched_content.tags().is_some());
+        let tags = enriched_content.tags().unwrap();
         assert!(tags.iter().any(|tag| tag.contains("ml:sentiment:")));
     }
 

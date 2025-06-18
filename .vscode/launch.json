@@ -1,7 +1,4 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
         {
@@ -25,21 +22,191 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'in4me'",
+            "name": "Debug all tests",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=in4me",
+                    "--lib",
                     "--package=in4me"
                 ],
                 "filter": {
                     "name": "in4me",
-                    "kind": "bin"
+                    "kind": "lib"
                 }
             },
             "args": [],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug specific test",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=in4me",
+                    "${input:testName}"
+                ],
+                "filter": {
+                    "name": "in4me",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug repository tests",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--test=repository",
+                    "--package=in4me"
+                ],
+                "filter": {
+                    "name": "repository",
+                    "kind": "test"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug MySQL repository tests",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--test=repository",
+                    "--package=in4me",
+                    "mysql_content_repository_test"
+                ],
+                "filter": {
+                    "name": "repository",
+                    "kind": "test"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug content fetching service tests",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=in4me",
+                    "application::use_cases::content::content_fetching_service::tests"
+                ],
+                "filter": {
+                    "name": "in4me",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug failing test",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=in4me",
+                    "test_content_item_properties"
+                ],
+                "filter": {
+                    "name": "in4me",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "RUST_LOG": "debug"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug integration tests (ignored)",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--test=repository",
+                    "--package=in4me"
+                ],
+                "filter": {
+                    "name": "repository",
+                    "kind": "test"
+                }
+            },
+            "args": ["--", "--ignored"],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug all tests (including ignored)",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib",
+                    "--package=in4me"
+                ],
+                "filter": {
+                    "name": "in4me",
+                    "kind": "lib"
+                }
+            },
+            "args": ["--", "--include-ignored"],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "testName",
+            "description": "Enter test name to debug",
+            "default": "test_content_item_properties",
+            "type": "promptString"
         }
     ]
 }

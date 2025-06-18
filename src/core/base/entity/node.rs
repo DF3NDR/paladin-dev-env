@@ -1,22 +1,10 @@
-/*
-Node
-
-A Node is the most fundamental type in the Core. It is a type that is used to build most 
-other types. It is a type that is created with UUID, a created timestamp, a modified 
-timestamp, and a generic type that for the node itself. It also has a name and version, a
-boolean value for versioning.
-*/
-
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Node<T> 
-where
-    T: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Serialize + for<'de> serde::Deserialize<'de>,
-{
+pub struct Node<T> {
     pub uuid: Uuid,
     pub created: DateTime<Utc>,
     pub modified: DateTime<Utc>,
@@ -25,9 +13,9 @@ where
     pub version: bool,
 }
 
-impl<T> Hash for Node<T> 
+impl<T> Hash for Node<T>
 where
-    T: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Serialize + for<'de> Deserialize<'de>,
+    T: Hash,
 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.uuid.hash(state);
@@ -36,10 +24,7 @@ where
     }
 }
 
-impl<T> Node<T>
-where
-    T: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Serialize + for<'de> Deserialize<'de>,
-{
+impl<T> Node<T> {
     pub fn new(node: T, name: Option<String>) -> Self {
         let now = Utc::now();
         Self {

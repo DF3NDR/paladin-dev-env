@@ -32,14 +32,10 @@ mod tests {
             let test_url = Url::parse("https://example.com/test-list")
                 .map_err(|e| format!("Failed to parse URL: {}", e))?;
             
-            Ok(ContentList {
-                uuid: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(), 
-                name: "test.txt".to_string(), 
-                url: test_url,
-                created: Utc::now(),
-                modified: Utc::now(),
-                list_items: vec![],
-            })
+            let mut content_list = ContentList::with_name("test.txt".to_string());
+            content_list.set_url(Some(test_url));
+            
+            Ok(content_list)
         }
     }
 
@@ -51,9 +47,9 @@ mod tests {
 
         assert!(result.is_ok());
         let content_list = result.unwrap();
-        assert_eq!(content_list.name, "test.txt");
-        assert_eq!(content_list.list_items.len(), 0);
-        assert_eq!(content_list.uuid.to_string(), "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(content_list.name, Some("test.txt".to_string()));
+        assert_eq!(content_list.len(), 0);
+        assert!(content_list.uuid != Uuid::nil());
     }
 
     #[test]
@@ -84,7 +80,7 @@ mod tests {
         let content_list = result.unwrap();
         
         // Test that the URL is valid
-        assert_eq!(content_list.url.as_str(), "https://example.com/test-list");
+        assert_eq!(content_list.url.as_ref().unwrap().as_str(), "https://example.com/test-list");
         
         // Test that timestamps are reasonable (within the last minute)
         let now = Utc::now();

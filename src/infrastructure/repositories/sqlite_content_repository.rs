@@ -1,6 +1,6 @@
 use crate::application::storage::sql_store::*;
 use crate::core::platform::container::content::ContentItem;
-use crate::core::platform::container::content_list::{ContentList, ContentItemToFetch};
+use crate::core::platform::container::content_list::ContentList;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use sqlx::SqlitePool;
@@ -122,28 +122,6 @@ impl ContentListRepository for SqliteStore {
 
     fn remove_item_from_list(&self, _list_id: Uuid, _item_id: Uuid) -> Result<(), RepositoryError> {
         todo!("Implement remove_item_from_list")
-    }
-}
-
-impl ContentItemToFetchRepository for SqliteStore {
-    fn get_by_id(&self, _id: Uuid) -> Result<Option<ContentItemToFetch>, RepositoryError> {
-        todo!("Implement ContentItemToFetch get_by_id")
-    }
-
-    fn save(&self, _item_to_fetch: &ContentItemToFetch) -> Result<(), RepositoryError> {
-        todo!("Implement ContentItemToFetch save")
-    }
-
-    fn delete(&self, _id: Uuid) -> Result<(), RepositoryError> {
-        todo!("Implement ContentItemToFetch delete")
-    }
-
-    fn get_pending(&self, _limit: Option<u32>) -> Result<Vec<ContentItemToFetch>, RepositoryError> {
-        todo!("Implement get_pending")
-    }
-
-    fn mark_as_fetched(&self, _id: Uuid, _content_item: &ContentItem) -> Result<(), RepositoryError> {
-        todo!("Implement mark_as_fetched")
     }
 }
 

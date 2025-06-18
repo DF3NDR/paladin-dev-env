@@ -5,7 +5,7 @@ An application repository is a port that defines the operations that the applica
 */
 
 use crate::core::platform::container::content::{ContentItem, ContentItemError};
-use crate::core::platform::container::content_list::{ContentList, ContentItemToFetch, CreateContentListError};
+use crate::core::platform::container::content_list::{ContentList, ContentListError};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
@@ -29,7 +29,7 @@ pub enum RepositoryError {
     #[error("Content item error: {0}")]
     ContentItemError(#[from] ContentItemError),
     #[error("Content list error: {0}")]
-    ContentListError(#[from] CreateContentListError),
+    ContentListError(#[from] ContentListError),
 }
 
 /// Content Repository
@@ -103,25 +103,6 @@ pub trait ContentListRepository {
     fn remove_item_from_list(&self, list_id: Uuid, item_id: Uuid) -> Result<(), RepositoryError>;
 }
 
-/// Content Item To Fetch Repository
-/// Manages items that need to be fetched
-pub trait ContentItemToFetchRepository {
-    /// Get content item to fetch by UUID
-    fn get_by_id(&self, id: Uuid) -> Result<Option<ContentItemToFetch>, RepositoryError>;
-    
-    /// Save a content item to fetch
-    fn save(&self, item_to_fetch: &ContentItemToFetch) -> Result<(), RepositoryError>;
-    
-    /// Delete a content item to fetch by UUID
-    fn delete(&self, id: Uuid) -> Result<(), RepositoryError>;
-    
-    /// Get all pending items to fetch
-    fn get_pending(&self, limit: Option<u32>) -> Result<Vec<ContentItemToFetch>, RepositoryError>;
-    
-    /// Mark item as fetched (move to content items)
-    fn mark_as_fetched(&self, id: Uuid, content_item: &ContentItem) -> Result<(), RepositoryError>;
-}
-
 /// Database Transaction Manager
 /// Handles database transactions across multiple operations
 pub trait TransactionManager {
@@ -146,7 +127,7 @@ pub trait MigrationManager {
 
 /// Combined Repository Interface
 /// Aggregates all repository interfaces for convenience
-pub trait SqlStore: ContentRepository + ContentListRepository + ContentItemToFetchRepository + TransactionManager + MigrationManager {
+pub trait SqlStore: ContentRepository + ContentListRepository + TransactionManager + MigrationManager {
     /// Get repository statistics
     fn get_stats(&self) -> Result<RepositoryStats, RepositoryError>;
     

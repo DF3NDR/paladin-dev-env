@@ -25,7 +25,7 @@ impl ContentSummarizer {
 
     /// Generate a summary of the content based on its type
     pub fn summarize_content(&self, content: &ContentItem, max_length: usize) -> ContentSummary {
-        match &content.content {
+        match content.content() {
             ContentType::Text(text_content) => self.summarize_text_content(text_content, max_length),
             ContentType::Video(video_content) => self.summarize_video_content(video_content),
             ContentType::Audio(audio_content) => self.summarize_audio_content(audio_content),
@@ -226,7 +226,7 @@ impl ContentSummarizer {
         let mut keywords = Vec::new();
 
         // Add content type as keyword
-        match &content.content {
+        match content.content() {
             ContentType::Text(_) => keywords.push("text".to_string()),
             ContentType::Video(_) => keywords.push("video".to_string()),
             ContentType::Audio(_) => keywords.push("audio".to_string()),
@@ -234,7 +234,7 @@ impl ContentSummarizer {
         }
 
         // Add file extension if available
-        if let Some(path) = content.content.path() {
+        if let Some(path) = content.content().path() {
             if let Some(extension) = std::path::Path::new(path)
                 .extension()
                 .and_then(|ext| ext.to_str()) {
@@ -243,12 +243,12 @@ impl ContentSummarizer {
         }
 
         // Add tags if available
-        if let Some(ref tags) = content.tags {
+        if let Some(tags) = content.tags() {
             keywords.extend(tags.clone());
         }
 
         // For text content, extract some key words
-        if let ContentType::Text(text_content) = &content.content {
+        if let ContentType::Text(text_content) = content.content() {
             if let Some(ref text) = text_content.content {
                 let words: Vec<String> = text
                     .split_whitespace()

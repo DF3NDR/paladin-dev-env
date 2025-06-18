@@ -209,16 +209,16 @@ impl FileStorageClient {
     fn payload_to_text(&self, payload: &ContentPayload) -> Result<String, ContentDeliveryError> {
         match payload {
             ContentPayload::SingleItem(item) => {
-                let mut text = format!("Content Item: {}\n", item.uuid);
-                text.push_str(&format!("Created: {}\n", item.created));
-                if let Some(ref title) = item.title {
+                let mut text = format!("Content Item: {}\n", item.uuid());
+                text.push_str(&format!("Created: {}\n", item.created()));
+                if let Some(ref title) = item.title() {
                     text.push_str(&format!("Title: {}\n", title));
                 }
-                if let Some(ref description) = item.description {
+                if let Some(ref description) = item.description() {
                     text.push_str(&format!("Description: {}\n", description));
                 }
                 
-                match &item.content {
+                match item.content() {
                     ContentType::Text(text_content) => {
                         if let Some(ref content) = text_content.content {
                             text.push_str(&format!("Content: {}\n", content));
@@ -250,20 +250,16 @@ impl FileStorageClient {
         match payload {
             ContentPayload::ContentList(list) => {
                 let mut csv = String::from("UUID,Title,Description,Created,Modified,Source\n");
-                for item in &list.list_items {
-                    match item {
-                        crate::core::platform::container::content_list::ContentListItem::Item(content_item) => {
-                            csv.push_str(&format!("\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",
-                                content_item.uuid,
-                                content_item.title.as_deref().unwrap_or(""),
-                                content_item.description.as_deref().unwrap_or(""),
-                                content_item.created,
-                                content_item.modified,
-                                content_item.source.as_deref().unwrap_or("")
-                            ));
-                        },
-                        _ => {} // Skip non-item entries for CSV
-                    }
+                // Use the correct field name 'items' instead of 'list_items'
+                for item in &list.items {
+                    csv.push_str(&format!("\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",
+                        item.uuid(),
+                        item.title().map(|s| s.as_str()).unwrap_or(""),
+                        item.description().map(|s| s.as_str()).unwrap_or(""),
+                        item.created(),
+                        item.modified(),
+                        item.source().map(|s| s.as_str()).unwrap_or("")
+                    ));
                 }
                 Ok(csv)
             },
@@ -278,16 +274,16 @@ impl FileStorageClient {
     fn payload_to_markdown(&self, payload: &ContentPayload) -> Result<String, ContentDeliveryError> {
         match payload {
             ContentPayload::SingleItem(item) => {
-                let mut md = format!("# {}\n\n", item.title.as_deref().unwrap_or("Content Item"));
-                md.push_str(&format!("**UUID:** {}\n", item.uuid));
-                md.push_str(&format!("**Created:** {}\n", item.created));
-                md.push_str(&format!("**Modified:** {}\n\n", item.modified));
+                let mut md = format!("# {}\n\n", item.title().map(|s| s.as_str()).unwrap_or("Content Item"));
+                md.push_str(&format!("**UUID:** {}\n", item.uuid()));
+                md.push_str(&format!("**Created:** {}\n", item.created()));
+                md.push_str(&format!("**Modified:** {}\n\n", item.modified()));
                 
-                if let Some(ref description) = item.description {
+                if let Some(ref description) = item.description() {
                     md.push_str(&format!("## Description\n\n{}\n\n", description));
                 }
                 
-                if let ContentType::Text(text_content) = &item.content {
+                if let ContentType::Text(text_content) = item.content() {
                     if let Some(ref content) = text_content.content {
                         md.push_str(&format!("## Content\n\n{}\n", content));
                     }

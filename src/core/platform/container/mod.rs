@@ -1,5 +1,6 @@
 pub mod comment;
 pub mod content;
+pub mod content_service;
 pub mod content_list;
 pub mod job;
 pub mod log_entry;

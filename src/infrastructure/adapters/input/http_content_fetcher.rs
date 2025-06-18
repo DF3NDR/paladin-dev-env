@@ -38,14 +38,10 @@ impl ContentFetchingService for HttpContentFetcher {
 
         // Get content body
         let body = response.text().map_err(|e| format!("Failed to read response body: {}", e))?;
-        let content_length = body.len() as u64;
 
         // Create text content with the fetched body
-        let text_content = TextContent {
-            path: None,
-            content: Some(body),
-            filesize: content_length,
-        };
+        let text_content = TextContent::new(None, Some(body))
+            .map_err(|e| format!("Failed to create text content: {}", e))?;
 
         let content_type = ContentType::Text(text_content);
 
@@ -53,19 +49,21 @@ impl ContentFetchingService for HttpContentFetcher {
         let mut content_item = ContentItem::new(content_type)
             .map_err(|e| format!("Failed to create content item: {}", e))?;
 
-        // Set URL-specific metadata
-        content_item.url = Some(parsed_url.clone());
-        content_item.source_url = Some(parsed_url);
+        // Set URL-specific metadata using setter methods
+        content_item.set_url(Some(parsed_url.clone()));
+        content_item.set_source_url(Some(parsed_url));
         
         // Try to extract title from HTML if it's HTML content
-        if let ContentType::Text(ref text_content) = content_item.content {
+        if let ContentType::Text(text_content) = content_item.content() {
             if let Some(ref html_content) = text_content.content {
-                content_item.title = extract_title_from_html(html_content);
+                if let Some(title) = extract_title_from_html(html_content) {
+                    content_item.set_title(Some(title));
+                }
             }
         }
 
-        content_item.source = Some("web".to_string());
-        content_item.tags = Some(vec!["web".to_string()]);
+        content_item.set_source(Some("web".to_string()));
+        content_item.set_tags(Some(vec!["web".to_string()]));
 
         Ok(content_item)
     }
@@ -104,13 +102,13 @@ mod tests {
         assert!(result.is_ok());
         let content_item = result.unwrap();
         
-        assert!(content_item.title.is_some());
-        assert_eq!(content_item.title.unwrap(), "Test Page");
-        assert!(matches!(content_item.content, ContentType::Text(_)));
+        assert!(content_item.title().is_some());
+        assert_eq!(content_item.title().unwrap(), "Test Page");
+        assert!(matches!(content_item.content(), ContentType::Text(_)));
         
-        if let ContentType::Text(text_content) = content_item.content {
+        if let ContentType::Text(text_content) = content_item.content() {
             assert!(text_content.content.is_some());
-            assert!(text_content.content.unwrap().contains("Test content"));
+            assert!(text_content.content.as_ref().unwrap().contains("Test content"));
         }
 
         mock.assert();

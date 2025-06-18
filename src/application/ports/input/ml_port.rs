@@ -129,7 +129,7 @@ impl MlInputData {
     pub fn from_content_item(content_item: &ContentItem) -> Result<Self, MlPortError> {
         use crate::core::platform::container::content::ContentType;
         
-        match &content_item.content {
+        match content_item.content() {
             ContentType::Text(text_content) => {
                 if let Some(ref content) = text_content.content {
                     Ok(MlInputData::Text(content.clone()))

@@ -6,7 +6,7 @@ It reads files from the specified directory and creates ContentItem objects for 
 use std::fs;
 use std::path::Path;
 use crate::core::platform::container::content::{ContentItem, ContentType, TextContent, ImageContent, VideoContent, AudioContent};
-use crate::core::platform::container::content_list::{ContentList, ContentListItem};
+use crate::core::platform::container::content_list::ContentList;
 use crate::application::use_cases::content::content_list_fetching_service::ContentListFetchingService;
 use url::Url;
 
@@ -57,7 +57,14 @@ impl FileContentListFetcher {
 
 impl ContentListFetchingService for FileContentListFetcher {
     fn fetch_content_list(&self, directory: &str) -> Result<ContentList, String> {
-        let mut list: Vec<ContentListItem> = Vec::new();
+        let mut content_list = ContentList::new();
+        
+        // Set the content list metadata
+        content_list.set_name(Some(format!("Content from {}", directory)));
+        content_list.set_source(Some("file_system".to_string()));
+        content_list.set_url(Url::parse(&format!("file://{}", directory))
+            .map_err(|e| format!("Invalid directory URL: {}", e))?
+            .into());
         
         if let Ok(entries) = fs::read_dir(directory) {
             for entry in entries {
@@ -70,18 +77,21 @@ impl ContentListFetchingService for FileContentListFetcher {
                         // Create ContentItem using the new method
                         match ContentItem::new(content_type) {
                             Ok(mut content_item) => {
-                                // Set additional metadata
-                                content_item.url = Url::parse(&format!("file://{}", path.to_string_lossy()))
-                                    .ok();
-                                content_item.source_url = content_item.url.clone();
-                                content_item.title = path.file_name()
-                                    .and_then(|name| name.to_str())
-                                    .map(|s| s.to_string());
-                                content_item.tags = Some(Vec::new());
+                                // Set additional metadata using setter methods
+                                let file_url = Url::parse(&format!("file://{}", path.to_string_lossy()))
+                                    .map_err(|e| format!("Invalid file URL: {}", e))?;
                                 
-                                // Convert ContentItem to ContentListItem
-                                let content_list_item = ContentListItem::Item(content_item);
-                                list.push(content_list_item);
+                                content_item.set_url(Some(file_url.clone()));
+                                content_item.set_source_url(Some(file_url));
+                                
+                                if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
+                                    content_item.set_title(Some(file_name.to_string()));
+                                }
+                                
+                                content_item.set_tags(Some(Vec::new()));
+                                
+                                // Add to content list
+                                content_list.add_item(content_item);
                             },
                             Err(e) => {
                                 eprintln!("Failed to create content item for {}: {}", path.display(), e);
@@ -95,12 +105,7 @@ impl ContentListFetchingService for FileContentListFetcher {
             return Err(format!("Failed to read directory: {}", directory));
         }
         
-        ContentList::new(
-            directory.to_string(),
-            Url::parse(&format!("file://{}", directory))
-                .map_err(|e| format!("Invalid directory URL: {}", e))?,
-            list,
-        ).map_err(|e| format!("Failed to create content list: {}", e))
+        Ok(content_list)
     }
 }
 
@@ -123,16 +128,12 @@ mod tests {
         
         assert!(result.is_ok());
         let list = result.unwrap();
-        assert_eq!(list.list_items.len(), 1);
+        assert_eq!(list.items().len(), 1);
         
-        let item = &list.list_items[0];
-        if let ContentListItem::Item(content_item) = item {
-            assert!(content_item.title.is_some());
-            assert_eq!(content_item.title.as_ref().unwrap(), "test.txt");
-            assert!(matches!(content_item.content, ContentType::Text(_)));
-        } else {
-            panic!("Expected ContentListItem::Item");
-        }
+        let item = &list.items()[0];
+        assert!(item.title().is_some());
+        assert_eq!(item.title().as_ref().unwrap().as_str(), "test.txt");
+        assert!(matches!(item.content(), ContentType::Text(_)));
     }
 
     #[test]
@@ -153,16 +154,12 @@ mod tests {
         
         assert!(result.is_ok());
         let list = result.unwrap();
-        assert_eq!(list.list_items.len(), 2);
+        assert_eq!(list.items().len(), 2);
         
         // Both should be text content types
-        for item in &list.list_items {
-            if let ContentListItem::Item(content_item) = item {
-                assert!(matches!(content_item.content, ContentType::Text(_)));
-                assert!(content_item.title.is_some());
-            } else {
-                panic!("Expected ContentListItem::Item");
-            }
+        for item in list.items() {
+            assert!(matches!(item.content(), ContentType::Text(_)));
+            assert!(item.title().is_some());
         }
     }
 
@@ -175,7 +172,7 @@ mod tests {
         
         assert!(result.is_ok());
         let list = result.unwrap();
-        assert_eq!(list.list_items.len(), 0);
+        assert_eq!(list.items().len(), 0);
     }
 
     #[test]
@@ -184,5 +181,25 @@ mod tests {
         let result = fetcher.fetch_content_list("/nonexistent/directory");
         
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_content_list_metadata() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        let mut file = File::create(&file_path).unwrap();
+        writeln!(file, "Hello, world!").unwrap();
+
+        let fetcher = FileContentListFetcher;
+        let result = fetcher.fetch_content_list(dir.path().to_str().unwrap());
+        
+        assert!(result.is_ok());
+        let list = result.unwrap();
+        
+        // Check metadata
+        assert!(list.name.is_some());
+        assert!(list.name.as_ref().unwrap().contains(dir.path().to_str().unwrap()));
+        assert_eq!(list.source, Some("file_system".to_string()));
+        assert!(list.url.is_some());
     }
 }

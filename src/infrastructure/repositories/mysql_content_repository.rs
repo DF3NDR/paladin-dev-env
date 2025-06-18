@@ -1,28 +1,16 @@
-/*
-MySQL Content Repository
-
-This adapter implements the SQL store ports for MySQL database operations.
-It provides concrete implementations for content item and content list storage,
-following hexagonal architecture principles by implementing the repository traits
-defined in the application layer.
-
-The adapter handles database connections, query execution, transaction management,
-and data mapping between domain entities and database records.
-*/
-
 use crate::application::storage::sql_store::{
-    ContentRepository, ContentListRepository, ContentItemToFetchRepository, 
+    ContentRepository, ContentListRepository, 
     TransactionManager, MigrationManager, SqlStore, RepositoryError, RepositoryStats
 };
-use crate::core::platform::container::content::{ContentItem, ContentType, TextContent, VideoContent, AudioContent, ImageContent};
-use crate::core::platform::container::content_list::{ContentList, ContentItemToFetch};
+use crate::core::platform::container::content::{ContentItem, ContentType, TextContent, VideoContent, AudioContent, ImageContent, ContentData};
+use crate::core::platform::container::content_list::ContentList;
+use crate::core::base::entity::node::Node;
 
 use sqlx::{MySqlPool, Row, mysql::MySqlPoolOptions};
 use serde_json;
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use url::Url;
-use std::str::FromStr;
 
 #[derive(Debug, Clone)]
 pub struct MySqlContentRepository {
@@ -116,33 +104,39 @@ impl MySqlContentRepository {
                 let content = data["content"].as_str().map(|s| s.to_string());
                 let filesize = data["filesize"].as_u64().unwrap_or(0);
                 
-                Ok(ContentType::Text(TextContent {
+                let text_content = TextContent {
                     path,
                     content,
                     filesize,
-                }))
+                };
+                
+                Ok(ContentType::Text(text_content))
             },
             "video" => {
                 let path = data["path"].as_str().map(|s| s.to_string());
                 let duration = data["duration"].as_u64().unwrap_or(0);
                 let filesize = data["filesize"].as_u64().unwrap_or(0);
                 
-                Ok(ContentType::Video(VideoContent {
+                let video_content = VideoContent {
                     path,
                     duration,
                     filesize,
-                }))
+                };
+                
+                Ok(ContentType::Video(video_content))
             },
             "audio" => {
                 let path = data["path"].as_str().map(|s| s.to_string());
                 let duration = data["duration"].as_u64().unwrap_or(0);
                 let filesize = data["filesize"].as_u64().unwrap_or(0);
                 
-                Ok(ContentType::Audio(AudioContent {
+                let audio_content = AudioContent {
                     path,
                     duration,
                     filesize,
-                }))
+                };
+                
+                Ok(ContentType::Audio(audio_content))
             },
             "image" => {
                 let path = data["path"].as_str().map(|s| s.to_string());
@@ -155,21 +149,29 @@ impl MySqlContentRepository {
                 };
                 let filesize = data["filesize"].as_u64().unwrap_or(0);
                 
-                Ok(ContentType::Image(ImageContent {
+                let image_content = ImageContent {
                     path,
                     resolution,
                     filesize,
-                }))
+                };
+                
+                Ok(ContentType::Image(image_content))
             },
             _ => Err(RepositoryError::SerializationError(format!("Unknown content type: {}", content_type))),
         }
     }
 
     async fn row_to_content_item(&self, row: &sqlx::mysql::MySqlRow) -> Result<ContentItem, RepositoryError> {
+        // Extract database values
         let uuid_str: String = row.try_get("uuid")
             .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
-        let uuid = Uuid::from_str(&uuid_str)
+        let uuid = Uuid::parse_str(&uuid_str)
             .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
+
+        let created: DateTime<Utc> = row.try_get("created")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+        let modified: DateTime<Utc> = row.try_get("modified")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
         let content_type_str: String = row.try_get("content_type")
             .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
@@ -178,35 +180,73 @@ impl MySqlContentRepository {
         
         let content = self.deserialize_content_type(&content_type_str, &content_data_str).await?;
 
+        // Extract optional fields
+        let title: Option<String> = row.try_get("title")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+
         let url = row.try_get::<Option<String>, _>("url")
             .map_err(|e| RepositoryError::QueryError(e.to_string()))?
             .and_then(|url_str| Url::parse(&url_str).ok());
+
+        let hash: Option<String> = row.try_get("hash")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
         let source_url = row.try_get::<Option<String>, _>("source_url")
             .map_err(|e| RepositoryError::QueryError(e.to_string()))?
             .and_then(|url_str| Url::parse(&url_str).ok());
 
+        let description: Option<String> = row.try_get("description")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+
         let tags_str: Option<String> = row.try_get("tags")
             .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
         let tags = tags_str.and_then(|s| serde_json::from_str(&s).ok());
 
-        Ok(ContentItem {
-            uuid,
-            created: row.try_get("created").map_err(|e| RepositoryError::QueryError(e.to_string()))?,
-            modified: row.try_get("modified").map_err(|e| RepositoryError::QueryError(e.to_string()))?,
+        let source: Option<String> = row.try_get("source")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+
+        let author: Option<String> = row.try_get("author")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+
+        let source_id: Option<String> = row.try_get("source_id")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+
+        let pub_date: Option<DateTime<Utc>> = row.try_get("pub_date")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+
+        let mod_date: Option<DateTime<Utc>> = row.try_get("mod_date")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+
+        let version: bool = row.try_get("version")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+
+        // Reconstruct ContentData
+        let content_data = ContentData {
             content,
             url,
-            hash: row.try_get("hash").map_err(|e| RepositoryError::QueryError(e.to_string()))?,
-            source_id: row.try_get("source_id").map_err(|e| RepositoryError::QueryError(e.to_string()))?,
+            hash,
+            source_id,
             source_url,
-            title: row.try_get("title").map_err(|e| RepositoryError::QueryError(e.to_string()))?,
-            description: row.try_get("description").map_err(|e| RepositoryError::QueryError(e.to_string()))?,
+            description,
             tags,
-            source: row.try_get("source").map_err(|e| RepositoryError::QueryError(e.to_string()))?,
-            author: row.try_get("author").map_err(|e| RepositoryError::QueryError(e.to_string()))?,
-            pub_date: row.try_get("pub_date").map_err(|e| RepositoryError::QueryError(e.to_string()))?,
-            mod_date: row.try_get("mod_date").map_err(|e| RepositoryError::QueryError(e.to_string()))?,
-        })
+            source,
+            author,
+            pub_date,
+            mod_date,
+        };
+
+        // Reconstruct Node with database values
+        let node = Node {
+            uuid,
+            created,
+            modified,
+            node: content_data,
+            name: title,
+            version,
+        };
+
+        // Create ContentItem with reconstructed node
+        Ok(ContentItem { node })
     }
 }
 
@@ -252,10 +292,10 @@ impl ContentRepository for MySqlContentRepository {
             .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
         
         rt.block_on(async {
-            let (content_type, content_data) = self.serialize_content_type(&content.content).await?;
-            let content_data_str = serde_json::to_string(&content_data)
+            let (content_type, content_data_json) = self.serialize_content_type(&content.node.node.content).await?;
+            let content_data_str = serde_json::to_string(&content_data_json)
                 .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
-            let tags_str = content.tags.as_ref()
+            let tags_str = content.node.node.tags.as_ref()
                 .map(|tags| serde_json::to_string(tags))
                 .transpose()
                 .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
@@ -263,25 +303,27 @@ impl ContentRepository for MySqlContentRepository {
             sqlx::query(r#"
                 INSERT INTO content_items (
                     uuid, created, modified, content_type, content_data, url, hash,
-                    source_id, source_url, title, description, tags, source, author, pub_date, mod_date
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_url, title, description, tags, source, author, source_id,
+                    pub_date, mod_date, version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#)
-            .bind(content.uuid.to_string())
-            .bind(content.created)
-            .bind(content.modified)
+            .bind(content.node.uuid.to_string())
+            .bind(content.node.created)
+            .bind(content.node.modified)
             .bind(&content_type)
             .bind(&content_data_str)
-            .bind(content.url.as_ref().map(|u| u.as_str()))
-            .bind(&content.hash)
-            .bind(&content.source_id)
-            .bind(content.source_url.as_ref().map(|u| u.as_str()))
-            .bind(&content.title)
-            .bind(&content.description)
+            .bind(content.node.node.url.as_ref().map(|u| u.as_str()))
+            .bind(&content.node.node.hash)
+            .bind(content.node.node.source_url.as_ref().map(|u| u.as_str()))
+            .bind(&content.node.name)
+            .bind(&content.node.node.description)
             .bind(tags_str.as_deref())
-            .bind(&content.source)
-            .bind(&content.author)
-            .bind(content.pub_date)
-            .bind(content.mod_date)
+            .bind(&content.node.node.source)
+            .bind(&content.node.node.author)
+            .bind(&content.node.node.source_id)
+            .bind(content.node.node.pub_date)
+            .bind(content.node.node.mod_date)
+            .bind(content.node.version)
             .execute(&self.pool)
             .await
             .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
@@ -295,10 +337,10 @@ impl ContentRepository for MySqlContentRepository {
             .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
         
         rt.block_on(async {
-            let (content_type, content_data) = self.serialize_content_type(&content.content).await?;
-            let content_data_str = serde_json::to_string(&content_data)
+            let (content_type, content_data_json) = self.serialize_content_type(&content.node.node.content).await?;
+            let content_data_str = serde_json::to_string(&content_data_json)
                 .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
-            let tags_str = content.tags.as_ref()
+            let tags_str = content.node.node.tags.as_ref()
                 .map(|tags| serde_json::to_string(tags))
                 .transpose()
                 .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
@@ -306,31 +348,32 @@ impl ContentRepository for MySqlContentRepository {
             let result = sqlx::query(r#"
                 UPDATE content_items SET 
                     modified = ?, content_type = ?, content_data = ?, url = ?, hash = ?,
-                    source_id = ?, source_url = ?, title = ?, description = ?, tags = ?, 
-                    source = ?, author = ?, pub_date = ?, mod_date = ?
+                    source_url = ?, title = ?, description = ?, tags = ?, 
+                    source = ?, author = ?, source_id = ?, pub_date = ?, mod_date = ?, version = ?
                 WHERE uuid = ?
             "#)
-            .bind(content.modified)
+            .bind(content.node.modified)
             .bind(&content_type)
             .bind(&content_data_str)
-            .bind(content.url.as_ref().map(|u| u.as_str()))
-            .bind(&content.hash)
-            .bind(&content.source_id)
-            .bind(content.source_url.as_ref().map(|u| u.as_str()))
-            .bind(&content.title)
-            .bind(&content.description)
+            .bind(content.node.node.url.as_ref().map(|u| u.as_str()))
+            .bind(&content.node.node.hash)
+            .bind(content.node.node.source_url.as_ref().map(|u| u.as_str()))
+            .bind(&content.node.name)
+            .bind(&content.node.node.description)
             .bind(tags_str.as_deref())
-            .bind(&content.source)
-            .bind(&content.author)
-            .bind(content.pub_date)
-            .bind(content.mod_date)
-            .bind(content.uuid.to_string())
+            .bind(&content.node.node.source)
+            .bind(&content.node.node.author)
+            .bind(&content.node.node.source_id)
+            .bind(content.node.node.pub_date)
+            .bind(content.node.node.mod_date)
+            .bind(content.node.version)
+            .bind(content.node.uuid.to_string())
             .execute(&self.pool)
             .await
             .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
             if result.rows_affected() == 0 {
-                return Err(RepositoryError::NotFound(content.uuid.to_string()));
+                return Err(RepositoryError::NotFound(content.node.uuid.to_string()));
             }
 
             Ok(())
@@ -501,15 +544,16 @@ impl MigrationManager for MySqlContentRepository {
                     content_data JSON NOT NULL,
                     url TEXT,
                     hash VARCHAR(255),
-                    source_id VARCHAR(255),
                     source_url TEXT,
                     title TEXT,
                     description TEXT,
                     tags JSON,
                     source VARCHAR(255),
                     author VARCHAR(255),
+                    source_id VARCHAR(255),
                     pub_date TIMESTAMP NULL,
                     mod_date TIMESTAMP NULL,
+                    version BOOLEAN DEFAULT TRUE,
                     INDEX idx_hash (hash),
                     INDEX idx_source (source),
                     INDEX idx_created (created),
@@ -528,6 +572,7 @@ impl MigrationManager for MySqlContentRepository {
                     url TEXT NOT NULL,
                     created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    version BOOLEAN DEFAULT TRUE,
                     INDEX idx_name (name),
                     INDEX idx_created (created)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
@@ -541,7 +586,6 @@ impl MigrationManager for MySqlContentRepository {
                 CREATE TABLE IF NOT EXISTS content_list_items (
                     list_uuid VARCHAR(36),
                     item_uuid VARCHAR(36),
-                    item_type ENUM('content_item', 'fetch_item') DEFAULT 'content_item',
                     created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (list_uuid, item_uuid),
                     FOREIGN KEY (list_uuid) REFERENCES content_lists(uuid) ON DELETE CASCADE,
@@ -553,33 +597,16 @@ impl MigrationManager for MySqlContentRepository {
             .await
             .map_err(|e| RepositoryError::MigrationError(e.to_string()))?;
 
-            // Create items_to_fetch table
-            sqlx::query(r#"
-                CREATE TABLE IF NOT EXISTS items_to_fetch (
-                    uuid VARCHAR(36) PRIMARY KEY,
-                    url TEXT NOT NULL,
-                    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    content_item_uuid VARCHAR(36) NOT NULL,
-                    FOREIGN KEY (content_item_uuid) REFERENCES content_items(uuid) ON DELETE CASCADE,
-                    INDEX idx_created (created)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            "#)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| RepositoryError::MigrationError(e.to_string()))?;
-
             Ok(())
         })
     }
 
     fn is_up_to_date(&self) -> Result<bool, RepositoryError> {
-        // For simplicity, we'll just check if all tables exist
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
         
         rt.block_on(async {
-            let tables = vec!["content_items", "content_lists", "content_list_items", "items_to_fetch"];
+            let tables = vec!["content_items", "content_lists", "content_list_items"];
             
             for table in tables {
                 let result = sqlx::query("SHOW TABLES LIKE ?")
@@ -598,15 +625,12 @@ impl MigrationManager for MySqlContentRepository {
     }
 
     fn current_version(&self) -> Result<Option<String>, RepositoryError> {
-        // Simplified version tracking
         Ok(Some("1.0.0".to_string()))
     }
 }
 
-// Implement other traits with similar patterns...
 impl ContentListRepository for MySqlContentRepository {
     fn get_by_id(&self, _id: Uuid) -> Result<Option<ContentList>, RepositoryError> {
-        // Implementation similar to content items
         todo!("Implement content list retrieval")
     }
 
@@ -647,54 +671,25 @@ impl ContentListRepository for MySqlContentRepository {
     }
 }
 
-impl ContentItemToFetchRepository for MySqlContentRepository {
-    // Similar implementations for items to fetch...
-    fn get_by_id(&self, _id: Uuid) -> Result<Option<ContentItemToFetch>, RepositoryError> {
-        todo!("Implement item to fetch retrieval")
-    }
-
-    fn save(&self, _item_to_fetch: &ContentItemToFetch) -> Result<(), RepositoryError> {
-        todo!("Implement item to fetch saving")
-    }
-
-    fn delete(&self, _id: Uuid) -> Result<(), RepositoryError> {
-        todo!("Implement item to fetch deletion")
-    }
-
-    fn get_pending(&self, _limit: Option<u32>) -> Result<Vec<ContentItemToFetch>, RepositoryError> {
-        todo!("Implement pending items retrieval")
-    }
-
-    fn mark_as_fetched(&self, _id: Uuid, _content_item: &ContentItem) -> Result<(), RepositoryError> {
-        todo!("Implement mark as fetched")
-    }
-}
-
 impl TransactionManager for MySqlContentRepository {
     fn with_transaction<F, R>(&self, operation: F) -> Result<R, RepositoryError>
     where
         F: FnOnce() -> Result<R, RepositoryError>,
     {
-        // Simplified transaction handling
         operation()
     }
 }
 
 impl SqlStore for MySqlContentRepository {
     fn get_stats(&self) -> Result<RepositoryStats, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
+        let content_items_count = ContentRepository::count(self)?;
         
-        rt.block_on(async {
-            let content_items_count = ContentRepository::count(self)?;
-            
-            Ok(RepositoryStats {
-                total_content_items: content_items_count,
-                total_content_lists: 0, // TODO: Implement
-                total_items_to_fetch: 0, // TODO: Implement
-                database_size_bytes: None,
-                last_updated: Utc::now(),
-            })
+        Ok(RepositoryStats {
+            total_content_items: content_items_count,
+            total_content_lists: 0,
+            total_items_to_fetch: 0,
+            database_size_bytes: None,
+            last_updated: Utc::now(),
         })
     }
 
@@ -731,21 +726,63 @@ impl SqlStore for MySqlContentRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::platform::container::content::TextContent;
 
     #[tokio::test]
     async fn test_mysql_repository_creation() {
-        // This test would require a real MySQL database
-        // In practice, you'd use a test database or mocking
         println!("MySQL repository tests require database setup");
     }
 
     #[test]
     fn test_content_type_serialization() {
-        let _rt = tokio::runtime::Runtime::new().unwrap();
-        let _config = MySqlConfig::default();
+        let text_content = TextContent {
+            path: Some("test.txt".to_string()),
+            content: Some("Test content".to_string()),
+            filesize: 12,
+        };
         
-        // This would normally require database connection
-        // For unit tests, you'd extract the serialization logic to separate functions
-        println!("Content type serialization tests");
+        let content_type = ContentType::Text(text_content);
+        println!("Content type created: {:?}", content_type);
+    }
+
+    #[test]
+    fn test_content_item_reconstruction() {
+        let text_content = TextContent {
+            path: None,
+            content: Some("Test content".to_string()),
+            filesize: 12,
+        };
+        
+        let content_data = ContentData {
+            content: ContentType::Text(text_content),
+            url: None,
+            hash: None,
+            source_id: None,
+            source_url: None,
+            description: None,
+            tags: None,
+            source: None,
+            author: None,
+            pub_date: None,
+            mod_date: None,
+        };
+
+        let uuid = Uuid::new_v4();
+        let now = Utc::now();
+        
+        let node = Node {
+            uuid,
+            created: now,
+            modified: now,
+            node: content_data,
+            name: Some("Test Item".to_string()),
+            version: true,
+        };
+
+        let content_item = ContentItem { node };
+        
+        assert_eq!(content_item.uuid(), uuid);
+        assert_eq!(content_item.created(), now);
+        assert_eq!(content_item.title(), Some(&"Test Item".to_string()));
     }
 }

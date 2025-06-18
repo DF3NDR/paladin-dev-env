@@ -1,14 +1,3 @@
-/*
-Api Content Deliverer
-
-This output adapter is responsible for delivering content through an API endpoint.
-It implements the ContentDeliveryService trait, which defines the methods for delivering content.
-It can be used to deliver content to clients or other systems via HTTP requests.
-It is designed to be used in a web application context, where content needs to be delivered
-via an API endpoint.
-It can be used to deliver notifications, alerts, or any other type of content that needs to be delivered via an API.
-*/
-
 use crate::application::ports::output::content_delivery_port::{
     ContentDeliveryService, BatchContentDeliveryService, DeliveryRequest, DeliveryResponse,
     DeliveryMethod, ContentPayload, DeliveryStatus, DeliveryStats, ContentDeliveryError
@@ -60,6 +49,26 @@ impl ApiContentDeliverer {
         self.max_retries = max_retries;
         self.retry_delay_ms = retry_delay_ms;
         self
+    }
+
+    // Add async version of deliver_content for internal use and testing
+    pub async fn deliver_content_async(&self, request: DeliveryRequest) -> Result<DeliveryResponse, ContentDeliveryError> {
+        let delivery_id = Uuid::new_v4();
+        
+        let result = self.delivery_with_retry(&request).await;
+
+        let (status, attempt_count, error) = match result {
+            Ok(attempts) => (DeliveryStatus::Delivered, attempts, None),
+            Err(ref e) => (DeliveryStatus::Failed, self.max_retries, Some(e)),
+        };
+
+        let response = self.create_delivery_response(delivery_id, status, attempt_count, error);
+        self.store_delivery_history(response.clone());
+
+        match result {
+            Ok(_) => Ok(response),
+            Err(e) => Err(e),
+        }
     }
 
     async fn deliver_http(&self, endpoint: &str, headers: &Option<HashMap<String, String>>, payload: &ContentPayload) -> Result<(), ContentDeliveryError> {
@@ -195,27 +204,24 @@ impl Default for ApiContentDeliverer {
 
 impl ContentDeliveryService for ApiContentDeliverer {
     fn deliver_content(&self, request: DeliveryRequest) -> Result<DeliveryResponse, ContentDeliveryError> {
-        let delivery_id = Uuid::new_v4();
-        
-        // For synchronous trait, we need to use a runtime
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|_e| ContentDeliveryError::ServiceUnavailable)?;
-
-        let result = rt.block_on(async {
-            self.delivery_with_retry(&request).await
-        });
-
-        let (status, attempt_count, error) = match result {
-            Ok(attempts) => (DeliveryStatus::Delivered, attempts, None),
-            Err(ref e) => (DeliveryStatus::Failed, self.max_retries, Some(e)),
-        };
-
-        let response = self.create_delivery_response(delivery_id, status, attempt_count, error);
-        self.store_delivery_history(response.clone());
-
-        match result {
-            Ok(_) => Ok(response),
-            Err(e) => Err(e),
+        // Check if we're already in a Tokio runtime
+        match tokio::runtime::Handle::try_current() {
+            Ok(_) => {
+                // We're in a runtime, use spawn_blocking to avoid nested runtime
+                let deliverer = self.clone();
+                let result = std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new()
+                        .map_err(|_| ContentDeliveryError::ServiceUnavailable)?;
+                    rt.block_on(deliverer.deliver_content_async(request))
+                }).join().map_err(|_| ContentDeliveryError::ServiceUnavailable)?;
+                result
+            },
+            Err(_) => {
+                // We're not in a runtime, create one
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|_| ContentDeliveryError::ServiceUnavailable)?;
+                rt.block_on(self.deliver_content_async(request))
+            }
         }
     }
 
@@ -365,7 +371,8 @@ async fn deliver_content_handler(
     payload: web::Json<DeliveryRequest>,
     deliverer: web::Data<ApiContentDeliverer>,
 ) -> ActixResult<HttpResponse> {
-    match deliverer.deliver_content(payload.into_inner()) {
+    // Use the async version directly in the handler
+    match deliverer.deliver_content_async(payload.into_inner()).await {
         Ok(response) => Ok(HttpResponse::Ok().json(response)),
         Err(e) => Ok(HttpResponse::BadRequest().json(serde_json::json!({
             "error": e.to_string()
@@ -438,7 +445,8 @@ mod tests {
             metadata: None,
         };
 
-        let result = deliverer.deliver_content(request);
+        // Use the async version in the test
+        let result = deliverer.deliver_content_async(request).await;
         assert!(result.is_ok());
         let response = result.unwrap();
         assert_eq!(response.status, DeliveryStatus::Delivered);

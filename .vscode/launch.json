@@ -22,7 +22,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug all tests",
+            "name": "Debug src tests",
             "cargo": {
                 "args": [
                     "test",
@@ -33,6 +33,28 @@
                 "filter": {
                     "name": "in4me",
                     "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug repository tests (tests/)",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--test=repository",
+                    "--package=in4me"
+                ],
+                "filter": {
+                    "name": "repository",
+                    "kind": "test"
                 }
             },
             "args": [],
@@ -67,16 +89,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug repository tests",
+            "name": "Debug integration tests",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--test=repository",
+                    "--test=integration",
                     "--package=in4me"
                 ],
                 "filter": {
-                    "name": "repository",
+                    "name": "integration",
                     "kind": "test"
                 }
             },
@@ -89,17 +111,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug MySQL repository tests",
+            "name": "Debug functional tests",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--test=repository",
-                    "--package=in4me",
-                    "mysql_content_repository_test"
+                    "--test=functional",
+                    "--package=in4me"
                 ],
                 "filter": {
-                    "name": "repository",
+                    "name": "functional",
                     "kind": "test"
                 }
             },
@@ -107,53 +128,6 @@
             "cwd": "${workspaceFolder}",
             "env": {
                 "RUST_BACKTRACE": "1"
-            }
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug content fetching service tests",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--lib",
-                    "--package=in4me",
-                    "application::use_cases::content::content_fetching_service::tests"
-                ],
-                "filter": {
-                    "name": "in4me",
-                    "kind": "lib"
-                }
-            },
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "RUST_BACKTRACE": "1"
-            }
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug failing test",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--lib",
-                    "--package=in4me",
-                    "test_content_item_properties"
-                ],
-                "filter": {
-                    "name": "in4me",
-                    "kind": "lib"
-                }
-            },
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "RUST_BACKTRACE": "1",
-                "RUST_LOG": "debug"
             }
         },
         {
@@ -164,11 +138,11 @@
                 "args": [
                     "test",
                     "--no-run",
-                    "--test=repository",
+                    "--test=integration_test",
                     "--package=in4me"
                 ],
                 "filter": {
-                    "name": "repository",
+                    "name": "integration_test",
                     "kind": "test"
                 }
             },
@@ -195,6 +169,28 @@
                 }
             },
             "args": ["--", "--include-ignored"],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_BACKTRACE": "1"
+            }
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug all integration tests",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--tests",
+                    "--package=in4me"
+                ],
+                "filter": {
+                    "name": "in4me",
+                    "kind": "test"
+                }
+            },
+            "args": [],
             "cwd": "${workspaceFolder}",
             "env": {
                 "RUST_BACKTRACE": "1"

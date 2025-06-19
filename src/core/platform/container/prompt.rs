@@ -1,239 +1,374 @@
-/*
-PromptItem Platform Container
-
-`PromptItem` represents a prompt used for LLM input. It is is container that is a specialized extension of a `ContentListItem` container which always has a text contentItem and can also contain any number of content including text composite type files (e.g. doc, pdf, csv, etc), videos files, audio files, or image files.  Basically anything that can be used as a prompt for an LLM.
-It contains metadata such as UUID, creation and modification timestamps, prompt type, URL, hash, source information, title, description, tags, author, and publication/modification dates.
-It also provides methods to create a new prompt item, update its prompt, and generate a hash for the prompt.
-PromptItem is a type of ContentList which is a type of Collection  in the Hexagonal Architecture, meaning it is a core domain entity that should not have direct knowledge of the repository.
-
-ToDo this is a placeholder for the actual implementation of the PromptItem domain entity. It is a copy of the ContentItem.
-
-*/
-
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use url::Url;
-use chrono::{DateTime, Utc};
-use std::hash::Hash;
-use fasthash::{murmur3::Hash128_x64, FastHash};
-
+use chrono::Utc;
+use std::hash::{Hash, Hasher};
+use std::collections::BTreeMap;
 use thiserror::Error;
-use std::io::Read;
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+use crate::core::base::entity::node::Node;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PromptItem {
-    pub uuid: Uuid,
-    pub created: DateTime<Utc>,
-    pub modified: DateTime<Utc>,
-    pub prompt: PromptType,
-    pub url: Option<Url>,
-    pub hash: Option<String>,
-    pub source_id: Option<String>,
-    pub source_url: Option<Url>,
-    pub title: Option<String>,
-    pub description: Option<String>,
+    pub node: Node<PromptData>,
+}
+
+impl Hash for PromptItem {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.node.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PromptData {
+    pub prompt_type: PromptType,
+    pub content_attachments: Vec<Uuid>, // References to ContentItems
+    pub parameters: PromptParameters,
+    pub context: Option<String>,
+    pub expected_output: Option<String>,
     pub tags: Option<Vec<String>>,
-    pub source: Option<String>,
+    pub category: Option<String>,
     pub author: Option<String>,
-    pub pub_date: Option<DateTime<Utc>>,
-    pub mod_date: Option<DateTime<Utc>>,
+    pub metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum PromptType {
+    Text(TextPrompt),
+    System(SystemPrompt),
+    User(UserPrompt),
+    Assistant(AssistantPrompt),
+    Function(FunctionPrompt),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptParameters {
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub frequency_penalty: Option<f32>,
+    pub presence_penalty: Option<f32>,
+    pub stop_sequences: Option<Vec<String>>,
+}
+
+impl PartialEq for PromptParameters {
+    fn eq(&self, other: &Self) -> bool {
+        self.max_tokens == other.max_tokens
+            && self.temperature == other.temperature
+            && self.top_p == other.top_p
+            && self.frequency_penalty == other.frequency_penalty
+            && self.presence_penalty == other.presence_penalty
+            && self.stop_sequences == other.stop_sequences
+    }
+}
+
+impl Eq for PromptParameters {}
+
+impl PartialOrd for PromptParameters {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        // First compare max_tokens
+        match self.max_tokens.cmp(&other.max_tokens) {
+            std::cmp::Ordering::Equal => {},
+            ord => return Some(ord),
+        }
+        
+        // Then compare temperature using bits representation for consistency
+        match (self.temperature, other.temperature) {
+            (Some(a), Some(b)) => {
+                match a.to_bits().cmp(&b.to_bits()) {
+                    std::cmp::Ordering::Equal => {},
+                    ord => return Some(ord),
+                }
+            },
+            (None, None) => {},
+            (Some(_), None) => return Some(std::cmp::Ordering::Greater),
+            (None, Some(_)) => return Some(std::cmp::Ordering::Less),
+        }
+        
+        // Compare top_p
+        match (self.top_p, other.top_p) {
+            (Some(a), Some(b)) => {
+                match a.to_bits().cmp(&b.to_bits()) {
+                    std::cmp::Ordering::Equal => {},
+                    ord => return Some(ord),
+                }
+            },
+            (None, None) => {},
+            (Some(_), None) => return Some(std::cmp::Ordering::Greater),
+            (None, Some(_)) => return Some(std::cmp::Ordering::Less),
+        }
+        
+        // Compare frequency_penalty
+        match (self.frequency_penalty, other.frequency_penalty) {
+            (Some(a), Some(b)) => {
+                match a.to_bits().cmp(&b.to_bits()) {
+                    std::cmp::Ordering::Equal => {},
+                    ord => return Some(ord),
+                }
+            },
+            (None, None) => {},
+            (Some(_), None) => return Some(std::cmp::Ordering::Greater),
+            (None, Some(_)) => return Some(std::cmp::Ordering::Less),
+        }
+        
+        // Compare presence_penalty
+        match (self.presence_penalty, other.presence_penalty) {
+            (Some(a), Some(b)) => {
+                match a.to_bits().cmp(&b.to_bits()) {
+                    std::cmp::Ordering::Equal => {},
+                    ord => return Some(ord),
+                }
+            },
+            (None, None) => {},
+            (Some(_), None) => return Some(std::cmp::Ordering::Greater),
+            (None, Some(_)) => return Some(std::cmp::Ordering::Less),
+        }
+        
+        // Finally compare stop_sequences
+        Some(self.stop_sequences.cmp(&other.stop_sequences))
+    }
+}
+
+impl Ord for PromptParameters {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
+
+impl Hash for PromptParameters {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.max_tokens.hash(state);
+        if let Some(temp) = self.temperature {
+            temp.to_bits().hash(state);
+        }
+        if let Some(top_p) = self.top_p {
+            top_p.to_bits().hash(state);
+        }
+        if let Some(freq) = self.frequency_penalty {
+            freq.to_bits().hash(state);
+        }
+        if let Some(pres) = self.presence_penalty {
+            pres.to_bits().hash(state);
+        }
+        self.stop_sequences.hash(state);
+    }
+}
+
+impl Default for PromptParameters {
+    fn default() -> Self {
+        Self {
+            max_tokens: Some(1000),
+            temperature: Some(0.7),
+            top_p: Some(1.0),
+            frequency_penalty: Some(0.0),
+            presence_penalty: Some(0.0),
+            stop_sequences: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TextPrompt {
+    pub content: String,
+    pub role: PromptRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum PromptRole {
+    System,
+    User,
+    Assistant,
+    Function,
+}
+
+// Additional prompt types...
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct SystemPrompt {
+    pub instructions: String,
+    pub constraints: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct UserPrompt {
+    pub query: String,
+    pub context: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AssistantPrompt {
+    pub response: String,
+    pub reasoning: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct FunctionPrompt {
+    pub function_name: String,
+    pub arguments: BTreeMap<String, String>,
+    pub description: Option<String>,
 }
 
 impl PromptItem {
-    // Being a Domain Entity in Hexagonal Architecture the PromptItem should not have any knowledge of the repository
-    pub fn new(
-        prompt: PromptType, 
-        // repository: &impl PromptRepository
-    ) -> Result<Self, PromptItemError> {
-        let prompt_item = PromptItem {
-            uuid: Uuid::new_v4(),
-            created: Utc::now(),
-            modified: Utc::now(),
-            prompt,
-            url: None,
-            hash: None,
-            source_id: None,
-            source_url: None,
-            title: None,
-            description: None,
+    pub fn new(prompt_type: PromptType) -> Result<Self, PromptItemError> {
+        let prompt_data = PromptData {
+            prompt_type,
+            content_attachments: Vec::new(),
+            parameters: PromptParameters::default(),
+            context: None,
+            expected_output: None,
             tags: None,
-            source: None,
+            category: None,
             author: None,
-            pub_date: None,
-            mod_date: None,
+            metadata: BTreeMap::new(),
         };
 
-        // prompt_item.update_hash(repository)?;
-
-        Ok(prompt_item)
+        let node = Node::new(prompt_data, None);
+        Ok(PromptItem { node })
     }
 
-    // Being a Domain Entity in Hexagonal Architecture the PromptItem should not have any knowledge of the repository
-    pub fn update_prompt(
-        &mut self, new_prompt: PromptType, 
-        // repository: &impl PromptRepository
-    ) -> Result<(), PromptItemError> {
-        self.prompt = new_prompt;
-        self.modified = Utc::now();
-        // self.update_hash(repository)?;
-        Ok(())
-    }
-
-    // Being a Domain Entity in Hexagonal Architecture the PromptItem should not have any knowledge of the repository
-    #[allow(dead_code)]
-    fn update_hash(
-        &mut self, 
-        // repository: &impl PromptRepository
-    ) -> Result<(), PromptItemError> {
-        if let Some(path) = self.prompt.path() {
-            let new_hash = generate_file_hash(&path)?;
-            // if let Some(existing_prompt) = repository.get_by_hash(&new_hash)? {
-            //     return Err(PromptItemError::HashAlreadyExists(existing_prompt.uuid));
-            // }
-            self.hash = Some(new_hash);
-        } else {
-            self.hash = None;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum PromptType {
-    Text(TextPrompt),
-    Video(VideoPrompt),
-    Audio(AudioPrompt),
-    Image(ImagePrompt),
-}
-
-impl PromptType {
-    pub fn path(&self) -> Option<&String> {
-        match self {
-            PromptType::Text(text) => text.path.as_ref(),
-            PromptType::Video(video) => video.path.as_ref(),
-            PromptType::Audio(audio) => audio.path.as_ref(),
-            PromptType::Image(image) => image.path.as_ref(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TextPrompt {
-    pub path: Option<String>,
-    pub prompt: Option<String>,
-    pub filesize: u64,
-}
-
-impl TextPrompt {
-    pub fn new(path: Option<String>, prompt: Option<String>) -> Result<Self, PromptItemError> {
-        let filesize = if let Some(ref path) = path {
-            let metadata = std::fs::metadata(path)?;
-            check_filesize(metadata.len())?;
-            metadata.len()
-        } else {
-            0
+    pub fn new_with_title(prompt_type: PromptType, title: String) -> Result<Self, PromptItemError> {
+        let prompt_data = PromptData {
+            prompt_type,
+            content_attachments: Vec::new(),
+            parameters: PromptParameters::default(),
+            context: None,
+            expected_output: None,
+            tags: None,
+            category: None,
+            author: None,
+            metadata: BTreeMap::new(),
         };
-        Ok(TextPrompt { path, prompt, filesize })
+
+        let node = Node::new(prompt_data, Some(title));
+        Ok(PromptItem { node })
+    }
+
+    // Getters and setters
+    pub fn uuid(&self) -> Uuid { self.node.uuid }
+    pub fn title(&self) -> Option<&String> { self.node.name.as_ref() }
+    pub fn prompt_type(&self) -> &PromptType { &self.node.node.prompt_type }
+    pub fn parameters(&self) -> &PromptParameters { &self.node.node.parameters }
+    pub fn content_attachments(&self) -> &[Uuid] { &self.node.node.content_attachments }
+    
+    pub fn add_content_attachment(&mut self, content_id: Uuid) {
+        self.node.node.content_attachments.push(content_id);
+        self.node.modified = Utc::now();
+    }
+
+    pub fn set_parameters(&mut self, parameters: PromptParameters) {
+        self.node.node.parameters = parameters;
+        self.node.modified = Utc::now();
+    }
+
+    pub fn set_context(&mut self, context: Option<String>) {
+        self.node.node.context = context;
+        self.node.modified = Utc::now();
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct VideoPrompt {
-    pub path: Option<String>,
-    pub duration: u64,
-    pub filesize: u64,
-}
-
-impl VideoPrompt {
-    pub fn new(path: Option<String>, duration: u64) -> Result<Self, PromptItemError> {
-        let filesize = if let Some(ref path) = path {
-            let metadata = std::fs::metadata(path)?;
-            check_filesize(metadata.len())?;
-            metadata.len()
-        } else {
-            0
-        };
-        Ok(VideoPrompt { path, duration, filesize })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AudioPrompt {
-    pub path: Option<String>,
-    pub duration: u64,
-    pub filesize: u64,
-}
-
-impl AudioPrompt {
-    pub fn new(path: Option<String>, duration: u64) -> Result<Self, PromptItemError> {
-        let filesize = if let Some(ref path) = path {
-            let metadata = std::fs::metadata(path)?;
-            check_filesize(metadata.len())?;
-            metadata.len()
-        } else {
-            0
-        };
-        Ok(AudioPrompt { path, duration, filesize })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ImagePrompt {
-    pub path: Option<String>,
-    pub resolution: (u32, u32),
-    pub filesize: u64,
-}
-
-impl ImagePrompt {
-    pub fn new(path: Option<String>, resolution: (u32, u32)) -> Result<Self, PromptItemError> {
-        let filesize = if let Some(ref path) = path {
-            let metadata = std::fs::metadata(path)?;
-            check_filesize(metadata.len())?;
-            metadata.len()
-        } else {
-            0
-        };
-        Ok(ImagePrompt { path, resolution, filesize })
-    }
-}
 #[derive(Debug, Clone, Error)]
 pub enum PromptItemError {
-    #[error("File not found")]
-    FileNotFound,
-    #[error("Failed to read file")]
-    FileReadError,
-    #[error("File size exceeds the maximum limit")]
-    FileSizeLimitExceeded,
-    #[error("Prompt hash already exists in the system with UUID: {0}")]
-    HashAlreadyExists(Uuid),
-    #[error("No prompt item exists for that hash")]
-    NoPromptForHash,
-    #[error("IO error: {0}")]
-    IoError(String),
+    #[error("Invalid prompt configuration: {0}")]
+    InvalidConfiguration(String),
+    #[error("Missing required field: {0}")]
+    MissingField(String),
+    #[error("Invalid parameter value: {0}")]
+    InvalidParameter(String),
 }
 
-impl From<std::io::Error> for PromptItemError {
-    fn from(error: std::io::Error) -> Self {
-        match error.kind() {
-            std::io::ErrorKind::NotFound => PromptItemError::FileNotFound,
-            _ => PromptItemError::IoError(error.to_string()),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prompt_parameters_equality() {
+        let params1 = PromptParameters {
+            max_tokens: Some(100),
+            temperature: Some(0.5),
+            top_p: Some(0.9),
+            frequency_penalty: Some(0.1),
+            presence_penalty: Some(0.2),
+            stop_sequences: Some(vec!["END".to_string()]),
+        };
+
+        let params2 = PromptParameters {
+            max_tokens: Some(100),
+            temperature: Some(0.5),
+            top_p: Some(0.9),
+            frequency_penalty: Some(0.1),
+            presence_penalty: Some(0.2),
+            stop_sequences: Some(vec!["END".to_string()]),
+        };
+
+        assert_eq!(params1, params2);
+    }
+
+    #[test]
+    fn test_prompt_parameters_ordering() {
+        let params1 = PromptParameters {
+            max_tokens: Some(100),
+            ..Default::default()
+        };
+
+        let params2 = PromptParameters {
+            max_tokens: Some(200),
+            ..Default::default()
+        };
+
+        assert!(params1 < params2);
+    }
+
+    #[test]
+    fn test_text_prompt_creation() {
+        let text_prompt = TextPrompt {
+            content: "Hello, world!".to_string(),
+            role: PromptRole::User,
+        };
+
+        let prompt_item = PromptItem::new_with_title(
+            PromptType::Text(text_prompt),
+            "Test Prompt".to_string(),
+        );
+
+        assert!(prompt_item.is_ok());
+        let item = prompt_item.unwrap();
+        assert_eq!(item.title(), Some(&"Test Prompt".to_string()));
+        
+        match item.prompt_type() {
+            PromptType::Text(text) => {
+                assert_eq!(text.content, "Hello, world!");
+                assert_eq!(text.role, PromptRole::User);
+            },
+            _ => panic!("Expected text prompt"),
         }
     }
-}
-#[allow(dead_code)]
-fn generate_file_hash(path: &str) -> Result<String, PromptItemError> {
-    let mut file = std::fs::File::open(path).map_err(|_| PromptItemError::FileNotFound)?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).map_err(|_| PromptItemError::FileReadError)?;
-    
-    // Fix: Hash128_x64::hash expects a slice, and we need to format the hash value properly
-    let hash_value = Hash128_x64::hash(&buffer);
-    Ok(format!("{:x}", hash_value))
-}
 
-fn check_filesize(filesize: u64) -> Result<(), PromptItemError> {
-    let max_file_size = crate::config::application_settings::Settings::max_file_size();
-    if filesize > max_file_size {
-        Err(PromptItemError::FileSizeLimitExceeded)
-    } else {
-        Ok(())
+    #[test]
+    fn test_prompt_item_modifications() {
+        let text_prompt = TextPrompt {
+            content: "Test content".to_string(),
+            role: PromptRole::System,
+        };
+
+        let mut prompt_item = PromptItem::new_with_title(
+            PromptType::Text(text_prompt),
+            "Modifiable Prompt".to_string(),
+        ).unwrap();
+
+        // Test adding content attachment
+        let content_id = Uuid::new_v4();
+        prompt_item.add_content_attachment(content_id);
+        assert_eq!(prompt_item.content_attachments().len(), 1);
+        assert_eq!(prompt_item.content_attachments()[0], content_id);
+
+        // Test setting parameters
+        let new_params = PromptParameters {
+            max_tokens: Some(500),
+            temperature: Some(0.8),
+            ..Default::default()
+        };
+        prompt_item.set_parameters(new_params.clone());
+        assert_eq!(prompt_item.parameters(), &new_params);
+
+        // Test setting context
+        prompt_item.set_context(Some("Test context".to_string()));
+        assert_eq!(prompt_item.node.node.context, Some("Test context".to_string()));
     }
 }

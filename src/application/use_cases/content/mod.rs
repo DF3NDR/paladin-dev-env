@@ -1,9 +1,10 @@
 pub mod content_aggregator_service;
 pub mod content_summarizer_service;
+pub mod content_analysis_service;
 // pub mod content_delivery_service;
 pub mod content_fetching_service;
 // pub mod content_filtering_service;
-// pub mod content_llm_analysis_service;
+pub mod content_llm_analysis_service;
 // pub mod content_summarizer_service;
 // pub mod content_filtering_service;
 // pub mod content_tagging_service;

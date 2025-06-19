@@ -1,8 +1,12 @@
-
 use serde_json::Value;
-use crate::core::domain::services::content_analysis_service::ContentAnalysisService;
-use crate::core::domain::entities::content_item::ContentItem;
+use crate::core::platform::container::content::ContentItem;
 
+/// Trait for content analysis services
+pub trait ContentAnalysisService {
+    fn analyze_content(&self, content: &ContentItem) -> Result<Value, String>;
+}
+
+/// Use case for analyzing content
 pub struct AnalyzeContent<T: ContentAnalysisService> {
     service: T,
 }
@@ -20,11 +24,8 @@ impl<T: ContentAnalysisService> AnalyzeContent<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::domain::services::content_analysis_service::ContentAnalysisService;
-    use crate::core::domain::entities::content_item::ContentItem;
-    use chrono::{DateTime, Utc};
+    use crate::core::platform::container::content::{ContentItem, ContentType, TextContent};
     use serde_json::Value;
-    use uuid::Uuid;
 
     struct MockContentAnalysisService;
 
@@ -38,15 +39,20 @@ mod tests {
     fn test_analyze_content() {
         let service = MockContentAnalysisService;
         let use_case = AnalyzeContent::new(service);
-        let content = ContentItem {
-            uuid: Uuid::new_v4(),
-            created: Utc::now(),
-            modified: Utc::now(),
-            source_data: SourceData::new("Mock Source".to_string(), "Mock URL".to_string());
-            content: crate::entities::content_item::ContentType::Text::new("Mock Content".to_string()),
-        };
+        
+        // Create a proper ContentItem for testing
+        let text_content = TextContent::new(
+            None, 
+            Some("Mock Content".to_string())
+        ).expect("Failed to create text content");
+        
+        let content = ContentItem::new_with_title(
+            ContentType::Text(text_content),
+            "Mock Title".to_string(),
+        ).expect("Failed to create content item");
+        
         let result = use_case.execute(&content);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Value::String("Test Summary".to_string())); // ToDo - Implement Mock ContentItem validation
+        assert_eq!(result.unwrap(), Value::String("Test Summary".to_string()));
     }
 }

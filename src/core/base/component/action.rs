@@ -1,7 +1,7 @@
 /*
 Action Component
 
-An Action Component is a struct that represents an action that can be taken in the system.
+An Action Component represents an action that can be taken in the system.
 It contains the Service Call, the Action Type, the source of the Action,
 and the Timestamp when the action was created and when it occurred.
 
@@ -11,6 +11,8 @@ Service with the Arguments.
 
 This gives a way for the system to respond to Events and to take Actions based on 
 those Events in a decoupled way.
+
+At the Platform level, Action type examples include Jobs and Tasks.
 */
 use chrono::{DateTime, Utc};
 

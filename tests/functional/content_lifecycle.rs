@@ -1,15 +1,19 @@
 #[cfg(test)]
 mod functional_tests {
-    use super::*;
-    use crate::core::platform::container::content::{ContentType, TextContent};
-    use crate::core::base::service::node_version_service::InMemoryNodeVersionRepository;
+    use in4me::core::platform::container::content::{ContentItem, ContentType, TextContent};
+    use in4me::core::base::service::node_version_service::{
+        InMemoryNodeVersionRepository, ChangeType, VersioningError, NodeVersionRepository
+    };
+    use in4me::core::platform::container::content_service::{ContentItemService, ContentItemServiceError};
     use std::sync::Arc;
+    use uuid::Uuid;
+    use chrono::Utc;
 
     #[test]
     fn test_functional_content_item_lifecycle() {
         // Setup
-        let repository = Arc::new(InMemoryNodeVersionRepository::new());
-        let service = ContentItemService::new(repository);
+        let repository: Arc<dyn NodeVersionRepository<_> + Send + Sync> = Arc::new(InMemoryNodeVersionRepository::new());
+        let service = ContentItemService::new(repository.clone());
         
         // Create initial content
         let text_content = TextContent::new(
@@ -144,7 +148,7 @@ mod functional_tests {
     #[test]
     fn test_versioning_disabled_content() {
         let repository = Arc::new(InMemoryNodeVersionRepository::new());
-        let service = ContentItemService::new(repository);
+        let service = ContentItemService::new(repository.clone());
         
         let text_content = TextContent::new(
             None, 
@@ -206,5 +210,70 @@ mod functional_tests {
         }
         
         println!("✅ Node integration test passed");
+    }
+
+    #[test]
+    fn test_content_item_basic_functionality() {
+        // Simple test to verify ContentItem works without versioning service
+        let text_content = TextContent::new(
+            None,
+            Some("Basic functionality test".to_string())
+        ).unwrap();
+        
+        let mut content_item = ContentItem::new_with_title(
+            ContentType::Text(text_content),
+            "Basic Test".to_string(),
+        ).unwrap();
+        
+        // Test basic properties
+        assert_eq!(content_item.title(), Some(&"Basic Test".to_string()));
+        assert!(content_item.uuid() != Uuid::nil());
+        assert!(content_item.created() <= Utc::now());
+        assert!(content_item.versioning_enabled());
+        
+        // Test property updates
+        content_item.set_description(Some("Updated description".to_string()));
+        content_item.set_author(Some("Test Author".to_string()));
+        content_item.set_tags(Some(vec!["tag1".to_string(), "tag2".to_string()]));
+        
+        assert_eq!(content_item.description(), Some(&"Updated description".to_string()));
+        assert_eq!(content_item.author(), Some(&"Test Author".to_string()));
+        assert_eq!(content_item.tags(), Some(&vec!["tag1".to_string(), "tag2".to_string()]));
+        
+        // Test versioning control
+        content_item.disable_versioning();
+        assert!(!content_item.versioning_enabled());
+        
+        content_item.enable_versioning();
+        assert!(content_item.versioning_enabled());
+        
+        println!("✅ Basic functionality test passed");
+    }
+
+    #[test]
+    fn test_content_type_variations() {
+        use in4me::core::platform::container::content::{VideoContent, AudioContent, ImageContent};
+        
+        // Test Text Content
+        let text_content = TextContent::new(None, Some("Text content".to_string())).unwrap();
+        let text_item = ContentItem::new(ContentType::Text(text_content)).unwrap();
+        assert!(matches!(*text_item.content(), ContentType::Text(_)));
+        
+        // Test Video Content
+        let video_content = VideoContent::new(None, 3600).unwrap(); // 1 hour duration
+        let video_item = ContentItem::new(ContentType::Video(video_content)).unwrap();
+        assert!(matches!(*video_item.content(), ContentType::Video(_)));
+        
+        // Test Audio Content
+        let audio_content = AudioContent::new(None, 180).unwrap(); // 3 minutes duration
+        let audio_item = ContentItem::new(ContentType::Audio(audio_content)).unwrap();
+        assert!(matches!(*audio_item.content(), ContentType::Audio(_)));
+        
+        // Test Image Content
+        let image_content = ImageContent::new(None, (1920, 1080)).unwrap(); // Full HD resolution
+        let image_item = ContentItem::new(ContentType::Image(image_content)).unwrap();
+        assert!(matches!(*image_item.content(), ContentType::Image(_)));
+        
+        println!("✅ Content type variations test passed");
     }
 }

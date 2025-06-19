@@ -11,12 +11,10 @@ It can have other fields.
 Example of a Resource type:
 
 A resource type could be a file stored which is accessible through the file system so 
-would require that if uses the standard scheme starting with `file://`.  It could be
+would require that it uses the standard scheme starting with `file://`.  It could be
 a custom resource like a file that is stored in a configurable location and utilizing a 
 custom scheme like 'private://', 'public://' or 'tmp://' or it could be a resource that is
 available over the internet and uses the standard `http://` or `https://` scheme.
-
-
 */
 
 use uuid::Uuid;

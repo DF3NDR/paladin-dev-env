@@ -1,4 +1,5 @@
 /target
+notes
 .env
 config.yml
 config.test.yml

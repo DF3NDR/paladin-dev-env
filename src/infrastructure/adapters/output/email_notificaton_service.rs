@@ -10,7 +10,7 @@ It can be used to send notifications, alerts, or any other type of content that 
 This implementation uses lettre for SMTP email sending and includes template rendering capabilities.
 */
 
-use crate::application::ports::output::notification_publisher_port::{
+use crate::application::ports::output::notification_port::{
     NotificationPublisherService, NotificationTemplateService, BulkNotificationService,
     NotificationRequest, NotificationResponse, NotificationRecipient, NotificationChannel,
     NotificationContent, NotificationTemplate, NotificationStats, NotificationStatus,

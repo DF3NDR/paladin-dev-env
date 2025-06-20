@@ -8,6 +8,7 @@ Messages contain source and destination locations, timestamps, priorities,
 and can carry any type of payload data.
 */
 use std::hash::{Hash, Hasher};
+use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
@@ -84,6 +85,18 @@ impl Location {
     /// Check if this is an external location
     pub fn is_external(&self) -> bool {
         matches!(self, Location::External(_))
+    }
+}
+
+/// Display implementation for Location
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Location::System(s) => write!(f, "system:{}", s),
+            Location::Service(s) => write!(f, "service:{}", s),
+            Location::External(s) => write!(f, "external:{}", s),
+            Location::User(s) => write!(f, "user:{}", s),
+        }
     }
 }
 

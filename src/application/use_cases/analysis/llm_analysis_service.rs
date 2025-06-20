@@ -50,8 +50,18 @@ pub struct TokenUsage {
     pub total_tokens: u32,
 }
 
+#[derive(Clone)] // Remove Debug derive here
 pub struct LlmAnalysisService {
     llm_port: Arc<dyn LlmPort>,
+}
+
+// Implement Debug manually
+impl std::fmt::Debug for LlmAnalysisService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmAnalysisService")
+            .field("llm_port", &format!("Arc<dyn LlmPort: {}>", self.llm_port.get_provider_name()))
+            .finish()
+    }
 }
 
 impl LlmAnalysisService {

@@ -63,24 +63,61 @@ struct LogMessageHandler {
     config: LogServiceConfig,
 }
 
+impl LogMessageHandler {
+    fn extract_destination(&self, entry: &crate::core::base::entity::message::Message<LogMessage>) -> LogResult<LogDestination> {
+        match &entry.destination {
+            Location::Service(name) => {
+                if name.contains("system-log") {
+                    Ok(LogDestination::System)
+                } else if name.contains("access-log") {
+                    Ok(LogDestination::Access)
+                } else if name.contains("error-log") {
+                    Ok(LogDestination::Error)
+                } else if name.contains("security-log") {
+                    Ok(LogDestination::Security)
+                } else if name.contains("performance-log") {
+                    Ok(LogDestination::Performance)
+                } else if name.starts_with("custom-log-") {
+                    let custom_name = name.strip_prefix("custom-log-").unwrap_or("unknown");
+                    Ok(LogDestination::Custom(custom_name.to_string()))
+                } else {
+                    // If it's not a recognized log service, don't handle it
+                    Err(LogError::DestinationNotFound(name.clone()))
+                }
+            }
+            _ => {
+                // Only handle Service() destinations
+                Err(LogError::DestinationNotFound(format!("{:?}", entry.destination)))
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl MessageHandler<LogMessage> for LogMessageHandler {
     async fn handle_message(&self, message: crate::core::base::entity::message::Message<LogMessage>) -> MessageResult<()> {
-        // Extract destination from message
-        let destination = self.extract_destination(&message)
-            .map_err(|e| MessageError::RoutingFailed(e.to_string()))?;
-        
-        // Create LogEntry from the message
+        // Only handle log service destinations
+        let destination = match self.extract_destination(&message) {
+            Ok(dest) => dest,
+            Err(_) => {
+                // Not a log message, ignore silently
+                return Ok(());
+            }
+        };
+
+        // Rest of the implementation stays the same...
+        let normalized_destination = destination.to_location();
+
         let log_entry = LogEntry {
             id: message.id,
             source: message.source,
-            destination: message.destination,
+            destination: normalized_destination.clone(),
             timestamp: message.timestamp,
             message: message.message,
             correlation_id: message.correlation_id,
             priority: message.priority,
         };
-        
+
         // Add to in-memory log
         {
             let mut logs = self.logs.write().await;
@@ -88,13 +125,13 @@ impl MessageHandler<LogMessage> for LogMessageHandler {
                 log.node.add_entry(log_entry.clone());
             }
         }
-        
+
         // Forward to persistent storage if available
         if let Some(port) = &self.log_port {
             port.write_entry(log_entry).await
                 .map_err(|e| MessageError::DeliveryFailed(e.to_string()))?;
         }
-        
+
         Ok(())
     }
     
@@ -106,29 +143,6 @@ impl MessageHandler<LogMessage> for LogMessageHandler {
             LogDestination::Security.to_location(),
             LogDestination::Performance.to_location(),
         ]
-    }
-}
-
-impl LogMessageHandler {
-    fn extract_destination(&self, entry: &crate::core::base::entity::message::Message<LogMessage>) -> LogResult<LogDestination> {
-        let dest_str = entry.destination.to_string();
-        
-        if dest_str.contains("system-log") {
-            Ok(LogDestination::System)
-        } else if dest_str.contains("access-log") {
-            Ok(LogDestination::Access)
-        } else if dest_str.contains("error-log") {
-            Ok(LogDestination::Error)
-        } else if dest_str.contains("security-log") {
-            Ok(LogDestination::Security)
-        } else if dest_str.contains("performance-log") {
-            Ok(LogDestination::Performance)
-        } else if dest_str.starts_with("custom-log-") {
-            let name = dest_str.strip_prefix("custom-log-").unwrap_or("unknown");
-            Ok(LogDestination::Custom(name.to_string()))
-        } else {
-            Ok(LogDestination::System) // Default fallback
-        }
     }
 }
 
@@ -166,20 +180,21 @@ impl LogService {
         self
     }
     
-    /// Initialize the log service
+    /// Initialize the log service  
     pub async fn initialize(&self) -> LogResult<()> {
         // Start the underlying message service
         self.message_service.start().await
             .map_err(|e| LogError::ConfigError(e.to_string()))?;
         
-        // Register log message handler
+        // Register log message handler for service-type destinations
         let handler = Arc::new(LogMessageHandler {
             logs: self.logs.clone(),
             log_port: self.log_port.clone(),
             config: self.config.clone(),
         });
         
-        self.message_service.register_handler("log".to_string(), handler).await
+        // Register for "service" destination type - this will catch all Service() destinations
+        self.message_service.register_handler("service".to_string(), handler).await
             .map_err(|e| LogError::ConfigError(e.to_string()))?;
         
         // Initialize default log destinations
@@ -187,6 +202,7 @@ impl LogService {
         
         Ok(())
     }
+        
     
     /// Initialize default log destinations
     pub async fn initialize_default_logs(&self) -> LogResult<()> {

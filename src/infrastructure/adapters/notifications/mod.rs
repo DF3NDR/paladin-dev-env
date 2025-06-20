@@ -1,0 +1,1 @@
+pub mod email_notificaton_adapter;

@@ -1,0 +1,102 @@
+<svg viewBox="0 0 1400 800" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="flowArrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2C3E50" />
+    </marker>
+    <linearGradient id="stageGrad1" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3498db;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2980b9;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="stageGrad2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#2ecc71;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#27ae60;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="stageGrad3" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#9b59b6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#8e44ad;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="stageGrad4" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#e74c3c;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#c0392b;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="stageGrad5" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#f39c12;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#d68910;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Title -->
+  <text x="700" y="40" font-family="Arial, sans-serif" font-size="26" font-weight="bold" text-anchor="middle" fill="#2C3E50">Content Processing Pipeline</text>
+  
+  <!-- Stage 1: Ingestion -->
+  <g id="stage1">
+    <circle cx="150" cy="200" r="80" fill="url(#stageGrad1)" stroke="#2471A3" stroke-width="3"/>
+    <text x="150" y="195" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">1. Ingestion</text>
+    <text x="150" y="215" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="white">Fetch Content</text>
+    
+    <!-- Input sources -->
+    <rect x="50" y="320" width="100" height="40" rx="8" fill="#E8F4FD" stroke="#3498db" stroke-width="2"/>
+    <text x="100" y="345" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#2980b9">Web URLs</text>
+    
+    <rect x="160" y="320" width="100" height="40" rx="8" fill="#E8F4FD" stroke="#3498db" stroke-width="2"/>
+    <text x="210" y="345" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#2980b9">Files</text>
+    
+    <rect x="50" y="370" width="100" height="40" rx="8" fill="#E8F4FD" stroke="#3498db" stroke-width="2"/>
+    <text x="100" y="395" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#2980b9">APIs</text>
+    
+    <rect x="160" y="370" width="100" height="40" rx="8" fill="#E8F4FD" stroke="#3498db" stroke-width="2"/>
+    <text x="210" y="395" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#2980b9">Databases</text>
+  </g>
+  
+  <!-- Stage 2: Validation -->
+  <g id="stage2">
+    <circle cx="400" cy="200" r="80" fill="url(#stageGrad2)" stroke="#239B56" stroke-width="3"/>
+    <text x="400" y="195" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">2. Validation</text>
+    <text x="400" y="215" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="white">Check & Clean</text>
+    
+    <!-- Validation steps -->
+    <rect x="320" y="320" width="160" height="30" rx="5" fill="#E8FBF5" stroke="#2ecc71" stroke-width="2"/>
+    <text x="400" y="340" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#27ae60">Format Validation</text>
+    
+    <rect x="320" y="360" width="160" height="30" rx="5" fill="#E8FBF5" stroke="#2ecc71" stroke-width="2"/>
+    <text x="400" y="380" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#27ae60">Duplicate Check</text>
+    
+    <rect x="320" y="400" width="160" height="30" rx="5" fill="#E8FBF5" stroke="#2ecc71" stroke-width="2"/>
+    <text x="400" y="420" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#27ae60">Content Sanitization</text>
+  </g>
+  
+  <!-- Stage 3: Processing -->
+  <g id="stage3">
+    <circle cx="700" cy="200" r="80" fill="url(#stageGrad3)" stroke="#7D3C98" stroke-width="3"/>
+    <text x="700" y="195" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">3. Processing</text>
+    <text x="700" y="215" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="white">Transform</text>
+    
+    <!-- Processing options -->
+    <rect x="570" y="320" width="120" height="40" rx="8" fill="#F4ECF7" stroke="#9b59b6" stroke-width="2"/>
+    <text x="630" y="345" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#8e44ad">ML Analysis</text>
+    
+    <rect x="710" y="320" width="120" height="40" rx="8" fill="#F4ECF7" stroke="#9b59b6" stroke-width="2"/>
+    <text x="770" y="345" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#8e44ad">NLP Processing</text>
+    
+    <rect x="570" y="370" width="120" height="40" rx="8" fill="#F4ECF7" stroke="#9b59b6" stroke-width="2"/>
+    <text x="630" y="395" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#8e44ad">Summarization</text>
+    
+    <rect x="710" y="370" width="120" height="40" rx="8" fill="#F4ECF7" stroke="#9b59b6" stroke-width="2"/>
+    <text x="770" y="395" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#8e44ad">Tag Extraction</text>
+  </g>
+  
+  <!-- Stage 4: Storage -->
+  <g id="stage4">
+    <circle cx="1000" cy="200" r="80" fill="url(#stageGrad4)" stroke="#A93226" stroke-width="3"/>
+    <text x="1000" y="195" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">4. Storage</text>
+    <text x="1000" y="215" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="white">Persist</text>
+    
+    <!-- Storage types -->
+    <rect x="920" y="320" width="160" height="30" rx="5" fill="#FDEDEC" stroke="#e74c3c" stroke-width="2"/>
+    <text x="1000" y="340" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#c0392b">Content Repository</text>
+    
+    <rect x="920" y="360" width="160" height="30" rx="5" fill="#FDEDEC" stroke="#e74c3c" stroke-width="2"/>
+    <text x="1000" y="380" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#c0392b">Version History</text>
+    
+    <rect x="920" y="400" width="160" height="30" rx="5" fill="#FDEDEC" stroke="#e74c3c" stroke-width="2"/>
+    <text x="1000" y="420" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#c0392b">Search Index</text>

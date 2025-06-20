@@ -1,0 +1,167 @@
+<svg viewBox="0 0 1200 900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#333" />
+    </marker>
+    <linearGradient id="contentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3498db;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#2980b9;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="processGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2ecc71;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#27ae60;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="deliveryGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#e74c3c;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#c0392b;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Title -->
+  <text x="600" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold" text-anchor="middle" fill="#2C3E50">Component Interaction Flow</text>
+  
+  <!-- Content Ingestion Section -->
+  <g id="ingestion">
+    <rect x="50" y="100" width="300" height="250" rx="15" fill="#E8F4FD" stroke="#3498db" stroke-width="2" stroke-dasharray="5,5"/>
+    <text x="200" y="130" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="#2980b9">Content Ingestion</text>
+    
+    <!-- Components -->
+    <rect x="70" y="150" width="120" height="50" rx="8" fill="url(#contentGrad)" stroke="#2471A3" stroke-width="2"/>
+    <text x="130" y="180" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">HTTP Fetcher</text>
+    
+    <rect x="210" y="150" width="120" height="50" rx="8" fill="url(#contentGrad)" stroke="#2471A3" stroke-width="2"/>
+    <text x="270" y="180" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">File Fetcher</text>
+    
+    <rect x="140" y="220" width="120" height="50" rx="8" fill="url(#contentGrad)" stroke="#2471A3" stroke-width="2"/>
+    <text x="200" y="250" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">API Fetcher</text>
+    
+    <rect x="140" y="290" width="120" height="40" rx="8" fill="#FFF" stroke="#3498db" stroke-width="2"/>
+    <text x="200" y="315" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#2980b9">Content Port</text>
+  </g>
+  
+  <!-- Processing Section -->
+  <g id="processing">
+    <rect x="450" y="100" width="300" height="350" rx="15" fill="#E8FBF5" stroke="#2ecc71" stroke-width="2" stroke-dasharray="5,5"/>
+    <text x="600" y="130" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="#27ae60">Content Processing</text>
+    
+    <!-- Components -->
+    <rect x="470" y="150" width="120" height="50" rx="8" fill="url(#processGrad)" stroke="#239B56" stroke-width="2"/>
+    <text x="530" y="180" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">Aggregator</text>
+    
+    <rect x="610" y="150" width="120" height="50" rx="8" fill="url(#processGrad)" stroke="#239B56" stroke-width="2"/>
+    <text x="670" y="180" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">Filter</text>
+    
+    <rect x="470" y="220" width="120" height="50" rx="8" fill="url(#processGrad)" stroke="#239B56" stroke-width="2"/>
+    <text x="530" y="250" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">Summarizer</text>
+    
+    <rect x="610" y="220" width="120" height="50" rx="8" fill="url(#processGrad)" stroke="#239B56" stroke-width="2"/>
+    <text x="670" y="250" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">ML Analyzer</text>
+    
+    <rect x="540" y="290" width="120" height="50" rx="8" fill="url(#processGrad)" stroke="#239B56" stroke-width="2"/>
+    <text x="600" y="320" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">NLP Analyzer</text>
+    
+    <rect x="540" y="360" width="120" height="60" rx="8" fill="#FFF" stroke="#2ecc71" stroke-width="2"/>
+    <text x="600" y="385" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#27ae60">Content</text>
+    <text x="600" y="405" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#27ae60">Repository</text>
+  </g>
+  
+  <!-- Delivery Section -->
+  <g id="delivery">
+    <rect x="850" y="100" width="300" height="250" rx="15" fill="#FDEDEC" stroke="#e74c3c" stroke-width="2" stroke-dasharray="5,5"/>
+    <text x="1000" y="130" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="#c0392b">Content Delivery</text>
+    
+    <!-- Components -->
+    <rect x="870" y="150" width="120" height="50" rx="8" fill="url(#deliveryGrad)" stroke="#A93226" stroke-width="2"/>
+    <text x="930" y="180" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">API Deliverer</text>
+    
+    <rect x="1010" y="150" width="120" height="50" rx="8" fill="url(#deliveryGrad)" stroke="#A93226" stroke-width="2"/>
+    <text x="1070" y="180" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">File Storage</text>
+    
+    <rect x="940" y="220" width="120" height="50" rx="8" fill="url(#deliveryGrad)" stroke="#A93226" stroke-width="2"/>
+    <text x="1000" y="250" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">Email Service</text>
+    
+    <rect x="940" y="290" width="120" height="40" rx="8" fill="#FFF" stroke="#e74c3c" stroke-width="2"/>
+    <text x="1000" y="315" font-family="Arial, sans-serif" font-size="12" text-anchor="middle" fill="#c0392b">Delivery Port</text>
+  </g>
+  
+  <!-- Central Components -->
+  <g id="central">
+    <rect x="300" y="500" width="600" height="350" rx="20" fill="#F4F6F7" stroke="#34495E" stroke-width="3"/>
+    <text x="600" y="530" font-family="Arial, sans-serif" font-size="18" font-weight="bold" text-anchor="middle" fill="#2C3E50">Core Platform Services</text>
+    
+    <!-- Scheduler -->
+    <rect x="330" y="550" width="150" height="80" rx="10" fill="#9B59B6" stroke="#7D3C98" stroke-width="2"/>
+    <text x="405" y="580" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="white">Scheduler</text>
+    <text x="405" y="600" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">Jobs & Tasks</text>
+    <text x="405" y="615" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">Orchestration</text>
+    
+    <!-- Queue Manager -->
+    <rect x="520" y="550" width="150" height="80" rx="10" fill="#E67E22" stroke="#D35400" stroke-width="2"/>
+    <text x="595" y="580" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="white">Queue Manager</text>
+    <text x="595" y="600" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">Task Queuing</text>
+    <text x="595" y="615" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">Priority Handling</text>
+    
+    <!-- Event Manager -->
+    <rect x="710" y="550" width="160" height="80" rx="10" fill="#16A085" stroke="#138D75" stroke-width="2"/>
+    <text x="790" y="580" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="white">Event Manager</text>
+    <text x="790" y="600" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">Event Routing</text>
+    <text x="790" y="615" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">Trigger Management</text>
+    
+    <!-- Version Service -->
+    <rect x="330" y="660" width="150" height="80" rx="10" fill="#2C3E50" stroke="#1B2631" stroke-width="2"/>
+    <text x="405" y="690" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="white">Version Service</text>
+    <text x="405" y="710" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">Content Versioning</text>
+    <text x="405" y="725" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">History Tracking</text>
+    
+    <!-- Storage Manager -->
+    <rect x="520" y="660" width="150" height="80" rx="10" fill="#C0392B" stroke="#A93226" stroke-width="2"/>
+    <text x="595" y="690" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="white">Storage Manager</text>
+    <text x="595" y="710" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">SQL/NoSQL</text>
+    <text x="595" y="725" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">File Storage</text>
+    
+    <!-- Notification Manager -->
+    <rect x="710" y="660" width="160" height="80" rx="10" fill="#8E44AD" stroke="#7D3C98" stroke-width="2"/>
+    <text x="790" y="685" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="white">Notification</text>
+    <text x="790" y="700" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="white">Manager</text>
+    <text x="790" y="720" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="white">Multi-channel</text>
+  </g>
+  
+  <!-- Arrows showing flow -->
+  <!-- Ingestion to Processing -->
+  <path d="M 350 300 Q 400 300 450 390" stroke="#666" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  
+  <!-- Processing to Delivery -->
+  <path d="M 750 390 Q 800 300 850 300" stroke="#666" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  
+  <!-- Processing to Storage -->
+  <path d="M 600 420 L 600 500" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+  
+  <!-- Scheduler interactions -->
+  <path d="M 405 550 Q 405 480 200 350" stroke="#9B59B6" stroke-width="2" stroke-dasharray="3,3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 405 550 Q 405 480 600 420" stroke="#9B59B6" stroke-width="2" stroke-dasharray="3,3" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 405 550 Q 405 480 1000 350" stroke="#9B59B6" stroke-width="2" stroke-dasharray="3,3" fill="none" marker-end="url(#arrow)"/>
+  
+  <!-- Event Manager connections -->
+  <path d="M 790 550 L 790 460" stroke="#16A085" stroke-width="2" stroke-dasharray="3,3" fill="none"/>
+  <path d="M 790 460 Q 600 460 600 420" stroke="#16A085" stroke-width="2" stroke-dasharray="3,3" fill="none" marker-end="url(#arrow)"/>
+  
+  <!-- Legend -->
+  <g id="legend">
+    <text x="50" y="820" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#2C3E50">Legend:</text>
+    
+    <line x1="120" y1="815" x2="160" y2="815" stroke="#666" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="170" y="820" font-family="Arial, sans-serif" font-size="12" fill="#555">Data Flow</text>
+    
+    <line x1="280" y1="815" x2="320" y2="815" stroke="#9B59B6" stroke-width="2" stroke-dasharray="3,3" marker-end="url(#arrow)"/>
+    <text x="330" y="820" font-family="Arial, sans-serif" font-size="12" fill="#555">Orchestration</text>
+    
+    <rect x="450" y="805" width="20" height="15" rx="3" fill="url(#contentGrad)"/>
+    <text x="475" y="817" font-family="Arial, sans-serif" font-size="12" fill="#555">Ingestion</text>
+    
+    <rect x="560" y="805" width="20" height="15" rx="3" fill="url(#processGrad)"/>
+    <text x="585" y="817" font-family="Arial, sans-serif" font-size="12" fill="#555">Processing</text>
+    
+    <rect x="680" y="805" width="20" height="15" rx="3" fill="url(#deliveryGrad)"/>
+    <text x="705" y="817" font-family="Arial, sans-serif" font-size="12" fill="#555">Delivery</text>
+  </g>
+</svg>

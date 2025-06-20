@@ -68,37 +68,9 @@ impl LlmAnalysisService {
     pub fn new(llm_port: Arc<dyn LlmPort>) -> Self {
         Self { llm_port }
     }
-}
 
-#[async_trait::async_trait]
-impl AnalysisService<LlmAnalysisInput, LlmAnalysisOutput, LlmAnalysisConfig> for LlmAnalysisService {
-    fn analyze(&self, input: &LlmAnalysisInput, config: &LlmAnalysisConfig) -> Result<AnalysisResult<LlmAnalysisOutput>, AnalysisError> {
-        // This will need to be async in practice, but keeping sync for the trait
-        tokio::runtime::Runtime::new()
-            .map_err(|e| AnalysisError::ProcessingError(format!("Runtime error: {}", e)))?
-            .block_on(self.analyze_async(input, config))
-    }
-
-    fn get_analysis_type(&self) -> &'static str {
-        "llm_analysis"
-    }
-
-    fn validate_input(&self, input: &LlmAnalysisInput) -> Result<(), AnalysisError> {
-        // Validate prompt
-        match input.prompt.prompt_type() {
-            crate::core::platform::container::prompt::PromptType::Text(text_prompt) => {
-                if text_prompt.content.is_empty() {
-                    return Err(AnalysisError::InvalidInput("Prompt content cannot be empty".to_string()));
-                }
-            },
-            _ => {} // Other prompt types can be added as needed
-        }
-        Ok(())
-    }
-}
-
-impl LlmAnalysisService {
-    async fn analyze_async(&self, input: &LlmAnalysisInput, config: &LlmAnalysisConfig) -> Result<AnalysisResult<LlmAnalysisOutput>, AnalysisError> {
+    /// Async version of analyze that should be used when possible
+    pub async fn analyze_async(&self, input: &LlmAnalysisInput, config: &LlmAnalysisConfig) -> Result<AnalysisResult<LlmAnalysisOutput>, AnalysisError> {
         let start_time = std::time::Instant::now();
         
         // Validate configuration
@@ -139,7 +111,7 @@ impl LlmAnalysisService {
                         id: Uuid::new_v4(),
                         created_at: chrono::Utc::now(),
                         analysis_type: self.get_analysis_type().to_string(),
-                        input_hash: None, // Could compute hash of input if needed
+                        input_hash: None,
                         result: output,
                         confidence: None,
                         metadata: std::collections::HashMap::new(),
@@ -158,5 +130,33 @@ impl LlmAnalysisService {
         Err(AnalysisError::ProcessingError(
             format!("LLM analysis failed after {} retries: {:?}", config.max_retries, last_error)
         ))
+    }
+}
+
+#[async_trait::async_trait]
+impl AnalysisService<LlmAnalysisInput, LlmAnalysisOutput, LlmAnalysisConfig> for LlmAnalysisService {
+    fn analyze(&self, _input: &LlmAnalysisInput, _config: &LlmAnalysisConfig) -> Result<AnalysisResult<LlmAnalysisOutput>, AnalysisError> {
+        // For sync version, return an error or use a different approach
+        // This avoids the nested runtime issue
+        Err(AnalysisError::ProcessingError(
+            "Sync analysis not supported. Use analyze_async for proper async handling.".to_string()
+        ))
+    }
+
+    fn get_analysis_type(&self) -> &'static str {
+        "llm_analysis"
+    }
+
+    fn validate_input(&self, input: &LlmAnalysisInput) -> Result<(), AnalysisError> {
+        // Validate prompt
+        match input.prompt.prompt_type() {
+            crate::core::platform::container::prompt::PromptType::Text(text_prompt) => {
+                if text_prompt.content.is_empty() {
+                    return Err(AnalysisError::InvalidInput("Prompt content cannot be empty".to_string()));
+                }
+            },
+            _ => {} // Other prompt types can be added as needed
+        }
+        Ok(())
     }
 }

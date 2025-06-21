@@ -6,7 +6,7 @@ use in4me::core::platform::container::content::{ContentItem, ContentType, TextCo
 use in4me::core::base::service::node_version_service::{
     InMemoryNodeVersionRepository, ChangeType
 };
-use in4me::core::platform::container::content_service::ContentItemService;
+use in4me::core::platform::manager::content_service::ContentItemService;
 use in4me::application::use_cases::content::content_fetching_service::{
     ContentFetchingService, FetchContent
 };

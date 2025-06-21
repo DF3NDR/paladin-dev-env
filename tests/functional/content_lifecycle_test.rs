@@ -4,7 +4,7 @@ mod functional_tests {
     use in4me::core::base::service::node_version_service::{
         InMemoryNodeVersionRepository, ChangeType, VersioningError, NodeVersionRepository
     };
-    use in4me::core::platform::container::content_service::{ContentItemService, ContentItemServiceError};
+    use in4me::core::platform::manager::content_service::{ContentItemService, ContentItemServiceError};
     use std::sync::Arc;
     use uuid::Uuid;
     use chrono::Utc;

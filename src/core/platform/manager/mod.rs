@@ -3,3 +3,4 @@ pub mod orchestrator;
 pub mod queue_manager;
 pub mod scheduler;
 pub mod log_service;
+pub mod content_service;

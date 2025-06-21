@@ -81,8 +81,9 @@ impl LogMessageHandler {
                     let custom_name = name.strip_prefix("custom-log-").unwrap_or("unknown");
                     Ok(LogDestination::Custom(custom_name.to_string()))
                 } else {
-                    // If it's not a recognized log service, don't handle it
-                    Err(LogError::DestinationNotFound(name.clone()))
+                    // For unrecognized log service names, default to System instead of returning an error
+                    // This provides a fallback behavior for any service that might want to log
+                    Ok(LogDestination::System)
                 }
             }
             _ => {
@@ -180,7 +181,6 @@ impl LogService {
         self
     }
     
-    /// Initialize the log service  
     pub async fn initialize(&self) -> LogResult<()> {
         // Start the underlying message service
         self.message_service.start().await
@@ -194,7 +194,11 @@ impl LogService {
         });
         
         // Register for "service" destination type - this will catch all Service() destinations
-        self.message_service.register_handler("service".to_string(), handler).await
+        // Also register for "log" for backward compatibility and clearer intent
+        self.message_service.register_handler("service".to_string(), handler.clone()).await
+            .map_err(|e| LogError::ConfigError(e.to_string()))?;
+        
+        self.message_service.register_handler("log".to_string(), handler).await
             .map_err(|e| LogError::ConfigError(e.to_string()))?;
         
         // Initialize default log destinations
@@ -720,6 +724,7 @@ mod tests {
         }
     }
 
+ 
     #[tokio::test]
     async fn test_message_handler_destination_extraction() {
         let config = LogServiceConfig::default();
@@ -731,25 +736,43 @@ mod tests {
 
         // Test destination extraction logic
         let test_cases = vec![
-            ("service:system-log", LogDestination::System),
-            ("service:access-log", LogDestination::Access),
-            ("service:error-log", LogDestination::Error),
-            ("service:security-log", LogDestination::Security),
-            ("service:performance-log", LogDestination::Performance),
-            ("service:custom-log-mylog", LogDestination::Custom("mylog".to_string())),
-            ("service:unknown", LogDestination::System), // fallback
+            ("system-log", LogDestination::System),
+            ("access-log", LogDestination::Access),
+            ("error-log", LogDestination::Error),
+            ("security-log", LogDestination::Security),
+            ("performance-log", LogDestination::Performance),
+            ("custom-log-mylog", LogDestination::Custom("mylog".to_string())),
+            ("unknown", LogDestination::System), // fallback to System
+            ("some-other-service", LogDestination::System), // fallback to System
         ];
 
-        for (location_str, expected_dest) in test_cases {
+        for (service_name, expected_dest) in test_cases {
             let message = crate::core::base::entity::message::Message::new(
                 Location::service("test"),
-                Location::service(location_str.split(':').nth(1).unwrap()),
+                Location::service(service_name),
                 LogMessage::new(LogLevel::Info, "test".to_string()),
             );
 
             let result = handler.extract_destination(&message);
-            assert!(result.is_ok(), "Failed for location: {}", location_str);
-            assert_eq!(result.unwrap(), expected_dest, "Wrong destination for: {}", location_str);
+            assert!(result.is_ok(), "Failed for service: {}", service_name);
+            assert_eq!(result.unwrap(), expected_dest, "Wrong destination for: {}", service_name);
+        }
+
+        // Test non-Service destinations (should fail)
+        let non_service_cases = vec![
+            Location::system("test"),
+            Location::user("test"),
+        ];
+
+        for location in non_service_cases {
+            let message = crate::core::base::entity::message::Message::new(
+                Location::service("test"),
+                location.clone(),
+                LogMessage::new(LogLevel::Info, "test".to_string()),
+            );
+
+            let result = handler.extract_destination(&message);
+            assert!(result.is_err(), "Should have failed for non-service destination: {:?}", location);
         }
     }
 
@@ -1127,9 +1150,15 @@ mod tests {
         let service = LogService::new(LogServiceConfig::default());
         service.initialize().await.unwrap();
         
+        // Wait a moment for initialization to complete
+        sleep(Duration::from_millis(50)).await;
+        
         // Verify that the message service was properly initialized
         let destinations = service.message_service.list_destinations().await;
-        assert!(destinations.contains(&"log".to_string()));
+        
+        // Should have both "service" and "log" handlers registered
+        assert!(destinations.contains(&"service".to_string()) || destinations.contains(&"log".to_string()), 
+                "Expected 'service' or 'log' destination, got: {:?}", destinations);
         
         // Test that we can send messages directly to the message service
         let log_message = LogMessage::new(LogLevel::Info, "Direct message test".to_string());

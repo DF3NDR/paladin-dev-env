@@ -1,15 +1,11 @@
-// Include the mysql_content_repository_test module directly
-#[path = "functional/content_lifecycle.rs"]
-mod mysql_content_repository_test;
-
 // Include the content_fetching_pipeline module directly
-#[path = "functional/content_fetching_pipeline.rs"]
-mod content_fetching_pipeline;
+#[path = "functional/content_fetching_pipeline_test.rs"]
+mod content_fetching_pipeline_test;
 
 // Include the content_lifecycle module directly
-#[path = "functional/content_lifecycle.rs"]
+#[path = "functional/content_lifecycle_test.rs"]
 mod content_lifecycle;
 
 // Include the content_llm_analysis_pipeline module directly
-#[path = "functional/content_llm_analysis_pipeline.rs"]
-mod content_llm_analysis_pipeline;
+#[path = "functional/content_llm_analysis_pipeline_test.rs"]
+mod content_llm_analysis_pipeline_test;

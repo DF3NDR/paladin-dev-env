@@ -1105,20 +1105,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flexi_logger"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab9765cc4ba26211f932a7a37649ec88752f7abcbd8822617572562ce31234df"
-dependencies = [
- "chrono",
- "flate2",
- "log",
- "nu-ansi-term",
- "regex",
- "thiserror",
-]
-
-[[package]]
 name = "flume"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1799,7 +1785,6 @@ dependencies = [
  "dotenv",
  "env_logger",
  "fasthash",
- "flexi_logger",
  "futures",
  "handlebars",
  "lazy_static",
@@ -2175,15 +2160,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "nu-ansi-term"
-version = "0.50.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4a28e057d01f97e61255210fcff094d74ed0466038633e95017f5beb68e4399"
-dependencies = [
- "windows-sys 0.52.0",
 ]
 
 [[package]]

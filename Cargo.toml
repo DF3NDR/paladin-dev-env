@@ -39,8 +39,12 @@ toml = "0.8.23"
 md5 = "0.7.0"
 async-trait = "0.1.88"
 futures = "0.3.31"
-flexi_logger = { version = "0.31.0", features = ["compress"] }
 
 [dev-dependencies]
 mockito = "1.7.0"
 tempfile = "3.0"
+
+# Integration test configuration
+[[test]]
+name = "system_log_integration"
+path = "tests/integration/system_log_integration_test.rs"

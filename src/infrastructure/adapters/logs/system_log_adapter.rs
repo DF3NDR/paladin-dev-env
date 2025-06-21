@@ -2,21 +2,20 @@
 System Log Adapter
 
 Infrastructure adapter that implements the LogPort using the standard Rust log ecosystem.
-This adapter provides file-based logging with rotation, structured logging support, and
-configurable output formats using the log crate with env_logger and flexi_logger.
+This adapter provides logging using the log crate with env_logger for simple configuration.
+The adapter formats log entries and writes them through the standard logging facade.
 
-Uses log for the logging facade and flexi_logger for file rotation and configuration.
+Uses log for the logging facade and env_logger for configuration and output.
 Configuration is managed through environment variables.
 */
 use std::env;
-use std::path::Path;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Once;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
-use log::{info, warn, Record};
-use flexi_logger::{Logger, FileSpec, Criterion, Naming, Cleanup, WriteMode};
+use log::{info, warn, error, debug, trace};
 use serde_json::json;
 
 use crate::application::ports::output::log_port::{
@@ -25,6 +24,9 @@ use crate::application::ports::output::log_port::{
 };
 use crate::core::platform::container::log::{LogEntry, LogLevel, LogDestination, LogEntryExt};
 
+/// Ensure env_logger is only initialized once
+static INIT: Once = Once::new();
+
 /// Configuration for the system log adapter
 #[derive(Debug, Clone)]
 pub struct SystemLogAdapterConfig {
@@ -32,31 +34,19 @@ pub struct SystemLogAdapterConfig {
     pub log_level: String,
     /// Output format (json, text, structured)
     pub format: LogFormat,
-    /// Log file path
-    pub file_path: String,
-    /// Maximum file size before rotation (in bytes)
-    pub max_size: u64,
-    /// Maximum number of rotated files
-    pub max_files: usize,
-    /// Enable console output
-    pub enable_console: bool,
-    /// Enable file output
-    pub enable_file: bool,
     /// Log target identifier
     pub target: String,
+    /// Enable structured output
+    pub structured: bool,
 }
 
 impl Default for SystemLogAdapterConfig {
     fn default() -> Self {
         Self {
             log_level: "info".to_string(),
-            format: LogFormat::Json,
-            file_path: "/var/log/in4me-system.log".to_string(),
-            max_size: 10 * 1024 * 1024, // 10MB
-            max_files: 5,
-            enable_console: true,
-            enable_file: true,
+            format: LogFormat::Text,
             target: "in4me".to_string(),
+            structured: true,
         }
     }
 }
@@ -65,141 +55,31 @@ impl SystemLogAdapterConfig {
     /// Load configuration from environment variables
     pub fn from_env() -> Self {
         Self {
-            log_level: env::var("SYSTEM_LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
-            format: match env::var("SYSTEM_LOG_FORMAT").unwrap_or_else(|_| "json".to_string()).as_str() {
+            log_level: env::var("RUST_LOG").unwrap_or_else(|_| 
+                env::var("SYSTEM_LOG_LEVEL").unwrap_or_else(|_| "info".to_string())
+            ),
+            format: match env::var("SYSTEM_LOG_FORMAT").unwrap_or_else(|_| "text".to_string()).as_str() {
                 "json" => LogFormat::Json,
                 "text" => LogFormat::Text,
                 template => LogFormat::Structured(template.to_string()),
             },
-            file_path: env::var("SYSTEM_LOG_FILE").unwrap_or_else(|_| "/var/log/in4me-system.log".to_string()),
-            max_size: env::var("SYSTEM_LOG_MAX_SIZE")
-                .unwrap_or_else(|_| "10485760".to_string()) // 10MB in bytes
-                .parse()
-                .unwrap_or(10 * 1024 * 1024),
-            max_files: env::var("SYSTEM_LOG_MAX_FILES")
-                .unwrap_or_else(|_| "5".to_string())
-                .parse()
-                .unwrap_or(5),
-            enable_console: env::var("SYSTEM_LOG_ENABLE_CONSOLE")
+            target: env::var("SYSTEM_LOG_TARGET").unwrap_or_else(|_| "in4me".to_string()),
+            structured: env::var("SYSTEM_LOG_STRUCTURED")
                 .unwrap_or_else(|_| "true".to_string())
                 .parse()
                 .unwrap_or(true),
-            enable_file: env::var("SYSTEM_LOG_ENABLE_FILE")
-                .unwrap_or_else(|_| "true".to_string())
-                .parse()
-                .unwrap_or(true),
-            target: env::var("SYSTEM_LOG_TARGET")
-                .unwrap_or_else(|_| "in4me".to_string()),
         }
     }
 }
 
-/// Custom formatter for structured logging
-struct StructuredFormatter {
-    format: LogFormat,
-    #[allow(dead_code)]
-    target: String,
-}
-
-impl StructuredFormatter {
-    fn new(format: LogFormat, target: String) -> Self {
-        Self { format, target }
-    }
-
-    fn format_record(&self, record: &Record, entry_data: Option<&LogEntryData>) -> String {
-        match self.format {
-            LogFormat::Json => self.format_json(record, entry_data),
-            LogFormat::Text => self.format_text(record, entry_data),
-            LogFormat::Structured(ref template) => self.format_structured(record, entry_data, template),
-        }
-    }
-
-    fn format_json(&self, record: &Record, entry_data: Option<&LogEntryData>) -> String {
-        let mut json_obj = json!({
-            "timestamp": chrono::Utc::now().to_rfc3339(),
-            "level": record.level().to_string(),
-            "target": record.target(),
-            "message": record.args().to_string(),
-            "module": record.module_path().unwrap_or("unknown"),
-            "file": record.file().unwrap_or("unknown"),
-            "line": record.line().unwrap_or(0),
-        });
-
-        if let Some(data) = entry_data {
-            json_obj["id"] = json!(data.id.to_string());
-            json_obj["source"] = json!(data.source.to_string());
-            json_obj["destination"] = json!(data.destination.to_string());
-            if let Some(ref correlation_id) = data.correlation_id {
-                json_obj["correlation_id"] = json!(correlation_id);
-            }
-            if let Some(ref priority) = data.priority {
-                json_obj["priority"] = json!(priority);
-            }
-            if let Some(ref context) = data.context {
-                json_obj["context"] = json!(context);
-            }
-        }
-
-        json_obj.to_string()
-    }
-
-    fn format_text(&self, record: &Record, entry_data: Option<&LogEntryData>) -> String {
-        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f UTC");
-        let mut formatted = format!(
-            "{} [{}] {}: {}",
-            timestamp,
-            record.level(),
-            record.target(),
-            record.args()
-        );
-
-        if let Some(data) = entry_data {
-            formatted.push_str(&format!(
-                " [id={}, src={}, dest={}",
-                data.id,
-                data.source,
-                data.destination
-            ));
-            
-            if let Some(ref correlation_id) = data.correlation_id {
-                formatted.push_str(&format!(", corr_id={}", correlation_id));
-            }
-            
-            formatted.push(']');
-        }
-
-        formatted
-    }
-
-    fn format_structured(&self, record: &Record, entry_data: Option<&LogEntryData>, _template: &str) -> String {
-        // For now, use text format for structured - could be enhanced later
-        self.format_text(record, entry_data)
-    }
-}
-
-/// Additional data to include in log entries
-#[derive(Debug, Clone)]
-struct LogEntryData {
-    id: uuid::Uuid,
-    source: crate::core::base::entity::message::Location,
-    destination: crate::core::base::entity::message::Location,
-    correlation_id: Option<String>,
-    priority: Option<String>,
-    context: Option<HashMap<String, String>>,
-}
-
-/// System log adapter using the log crate
+/// System log adapter using env_logger
 pub struct SystemLogAdapter {
     /// Configuration
     config: SystemLogAdapterConfig,
     /// Statistics
     stats: Arc<RwLock<LogStats>>,
-    /// Logger handle for cleanup
-    _logger_handle: Option<flexi_logger::LoggerHandle>,
     /// Destination configurations with their targets
     destinations: Arc<RwLock<HashMap<LogDestination, LogDestinationConfig>>>,
-    /// Formatter for structured logging
-    formatter: StructuredFormatter,
 }
 
 impl SystemLogAdapter {
@@ -207,33 +87,27 @@ impl SystemLogAdapter {
     pub fn new(config: SystemLogAdapterConfig) -> LogResult<Self> {
         let stats = Arc::new(RwLock::new(LogStats::default()));
         let destinations = Arc::new(RwLock::new(HashMap::new()));
-        let formatter = StructuredFormatter::new(config.format.clone(), config.target.clone());
         
-        // Initialize the logger (may fail in tests, which is OK)
-        let logger_handle = Self::init_logger(&config).ok().flatten();
+        // Initialize env_logger once
+        Self::init_logger(&config)?;
         
         Ok(Self {
             config,
             stats,
-            _logger_handle: logger_handle,
             destinations,
-            formatter,
         })
     }
-    
+
     /// Create a new system log adapter for testing (without logger initialization)
     #[cfg(test)]
     pub fn new_for_test(config: SystemLogAdapterConfig) -> LogResult<Self> {
         let stats = Arc::new(RwLock::new(LogStats::default()));
         let destinations = Arc::new(RwLock::new(HashMap::new()));
-        let formatter = StructuredFormatter::new(config.format.clone(), config.target.clone());
         
         Ok(Self {
             config,
             stats,
-            _logger_handle: None, // Don't initialize logger for tests
             destinations,
-            formatter,
         })
     }
     
@@ -243,52 +117,41 @@ impl SystemLogAdapter {
         Self::new(config)
     }
     
-    /// Initialize the logger based on configuration
-    fn init_logger(config: &SystemLogAdapterConfig) -> LogResult<Option<flexi_logger::LoggerHandle>> {
-        // Check if a logger is already initialized by testing if logging is enabled
-        if log::log_enabled!(log::Level::Trace) || log::log_enabled!(log::Level::Debug) || 
-           log::log_enabled!(log::Level::Info) || log::log_enabled!(log::Level::Warn) || 
-           log::log_enabled!(log::Level::Error) {
-            // Logger already initialized, return None (OK for tests)
-            return Ok(None);
-        }
-
-        let mut logger_builder = Logger::try_with_str(&format!("{}={}", config.target, config.log_level))
-            .map_err(|e| LogError::ConfigError(format!("Invalid log configuration: {}", e)))?;
-
-        if config.enable_file {
-            // Create log directory if it doesn't exist
-            let log_path = Path::new(&config.file_path);
-            if let Some(parent) = log_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| LogError::IoError(format!("Failed to create log directory: {}", e)))?;
+    /// Initialize env_logger (only once per process)
+    fn init_logger(config: &SystemLogAdapterConfig) -> LogResult<()> {
+        INIT.call_once(|| {
+            // Set RUST_LOG if not already set (using unsafe block as required)
+            if env::var("RUST_LOG").is_err() {
+                unsafe {
+                    env::set_var("RUST_LOG", &config.log_level);
+                }
             }
-
-            let file_spec = FileSpec::try_from(&config.file_path)
-                .map_err(|e| LogError::ConfigError(format!("Invalid file path: {}", e)))?;
-
-            logger_builder = logger_builder
-                .log_to_file(file_spec)
-                .rotate(
-                    Criterion::Size(config.max_size),
-                    Naming::Timestamps,
-                    Cleanup::KeepLogFiles(config.max_files),
-                )
-                .write_mode(WriteMode::BufferAndFlush);
-        }
-
-        if !config.enable_console {
-            logger_builder = logger_builder.do_not_log();
-        }
-
-        match logger_builder.start() {
-            Ok(handle) => Ok(Some(handle)),
-            Err(flexi_logger::FlexiLoggerError::Log(_)) => {
-                // Logger already initialized, which is fine
-                Ok(None)
+            
+            // Initialize env_logger with custom formatting if needed
+            if config.structured && config.format == LogFormat::Json {
+                env_logger::Builder::from_default_env()
+                    .format(|buf, record| {
+                        use std::io::Write;
+                        
+                        let json_log = json!({
+                            "timestamp": chrono::Utc::now().to_rfc3339(),
+                            "level": record.level().to_string(),
+                            "target": record.target(),
+                            "message": record.args().to_string(),
+                            "module": record.module_path().unwrap_or("unknown"),
+                            "file": record.file().unwrap_or("unknown"),
+                            "line": record.line().unwrap_or(0),
+                        });
+                        
+                        writeln!(buf, "{}", json_log)
+                    })
+                    .init();
+            } else {
+                env_logger::init();
             }
-            Err(e) => Err(LogError::ConfigError(format!("Failed to start logger: {}", e))),
-        }
+        });
+        
+        Ok(())
     }
     
     /// Convert LogLevel to log::Level
@@ -303,84 +166,133 @@ impl SystemLogAdapter {
         }
     }
     
-     /// Write log entry using the log crate
-    fn write_log_entry(&self, entry: &LogEntry) {
-        // Skip actual logging if no logger handle (test mode)
-        if self._logger_handle.is_none() && cfg!(test) {
-            return;
+    /// Convert LogLevel to string for formatting
+    fn log_level_to_string(level: LogLevel) -> &'static str {
+        match level {
+            LogLevel::Trace => "TRACE",
+            LogLevel::Debug => "DEBUG",
+            LogLevel::Info => "INFO",
+            LogLevel::Warn => "WARN",
+            LogLevel::Error => "ERROR",
+            LogLevel::Fatal => "FATAL",
+        }
+    }
+    
+    /// Format log entry for output
+    fn format_log_entry(&self, entry: &LogEntry) -> String {
+        match self.config.format {
+            LogFormat::Json => self.format_json(entry),
+            LogFormat::Text => self.format_text(entry),
+            LogFormat::Structured(ref template) => self.format_structured(entry, template),
+        }
+    }
+
+    fn format_json(&self, entry: &LogEntry) -> String {
+        let mut json_obj = json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "level": Self::log_level_to_string(entry.level()),
+            "target": self.get_target_for_destination(&entry.destination),
+            "message": entry.message.message,
+            "id": entry.id.to_string(),
+            "source": entry.source.to_string(),
+            "destination": entry.destination.to_string(),
+            "priority": format!("{:?}", entry.priority),
+        });
+
+        if let Some(ref correlation_id) = entry.correlation_id {
+            json_obj["correlation_id"] = json!(correlation_id);
+        }
+        
+        if let Some(ref context) = entry.message.context {
+            json_obj["context"] = json!(context);
+        }
+        if let Some(ref module) = entry.message.module {
+            json_obj["module"] = json!(module);
+        }
+        if let Some(ref function) = entry.message.function {
+            json_obj["function"] = json!(function);
         }
 
+        json_obj.to_string()
+    }
+
+    fn format_text(&self, entry: &LogEntry) -> String {
+        if self.config.structured {
+            // Structured text format with all fields
+            let mut formatted = format!(
+                "{} [{}] {}: {}",
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f UTC"),
+                Self::log_level_to_string(entry.level()),
+                self.get_target_for_destination(&entry.destination),
+                entry.message.message
+            );
+
+            formatted.push_str(&format!(
+                " [id={}, src={}, dest={}",
+                entry.id,
+                entry.source,
+                entry.destination
+            ));
+            
+            if let Some(ref correlation_id) = entry.correlation_id {
+                formatted.push_str(&format!(", corr_id={}", correlation_id));
+            }
+            
+            formatted.push(']');
+            formatted
+        } else {
+            // Simple text format - just the message
+            entry.message.message.clone()
+        }
+    }
+
+    fn format_structured(&self, entry: &LogEntry, _template: &str) -> String {
+        // For now, use structured text format - could be enhanced later with template parsing
+        self.format_text(entry)
+    }
+    
+    /// Write log entry using the log crate
+    fn write_log_entry(&self, entry: &LogEntry) {
         let level = Self::log_level_to_log_level(entry.level());
-        let message = &entry.message.message;
-        
-        // Get target from destination configuration or use default
         let target = self.get_target_for_destination(&entry.destination);
         
-        // Create entry data for structured logging
-        let entry_data = LogEntryData {
-            id: entry.id,
-            source: entry.source.clone(),
-            destination: entry.destination.clone(),
-            correlation_id: entry.correlation_id.map(|id| id.to_string()),
-            priority: Some(format!("{:?}", entry.priority)),
-            context: entry.message.context.as_ref().and_then(|ctx| {
-                if let serde_json::Value::Object(map) = ctx {
-                    let mut result = HashMap::new();
-                    for (key, value) in map {
-                        result.insert(key.clone(), value.to_string());
-                    }
-                    Some(result)
-                } else {
-                    None
-                }
-            }),
+        // If env_logger is handling JSON formatting, just pass the structured data
+        // Otherwise, format the message ourselves
+        let message = if self.config.structured && self.config.format == LogFormat::Json {
+            // Let env_logger handle JSON formatting, just pass the raw message
+            entry.message.message.clone()
+        } else {
+            // Format the message ourselves
+            self.format_log_entry(entry)
         };
 
-        // Create a simple formatted message for direct logging
-        let formatted_message = self.formatter.format_record(
-            &log::Record::builder()
-                .args(format_args!("{}", message))
-                .level(level)
-                .target(target)
-                .module_path(entry.message.module.as_deref())
-                .file(entry.message.function.as_deref())
-                .line(Some(0))
-                .build(),
-            Some(&entry_data)
-        );
-
-        // Use log macros with target - simplified to avoid Record builder issues
+        // Use log macros with target
         match level {
-            log::Level::Error => log::error!(target: target, "{}", formatted_message),
-            log::Level::Warn => log::warn!(target: target, "{}", formatted_message),
-            log::Level::Info => log::info!(target: target, "{}", formatted_message),
-            log::Level::Debug => log::debug!(target: target, "{}", formatted_message),
-            log::Level::Trace => log::trace!(target: target, "{}", formatted_message),
+            log::Level::Error => error!(target: &target, "{}", message),
+            log::Level::Warn => warn!(target: &target, "{}", message),
+            log::Level::Info => info!(target: &target, "{}", message),
+            log::Level::Debug => debug!(target: &target, "{}", message),
+            log::Level::Trace => trace!(target: &target, "{}", message),
         }
     }
     
     /// Get target for a specific destination
-    fn get_target_for_destination(&self, destination: &crate::core::base::entity::message::Location) -> &str {
+    fn get_target_for_destination(&self, destination: &crate::core::base::entity::message::Location) -> String {
         // Try to find the destination in our configuration
         if let Ok(destinations) = self.destinations.try_read() {
             // Convert Location to LogDestination for lookup
             if let Ok(log_dest) = self.location_to_log_destination(destination) {
-                if let Some(_config) = destinations.get(&log_dest) {
-                    // Generate target based on destination type
-                    return match log_dest {
-                        LogDestination::System => "system",
-                        LogDestination::Access => "access",
-                        LogDestination::Error => "error", 
-                        LogDestination::Security => "security",
-                        LogDestination::Performance => "performance",
-                        LogDestination::Custom(_) => "custom",
-                    };
+                if let Some(destination_config) = destinations.get(&log_dest) {
+                    // Get the target from the destination settings or use default
+                    if let Some(target) = destination_config.settings.get("target") {
+                        return target.clone();
+                    }
                 }
             }
         }
         
         // Fall back to configured target
-        &self.config.target
+        self.config.target.clone()
     }
     
     /// Convert Location to LogDestination for configuration lookup
@@ -454,7 +366,12 @@ impl LogPort for SystemLogAdapter {
         ))
     }
     
-    async fn configure_destination(&self, config: LogDestinationConfig) -> LogResult<()> {
+    async fn configure_destination(&self, mut config: LogDestinationConfig) -> LogResult<()> {
+        // If target is provided in settings, use it; otherwise set default
+        if !config.settings.contains_key("target") {
+            config.settings.insert("target".to_string(), self.config.target.clone());
+        }
+        
         let mut destinations = self.destinations.write().await;
         destinations.insert(config.destination.clone(), config);
         Ok(())
@@ -472,9 +389,7 @@ impl LogPort for SystemLogAdapter {
     }
     
     async fn flush(&self) -> LogResult<()> {
-        if let Some(ref handle) = self._logger_handle {
-            handle.flush();
-        }
+        // env_logger doesn't provide explicit flush, but it's usually immediate
         Ok(())
     }
     
@@ -483,7 +398,7 @@ impl LogPort for SystemLogAdapter {
     }
     
     async fn rotate_logs(&self, _destination: LogDestination) -> LogResult<()> {
-        // Rotation is handled automatically by flexi_logger
+        // env_logger doesn't support rotation - would need external log management
         Ok(())
     }
     
@@ -542,7 +457,7 @@ impl LogPort for SystemLogAdapter {
     }
     
     fn get_provider_name(&self) -> &'static str {
-        "SystemLogAdapter (log + flexi_logger)"
+        "SystemLogAdapter (log + env_logger)"
     }
     
     async fn test_connection(&self) -> LogResult<()> {
@@ -563,54 +478,28 @@ impl LogPort for SystemLogAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use crate::core::platform::container::log::LogEntryBuilder;
-    
-    fn init_test_logger() {
-        let _ = env_logger::builder()
-            .filter_level(log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-    }
 
-        #[tokio::test]
+    #[tokio::test]
     async fn test_system_log_adapter_creation() {
-        init_test_logger();
-        
-        let temp_dir = TempDir::new().unwrap();
-        let log_path = temp_dir.path().join("test.log");
-        
         let config = SystemLogAdapterConfig {
             log_level: "debug".to_string(),
-            format: LogFormat::Json,
-            file_path: log_path.to_string_lossy().to_string(),
-            max_size: 1024 * 1024, // 1MB
-            max_files: 3,
-            enable_console: false, // Disable for testing
-            enable_file: true,
+            format: LogFormat::Text,
             target: "test".to_string(),
+            structured: true,
         };
         
         let adapter = SystemLogAdapter::new_for_test(config).unwrap();
-        assert_eq!(adapter.get_provider_name(), "SystemLogAdapter (log + flexi_logger)");
+        assert_eq!(adapter.get_provider_name(), "SystemLogAdapter (log + env_logger)");
     }
 
     #[tokio::test]
     async fn test_write_entry() {
-        init_test_logger();
-        
-        let temp_dir = TempDir::new().unwrap();
-        let log_path = temp_dir.path().join("test.log");
-        
         let config = SystemLogAdapterConfig {
             log_level: "debug".to_string(),
-            format: LogFormat::Json,
-            file_path: log_path.to_string_lossy().to_string(),
-            max_size: 1024 * 1024,
-            max_files: 3,
-            enable_console: false,
-            enable_file: true,
+            format: LogFormat::Text,
             target: "test".to_string(),
+            structured: true,
         };
         
         let adapter = SystemLogAdapter::new_for_test(config).unwrap();
@@ -631,20 +520,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_check() {
-        init_test_logger();
-        
-        let temp_dir = TempDir::new().unwrap();
-        let log_path = temp_dir.path().join("test.log");
-        
         let config = SystemLogAdapterConfig {
             log_level: "info".to_string(),
             format: LogFormat::Text,
-            file_path: log_path.to_string_lossy().to_string(),
-            max_size: 1024 * 1024,
-            max_files: 3,
-            enable_console: false,
-            enable_file: true,
             target: "test".to_string(),
+            structured: true,
         };
         
         let adapter = SystemLogAdapter::new_for_test(config).unwrap();
@@ -655,51 +535,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_formatter_json() {
-        let formatter = StructuredFormatter::new(LogFormat::Json, "test".to_string());
-        
-        let record = log::Record::builder()
-            .args(format_args!("Test message"))
-            .level(log::Level::Info)
-            .target("test")
-            .module_path(Some("test_module"))
-            .file(Some("test.rs"))
-            .line(Some(42))
-            .build();
-
-        let entry_data = LogEntryData {
-            id: uuid::Uuid::new_v4(),
-            source: crate::core::base::entity::message::Location::system("source"),
-            destination: crate::core::base::entity::message::Location::service("dest"),
-            correlation_id: Some("corr123".to_string()),
-            priority: Some("High".to_string()),
-            context: None,
+    async fn test_json_formatting() {
+        let config = SystemLogAdapterConfig {
+            log_level: "info".to_string(),
+            format: LogFormat::Json,
+            target: "test".to_string(),
+            structured: true,
         };
-
-        let formatted = formatter.format_record(&record, Some(&entry_data));
         
-        // Should be valid JSON
+        let adapter = SystemLogAdapter::new_for_test(config).unwrap();
+        
+        let entry = LogEntryBuilder::new_entry(
+            crate::core::base::entity::message::Location::system("test"),
+            LogDestination::System,
+            LogLevel::Info,
+            "JSON test message".to_string(),
+        );
+        
+        let formatted = adapter.format_log_entry(&entry);
         let parsed: serde_json::Value = serde_json::from_str(&formatted).unwrap();
-        assert_eq!(parsed["message"], "Test message");
+        
+        assert_eq!(parsed["message"], "JSON test message");
         assert_eq!(parsed["level"], "INFO");
-        assert_eq!(parsed["correlation_id"], "corr123");
+        assert!(parsed["timestamp"].is_string());
     }
 
     #[tokio::test]
-    async fn test_formatter_text() {
-        let formatter = StructuredFormatter::new(LogFormat::Text, "test".to_string());
-        
-        let record = log::Record::builder()
-            .args(format_args!("Test message"))
-            .level(log::Level::Warn)
-            .target("test")
-            .build();
-
-        let formatted = formatter.format_record(&record, None);
-        
-        // Should contain the basic elements
-        assert!(formatted.contains("WARN"));
-        assert!(formatted.contains("Test message"));
-        assert!(formatted.contains("test"));
+    async fn test_log_level_conversion() {
+        assert_eq!(SystemLogAdapter::log_level_to_string(LogLevel::Trace), "TRACE");
+        assert_eq!(SystemLogAdapter::log_level_to_string(LogLevel::Debug), "DEBUG");
+        assert_eq!(SystemLogAdapter::log_level_to_string(LogLevel::Info), "INFO");
+        assert_eq!(SystemLogAdapter::log_level_to_string(LogLevel::Warn), "WARN");
+        assert_eq!(SystemLogAdapter::log_level_to_string(LogLevel::Error), "ERROR");
+        assert_eq!(SystemLogAdapter::log_level_to_string(LogLevel::Fatal), "FATAL");
     }
 }

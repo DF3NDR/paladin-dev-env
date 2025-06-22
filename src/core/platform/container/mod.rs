@@ -6,7 +6,6 @@ pub mod log;
 pub mod notification;
 pub mod prompt;
 pub mod queue_item;
-pub mod resource;
 pub mod task;
 pub mod trigger;
 pub mod user_group;

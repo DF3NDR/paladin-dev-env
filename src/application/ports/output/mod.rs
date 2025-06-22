@@ -3,3 +3,4 @@ pub mod log_port;
 pub mod notification_port;
 pub mod search_engine_port;
 pub mod llm_port;
+pub mod queue_port;

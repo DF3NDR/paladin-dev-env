@@ -612,6 +612,10 @@ mod tests {
             {
                 Ok(Some(serde_json::json!({"test": "success"})))
             }
+            
+            fn clone_service(&self) -> Box<dyn TaskService> {
+                Box::new(CustomService)
+            }
         }
         
         scheduler.register_service(Box::new(CustomService));

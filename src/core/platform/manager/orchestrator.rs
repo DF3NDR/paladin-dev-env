@@ -14,13 +14,12 @@ use crate::core::platform::manager::queue_service::{QueueService, QueueConfig, Q
 use crate::core::platform::manager::listener_service::{ListenerService, EventListener, ListenerError};
 use crate::core::platform::container::job::{Job, JobError, JobExecutionMode};
 use crate::core::platform::container::task::{Task, TaskService, TaskError};
-use crate::core::platform::container::queue_item::{QueueItem, QueueItemConfig};
-use crate::core::platform::container::trigger::{Trigger, TriggerCondition, TriggerConfig};
+use crate::core::platform::container::queue_item::{QueueItem};
+use crate::core::platform::container::trigger::{Trigger, TriggerCondition};
 use crate::core::platform::container::content::ContentItem;
-use crate::core::base::component::action::{Action, ActionPriority, ActionStatus, ActionContext};
+use crate::core::base::component::action::{Action, ActionPriority};
 use crate::core::base::component::event::Event;
 use crate::core::base::entity::message::{Message, Location, MessagePriority};
-use crate::core::base::entity::node::Node;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -164,10 +163,10 @@ impl Orchestrator {
     pub async fn register_task_service(&self, service: Box<dyn TaskService>) -> Result<(), OrchestratorError> {
         let service_name = service.name().to_string();
         
-        // Register with scheduler
+        // Register with scheduler using the new clone_service method
         {
             let mut scheduler = self.scheduler.lock().await;
-            scheduler.register_service(service.clone_box()?);
+            scheduler.register_service(service.clone_service());
         }
         
         // Register with orchestrator
@@ -195,36 +194,37 @@ impl Orchestrator {
         println!("Registered content processor: {}", processor_name);
         Ok(())
     }
-
-/// Create and execute a simple job immediately
-pub async fn execute_job(&self, job: Job, context: OrchestrationContext) -> Result<Uuid, OrchestratorError> {
-    let job_id = job.id();
     
-    // Start orchestration session
-    self.start_session(context.clone()).await?;
-    
-    // Execute job with registered services - collect cloned services
-    let services: HashMap<String, Box<dyn TaskService>> = {
-        let services_guard = self.task_services.read().await;
-        services_guard.iter()
-            .map(|(k, v)| (k.clone(), v.clone_service()))
-            .collect()
-    };
-    
-    let mut job_clone = job.clone();
-    match job_clone.execute(&services).await {
-        Ok(_) => {
-            println!("Job '{}' executed successfully", job_clone.name());
-            self.end_session(context.session_id).await?;
-            Ok(job_id)
-        }
-        Err(e) => {
-            println!("Job '{}' execution failed: {}", job_clone.name(), e);
-            self.end_session(context.session_id).await?;
-            Err(OrchestratorError::JobError(e))
+    /// Create and execute a simple job immediately
+    pub async fn execute_job(&self, job: Job, context: OrchestrationContext) -> Result<Uuid, OrchestratorError> {
+        let job_id = job.id();
+        
+        // Start orchestration session
+        self.start_session(context.clone()).await?;
+        
+        // Execute job with registered services - collect cloned services
+        let services: HashMap<String, Box<dyn TaskService>> = {
+            let services_guard = self.task_services.read().await;
+            services_guard.iter()
+                .map(|(k, v)| (k.clone(), v.clone_service()))
+                .collect()
+        };
+        
+        let mut job_clone = job.clone();
+        match job_clone.execute(&services).await {
+            Ok(_) => {
+                println!("Job '{}' executed successfully", job_clone.name());
+                self.end_session(context.session_id).await?;
+                Ok(job_id)
+            }
+            Err(e) => {
+                println!("Job '{}' execution failed: {}", job_clone.name(), e);
+                self.end_session(context.session_id).await?;
+                Err(OrchestratorError::JobError(e))
+            }
         }
     }
-}
+
     /// Schedule a job for recurring execution
     pub async fn schedule_job(&self, job: Job, schedule: Schedule, context: OrchestrationContext) -> Result<Uuid, OrchestratorError> {
         let job_id = job.id();
@@ -246,16 +246,17 @@ pub async fn execute_job(&self, job: Job, context: OrchestrationContext) -> Resu
     /// Queue a job for asynchronous execution
     pub async fn queue_job(&self, job: Job, queue_name: &str, context: OrchestrationContext) -> Result<Uuid, OrchestratorError> {
         // Convert job to queue item
-        let message = Message::new(
+        let message = Message::with_priority(
             Location::system("orchestrator"),
             Location::service("job_processor"),
             job.clone(),
-        ).with_priority(match job.action.priority {
-            ActionPriority::Low => MessagePriority::Low,
-            ActionPriority::Normal => MessagePriority::Normal,
-            ActionPriority::High => MessagePriority::High,
-            ActionPriority::Critical => MessagePriority::Critical,
-        });
+            match job.action.priority {
+                ActionPriority::Low => MessagePriority::Low,
+                ActionPriority::Normal => MessagePriority::Normal,
+                ActionPriority::High => MessagePriority::High,
+                ActionPriority::Critical => MessagePriority::Critical,
+            }
+        );
         
         let queue_item = QueueItem::new(queue_name.to_string(), message, None);
         let item_id = self.queue_service.enqueue(queue_name, queue_item).await
@@ -383,6 +384,7 @@ pub async fn execute_job(&self, job: Job, context: OrchestrationContext) -> Resu
         // Process created triggers
         for trigger_id in &trigger_ids {
             if let Some(trigger) = self.listener_service.get_next_trigger().await {
+                println!("Processing trigger {} for trigger ID {}", trigger.name, trigger_id);
                 self.execute_trigger(trigger).await?;
             }
         }
@@ -794,20 +796,6 @@ pub enum OrchestratorError {
 impl Default for Orchestrator {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// Extension trait for TaskService to support cloning
-trait TaskServiceClone {
-    fn clone_box(&self) -> Result<Box<dyn TaskService>, OrchestratorError>;
-}
-
-impl<T> TaskServiceClone for T 
-where 
-    T: TaskService + Clone + 'static 
-{
-    fn clone_box(&self) -> Result<Box<dyn TaskService>, OrchestratorError> {
-        Ok(Box::new(self.clone()))
     }
 }
 

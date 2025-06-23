@@ -278,17 +278,18 @@ pub enum TaskError {
 /// Trait for services that can execute tasks
 #[async_trait]
 pub trait TaskService: Debug + Send + Sync {
-    /// Executes the task and returns optional result data
-    async fn execute(&self, action: &Action) -> Result<Option<serde_json::Value>, TaskError>;
-    
     /// Returns the service name
     fn name(&self) -> &str;
-    
+
+    /// Executes the task and returns optional result data
+    async fn execute(&self, action: &Action) -> Result<Option<serde_json::Value>, TaskError>;
+        
     /// Checks if the service can handle the given task
     fn can_handle(&self, task: &Task) -> bool {
         task.service_name == self.name()
     }
     
+    /// Clones the service for re-use
     fn clone_service(&self) -> Box<dyn TaskService>;
 }
 
@@ -300,24 +301,23 @@ pub struct DataBackupService {
 
 #[async_trait]
 impl TaskService for DataBackupService {
+    fn name(&self) -> &str {
+        "DataBackupService"
+    }
+
     async fn execute(&self, action: &Action) -> Result<Option<serde_json::Value>, TaskError> {
         println!("Running data backup to: {} for task: {}", self.backup_path, action.name);
         
         // Simulate backup work
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         
-        let result = serde_json::json!({
+        Ok(Some(serde_json::json!({
             "backup_path": self.backup_path,
-            "files_backed_up": 150,
-            "size_mb": 1024
-        });
-        
-        println!("Data backup completed for task: {}", action.name);
-        Ok(Some(result))
-    }
-
-    fn name(&self) -> &str {
-        "DataBackupService"
+            // "documents_indexed": 500,
+            // "index_size_mb": 256,
+            "status": "completed",
+            "timestamp": chrono::Utc::now()
+        })))
     }
     
     fn clone_service(&self) -> Box<dyn TaskService> {
@@ -332,24 +332,27 @@ pub struct ContentIndexingService {
 
 #[async_trait]
 impl TaskService for ContentIndexingService {
+    fn name(&self) -> &str {
+        "ContentIndexingService"
+    }
+
     async fn execute(&self, action: &Action) -> Result<Option<serde_json::Value>, TaskError> {
         println!("Running content indexing for index: {} for task: {}", self.index_name, action.name);
+        println!("Action: {} - {}", action.name, action.description);
         
         // Simulate indexing work
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
         
         let result = serde_json::json!({
             "index_name": self.index_name,
-            "documents_indexed": 500,
-            "index_size_mb": 256
+            // "documents_indexed": 500,
+            // "index_size_mb": 256,
+            "status": "indexed",
+            "timestamp": chrono::Utc::now()
         });
         
         println!("Content indexing completed for task: {}", action.name);
         Ok(Some(result))
-    }
-
-    fn name(&self) -> &str {
-        "ContentIndexingService"
     }
     
     fn clone_service(&self) -> Box<dyn TaskService> {
@@ -364,6 +367,10 @@ pub struct EmailNotificationService {
 
 #[async_trait]
 impl TaskService for EmailNotificationService {
+    fn name(&self) -> &str {
+        "EmailNotificationService"
+    }
+    
     async fn execute(&self, action: &Action) -> Result<Option<serde_json::Value>, TaskError> {
         println!("Sending email notification via: {} for task: {}", self.smtp_server, action.name);
         
@@ -378,15 +385,12 @@ impl TaskService for EmailNotificationService {
         let result = serde_json::json!({
             "smtp_server": self.smtp_server,
             "to_email": to_email,
-            "status": "sent"
+            "status": "sent",
+            "timestamp": chrono::Utc::now()
         });
         
         println!("Email notification sent to: {} for task: {}", to_email, action.name);
         Ok(Some(result))
-    }
-
-    fn name(&self) -> &str {
-        "EmailNotificationService"
     }
     
     fn clone_service(&self) -> Box<dyn TaskService> {

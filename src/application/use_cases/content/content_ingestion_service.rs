@@ -21,7 +21,16 @@ use url::Url;
 
 use crate::core::platform::container::content::{ContentItem, ContentType, TextContent};
 use crate::core::platform::manager::orchestrator::{Orchestrator, OrchestrationContext, ContentAnalysisType};
-use crate::application::storage::sql_store::ContentRepository;
+
+/// Content repository trait that must be thread-safe
+#[async_trait]
+pub trait ContentRepository: Send + Sync {
+    async fn create(&self, content: ContentItem) -> Result<Uuid, String>;
+    async fn get_by_id(&self, id: Uuid) -> Result<Option<ContentItem>, String>;
+    async fn update(&self, content: ContentItem) -> Result<(), String>;
+    async fn delete(&self, id: Uuid) -> Result<(), String>;
+    async fn list(&self) -> Result<Vec<ContentItem>, String>;
+}
 
 /// Content ingestion configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,7 +261,8 @@ impl DefaultContentIngestionService {
             }
             _ => {
                 // Default: treat as plain text
-                let text_content = TextContent::new(source.url.clone(), Some(raw_content))
+                let url_string = source.url.as_ref().map(|u| u.to_string());
+                let text_content = TextContent::new(url_string, Some(raw_content))
                     .map_err(|e| IngestionError::ParseError(e.to_string()))?;
                 let content_item = ContentItem::new(ContentType::Text(text_content))
                     .map_err(|e| IngestionError::ParseError(e.to_string()))?;
@@ -272,7 +282,8 @@ impl DefaultContentIngestionService {
     async fn parse_web_page(&self, content: String, url: Option<Url>) -> Result<ContentItem, IngestionError> {
         // Extract text content from HTML
         // This would use a crate like `scraper` or `html2text`
-        let text_content = TextContent::new(url, Some(content))
+        let url_string = url.map(|u| u.to_string());
+        let text_content = TextContent::new(url_string, Some(content))
             .map_err(|e| IngestionError::ParseError(e.to_string()))?;
         ContentItem::new(ContentType::Text(text_content))
             .map_err(|e| IngestionError::ParseError(e.to_string()))
@@ -288,6 +299,18 @@ impl DefaultContentIngestionService {
         // This would use reqwest or similar HTTP client
         // For now, return a placeholder
         Ok(format!("Content from {}", url))
+    }
+    
+    /// Get content size for different content types
+    fn get_content_size(content_type: &ContentType) -> usize {
+        match content_type {
+            ContentType::Text(text_content) => {
+                text_content.content.as_ref().map(|t| t.len()).unwrap_or(0)
+            }
+            ContentType::Video(video_content) => video_content.filesize as usize,
+            ContentType::Audio(audio_content) => audio_content.filesize as usize,
+            ContentType::Image(image_content) => image_content.filesize as usize,
+        }
     }
     
     /// Trigger content analysis if enabled
@@ -422,7 +445,7 @@ impl ContentIngestionService for DefaultContentIngestionService {
                 error: None,
                 ingested_at: Utc::now(),
                 processing_time_ms,
-                content_size: Some(content_item.content().size()),
+                content_size: Some(Self::get_content_size(content_item.content())),
                 analysis_triggered,
             })
         } else {
@@ -477,7 +500,7 @@ impl ContentIngestionService for DefaultContentIngestionService {
             error: None,
             ingested_at: Utc::now(),
             processing_time_ms,
-            content_size: Some(content_item.content().size()),
+            content_size: Some(Self::get_content_size(content_item.content())),
             analysis_triggered,
         })
     }
@@ -658,10 +681,56 @@ impl Default for IngestionStats {
     }
 }
 
+/// In-memory implementation of ContentRepository for testing
+#[derive(Debug, Clone)]
+pub struct InMemoryContentRepository {
+    items: Arc<RwLock<HashMap<Uuid, ContentItem>>>,
+}
+
+impl InMemoryContentRepository {
+    pub fn new() -> Self {
+        Self {
+            items: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl ContentRepository for InMemoryContentRepository {
+    async fn create(&self, content: ContentItem) -> Result<Uuid, String> {
+        let id = content.uuid();
+        let mut items = self.items.write().await;
+        items.insert(id, content);
+        Ok(id)
+    }
+    
+    async fn get_by_id(&self, id: Uuid) -> Result<Option<ContentItem>, String> {
+        let items = self.items.read().await;
+        Ok(items.get(&id).cloned())
+    }
+    
+    async fn update(&self, content: ContentItem) -> Result<(), String> {
+        let id = content.uuid();
+        let mut items = self.items.write().await;
+        items.insert(id, content);
+        Ok(())
+    }
+    
+    async fn delete(&self, id: Uuid) -> Result<(), String> {
+        let mut items = self.items.write().await;
+        items.remove(&id);
+        Ok(())
+    }
+    
+    async fn list(&self) -> Result<Vec<ContentItem>, String> {
+        let items = self.items.read().await;
+        Ok(items.values().cloned().collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::repositories::in_memory_content_repository::InMemoryContentRepository;
 
     #[tokio::test]
     async fn test_content_ingestion_service_creation() {

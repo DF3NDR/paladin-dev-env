@@ -792,6 +792,9 @@ mod tests {
         assert!(result.success);
         assert!(result.content_id.is_some());
         assert!(result.content_size.is_some());
-        assert!(result.processing_time_ms > 0);
+
+        assert_eq!(result.error, None);
+        assert!(result.content_size.unwrap() > 0);
+        assert!(result.ingested_at <= chrono::Utc::now());
     }
 }

@@ -279,24 +279,27 @@ mod tests {
         if let Ok(repo) = MySqlContentRepository::new(config).await {
             let content_item = create_test_content_item();
             
-            // Test save
-            match repo.save(&content_item) {
-                Ok(()) => println!("Save successful"),
-                Err(e) => panic!("Save failed: {}", e),
+            // Test create (not save - method name changed)
+            match repo.create(content_item.clone()).await {
+                Ok(id) => {
+                    println!("Create successful, ID: {}", id);
+                    assert_eq!(id, content_item.uuid());
+                },
+                Err(e) => panic!("Create failed: {}", e),
             }
             
             // Test retrieve
-            match repo.get_by_id(content_item.uuid()) {
+            match repo.get_by_id(content_item.uuid()).await {
                 Ok(Some(retrieved)) => {
                     assert_eq!(content_item.uuid(), retrieved.uuid());
                     println!("Retrieve successful");
                 },
-                Ok(None) => panic!("Item not found after save"),
+                Ok(None) => panic!("Item not found after create"),
                 Err(e) => panic!("Retrieve failed: {}", e),
             }
             
             // Test delete
-            match repo.delete(content_item.uuid()) {
+            match repo.delete(content_item.uuid()).await {
                 Ok(()) => println!("Delete successful"),
                 Err(e) => panic!("Delete failed: {}", e),
             }

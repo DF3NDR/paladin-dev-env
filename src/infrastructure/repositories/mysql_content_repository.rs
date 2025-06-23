@@ -5,6 +5,7 @@ use crate::application::storage::sql_store::{
 use crate::core::platform::container::content::{ContentItem, ContentType, TextContent, VideoContent, AudioContent, ImageContent, ContentData};
 use crate::core::platform::container::content_list::ContentList;
 use crate::core::base::entity::node::Node;
+use async_trait::async_trait;
 
 use sqlx::{MySqlPool, Row, mysql::MySqlPoolOptions};
 use serde_json;
@@ -50,7 +51,27 @@ impl MySqlContentRepository {
         let repository = Self { pool };
         
         // Run migrations on startup
-        repository.migrate()?;
+        repository.migrate().await?;
+        
+        Ok(repository)
+    }
+
+    pub async fn from_pool(pool: MySqlPool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn with_config(config: MySqlConfig) -> Result<Self, RepositoryError> {
+        let pool = MySqlPoolOptions::new()
+            .max_connections(config.max_connections)
+            .min_connections(config.min_connections)
+            .connect(&config.database_url)
+            .await
+            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
+
+        let repository = Self { pool };
+        
+        // Run migrations on startup
+        repository.migrate().await?;
         
         Ok(repository)
     }
@@ -250,381 +271,290 @@ impl MySqlContentRepository {
     }
 }
 
+#[async_trait]
 impl ContentRepository for MySqlContentRepository {
-    fn get_by_hash(&self, hash: &str) -> Result<Option<ContentItem>, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            let row = sqlx::query("SELECT * FROM content_items WHERE hash = ?")
-                .bind(hash)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+    async fn get_by_hash(&self, hash: &str) -> Result<Option<ContentItem>, RepositoryError> {
+        let row = sqlx::query("SELECT * FROM content_items WHERE hash = ?")
+            .bind(hash)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
-            match row {
-                Some(row) => Ok(Some(self.row_to_content_item(&row).await?)),
-                None => Ok(None),
-            }
-        })
+        match row {
+            Some(row) => Ok(Some(self.row_to_content_item(&row).await?)),
+            None => Ok(None),
+        }
     }
 
-    fn get_by_id(&self, id: Uuid) -> Result<Option<ContentItem>, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            let row = sqlx::query("SELECT * FROM content_items WHERE uuid = ?")
-                .bind(id.to_string())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+    async fn get_by_id(&self, id: Uuid) -> Result<Option<ContentItem>, RepositoryError> {
+        let row = sqlx::query("SELECT * FROM content_items WHERE uuid = ?")
+            .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
-            match row {
-                Some(row) => Ok(Some(self.row_to_content_item(&row).await?)),
-                None => Ok(None),
-            }
-        })
+        match row {
+            Some(row) => Ok(Some(self.row_to_content_item(&row).await?)),
+            None => Ok(None),
+        }
     }
 
-    fn save(&self, content: &ContentItem) -> Result<(), RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            let (content_type, content_data_json) = self.serialize_content_type(&content.node.node.content).await?;
-            let content_data_str = serde_json::to_string(&content_data_json)
-                .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
-            let tags_str = content.node.node.tags.as_ref()
-                .map(|tags| serde_json::to_string(tags))
-                .transpose()
-                .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
+    async fn create(&self, content: ContentItem) -> Result<Uuid, RepositoryError> {
+        let id = content.uuid();
+        let (content_type, content_data_json) = self.serialize_content_type(&content.node.node.content).await?;
+        let content_data_str = serde_json::to_string(&content_data_json)
+            .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
+        let tags_str = content.node.node.tags.as_ref()
+            .map(|tags| serde_json::to_string(tags))
+            .transpose()
+            .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
 
-            sqlx::query(r#"
-                INSERT INTO content_items (
-                    uuid, created, modified, content_type, content_data, url, hash,
-                    source_url, title, description, tags, source, author, source_id,
-                    pub_date, mod_date, version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#)
-            .bind(content.node.uuid.to_string())
-            .bind(content.node.created)
-            .bind(content.node.modified)
-            .bind(&content_type)
-            .bind(&content_data_str)
-            .bind(content.node.node.url.as_ref().map(|u| u.as_str()))
-            .bind(&content.node.node.hash)
-            .bind(content.node.node.source_url.as_ref().map(|u| u.as_str()))
-            .bind(&content.node.name)
-            .bind(&content.node.node.description)
-            .bind(tags_str.as_deref())
-            .bind(&content.node.node.source)
-            .bind(&content.node.node.author)
-            .bind(&content.node.node.source_id)
-            .bind(content.node.node.pub_date)
-            .bind(content.node.node.mod_date)
-            .bind(content.node.version)
+        sqlx::query(r#"
+            INSERT INTO content_items (
+                uuid, created, modified, content_type, content_data, url, hash,
+                source_url, title, description, tags, source, author, source_id,
+                pub_date, mod_date, version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#)
+        .bind(content.node.uuid.to_string())
+        .bind(content.node.created)
+        .bind(content.node.modified)
+        .bind(&content_type)
+        .bind(&content_data_str)
+        .bind(content.node.node.url.as_ref().map(|u| u.as_str()))
+        .bind(&content.node.node.hash)
+        .bind(content.node.node.source_url.as_ref().map(|u| u.as_str()))
+        .bind(&content.node.name)
+        .bind(&content.node.node.description)
+        .bind(tags_str.as_deref())
+        .bind(&content.node.node.source)
+        .bind(&content.node.node.author)
+        .bind(&content.node.node.source_id)
+        .bind(content.node.node.pub_date)
+        .bind(content.node.node.mod_date)
+        .bind(content.node.version)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+
+        Ok(id)
+    }
+
+    async fn update(&self, content: &ContentItem) -> Result<(), RepositoryError> {
+        let (content_type, content_data_json) = self.serialize_content_type(&content.node.node.content).await?;
+        let content_data_str = serde_json::to_string(&content_data_json)
+            .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
+        let tags_str = content.node.node.tags.as_ref()
+            .map(|tags| serde_json::to_string(tags))
+            .transpose()
+            .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
+
+        let result = sqlx::query(r#"
+            UPDATE content_items SET 
+                modified = ?, content_type = ?, content_data = ?, url = ?, hash = ?,
+                source_url = ?, title = ?, description = ?, tags = ?, 
+                source = ?, author = ?, source_id = ?, pub_date = ?, mod_date = ?, version = ?
+            WHERE uuid = ?
+        "#)
+        .bind(content.node.modified)
+        .bind(&content_type)
+        .bind(&content_data_str)
+        .bind(content.node.node.url.as_ref().map(|u| u.as_str()))
+        .bind(&content.node.node.hash)
+        .bind(content.node.node.source_url.as_ref().map(|u| u.as_str()))
+        .bind(&content.node.name)
+        .bind(&content.node.node.description)
+        .bind(tags_str.as_deref())
+        .bind(&content.node.node.source)
+        .bind(&content.node.node.author)
+        .bind(&content.node.node.source_id)
+        .bind(content.node.node.pub_date)
+        .bind(content.node.node.mod_date)
+        .bind(content.node.version)
+        .bind(content.node.uuid.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound(content.node.uuid.to_string()));
+        }
+
+        Ok(())
+    }
+
+    async fn delete(&self, id: Uuid) -> Result<(), RepositoryError> {
+        let result = sqlx::query("DELETE FROM content_items WHERE uuid = ?")
+            .bind(id.to_string())
             .execute(&self.pool)
             .await
             .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
-            Ok(())
-        })
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound(id.to_string()));
+        }
+
+        Ok(())
     }
 
-    fn update(&self, content: &ContentItem) -> Result<(), RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            let (content_type, content_data_json) = self.serialize_content_type(&content.node.node.content).await?;
-            let content_data_str = serde_json::to_string(&content_data_json)
-                .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
-            let tags_str = content.node.node.tags.as_ref()
-                .map(|tags| serde_json::to_string(tags))
-                .transpose()
-                .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
-
-            let result = sqlx::query(r#"
-                UPDATE content_items SET 
-                    modified = ?, content_type = ?, content_data = ?, url = ?, hash = ?,
-                    source_url = ?, title = ?, description = ?, tags = ?, 
-                    source = ?, author = ?, source_id = ?, pub_date = ?, mod_date = ?, version = ?
-                WHERE uuid = ?
-            "#)
-            .bind(content.node.modified)
-            .bind(&content_type)
-            .bind(&content_data_str)
-            .bind(content.node.node.url.as_ref().map(|u| u.as_str()))
-            .bind(&content.node.node.hash)
-            .bind(content.node.node.source_url.as_ref().map(|u| u.as_str()))
-            .bind(&content.node.name)
-            .bind(&content.node.node.description)
-            .bind(tags_str.as_deref())
-            .bind(&content.node.node.source)
-            .bind(&content.node.node.author)
-            .bind(&content.node.node.source_id)
-            .bind(content.node.node.pub_date)
-            .bind(content.node.node.mod_date)
-            .bind(content.node.version)
-            .bind(content.node.uuid.to_string())
-            .execute(&self.pool)
+    async fn list(&self) -> Result<Vec<ContentItem>, RepositoryError> {
+        let rows = sqlx::query("SELECT * FROM content_items ORDER BY created DESC")
+            .fetch_all(&self.pool)
             .await
             .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
-            if result.rows_affected() == 0 {
-                return Err(RepositoryError::NotFound(content.node.uuid.to_string()));
-            }
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(self.row_to_content_item(&row).await?);
+        }
 
-            Ok(())
-        })
+        Ok(items)
     }
 
-    fn delete(&self, id: Uuid) -> Result<(), RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            let result = sqlx::query("DELETE FROM content_items WHERE uuid = ?")
-                .bind(id.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
-
-            if result.rows_affected() == 0 {
-                return Err(RepositoryError::NotFound(id.to_string()));
-            }
-
-            Ok(())
-        })
-    }
-
-    fn find_by_tags(&self, tags: &[String]) -> Result<Vec<ContentItem>, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            let mut items = Vec::new();
-            
-            for tag in tags {
-                let rows = sqlx::query("SELECT * FROM content_items WHERE JSON_CONTAINS(tags, ?)")
-                    .bind(format!("\"{}\"", tag))
-                    .fetch_all(&self.pool)
-                    .await
-                    .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
-
-                for row in rows {
-                    items.push(self.row_to_content_item(&row).await?);
-                }
-            }
-
-            Ok(items)
-        })
-    }
-
-    fn find_by_source(&self, source: &str) -> Result<Vec<ContentItem>, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            let rows = sqlx::query("SELECT * FROM content_items WHERE source = ?")
-                .bind(source)
+    async fn find_by_tags(&self, tags: &[String]) -> Result<Vec<ContentItem>, RepositoryError> {
+        let mut items = Vec::new();
+        for tag in tags {
+            let rows = sqlx::query("SELECT * FROM content_items WHERE JSON_CONTAINS(tags, ?)")
+                .bind(format!("\"{}\"", tag))
                 .fetch_all(&self.pool)
                 .await
                 .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
-            let mut items = Vec::new();
             for row in rows {
                 items.push(self.row_to_content_item(&row).await?);
             }
-
-            Ok(items)
-        })
+        }
+        Ok(items)
     }
 
-    fn find_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<ContentItem>, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            let rows = sqlx::query("SELECT * FROM content_items WHERE created BETWEEN ? AND ?")
-                .bind(start)
-                .bind(end)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+    async fn find_by_source(&self, source: &str) -> Result<Vec<ContentItem>, RepositoryError> {
+        let rows = sqlx::query("SELECT * FROM content_items WHERE source = ?")
+            .bind(source)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
-            let mut items = Vec::new();
-            for row in rows {
-                items.push(self.row_to_content_item(&row).await?);
-            }
-
-            Ok(items)
-        })
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(self.row_to_content_item(&row).await?);
+        }
+        Ok(items)
     }
 
-    fn find_all(&self, limit: Option<u32>, offset: Option<u32>) -> Result<Vec<ContentItem>, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            let mut query = "SELECT * FROM content_items ORDER BY created DESC".to_string();
-            
-            if let Some(limit) = limit {
-                query.push_str(&format!(" LIMIT {}", limit));
-            }
-            
-            if let Some(offset) = offset {
-                query.push_str(&format!(" OFFSET {}", offset));
-            }
+    async fn count(&self) -> Result<u64, RepositoryError> {
+        let row = sqlx::query("SELECT COUNT(*) as count FROM content_items")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
-            let rows = sqlx::query(&query)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+        let count: i64 = row.try_get("count")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
-            let mut items = Vec::new();
-            for row in rows {
-                items.push(self.row_to_content_item(&row).await?);
-            }
-
-            Ok(items)
-        })
+        Ok(count as u64)
     }
 
-    fn count(&self) -> Result<u64, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            let row = sqlx::query("SELECT COUNT(*) as count FROM content_items")
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+    async fn exists_by_hash(&self, hash: &str) -> Result<bool, RepositoryError> {
+        let row = sqlx::query("SELECT COUNT(*) as count FROM content_items WHERE hash = ?")
+            .bind(hash)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
-            let count: i64 = row.try_get("count")
-                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
+        let count: i64 = row.try_get("count")
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
-            Ok(count as u64)
-        })
-    }
-
-    fn exists_by_hash(&self, hash: &str) -> Result<bool, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            let row = sqlx::query("SELECT COUNT(*) as count FROM content_items WHERE hash = ?")
-                .bind(hash)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
-
-            let count: i64 = row.try_get("count")
-                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
-
-            Ok(count > 0)
-        })
+        Ok(count > 0)
     }
 }
 
+#[async_trait]
 impl MigrationManager for MySqlContentRepository {
-    fn migrate(&self) -> Result<(), RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
-        
-        rt.block_on(async {
-            // Create content_items table
-            sqlx::query(r#"
-                CREATE TABLE IF NOT EXISTS content_items (
-                    uuid VARCHAR(36) PRIMARY KEY,
-                    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    content_type VARCHAR(50) NOT NULL,
-                    content_data JSON NOT NULL,
-                    url TEXT,
-                    hash VARCHAR(255),
-                    source_url TEXT,
-                    title TEXT,
-                    description TEXT,
-                    tags JSON,
-                    source VARCHAR(255),
-                    author VARCHAR(255),
-                    source_id VARCHAR(255),
-                    pub_date TIMESTAMP NULL,
-                    mod_date TIMESTAMP NULL,
-                    version BOOLEAN DEFAULT TRUE,
-                    INDEX idx_hash (hash),
-                    INDEX idx_source (source),
-                    INDEX idx_created (created),
-                    INDEX idx_content_type (content_type)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            "#)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| RepositoryError::MigrationError(e.to_string()))?;
+    async fn migrate(&self) -> Result<(), RepositoryError> {
+        // Create content_items table
+        sqlx::query(r#"
+            CREATE TABLE IF NOT EXISTS content_items (
+                uuid VARCHAR(36) PRIMARY KEY,
+                created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                content_type VARCHAR(50) NOT NULL,
+                content_data JSON NOT NULL,
+                url TEXT,
+                hash VARCHAR(255),
+                source_url TEXT,
+                title TEXT,
+                description TEXT,
+                tags JSON,
+                source VARCHAR(255),
+                author VARCHAR(255),
+                source_id VARCHAR(255),
+                pub_date TIMESTAMP NULL,
+                mod_date TIMESTAMP NULL,
+                version BOOLEAN DEFAULT TRUE,
+                INDEX idx_hash (hash),
+                INDEX idx_source (source),
+                INDEX idx_created (created),
+                INDEX idx_content_type (content_type)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        "#)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| RepositoryError::MigrationError(e.to_string()))?;
 
-            // Create content_lists table
-            sqlx::query(r#"
-                CREATE TABLE IF NOT EXISTS content_lists (
-                    uuid VARCHAR(36) PRIMARY KEY,
-                    name VARCHAR(255) NOT NULL,
-                    url TEXT NOT NULL,
-                    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    version BOOLEAN DEFAULT TRUE,
-                    INDEX idx_name (name),
-                    INDEX idx_created (created)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            "#)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| RepositoryError::MigrationError(e.to_string()))?;
+        // Create content_lists table
+        sqlx::query(r#"
+            CREATE TABLE IF NOT EXISTS content_lists (
+                uuid VARCHAR(36) PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                url TEXT NOT NULL,
+                created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                version BOOLEAN DEFAULT TRUE,
+                INDEX idx_name (name),
+                INDEX idx_created (created)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        "#)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| RepositoryError::MigrationError(e.to_string()))?;
 
-            // Create content_list_items junction table
-            sqlx::query(r#"
-                CREATE TABLE IF NOT EXISTS content_list_items (
-                    list_uuid VARCHAR(36),
-                    item_uuid VARCHAR(36),
-                    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (list_uuid, item_uuid),
-                    FOREIGN KEY (list_uuid) REFERENCES content_lists(uuid) ON DELETE CASCADE,
-                    INDEX idx_list_uuid (list_uuid),
-                    INDEX idx_item_uuid (item_uuid)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            "#)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| RepositoryError::MigrationError(e.to_string()))?;
+        // Create content_list_items junction table
+        sqlx::query(r#"
+            CREATE TABLE IF NOT EXISTS content_list_items (
+                list_uuid VARCHAR(36),
+                item_uuid VARCHAR(36),
+                created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (list_uuid, item_uuid),
+                FOREIGN KEY (list_uuid) REFERENCES content_lists(uuid) ON DELETE CASCADE,
+                INDEX idx_list_uuid (list_uuid),
+                INDEX idx_item_uuid (item_uuid)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        "#)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| RepositoryError::MigrationError(e.to_string()))?;
 
-            Ok(())
-        })
+        Ok(())
     }
 
-    fn is_up_to_date(&self) -> Result<bool, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
+    async fn is_up_to_date(&self) -> Result<bool, RepositoryError> {
+        let tables = vec!["content_items", "content_lists", "content_list_items"];
         
-        rt.block_on(async {
-            let tables = vec!["content_items", "content_lists", "content_list_items"];
+        for table in tables {
+            let result = sqlx::query("SHOW TABLES LIKE ?")
+                .bind(table)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
             
-            for table in tables {
-                let result = sqlx::query("SHOW TABLES LIKE ?")
-                    .bind(table)
-                    .fetch_optional(&self.pool)
-                    .await
-                    .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
-                
-                if result.is_none() {
-                    return Ok(false);
-                }
+            if result.is_none() {
+                return Ok(false);
             }
-            
-            Ok(true)
-        })
+        }
+        
+        Ok(true)
     }
 
-    fn current_version(&self) -> Result<Option<String>, RepositoryError> {
+    async fn current_version(&self) -> Result<Option<String>, RepositoryError> {
         Ok(Some("1.0.0".to_string()))
     }
 }
@@ -680,9 +610,10 @@ impl TransactionManager for MySqlContentRepository {
     }
 }
 
+#[async_trait]
 impl SqlStore for MySqlContentRepository {
-    fn get_stats(&self) -> Result<RepositoryStats, RepositoryError> {
-        let content_items_count = ContentRepository::count(self)?;
+    async fn get_stats(&self) -> Result<RepositoryStats, RepositoryError> {
+        let content_items_count = ContentRepository::count(self).await?;
         
         Ok(RepositoryStats {
             total_content_items: content_items_count,
@@ -693,33 +624,23 @@ impl SqlStore for MySqlContentRepository {
         })
     }
 
-    fn health_check(&self) -> Result<bool, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
+    async fn health_check(&self) -> Result<bool, RepositoryError> {
+        sqlx::query("SELECT 1")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
         
-        rt.block_on(async {
-            sqlx::query("SELECT 1")
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
-            
-            Ok(true)
-        })
+        Ok(true)
     }
 
-    fn cleanup(&self, older_than: DateTime<Utc>) -> Result<u64, RepositoryError> {
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| RepositoryError::ConnectionError(e.to_string()))?;
+    async fn cleanup(&self, older_than: DateTime<Utc>) -> Result<u64, RepositoryError> {
+        let result = sqlx::query("DELETE FROM content_items WHERE created < ?")
+            .bind(older_than)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
         
-        rt.block_on(async {
-            let result = sqlx::query("DELETE FROM content_items WHERE created < ?")
-                .bind(older_than)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
-            
-            Ok(result.rows_affected())
-        })
+        Ok(result.rows_affected())
     }
 }
 

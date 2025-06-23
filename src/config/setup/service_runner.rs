@@ -68,7 +68,7 @@ impl ServiceRunner {
 
     async fn init_database() -> Result<SqliteStore, Box<dyn std::error::Error>> {
         let db = SqliteStore::new("sqlite:database.db").await?;
-        db.migrate()?;
+        db.migrate().await?;
         Ok(db)
     }
 

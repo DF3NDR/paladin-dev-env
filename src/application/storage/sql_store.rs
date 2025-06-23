@@ -2,13 +2,15 @@
 SQL Database Application Repository
 
 An application repository is a port that defines the operations that the application layer can perform on the data layer (infrastructure repositories) and the interface requirements that the data layers adapter must implement. The application repository is implemented by the data layer, which contains the actual implementation of the operations defined in the application repository. The application repository acts as a bridge between the application layer and the data layer, allowing the application layer to interact with the data layer without having to know the details of the data layer implementation.
-*/
 
+TODO Should this be renamed as the ContentSqlRepository in the content_sql_store.rs?
+*/
 use crate::core::platform::container::content::{ContentItem, ContentItemError};
 use crate::core::platform::container::content_list::{ContentList, ContentListError};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
+use async_trait::async_trait;
 
 #[derive(Debug, Clone, Error)]
 pub enum RepositoryError {
@@ -32,43 +34,40 @@ pub enum RepositoryError {
     ContentListError(#[from] ContentListError),
 }
 
-/// Content Repository
-/// Defines operations for managing ContentItem entities
-pub trait ContentRepository {
+#[async_trait]
+pub trait ContentRepository: Send + Sync {
     /// Get content item by hash
-    fn get_by_hash(&self, hash: &str) -> Result<Option<ContentItem>, RepositoryError>;
+    async fn get_by_hash(&self, hash: &str) -> Result<Option<ContentItem>, RepositoryError>;
     
-    /// Get content item by UUID
-    fn get_by_id(&self, id: Uuid) -> Result<Option<ContentItem>, RepositoryError>;
+    /// Get content item by UUID  
+    async fn get_by_id(&self, id: Uuid) -> Result<Option<ContentItem>, RepositoryError>;
     
-    /// Save a content item
-    fn save(&self, content: &ContentItem) -> Result<(), RepositoryError>;
+    /// Create/save a content item
+    async fn create(&self, content: ContentItem) -> Result<Uuid, RepositoryError>;
     
     /// Update an existing content item
-    fn update(&self, content: &ContentItem) -> Result<(), RepositoryError>;
+    async fn update(&self, content: &ContentItem) -> Result<(), RepositoryError>;
     
     /// Delete a content item by UUID
-    fn delete(&self, id: Uuid) -> Result<(), RepositoryError>;
-    
-    /// Find content items by tags
-    fn find_by_tags(&self, tags: &[String]) -> Result<Vec<ContentItem>, RepositoryError>;
-    
-    /// Find content items by source
-    fn find_by_source(&self, source: &str) -> Result<Vec<ContentItem>, RepositoryError>;
-    
-    /// Find content items created within a date range
-    fn find_by_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<ContentItem>, RepositoryError>;
+    async fn delete(&self, id: Uuid) -> Result<(), RepositoryError>;
     
     /// Get all content items with pagination
-    fn find_all(&self, limit: Option<u32>, offset: Option<u32>) -> Result<Vec<ContentItem>, RepositoryError>;
+    async fn list(&self) -> Result<Vec<ContentItem>, RepositoryError>;
+    
+    /// Find content items by tags
+    async fn find_by_tags(&self, tags: &[String]) -> Result<Vec<ContentItem>, RepositoryError>;
+    
+    /// Find content items by source
+    async fn find_by_source(&self, source: &str) -> Result<Vec<ContentItem>, RepositoryError>;
     
     /// Count total content items
-    fn count(&self) -> Result<u64, RepositoryError>;
+    async fn count(&self) -> Result<u64, RepositoryError>;
     
     /// Check if content with hash exists
-    fn exists_by_hash(&self, hash: &str) -> Result<bool, RepositoryError>;
+    async fn exists_by_hash(&self, hash: &str) -> Result<bool, RepositoryError>;
 }
 
+// Todo make async
 /// Content List Repository  
 /// Defines operations for managing ContentList entities
 pub trait ContentListRepository {
@@ -114,28 +113,28 @@ pub trait TransactionManager {
 
 /// Database Migration Manager
 /// Handles database schema migrations
-pub trait MigrationManager {
-    /// Run pending migrations
-    fn migrate(&self) -> Result<(), RepositoryError>;
+#[async_trait]
+pub trait MigrationManager: Send + Sync {
+    /// Run database migrations
+    async fn migrate(&self) -> Result<(), RepositoryError>;
     
-    /// Check if migrations are up to date
-    fn is_up_to_date(&self) -> Result<bool, RepositoryError>;
+    /// Check if database is up to date
+    async fn is_up_to_date(&self) -> Result<bool, RepositoryError>;
     
     /// Get current migration version
-    fn current_version(&self) -> Result<Option<String>, RepositoryError>;
+    async fn current_version(&self) -> Result<Option<String>, RepositoryError>;
 }
 
-/// Combined Repository Interface
-/// Aggregates all repository interfaces for convenience
-pub trait SqlStore: ContentRepository + ContentListRepository + TransactionManager + MigrationManager {
+#[async_trait]
+pub trait SqlStore: Send + Sync {
     /// Get repository statistics
-    fn get_stats(&self) -> Result<RepositoryStats, RepositoryError>;
+    async fn get_stats(&self) -> Result<RepositoryStats, RepositoryError>;
     
-    /// Perform database health check
-    fn health_check(&self) -> Result<bool, RepositoryError>;
+    /// Perform health check
+    async fn health_check(&self) -> Result<bool, RepositoryError>;
     
-    /// Clean up old or orphaned records
-    fn cleanup(&self, older_than: DateTime<Utc>) -> Result<u64, RepositoryError>;
+    /// Clean up old content
+    async fn cleanup(&self, older_than: DateTime<Utc>) -> Result<u64, RepositoryError>;
 }
 
 #[derive(Debug, Clone, PartialEq)]

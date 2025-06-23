@@ -37,7 +37,7 @@ The framework emphasizes modularity, testability, and clear separation of concer
    - Bounded contexts for different domains
    - Value objects and entities with clear boundaries
 
-3. **Event-Driven Architecture**
+3. **Event-Driven Process Architecture**
    - Loosely coupled components communicating through events
    - Asynchronous processing capabilities
    - Event sourcing for audit trails
@@ -71,7 +71,7 @@ The framework emphasizes modularity, testability, and clear separation of concer
 ### Layers in Detail
 
 #### 1. Core Layer (Domain)
-The innermost layer containing pure business logic:
+The innermost layer containing pure framework logic:
 - **Entities**: Node, Collection, Field, Message
 - **Components**: Event, Action, Trigger
 - **Base Services**: Version management, collection management
@@ -79,7 +79,7 @@ The innermost layer containing pure business logic:
 
 #### 2. Platform Layer
 Domain-specific implementations and orchestration:
-- **Containers**: ContentItem, ContentList, Job, Task, User, Notification
+- **Containers**: ContentItem, ContentList, Job, Task, User, Notification, Trigger
 - **Managers**: Scheduler, Queue Manager, Event Manager, Notification Manager
 - **Platform Services**: Content versioning, user management
 
@@ -123,10 +123,15 @@ Technical implementations and external integrations:
 - **File Store**: Binary content storage
 - **Key-Value Store**: Fast caching and temporary storage
 
-## Data Flow
+## Data Flow and Business Domain Logic
 
 ### Content Processing Pipeline
-### Pipeline Stages Description
+
+Content of various types including text, images, and videos can be ingested and processed 
+through a number of stages. The modular pipeline stages can also be orchestrated to run back through the 
+pipeline for further processing or enrichment.
+
+#### Pipeline Stages Description
 
 1. **Ingestion Stage**
    - Fetches content from various sources
@@ -204,10 +209,12 @@ max_concurrent_jobs = 5
 ### 4. Audit & Compliance
 - Comprehensive logging
 - Content versioning for audit trails
-- GDPR compliance features
-- Data retention policies
 
-## Deployment Architecture### Deployment Strategies
+## Deployment Architecture
+
+>> NOTE: The particulars of the Deployment Strategies are currently in the design phase. The following is a draft.
+
+### Deployment Strategies
 
 #### 1. Container Orchestration
 - **Kubernetes** for container orchestration

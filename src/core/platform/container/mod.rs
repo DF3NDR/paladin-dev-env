@@ -10,3 +10,4 @@ pub mod task;
 pub mod trigger;
 pub mod user_group;
 pub mod user;
+pub mod workflow;

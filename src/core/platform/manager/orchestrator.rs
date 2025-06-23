@@ -10,9 +10,9 @@ job types, and scheduling strategies as needed.
 */
 
 use crate::core::platform::manager::scheduler::{Scheduler, Schedule, SchedulerError};
-use crate::core::platform::manager::queue_service::{QueueService, QueueConfig, QueueError};
+use crate::core::platform::manager::queue_service::{QueueService, QueueError};
 use crate::core::platform::manager::listener_service::{ListenerService, EventListener, ListenerError};
-use crate::core::platform::container::job::{Job, JobError, JobExecutionMode};
+use crate::core::platform::container::job::{Job, JobError};
 use crate::core::platform::container::task::{Task, TaskService, TaskError};
 use crate::core::platform::container::queue_item::{QueueItem};
 use crate::core::platform::container::trigger::{Trigger, TriggerCondition};
@@ -20,6 +20,7 @@ use crate::core::platform::container::content::ContentItem;
 use crate::core::base::component::action::{Action, ActionPriority};
 use crate::core::base::component::event::Event;
 use crate::core::base::entity::message::{Message, Location, MessagePriority};
+use crate::core::platform::container::workflow::{Workflow, WorkflowExecutionOrder, WorkflowListener};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -72,51 +73,7 @@ impl OrchestrationContext {
     }
 }
 
-/// Workflow definition for complex orchestrations
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Workflow {
-    pub id: Uuid,
-    pub name: String,
-    pub description: String,
-    pub jobs: Vec<Job>,
-    pub listeners: Vec<WorkflowListener>,
-    pub queues: Vec<WorkflowQueue>,
-    pub execution_order: WorkflowExecutionOrder,
-    pub context: OrchestrationContext,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowListener {
-    pub name: String,
-    pub conditions: Vec<TriggerCondition>,
-    pub target_job_id: Option<Uuid>,
-    pub target_queue: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowQueue {
-    pub name: String,
-    pub config: QueueConfig,
-    pub processor_job_id: Option<Uuid>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum WorkflowExecutionOrder {
-    Sequential,
-    Parallel,
-    EventDriven,
-    Custom(Vec<WorkflowStage>),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowStage {
-    pub name: String,
-    pub job_ids: Vec<Uuid>,
-    pub dependencies: Vec<String>, // Stage names this stage depends on
-    pub execution_mode: JobExecutionMode,
-}
 
 /// Main Orchestrator service
 pub struct Orchestrator {

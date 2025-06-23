@@ -288,6 +288,8 @@ pub trait TaskService: Debug + Send + Sync {
     fn can_handle(&self, task: &Task) -> bool {
         task.service_name == self.name()
     }
+    
+    fn clone_service(&self) -> Box<dyn TaskService>;
 }
 
 // Example task services
@@ -317,6 +319,10 @@ impl TaskService for DataBackupService {
     fn name(&self) -> &str {
         "DataBackupService"
     }
+    
+    fn clone_service(&self) -> Box<dyn TaskService> {
+        Box::new(self.clone())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -344,6 +350,10 @@ impl TaskService for ContentIndexingService {
 
     fn name(&self) -> &str {
         "ContentIndexingService"
+    }
+    
+    fn clone_service(&self) -> Box<dyn TaskService> {
+        Box::new(self.clone())
     }
 }
 
@@ -377,6 +387,10 @@ impl TaskService for EmailNotificationService {
 
     fn name(&self) -> &str {
         "EmailNotificationService"
+    }
+    
+    fn clone_service(&self) -> Box<dyn TaskService> {
+        Box::new(self.clone())
     }
 }
 

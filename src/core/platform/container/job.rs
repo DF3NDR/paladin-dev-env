@@ -402,6 +402,32 @@ impl Job {
             Ok(())
         }
     }
+    
+    // // Add this method to work with service references
+    // pub async fn execute_with_service_refs(
+    //     &mut self, 
+    //     services: &HashMap<String, &Box<dyn TaskService>>
+    // ) -> Result<(), JobError> {
+    //     for task in &mut self.tasks {
+    //         // Find the appropriate service for this task
+    //         if let Some(service) = services.get(&task.target) {
+    //             // Execute the task with the service
+    //             let result = service.execute(&task.action).await
+    //                 .map_err(|e| JobError::TaskExecutionFailed(task.name.clone(), e.to_string()))?;
+                
+    //             // Store result if needed
+    //             if let Some(data) = result {
+    //                 task.action.add_argument("execution_result".to_string(), data)
+    //                     .map_err(|e| JobError::TaskExecutionFailed(task.name.clone(), e.to_string()))?;
+    //             }
+    //         } else {
+    //             return Err(JobError::ServiceNotFound(task.target.clone()));
+    //         }
+    //     }
+        
+    //     self.action.status = ActionStatus::Completed;
+    //     Ok(())
+    // }    
 
     /// Executes a single task - static helper function
     async fn execute_single_task(task: &mut Task, services: &HashMap<String, Box<dyn TaskService>>) -> Result<(), JobError> {

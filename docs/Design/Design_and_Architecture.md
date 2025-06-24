@@ -1,4 +1,4 @@
-# In4me Framework: Design and Architecture Documentation
+# In4me Framework: Design and Architecture Outline
 
 ## Table of Contents
 1. [Executive Summary](#executive-summary)
@@ -11,6 +11,7 @@
 8. [Security Considerations](#security-considerations)
 9. [Deployment Architecture](#deployment-architecture)
 10. [Future Considerations](#future-considerations)
+11. [Use Cases](#5-use-cases-initial)
 
 ## Executive Summary
 
@@ -23,9 +24,20 @@ In4me is a Rust-based information collection and processing framework designed u
 
 The framework emphasizes modularity, testability, and clear separation of concerns through Domain-Driven Design (DDD) and Test-Driven Development (TDD) practices.
 
+The In4me framework provides a robust, scalable, and maintainable solution for content aggregation and processing. By leveraging:
+
+- **Hexagonal Architecture** for clean separation of concerns
+- **Domain-Driven Design** for rich business modeling
+- **Rust's type system** for safety and performance
+- **Modern deployment practices** for reliability
+
+The system is well-positioned to handle diverse content sources, complex processing requirements, and multiple delivery channels while maintaining high performance and reliability standards.
+
+The modular design ensures that new features can be added without disrupting existing functionality, and the comprehensive testing strategy provides confidence in system behavior. With proper implementation of these architectural principles, In4me can serve as a powerful platform for information management and processing needs.
+
 ## Architecture Overview
 
-### High-Level Architecture Diagram### Key Architectural Patterns
+### Key Architectural Patterns
 
 1. **Hexagonal Architecture (Ports & Adapters)**
    - Core domain logic is isolated from external concerns
@@ -242,23 +254,24 @@ max_concurrent_jobs = 5
 
 ## Future Considerations
 
-### 1. Scalability Enhancements
+###  Scalability Enhancements
 - **Horizontal scaling** strategies for all components
 - **Event streaming** with Apache Kafka for high-throughput
 - **Edge computing** for distributed processing
 - **Multi-region deployment** for global availability
 
-### 2. Advanced Features
+### Advanced Features
 - **Real-time processing** capabilities
 - **Advanced ML pipelines** with model versioning
 - **GraphQL API** for flexible querying
 - **WebSocket support** for real-time updates
 
-### 3. Integration Possibilities
+### Integration Possibilities
 - **Cloud provider integrations** (AWS, GCP, Azure)
 - **Enterprise system connectors** (SAP, Salesforce)
 - **BI tool integration** (Tableau, PowerBI)
 - **Workflow engines** (Apache Airflow, Temporal)
+- **Git Repositories** (Github, Atlassian)
 
 ### 4. Security Improvements
 - **Zero-trust architecture** implementation
@@ -266,15 +279,8 @@ max_concurrent_jobs = 5
 - **Compliance automation** (GDPR, HIPAA)
 - **Secrets management** with HashiCorp Vault
 
-## Conclusion
-
-The In4me framework provides a robust, scalable, and maintainable solution for content aggregation and processing. By leveraging:
-
-- **Hexagonal Architecture** for clean separation of concerns
-- **Domain-Driven Design** for rich business modeling
-- **Rust's type system** for safety and performance
-- **Modern deployment practices** for reliability
-
-The system is well-positioned to handle diverse content sources, complex processing requirements, and multiple delivery channels while maintaining high performance and reliability standards.
-
-The modular design ensures that new features can be added without disrupting existing functionality, and the comprehensive testing strategy provides confidence in system behavior. With proper implementation of these architectural principles, In4me can serve as a powerful platform for information management and processing needs.
+### 5. Use Cases
+>> Note: These are the initial use cases being considered
+- **Security Auditing**
+- **New Information Processing** News, Sentiment, Social Media Analysis 
+- **Trading AI Backbone**

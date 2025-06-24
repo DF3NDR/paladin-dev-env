@@ -8,6 +8,7 @@ use crate::core::base::service::message_service::{MessageService, MessageService
 use crate::core::platform::manager::event_manager::EventService;
 use tokio::task::JoinHandle;
 use tokio::signal;
+use std::env;
 
 pub struct ServiceRunner {
     scheduler: Arc<RwLock<Scheduler>>,
@@ -72,16 +73,153 @@ impl ServiceRunner {
         Ok(db)
     }
 
-    fn create_message_service_config(_config: &Settings) -> MessageServiceConfig {
-        // TODO config needs to be used for more dynamic configuration.  If empty we should
-        // look to configurable via Env and then fallback to the default values.
+    fn create_message_service_config(config: &Settings) -> MessageServiceConfig {
+        // Helper function to get value from config, env, or default for usize
+        fn get_usize_config_value(
+            config_value: Option<usize>,
+            env_key: &str,
+            default_value: usize,
+        ) -> usize {
+            // First try config value
+            if let Some(value) = config_value {
+                return value;
+            }
+            
+            // Then try environment variable
+            if let Ok(env_value) = env::var(env_key) {
+                if let Ok(parsed) = env_value.parse::<usize>() {
+                    return parsed;
+                }
+            }
+            
+            // Finally use default
+            default_value
+        }
+
+        // Helper function to get value from config, env, or default for u32
+        fn get_u32_config_value(
+            config_value: Option<u32>,
+            env_key: &str,
+            default_value: u32,
+        ) -> u32 {
+            // First try config value
+            if let Some(value) = config_value {
+                return value;
+            }
+            
+            // Then try environment variable
+            if let Ok(env_value) = env::var(env_key) {
+                if let Ok(parsed) = env_value.parse::<u32>() {
+                    return parsed;
+                }
+            }
+            
+            // Finally use default
+            default_value
+        }
+
+        // Helper function to get value from config, env, or default for u64
+        fn get_i64_config_value(
+            config_value: Option<i64>,
+            env_key: &str,
+            default_value: i64,
+        ) -> i64 {
+            // First try config value
+            if let Some(value) = config_value {
+                return value;
+            }
+            
+            // Then try environment variable
+            if let Ok(env_value) = env::var(env_key) {
+                if let Ok(parsed) = env_value.parse::<i64>() {
+                    return parsed;
+                }
+            }
+            
+            // Finally use default
+            default_value
+        }
+        
+                // Helper function to get value from config, env, or default for u64
+        fn get_u64_config_value(
+            config_value: Option<u64>,
+            env_key: &str,
+            default_value: u64,
+        ) -> u64 {
+            // First try config value
+            if let Some(value) = config_value {
+                return value;
+            }
+            
+            // Then try environment variable
+            if let Ok(env_value) = env::var(env_key) {
+                if let Ok(parsed) = env_value.parse::<u64>() {
+                    return parsed;
+                }
+            }
+            
+            // Finally use default
+            default_value
+        }
+
+        // Helper for boolean values
+        fn get_bool_config_value(
+            config_value: Option<bool>,
+            env_key: &str,
+            default_value: bool
+        ) -> bool {
+            // First try config value
+            if let Some(value) = config_value {
+                return value;
+            }
+            
+            // Then try environment variable
+            if let Ok(env_value) = env::var(env_key) {
+                match env_value.to_lowercase().as_str() {
+                    "true" | "1" | "yes" | "on" => return true,
+                    "false" | "0" | "no" | "off" => return false,
+                    _ => {}
+                }
+            }
+            
+            // Finally use default
+            default_value
+        }
+
+        // Extract message service configuration from Settings if available
+        let message_config = config.message_service.as_ref();
+
         MessageServiceConfig {
-            max_queue_size: 10000,
-            default_ttl_seconds: 3600, // 1 hour
-            enable_persistence: false,
-            worker_threads: 4,
-            retry_attempts: 3,
-            retry_delay_ms: 1000,
+            max_queue_size: get_usize_config_value(
+                message_config.and_then(|c| c.max_queue_size),
+                "MESSAGE_SERVICE_MAX_QUEUE_SIZE",
+                10000,
+            ),
+            default_ttl_seconds: get_i64_config_value(
+                message_config.and_then(|c| c.default_ttl_seconds),
+                "MESSAGE_SERVICE_DEFAULT_TTL_SECONDS",
+                3600, // 1 hour
+            ),
+            enable_persistence: get_bool_config_value(
+                message_config.and_then(|c| c.enable_persistence),
+                "MESSAGE_SERVICE_ENABLE_PERSISTENCE",
+                false
+            ),
+            worker_threads: get_usize_config_value(
+                message_config.and_then(|c| c.worker_threads),
+                "MESSAGE_SERVICE_WORKER_THREADS",
+                4,
+            ),
+            retry_attempts: get_u32_config_value(
+                message_config.and_then(|c| c.retry_attempts),
+                "MESSAGE_SERVICE_RETRY_ATTEMPTS",
+                3,
+            ),
+            retry_delay_ms: get_u64_config_value(
+                message_config.and_then(|c| c.retry_delay_ms),
+                "MESSAGE_SERVICE_RETRY_DELAY_MS",
+                1000,
+            ),
         }
     }
 
@@ -250,6 +388,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_message_service_config_with_env_vars() {
+        // Set environment variables using unsafe blocks
+        unsafe {
+            env::set_var("MESSAGE_SERVICE_MAX_QUEUE_SIZE", "5000");
+            env::set_var("MESSAGE_SERVICE_WORKER_THREADS", "8");
+            env::set_var("MESSAGE_SERVICE_ENABLE_PERSISTENCE", "true");
+        }
+        
+        let mut settings = Settings::default();
+        settings.message_service = None;
+        let config = ServiceRunner::create_message_service_config(&settings);
+        
+        // Should use environment variables
+        assert_eq!(config.max_queue_size, 5000);
+        assert_eq!(config.worker_threads, 8);
+        assert_eq!(config.enable_persistence, true);
+        
+        // Clean up
+        unsafe {
+            env::remove_var("MESSAGE_SERVICE_MAX_QUEUE_SIZE");
+            env::remove_var("MESSAGE_SERVICE_WORKER_THREADS");
+            env::remove_var("MESSAGE_SERVICE_ENABLE_PERSISTENCE");
+        }
+    }
+
+    #[tokio::test]
     async fn test_service_health_status() {
         let runner = ServiceRunner::new();
         let health = runner.get_service_health().await;
@@ -259,5 +423,28 @@ mod tests {
         assert!(!health.event_service_initialized);
         assert_eq!(health.total_jobs, 0);
         assert_eq!(health.enabled_jobs, 0);
-    }  
+    }
+
+    #[test]
+    fn test_config_precedence() {
+        // Test that config values take precedence over env vars
+        unsafe {
+            env::set_var("MESSAGE_SERVICE_MAX_QUEUE_SIZE", "9999");
+        }
+        
+        // Create a settings with message service config
+        let settings = Settings::default();
+        // Note: You'll need to adjust this based on your actual Settings structure
+        // This is just an example of how config values should take precedence
+        
+        let config = ServiceRunner::create_message_service_config(&settings);
+        
+        // If Settings had a value, it should take precedence over env var
+        // Since Settings::default() provides Some values, config should use those
+        assert_eq!(config.max_queue_size, 10000); // Should use config value, not env var
+        
+        unsafe {
+            env::remove_var("MESSAGE_SERVICE_MAX_QUEUE_SIZE");
+        }
+    }
 }

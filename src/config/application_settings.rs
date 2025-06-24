@@ -17,6 +17,16 @@ pub struct ServerConfig {
     pub port: u16,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageServiceSettings {
+    pub max_queue_size: Option<usize>,
+    pub default_ttl_seconds: Option<i64>,
+    pub enable_persistence: Option<bool>,
+    pub worker_threads: Option<usize>,
+    pub retry_attempts: Option<u32>,
+    pub retry_delay_ms: Option<u64>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub llm_type: String,
@@ -25,6 +35,7 @@ pub struct Settings {
     pub server: ServerConfig,
     pub sources: Vec<SourceConfig>,
     pub max_file_size: u64,
+    pub message_service: Option<MessageServiceSettings>
 }
 
 impl Settings {
@@ -82,7 +93,15 @@ impl Default for Settings {
                 port: 8080,
             },
             sources: Vec::new(),
-            max_file_size: 10 * 1024 * 1024, // 10MB default
+            max_file_size: 10 * 1024 * 1024,
+            message_service: Some(MessageServiceSettings {
+                max_queue_size: Some(10000),
+                default_ttl_seconds: Some(3600),
+                enable_persistence: Some(false),
+                worker_threads: Some(4),
+                retry_attempts: Some(3),
+                retry_delay_ms: Some(1000),
+            }),
         }
     }
 }

@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  redis:
+    command: redis-server --appendonly yes --save 60 1 --loglevel debug
+    volumes:
+      - ./redis-dev.conf:/usr/local/etc/redis/redis.conf:ro
+    ports:
+      - "6379:6379"
+
+  in4me-app:
+    build:
+      target: development
+    volumes:
+      - ../target:/app/target
+      - ../src:/app/src:ro
+      - ../Cargo.toml:/app/Cargo.toml:ro
+      - ../Cargo.lock:/app/Cargo.lock:ro
+    environment:
+      - RUST_LOG=debug
+      - RUST_BACKTRACE=1
+      - APP_ENV=development
+    command: cargo run

@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  redis-test:
+    image: redis:7-alpine
+    container_name: in4me-redis-test
+    ports:
+      - "6380:6379"
+    command: redis-server --appendonly no --save ""
+    tmpfs:
+      - /data
+    networks:
+      - in4me-test-network
+
+  test-runner:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: test
+    container_name: in4me-test-runner
+    depends_on:
+      - redis-test
+    environment:
+      - APP_REDIS_HOST=redis-test
+      - APP_REDIS_PORT=6379
+      - APP_REDIS_DB=0
+      - RUST_LOG=debug
+      - RUST_BACKTRACE=1
+    command: cargo test queue_integration_tests
+    networks:
+      - in4me-test-network
+    volumes:
+      - ../target:/app/target
+      - ../tests:/app/tests:ro
+
+networks:
+  in4me-test-network:
+    driver: bridge

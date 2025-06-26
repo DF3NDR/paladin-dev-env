@@ -102,6 +102,8 @@
                     "kind": "test"
                 }
             },
+            // "sourceMap": {
+            //     "/rustc/<commit_hash>/": "${workspaceFolder}/.rustup/toolchains/<toolchain>/lib/rustlib/src/rust/"},
             "args": [],
             "cwd": "${workspaceFolder}",
             "env": {

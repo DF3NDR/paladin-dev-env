@@ -39,12 +39,40 @@ toml = "0.8.23"
 md5 = "0.7.0"
 async-trait = "0.1.88"
 futures = "0.3.31"
+redis = { version = "0.32.2", features = ["aio", "tokio-comp", "connection-manager", "script"], optional = true  }
 
 [dev-dependencies]
 mockito = "1.7.0"
 tempfile = "3.0"
+testcontainers = "0.24.0"
+tokio-test = "0.4"
+proptest = "1.4"
 
 # Integration test configuration
 [[test]]
 name = "system_log_integration"
 path = "tests/integration/system_log_integration_test.rs"
+
+[[bin]]
+name = "in4me"
+path = "src/main.rs"
+
+[features]
+default = ["redis-queue"]
+redis-queue = ["redis"]
+
+# Performance optimizations for Redis
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true
+overflow-checks = true
+
+[profile.test]
+opt-level = 0
+debug = true

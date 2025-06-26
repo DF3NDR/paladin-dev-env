@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 use std::collections::HashMap;
 use serde::{Serialize, de::DeserializeOwned};
+use crate::core::base::entity::message::{MessagePriority, Location};
 
 /// Queue Port trait - defines the interface for queue operations
 /// This trait abstracts the queue service implementation from the application layer
@@ -100,7 +101,8 @@ pub trait BatchQueuePort: Send + Sync {
         T: Serialize + Clone + for<'de> serde::Deserialize<'de> + Send + Sync;
 
     /// Enqueue with explicit priority override
-    async fn enqueue_with_priority<T>(&self, queue_name: &str, item: QueueItem<T>, priority: crate::core::base::entity::message::MessagePriority) -> Result<Uuid, QueueError>
+    async fn enqueue_with_priority<T>(&self, queue_name: &str, item: QueueItem<T>, priority:
+        MessagePriority) -> Result<Uuid, QueueError>
     where
         T: Serialize + Clone + for<'de> serde::Deserialize<'de> + Send + Sync;
     
@@ -115,7 +117,8 @@ pub trait BatchQueuePort: Send + Sync {
 #[async_trait]
 pub trait PriorityQueuePort: Send + Sync {
     /// Enqueue with explicit priority override
-    async fn enqueue_with_priority<T>(&self, queue_name: &str, item: QueueItem<T>, priority: crate::core::base::entity::message::MessagePriority) -> Result<Uuid, QueueError>
+    async fn enqueue_with_priority<T>(&self, queue_name: &str, item: QueueItem<T>, priority: 
+        MessagePriority) -> Result<Uuid, QueueError>
     where
         T: Serialize + Send + Sync;
     
@@ -123,7 +126,7 @@ pub trait PriorityQueuePort: Send + Sync {
     async fn dequeue_highest_priority(&self, queue_name: &str) -> Result<Option<QueueItem<serde_json::Value>>, QueueError>;
     
     /// Get items by priority level
-    async fn get_items_by_priority(&self, queue_name: &str, priority: crate::core::base::entity::message::MessagePriority) -> Result<Vec<QueueItemSummary>, QueueError>;
+    async fn get_items_by_priority(&self, queue_name: &str, priority: MessagePriority) -> Result<Vec<QueueItemSummary>, QueueError>;
 }
 
 /// Monitoring and management port for queue operations
@@ -168,8 +171,8 @@ pub trait QueueItemFactory {
         &self,
         queue_name: String,
         payload: T,
-        source: crate::core::base::entity::message::Location,
-        destination: crate::core::base::entity::message::Location,
+        source: Location,
+        destination: Location,
         config: Option<QueueItemConfig>,
     ) -> QueueItem<T>
     where
@@ -180,8 +183,8 @@ pub trait QueueItemFactory {
         &self,
         queue_name: String,
         payload: T,
-        source: crate::core::base::entity::message::Location,
-        destination: crate::core::base::entity::message::Location,
+        source: Location,
+        destination: Location,
         priority: crate::core::base::entity::message::MessagePriority,
         config: Option<QueueItemConfig>,
     ) -> QueueItem<T>
@@ -197,8 +200,8 @@ impl QueueItemFactory for DefaultQueueItemFactory {
         &self,
         queue_name: String,
         payload: T,
-        source: crate::core::base::entity::message::Location,
-        destination: crate::core::base::entity::message::Location,
+        source: Location,
+        destination: Location,
         config: Option<QueueItemConfig>,
     ) -> QueueItem<T>
     where
@@ -212,8 +215,8 @@ impl QueueItemFactory for DefaultQueueItemFactory {
         &self,
         queue_name: String,
         payload: T,
-        source: crate::core::base::entity::message::Location,
-        destination: crate::core::base::entity::message::Location,
+        source: Location,
+        destination: Location,
         priority: crate::core::base::entity::message::MessagePriority,
         config: Option<QueueItemConfig>,
     ) -> QueueItem<T>
@@ -230,7 +233,7 @@ impl QueueItemFactory for DefaultQueueItemFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::base::entity::message::Location;
+    use Location;
 
     #[test]
     fn test_queue_item_factory() {

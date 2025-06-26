@@ -1,0 +1,124 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: in4me-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    environment:
+      - REDIS_REPLICATION_MODE=master
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - in4me-network
+    restart: unless-stopped
+
+  in4me-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: in4me-app
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      # Redis configuration
+      - APP_REDIS_HOST=redis
+      - APP_REDIS_PORT=6379
+      - APP_REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - APP_REDIS_DB=0
+      - APP_REDIS_CONNECTION_TIMEOUT=30
+      - APP_REDIS_KEY_PREFIX=in4me:queue
+      - APP_REDIS_MAX_RETRIES=3
+      - APP_REDIS_ENABLE_PRIORITY_QUEUES=true
+      
+      # Application configuration
+      - APP_SERVER_HOST=0.0.0.0
+      - APP_SERVER_PORT=8080
+      - APP_LLM_TYPE=${LLM_TYPE:-openai}
+      - APP_LLM_URL=${LLM_URL:-https://api.openai.com/v1}
+      - APP_LLM_API_KEY=${LLM_API_KEY}
+      - APP_MAX_FILE_SIZE=${MAX_FILE_SIZE:-10485760}
+      
+      # Message service configuration
+      - MESSAGE_SERVICE_MAX_QUEUE_SIZE=10000
+      - MESSAGE_SERVICE_WORKER_THREADS=4
+      - MESSAGE_SERVICE_ENABLE_PERSISTENCE=true
+      - MESSAGE_SERVICE_DEFAULT_TTL_SECONDS=3600
+      - MESSAGE_SERVICE_RETRY_ATTEMPTS=3
+      - MESSAGE_SERVICE_RETRY_DELAY_MS=1000
+      
+      # Logging
+      - RUST_LOG=${RUST_LOG:-info}
+      - RUST_BACKTRACE=${RUST_BACKTRACE:-0}
+    volumes:
+      - app_data:/app/data
+      - ./config:/app/config:ro
+    networks:
+      - in4me-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: in4me-redis-commander
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOSTS=local:redis:6379:0:${REDIS_PASSWORD:-}
+      - HTTP_USER=${REDIS_COMMANDER_USER:-admin}
+      - HTTP_PASSWORD=${REDIS_COMMANDER_PASSWORD:-admin}
+    networks:
+      - in4me-network
+    restart: unless-stopped
+    profiles:
+      - dev
+      - debug
+
+  # Optional: Redis Insight for advanced Redis monitoring
+  redis-insight:
+    image: redislabs/redisinsight:latest
+    container_name: in4me-redis-insight
+    ports:
+      - "8001:8001"
+    depends_on:
+      - redis
+    volumes:
+      - redis_insight_data:/db
+    networks:
+      - in4me-network
+    restart: unless-stopped
+    profiles:
+      - dev
+      - debug
+
+volumes:
+  redis_data:
+    driver: local
+  app_data:
+    driver: local
+  redis_insight_data:
+    driver: local
+
+networks:
+  in4me-network:
+    driver: bridge
+

@@ -133,13 +133,22 @@ impl RedisQueueAdapter {
             }
         }
     }
-
-    // Add debugging to serialize_item
-    fn serialize_item<T>(&self, item: &QueueItem<T>) -> Result<String, QueueError>
+    
+     /// Serialize queue item to JSON for Redis storage
+    fn serialize_item<T>(&self, item: &QueueItem<T>, queue_name: &str) -> Result<String, QueueError>
     where
         T: Serialize,
     {
-        let serialized = serde_json::to_string(item)
+        // Create a JSON value from the item first
+        let mut item_json = serde_json::to_value(item)
+            .map_err(|e| QueueError::SerializationError(format!("Failed to convert item to JSON: {}", e)))?;
+        
+        // Update the queue_name in the JSON
+        if let Some(obj) = item_json.as_object_mut() {
+            obj.insert("queue_name".to_string(), serde_json::Value::String(queue_name.to_string()));
+        }
+        
+        let serialized = serde_json::to_string(&item_json)
             .map_err(|e| QueueError::SerializationError(format!("Failed to serialize item: {}", e)))?;
         
         println!("DEBUG: Serialized item: {}", serialized);
@@ -250,6 +259,12 @@ impl QueuePort for RedisQueueAdapter {
             .await
             .map_err(|e| QueueError::OperationFailed(format!("Failed to delete queue: {}", e)))?;
 
+        // Remove from queue list - THIS WAS MISSING!
+        let queue_list_key = format!("{}:queues", self.config.key_prefix);
+        let _: () = conn.srem(&queue_list_key, name)
+            .await
+            .map_err(|e| QueueError::OperationFailed(format!("Failed to remove queue from list: {}", e)))?;
+
         // Remove from memory cache
         {
             let mut configs = self.queue_configs.write().await;
@@ -269,7 +284,7 @@ impl QueuePort for RedisQueueAdapter {
         }
 
         let item_id = item.id();
-        let serialized = self.serialize_item(&item)?;
+        let serialized = self.serialize_item(&item, queue_name)?;
         
         let mut conn = self.conn.write().await;
         
@@ -285,7 +300,6 @@ impl QueuePort for RedisQueueAdapter {
         };
         
         println!("DEBUG: Queue key: {}", queue_key);
-        println!("DEBUG: Serialized item: {}", serialized);
 
         // Add to queue (LPUSH for FIFO with RPOP)
         let _: () = conn.lpush(&queue_key, &serialized)
@@ -299,7 +313,6 @@ impl QueuePort for RedisQueueAdapter {
             format!("Enqueued item {} to queue {}", item_id, queue_name)
         ).await;
 
-        
         Ok(item_id)
     }
 
@@ -366,6 +379,15 @@ impl QueuePort for RedisQueueAdapter {
     async fn start_processing(&self, queue_name: &str, item_id: Uuid, worker_id: String) -> Result<(), QueueError> {
         let mut conn = self.conn.write().await;
         let processing_key = self.processing_key(queue_name);
+        
+        // Check if item exists in processing
+        let exists: bool = conn.hexists(&processing_key, item_id.to_string())
+            .await
+            .map_err(|e| QueueError::OperationFailed(format!("Failed to check processing item: {}", e)))?;
+        
+        if !exists {
+            return Err(QueueError::ItemNotFound(item_id));
+        }
         
         // Update processing metadata
         let metadata_key = format!("{}:worker", processing_key);
@@ -454,7 +476,19 @@ impl QueuePort for RedisQueueAdapter {
                     self.queue_key(queue_name)
                 };
 
-                let serialized = self.serialize_item(&item)?;
+                // Instead of re-serializing, modify the original JSON data and re-queue that
+                let mut item_json: serde_json::Value = serde_json::from_str(&data)
+                    .map_err(|e| QueueError::SerializationError(format!("Failed to parse item JSON: {}", e)))?;
+                
+                // Update attempt count in the JSON
+                if let Some(obj) = item_json.as_object_mut() {
+                    obj.insert("attempt_count".to_string(), serde_json::Value::Number(serde_json::Number::from(item.attempt_count)));
+                    obj.insert("queue_name".to_string(), serde_json::Value::String(queue_name.to_string()));
+                }
+                
+                let serialized = serde_json::to_string(&item_json)
+                    .map_err(|e| QueueError::SerializationError(format!("Failed to serialize updated item: {}", e)))?;
+
                 let _: () = conn.lpush(&queue_key, &serialized)
                     .await
                     .map_err(|e| QueueError::OperationFailed(format!("Failed to re-queue item: {}", e)))?;
@@ -600,9 +634,118 @@ impl QueuePort for RedisQueueAdapter {
         
         // Get all queues and check for expired items
         let queues = self.list_queues().await;
-        for _queue_name in queues { // Fixed: prefix with underscore to indicate intentional non-use
+        for _queue_name in queues {
             // Logic to clean up expired items in each queue
-            // TODO: This is a placeholder - actual implementation would depend on how expiration is tracked
+            // Cleanup expired items in processing, completed, and failed queues
+            // This assumes QueueItem<T> has an `expires_at: Option<DateTime<Utc>>` field
+
+            // let processing_key = self.processing_key(&_queue_name);
+            // let completed_key = self.completed_key(&_queue_name);
+            // let failed_key = self.failed_key(&_queue_name);
+
+            // let now = chrono::Utc::now();
+
+            // // Helper closure to cleanup expired items in a hash
+            // async fn cleanup_expired_in_hash(
+            //     conn: &mut ConnectionManager,
+            //     key: &str,
+            //     queue_name: &str,
+            //     log: &Option<Arc<dyn LogPort>>,
+            //     now: chrono::DateTime<chrono::Utc>,
+            // ) -> Result<usize, QueueError> {
+            //     let items: HashMap<String, String> = conn.hgetall(key)
+            //         .await
+            //         .map_err(|e| QueueError::OperationFailed(format!("Failed to get items for cleanup: {}", e)))?;
+            //     let mut expired_ids = Vec::new();
+            //     for (id, data) in &items {
+            //         if let Ok(item) = serde_json::from_str::<QueueItem<serde_json::Value>>(data) {
+            //             if let Some(expires_at) = item.expires_at {
+            //                 if expires_at < now {
+            //                     expired_ids.push(id.clone());
+            //                 }
+            //             }
+            //         }
+            //     }
+            //     if !expired_ids.is_empty() {
+            //         let _: () = conn.hdel(key, expired_ids.clone())
+            //             .await
+            //             .map_err(|e| QueueError::OperationFailed(format!("Failed to delete expired items: {}", e)))?;
+            //         if let Some(log_port) = log {
+            //             let msg = format!("Cleaned up {} expired items from {}", expired_ids.len(), key);
+            //             let entry = LogEntry {
+            //                 id: Uuid::new_v4(),
+            //                 timestamp: now,
+            //                 message: LogMessage::new(LogLevel::Info, msg.clone()),
+            //                 source: Location::service("redis-queue-adapter"),
+            //                 destination: Location::system("log"),
+            //                 correlation_id: None,
+            //                 priority: MessagePriority::Normal,
+            //             };
+            //             let _ = log_port.write_entry(entry).await;
+            //         }
+            //     }
+            //     Ok(expired_ids.len())
+            // }
+
+            // let mut conn = self.conn.write().await;
+            // let _ = cleanup_expired_in_hash(&mut *conn, &processing_key, &_queue_name, &self.log_port, now).await;
+            // let _ = cleanup_expired_in_hash(&mut *conn, &completed_key, &_queue_name, &self.log_port, now).await;
+            // let _ = cleanup_expired_in_hash(&mut *conn, &failed_key, &_queue_name, &self.log_port, now).await;
+
+            // // For pending queues (list), remove expired items by scanning and rebuilding the list
+            // // Handle both regular and priority-based queues
+            // let config = self.queue_configs.read().await.get(&_queue_name).cloned();
+            // let queue_keys = if let Some(config) = config {
+            //     if config.priority_based {
+            //         Self::get_priority_levels()
+            //             .into_iter()
+            //             .map(|priority| self.priority_queue_key(&_queue_name, priority))
+            //             .collect::<Vec<_>>()
+            //     } else {
+            //         vec![self.queue_key(&_queue_name)]
+            //     }
+            // } else {
+            //     vec![self.queue_key(&_queue_name)]
+            // };
+
+            // for queue_key in queue_keys {
+            //     let items: Vec<String> = conn.lrange(&queue_key, 0, -1)
+            //         .await
+            //         .unwrap_or_default();
+            //     let mut keep_items = Vec::new();
+            //     let mut expired_count = 0;
+            //     for data in items {
+            //         if let Ok(item) = serde_json::from_str::<QueueItem<serde_json::Value>>(&data) {
+            //             if let Some(expires_at) = item.expires_at {
+            //                 if expires_at < now {
+            //                     expired_count += 1;
+            //                     continue;
+            //                 }
+            //             }
+            //         }
+            //         keep_items.push(data);
+            //     }
+            //     if expired_count > 0 {
+            //         // Replace the list with only non-expired items
+            //         let _: () = conn.del(&queue_key).await.unwrap_or(());
+            //         if !keep_items.is_empty() {
+            //             let _: () = conn.rpush(&queue_key, keep_items).await.unwrap_or(());
+            //         }
+            //         if let Some(log_port) = &self.log_port {
+            //             let msg = format!("Cleaned up {} expired items from {}", expired_count, queue_key);
+            //             let entry = LogEntry {
+            //                 id: Uuid::new_v4(),
+            //                 timestamp: now,
+            //                 message: LogMessage::new(LogLevel::Info, msg.clone()),
+            //                 source: Location::service("redis-queue-adapter"),
+            //                 destination: Location::system("log"),
+            //                 correlation_id: None,
+            //                 priority: MessagePriority::Normal,
+            //             };
+            //             let _ = log_port.write_entry(entry).await;
+            //         }
+            //     }
+            // }
         }
     }
 
@@ -663,7 +806,7 @@ impl BatchQueuePort for RedisQueueAdapter {
             let item_id = item.id();
             item_ids.push(item_id);
             
-            let serialized = self.serialize_item(item)?;
+            let serialized = self.serialize_item(item, queue_name)?;
             let queue_key = self.queue_key(queue_name);
             pipe.lpush(&queue_key, &serialized);
         }
@@ -689,7 +832,7 @@ impl BatchQueuePort for RedisQueueAdapter {
         }
 
         let item_id = item.id();
-        let serialized = self.serialize_item(&item)?;
+        let serialized = self.serialize_item(&item, queue_name)?;
         
         let mut conn = self.conn.write().await;
         let queue_key = self.priority_queue_key(queue_name, priority);
@@ -822,14 +965,14 @@ impl BatchQueuePort for RedisQueueAdapter {
 impl PriorityQueuePort for RedisQueueAdapter {
     async fn enqueue_with_priority<T>(&self, queue_name: &str, item: QueueItem<T>, priority: MessagePriority) -> Result<Uuid, QueueError>
     where
-        T: Serialize + Send + Sync, 
+        T: Serialize + Send + Sync,
     {
         if !self.queue_exists(queue_name).await? {
             return Err(QueueError::QueueNotFound(queue_name.to_string()));
         }
 
         let item_id = item.action.id; // Use the action's ID directly
-        let serialized = self.serialize_item(&item)?;
+        let serialized = self.serialize_item(&item, queue_name)?;
         
         let mut conn = self.conn.write().await;
         let queue_key = self.priority_queue_key(queue_name, priority);
@@ -989,12 +1132,18 @@ impl QueueManagementPort for RedisQueueAdapter {
             .map_err(|e| QueueError::OperationFailed(format!("Failed to get failed item: {}", e)))?;
 
         if let Some(data) = item_data {
-            let mut item = self.deserialize_item(&data)?;
+            // Reset attempt count in the JSON data directly
+            let mut item_json: serde_json::Value = serde_json::from_str(&data)
+                .map_err(|e| QueueError::SerializationError(format!("Failed to parse item JSON: {}", e)))?;
             
-            // Reset attempt count and re-queue
-            item.attempt_count = 0;
-            let serialized = serde_json::to_string(&item)
-                .map_err(|e| QueueError::SerializationError(format!("Failed to serialize for retry: {}", e)))?;
+            // Reset attempt count and update queue name
+            if let Some(obj) = item_json.as_object_mut() {
+                obj.insert("attempt_count".to_string(), serde_json::Value::Number(serde_json::Number::from(0)));
+                obj.insert("queue_name".to_string(), serde_json::Value::String(queue_name.to_string()));
+            }
+            
+            let serialized = serde_json::to_string(&item_json)
+                .map_err(|e| QueueError::SerializationError(format!("Failed to serialize retry item: {}", e)))?;
 
             let queue_key = self.queue_key(queue_name);
             let _: () = conn.lpush(&queue_key, &serialized)

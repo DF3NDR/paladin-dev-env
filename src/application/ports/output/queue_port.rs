@@ -120,7 +120,7 @@ pub trait PriorityQueuePort: Send + Sync {
     async fn enqueue_with_priority<T>(&self, queue_name: &str, item: QueueItem<T>, priority: 
         MessagePriority) -> Result<Uuid, QueueError>
     where
-        T: Serialize + Send + Sync;
+        T: Serialize + Clone + for<'de> serde::Deserialize<'de> + Send + Sync;
     
     /// Dequeue highest priority item
     async fn dequeue_highest_priority(&self, queue_name: &str) -> Result<Option<QueueItem<serde_json::Value>>, QueueError>;

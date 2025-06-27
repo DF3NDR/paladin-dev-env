@@ -87,6 +87,17 @@
             }
         },
         {
+            "name": "Debug Specific Integration Test",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/target/debug/deps/${fileBasenameNoExtension}",
+            "args": ["--test", "--", "--exact", "my_specific_test"],
+            "cwd": "${workspaceFolder}",
+            "sourceMap": {
+                "${workspaceFolder}/target/debug/deps/": "${workspaceFolder}/tests/integration/"
+            },
+        },
+        {
             "type": "lldb",
             "request": "launch",
             "name": "Debug integration tests",
@@ -102,13 +113,28 @@
                     "kind": "test"
                 }
             },
-            // "sourceMap": {
-            //     "/rustc/<commit_hash>/": "${workspaceFolder}/.rustup/toolchains/<toolchain>/lib/rustlib/src/rust/"},
             "args": [],
+            "cwd": "${workspaceFolder}",
+            // "sourceMap": {
+            //     "${workspaceFolder}/target/debug/deps/": "${workspaceFolder}/tests/integration/",
+            //     "/home/**/*.rs"
+            // },
+        },
+        {
+            "name": "Debug Integration Test (select file)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/target/debug/deps/${fileBasenameNoExtension}",
+            "args": ["--test=integration", "--nocapture"],
             "cwd": "${workspaceFolder}",
             "env": {
                 "RUST_BACKTRACE": "1"
-            }
+            },
+            "sourceMap": {
+                "${workspaceFolder}/target/debug/deps/": "${workspaceFolder}/tests/",
+                "/home/**/*.rs": null
+            },
+            // "preLaunchTask": "cargo test --no-run"
         },
         {
             "type": "lldb",

@@ -44,6 +44,7 @@ impl Default for RedisQueueConfig {
 
 /// Redis queue adapter that implements all queue port traits
 pub struct RedisQueueAdapter {
+    #[allow(dead_code)]
     client: Client,
     conn: Arc<RwLock<ConnectionManager>>,
     config: RedisQueueConfig,
@@ -151,7 +152,6 @@ impl RedisQueueAdapter {
         let serialized = serde_json::to_string(&item_json)
             .map_err(|e| QueueError::SerializationError(format!("Failed to serialize item: {}", e)))?;
         
-        println!("DEBUG: Serialized item: {}", serialized);
         Ok(serialized)
     }
 
@@ -285,7 +285,6 @@ impl QueuePort for RedisQueueAdapter {
 
         let item_id = item.id();
         let serialized = self.serialize_item(&item, queue_name)?;
-        
         let mut conn = self.conn.write().await;
         
         // Determine which queue to use based on priority
@@ -298,16 +297,12 @@ impl QueuePort for RedisQueueAdapter {
         } else {
             self.queue_key(queue_name)
         };
-        
-        println!("DEBUG: Queue key: {}", queue_key);
 
         // Add to queue (LPUSH for FIFO with RPOP)
         let _: () = conn.lpush(&queue_key, &serialized)
             .await
             .map_err(|e| QueueError::OperationFailed(format!("Failed to enqueue item: {}", e)))?;
 
-        println!("DEBUG: lpush completed successfully");
-        
         self.log_operation(
             LogLevel::Info, 
             format!("Enqueued item {} to queue {}", item_id, queue_name)

@@ -166,6 +166,7 @@ impl Default for Settings {
 mod tests {
     use super::*;
     use std::env;
+    use serial_test::serial;
 
     #[test]
     fn test_default_queue_config() {
@@ -181,6 +182,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_queue_config_env_override() {
         // Set environment variables
         unsafe {
@@ -205,7 +207,6 @@ mod tests {
         assert_eq!(config.max_retries, Some(5));
         assert_eq!(config.enable_priority_queues, Some(false));
 
-        // Clean up
         unsafe {
             env::remove_var("APP_REDIS_HOST");
             env::remove_var("APP_REDIS_PORT");
@@ -219,6 +220,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_settings_with_queue_config() {
         let settings = Settings {
             queue: Some(QueueConfig {

@@ -12,6 +12,44 @@ services:
     networks:
       - in4me-test-network
 
+  minio-test:
+    image: minio/minio:latest
+    container_name: in4me-minio-test
+    ports:
+      - "9010:9000"
+      - "9011:9001"
+    environment:
+      MINIO_ROOT_USER: testuser
+      MINIO_ROOT_PASSWORD: testpass123
+    command: server /data --console-address ":9001"
+    tmpfs:
+      - /data
+    networks:
+      - in4me-test-network
+
+  minio-test-init:
+    image: minio/mc:latest
+    container_name: in4me-minio-test-init
+    depends_on:
+      - minio-test
+    environment:
+      MINIO_ROOT_USER: testuser
+      MINIO_ROOT_PASSWORD: testpass123
+    entrypoint: |
+      /bin/sh -c "
+      echo 'Waiting for MinIO test to be ready...'
+      until mc alias set minio http://minio-test:9000 \$MINIO_ROOT_USER \$MINIO_ROOT_PASSWORD; do
+        echo 'MinIO test not ready, waiting...'
+        sleep 2
+      done
+      echo 'MinIO test is ready. Creating test buckets...'
+      mc mb minio/test-bucket --ignore-existing
+      mc mb minio/integration-tests --ignore-existing
+      echo 'Test bucket initialization complete'
+      "
+    networks:
+      - in4me-test-network
+
   test-runner:
     build:
       context: ..
@@ -20,13 +58,20 @@ services:
     container_name: in4me-test-runner
     depends_on:
       - redis-test
+      - minio-test
+      - minio-test-init
     environment:
       - APP_REDIS_HOST=redis-test
       - APP_REDIS_PORT=6379
       - APP_REDIS_DB=0
+      - APP_MINIO_ENDPOINT=minio-test:9000
+      - APP_MINIO_ACCESS_KEY=testuser
+      - APP_MINIO_SECRET_KEY=testpass123
+      - APP_MINIO_BUCKET=test-bucket
+      - APP_MINIO_SECURE=false
       - RUST_LOG=debug
       - RUST_BACKTRACE=1
-    command: cargo test queue_integration_tests
+    command: cargo test file_storage_integration_tests
     networks:
       - in4me-test-network
     volumes:

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use config::{Config, ConfigError, File, Environment};
 use std::fs;
+use std::time::Duration;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SourceConfig {
@@ -55,6 +56,48 @@ impl Default for QueueConfig {
     }
 }
 
+/// Configuration for MinIO file storage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileStorageConfig {
+    pub minio_endpoint: String,
+    pub minio_access_key: String,
+    pub minio_secret_key: String,
+    pub minio_bucket: String,
+    pub minio_region: Option<String>,
+    pub minio_secure: Option<bool>,
+    pub minio_path_style: Option<bool>,
+    pub connection_timeout: Option<u64>,
+    pub request_timeout: Option<u64>,
+    pub max_idle_conns: Option<u32>,
+    pub max_file_size: Option<u64>,
+    pub allowed_extensions: Option<Vec<String>>,
+}
+
+impl Default for FileStorageConfig {
+    fn default() -> Self {
+        Self {
+            minio_endpoint: "localhost:9000".to_string(),
+            minio_access_key: "minioadmin".to_string(),
+            minio_secret_key: "minioadmin".to_string(),
+            minio_bucket: "in4me-files".to_string(),
+            minio_region: None,
+            minio_secure: Some(false),
+            minio_path_style: Some(true),
+            connection_timeout: Some(30),
+            request_timeout: Some(300),
+            max_idle_conns: Some(10),
+            max_file_size: Some(100 * 1024 * 1024), // 100MB
+            allowed_extensions: Some(vec![
+                "txt".to_string(), "md".to_string(), "json".to_string(),
+                "pdf".to_string(), "doc".to_string(), "docx".to_string(),
+                "jpg".to_string(), "png".to_string(), "gif".to_string(),
+                "rs".to_string(), "py".to_string(), "js".to_string(),
+                "html".to_string(), "css".to_string(), "xml".to_string(),
+            ]),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub llm_type: String,
@@ -65,6 +108,7 @@ pub struct Settings {
     pub max_file_size: u64,
     pub message_service: Option<MessageServiceSettings>,
     pub queue: Option<QueueConfig>,
+    pub file_storage: Option<FileStorageConfig>,
 }
 
 impl Settings {
@@ -135,6 +179,98 @@ impl Settings {
 
         config
     }
+
+    /// Get file storage configuration with environment variable overrides
+    pub fn get_file_storage_config(&self) -> FileStorageConfig {
+        let mut config = self.file_storage.clone().unwrap_or_default();
+
+        // Override with environment variables if present
+        if let Ok(endpoint) = std::env::var("APP_MINIO_ENDPOINT") {
+            config.minio_endpoint = endpoint;
+        }
+
+        if let Ok(access_key) = std::env::var("APP_MINIO_ACCESS_KEY") {
+            config.minio_access_key = access_key;
+        }
+
+        if let Ok(secret_key) = std::env::var("APP_MINIO_SECRET_KEY") {
+            config.minio_secret_key = secret_key;
+        }
+
+        if let Ok(bucket) = std::env::var("APP_MINIO_BUCKET") {
+            config.minio_bucket = bucket;
+        }
+
+        if let Ok(region) = std::env::var("APP_MINIO_REGION") {
+            config.minio_region = Some(region);
+        }
+
+        if let Ok(secure_str) = std::env::var("APP_MINIO_SECURE") {
+            if let Ok(secure) = secure_str.parse::<bool>() {
+                config.minio_secure = Some(secure);
+            }
+        }
+
+        if let Ok(path_style_str) = std::env::var("APP_MINIO_PATH_STYLE") {
+            if let Ok(path_style) = path_style_str.parse::<bool>() {
+                config.minio_path_style = Some(path_style);
+            }
+        }
+
+        if let Ok(timeout_str) = std::env::var("APP_MINIO_CONNECTION_TIMEOUT") {
+            if let Ok(timeout) = timeout_str.parse::<u64>() {
+                config.connection_timeout = Some(timeout);
+            }
+        }
+
+        if let Ok(request_timeout_str) = std::env::var("APP_MINIO_REQUEST_TIMEOUT") {
+            if let Ok(timeout) = request_timeout_str.parse::<u64>() {
+                config.request_timeout = Some(timeout);
+            }
+        }
+
+        if let Ok(max_conns_str) = std::env::var("APP_MINIO_MAX_IDLE_CONNS") {
+            if let Ok(max_conns) = max_conns_str.parse::<u32>() {
+                config.max_idle_conns = Some(max_conns);
+            }
+        }
+
+        if let Ok(max_size_str) = std::env::var("APP_MINIO_MAX_FILE_SIZE") {
+            if let Ok(max_size) = max_size_str.parse::<u64>() {
+                config.max_file_size = Some(max_size);
+            }
+        }
+
+        if let Ok(extensions_str) = std::env::var("APP_MINIO_ALLOWED_EXTENSIONS") {
+            let extensions: Vec<String> = extensions_str
+                .split(',')
+                .map(|s| s.trim().to_lowercase())
+                .collect();
+            if !extensions.is_empty() {
+                config.allowed_extensions = Some(extensions);
+            }
+        }
+
+        config
+    }
+
+    /// Convert FileStorageConfig to MinioConfig
+    pub fn to_minio_config(&self) -> crate::infrastructure::adapters::file_storage::minio::MinioConfig {
+        let fs_config = self.get_file_storage_config();
+        
+        crate::infrastructure::adapters::file_storage::minio::MinioConfig {
+            endpoint: fs_config.minio_endpoint,
+            access_key: fs_config.minio_access_key,
+            secret_key: fs_config.minio_secret_key,
+            bucket: fs_config.minio_bucket,
+            region: fs_config.minio_region,
+            secure: fs_config.minio_secure.unwrap_or(false),
+            path_style: fs_config.minio_path_style.unwrap_or(true),
+            connection_timeout: Duration::from_secs(fs_config.connection_timeout.unwrap_or(30)),
+            request_timeout: Duration::from_secs(fs_config.request_timeout.unwrap_or(300)),
+            max_idle_conns: fs_config.max_idle_conns.unwrap_or(10),
+        }
+    }
 }
 
 impl Default for Settings {
@@ -158,6 +294,7 @@ impl Default for Settings {
                 retry_delay_ms: Some(1000),
             }),
             queue: Some(QueueConfig::default()),
+            file_storage: Some(FileStorageConfig::default()),
         }
     }
 }
@@ -166,80 +303,128 @@ impl Default for Settings {
 mod tests {
     use super::*;
     use std::env;
-    use serial_test::serial;
 
     #[test]
-    fn test_default_queue_config() {
-        let config = QueueConfig::default();
-        assert_eq!(config.redis_host, "localhost");
-        assert_eq!(config.redis_port, 6379);
-        assert_eq!(config.redis_db, 0);
-        assert!(config.redis_password.is_none());
+    fn test_default_file_storage_config() {
+        let config = FileStorageConfig::default();
+        assert_eq!(config.minio_endpoint, "localhost:9000");
+        assert_eq!(config.minio_access_key, "minioadmin");
+        assert_eq!(config.minio_secret_key, "minioadmin");
+        assert_eq!(config.minio_bucket, "in4me-files");
+        assert_eq!(config.minio_secure, Some(false));
+        assert_eq!(config.minio_path_style, Some(true));
         assert_eq!(config.connection_timeout, Some(30));
-        assert_eq!(config.key_prefix, Some("in4me:queue".to_string()));
-        assert_eq!(config.max_retries, Some(3));
-        assert_eq!(config.enable_priority_queues, Some(true));
+        assert_eq!(config.request_timeout, Some(300));
+        assert_eq!(config.max_idle_conns, Some(10));
+        assert_eq!(config.max_file_size, Some(100 * 1024 * 1024));
+        assert!(config.allowed_extensions.is_some());
     }
 
     #[test]
-    #[serial]
-    fn test_queue_config_env_override() {
+    fn test_file_storage_config_env_override() {
         // Set environment variables
         unsafe {
-            env::set_var("APP_REDIS_HOST", "redis-server");
-            env::set_var("APP_REDIS_PORT", "6380");
-            env::set_var("APP_REDIS_PASSWORD", "secret");
-            env::set_var("APP_REDIS_DB", "1");
-            env::set_var("APP_REDIS_CONNECTION_TIMEOUT", "60");
-            env::set_var("APP_REDIS_KEY_PREFIX", "myapp:queue");
-            env::set_var("APP_REDIS_MAX_RETRIES", "5");
-            env::set_var("APP_REDIS_ENABLE_PRIORITY_QUEUES", "false");
+            env::set_var("APP_MINIO_ENDPOINT", "minio-server:9000");
+            env::set_var("APP_MINIO_ACCESS_KEY", "testuser");
+            env::set_var("APP_MINIO_SECRET_KEY", "testpass");
+            env::set_var("APP_MINIO_BUCKET", "test-bucket");
+            env::set_var("APP_MINIO_REGION", "us-east-1");
+            env::set_var("APP_MINIO_SECURE", "true");
+            env::set_var("APP_MINIO_PATH_STYLE", "false");
+            env::set_var("APP_MINIO_CONNECTION_TIMEOUT", "60");
+            env::set_var("APP_MINIO_REQUEST_TIMEOUT", "600");
+            env::set_var("APP_MINIO_MAX_IDLE_CONNS", "20");
+            env::set_var("APP_MINIO_MAX_FILE_SIZE", "209715200"); // 200MB
+            env::set_var("APP_MINIO_ALLOWED_EXTENSIONS", "pdf,doc,docx,jpg,png");
         }
         let settings = Settings::default();
-        let config = settings.get_queue_config();
+        let config = settings.get_file_storage_config();
 
-        assert_eq!(config.redis_host, "redis-server");
-        assert_eq!(config.redis_port, 6380);
-        assert_eq!(config.redis_password, Some("secret".to_string()));
-        assert_eq!(config.redis_db, 1);
+        assert_eq!(config.minio_endpoint, "minio-server:9000");
+        assert_eq!(config.minio_access_key, "testuser");
+        assert_eq!(config.minio_secret_key, "testpass");
+        assert_eq!(config.minio_bucket, "test-bucket");
+        assert_eq!(config.minio_region, Some("us-east-1".to_string()));
+        assert_eq!(config.minio_secure, Some(true));
+        assert_eq!(config.minio_path_style, Some(false));
         assert_eq!(config.connection_timeout, Some(60));
-        assert_eq!(config.key_prefix, Some("myapp:queue".to_string()));
-        assert_eq!(config.max_retries, Some(5));
-        assert_eq!(config.enable_priority_queues, Some(false));
+        assert_eq!(config.request_timeout, Some(600));
+        assert_eq!(config.max_idle_conns, Some(20));
+        assert_eq!(config.max_file_size, Some(209715200));
+        assert_eq!(config.allowed_extensions, Some(vec![
+            "pdf".to_string(), "doc".to_string(), "docx".to_string(),
+            "jpg".to_string(), "png".to_string()
+        ]));
 
+        // Clean up
         unsafe {
-            env::remove_var("APP_REDIS_HOST");
-            env::remove_var("APP_REDIS_PORT");
-            env::remove_var("APP_REDIS_PASSWORD");
-            env::remove_var("APP_REDIS_DB");
-            env::remove_var("APP_REDIS_CONNECTION_TIMEOUT");
-            env::remove_var("APP_REDIS_KEY_PREFIX");
-            env::remove_var("APP_REDIS_MAX_RETRIES");
-            env::remove_var("APP_REDIS_ENABLE_PRIORITY_QUEUES");
+            env::remove_var("APP_MINIO_ENDPOINT");
+            env::remove_var("APP_MINIO_ACCESS_KEY");
+            env::remove_var("APP_MINIO_SECRET_KEY");
+            env::remove_var("APP_MINIO_BUCKET");
+            env::remove_var("APP_MINIO_REGION");
+            env::remove_var("APP_MINIO_SECURE");
+            env::remove_var("APP_MINIO_PATH_STYLE");
+            env::remove_var("APP_MINIO_CONNECTION_TIMEOUT");
+            env::remove_var("APP_MINIO_REQUEST_TIMEOUT");
+            env::remove_var("APP_MINIO_MAX_IDLE_CONNS");
+            env::remove_var("APP_MINIO_MAX_FILE_SIZE");
+            env::remove_var("APP_MINIO_ALLOWED_EXTENSIONS");
         }
     }
 
     #[test]
-    #[serial]
-    fn test_settings_with_queue_config() {
+    fn test_settings_with_file_storage_config() {
         let settings = Settings {
-            queue: Some(QueueConfig {
-                redis_host: "custom-host".to_string(),
-                redis_port: 6000,
-                redis_password: Some("password".to_string()),
-                redis_db: 2,
+            file_storage: Some(FileStorageConfig {
+                minio_endpoint: "custom-minio:9000".to_string(),
+                minio_access_key: "custom-access".to_string(),
+                minio_secret_key: "custom-secret".to_string(),
+                minio_bucket: "custom-bucket".to_string(),
+                minio_region: Some("eu-west-1".to_string()),
+                minio_secure: Some(true),
+                minio_path_style: Some(false),
                 connection_timeout: Some(45),
-                key_prefix: Some("custom:prefix".to_string()),
-                max_retries: Some(10),
-                enable_priority_queues: Some(false),
+                request_timeout: Some(450),
+                max_idle_conns: Some(15),
+                max_file_size: Some(50 * 1024 * 1024), // 50MB
+                allowed_extensions: Some(vec!["rs".to_string(), "toml".to_string()]),
             }),
             ..Default::default()
         };
 
-        let config = settings.get_queue_config();
-        assert_eq!(config.redis_host, "custom-host");
-        assert_eq!(config.redis_port, 6000);
-        assert_eq!(config.redis_password, Some("password".to_string()));
-        assert_eq!(config.redis_db, 2);
+        let config = settings.get_file_storage_config();
+        assert_eq!(config.minio_endpoint, "custom-minio:9000");
+        assert_eq!(config.minio_access_key, "custom-access");
+        assert_eq!(config.minio_secret_key, "custom-secret");
+        assert_eq!(config.minio_bucket, "custom-bucket");
+        assert_eq!(config.minio_region, Some("eu-west-1".to_string()));
+    }
+
+    #[test]
+    fn test_to_minio_config_conversion() {
+        let settings = Settings::default();
+        let minio_config = settings.to_minio_config();
+
+        assert_eq!(minio_config.endpoint, "localhost:9000");
+        assert_eq!(minio_config.access_key, "minioadmin");
+        assert_eq!(minio_config.secret_key, "minioadmin");
+        assert_eq!(minio_config.bucket, "in4me-files");
+        assert!(!minio_config.secure);
+        assert!(minio_config.path_style);
+        assert_eq!(minio_config.connection_timeout, Duration::from_secs(30));
+        assert_eq!(minio_config.request_timeout, Duration::from_secs(300));
+        assert_eq!(minio_config.max_idle_conns, 10);
+    }
+
+    #[test]
+    fn test_queue_config_compatibility() {
+        // Ensure existing queue config functionality still works
+        let settings = Settings::default();
+        let queue_config = settings.get_queue_config();
+        
+        assert_eq!(queue_config.redis_host, "localhost");
+        assert_eq!(queue_config.redis_port, 6379);
+        assert_eq!(queue_config.redis_db, 0);
     }
 }

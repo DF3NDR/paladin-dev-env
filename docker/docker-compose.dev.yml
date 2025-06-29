@@ -8,6 +8,19 @@ services:
     ports:
       - "6379:6379"
 
+  minio:
+    environment:
+      MINIO_ROOT_USER: devuser
+      MINIO_ROOT_PASSWORD: devpassword123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  minio-init:
+    environment:
+      MINIO_ROOT_USER: devuser
+      MINIO_ROOT_PASSWORD: devpassword123
+
   in4me-app:
     build:
       target: development
@@ -20,4 +33,6 @@ services:
       - RUST_LOG=debug
       - RUST_BACKTRACE=1
       - APP_ENV=development
+      - APP_MINIO_ACCESS_KEY=devuser
+      - APP_MINIO_SECRET_KEY=devpassword123
     command: cargo run

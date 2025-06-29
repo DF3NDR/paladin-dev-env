@@ -22,6 +22,58 @@ services:
       - in4me-network
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    container_name: in4me-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BROWSER_REDIRECT_URL: ${MINIO_BROWSER_REDIRECT_URL:-http://localhost:9001}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+    networks:
+      - in4me-network
+    restart: unless-stopped
+
+  # MinIO Client for bucket initialization
+  minio-init:
+    image: minio/mc:latest
+    container_name: in4me-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    entrypoint: |
+      /bin/sh -c "
+      echo 'Waiting for MinIO to be ready...'
+      until mc alias set minio http://minio:9000 \$$MINIO_ROOT_USER \$$MINIO_ROOT_PASSWORD; do
+        echo 'MinIO not ready, waiting...'
+        sleep 2
+      done
+      echo 'MinIO is ready. Creating buckets...'
+      mc mb minio/in4me-files --ignore-existing
+      mc mb minio/in4me-analysis --ignore-existing  
+      mc mb minio/in4me-reports --ignore-existing
+      mc mb minio/in4me-backups --ignore-existing
+      echo 'Setting bucket policies...'
+      mc anonymous set public minio/in4me-files
+      echo 'Bucket initialization complete'
+      "
+    networks:
+      - in4me-network
+
   in4me-app:
     build:
       context: ..
@@ -32,6 +84,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     environment:
       # Redis configuration
       - APP_REDIS_HOST=redis
@@ -42,6 +98,19 @@ services:
       - APP_REDIS_KEY_PREFIX=in4me:queue
       - APP_REDIS_MAX_RETRIES=3
       - APP_REDIS_ENABLE_PRIORITY_QUEUES=true
+      
+      # MinIO configuration
+      - APP_MINIO_ENDPOINT=minio:9000
+      - APP_MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - APP_MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - APP_MINIO_BUCKET=in4me-files
+      - APP_MINIO_SECURE=false
+      - APP_MINIO_PATH_STYLE=true
+      - APP_MINIO_CONNECTION_TIMEOUT=30
+      - APP_MINIO_REQUEST_TIMEOUT=300
+      - APP_MINIO_MAX_IDLE_CONNS=10
+      - APP_MINIO_MAX_FILE_SIZE=104857600  # 100MB
+      - APP_MINIO_ALLOWED_EXTENSIONS=txt,md,json,pdf,doc,docx,jpg,png,gif,rs,py,js,html,css,xml
       
       # Application configuration
       - APP_SERVER_HOST=0.0.0.0
@@ -113,6 +182,8 @@ services:
 volumes:
   redis_data:
     driver: local
+  minio_data:
+    driver: local
   app_data:
     driver: local
   redis_insight_data:
@@ -121,4 +192,3 @@ volumes:
 networks:
   in4me-network:
     driver: bridge
-

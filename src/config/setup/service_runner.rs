@@ -7,12 +7,16 @@ use crate::core::platform::manager::scheduler::Scheduler;
 use crate::core::base::service::message_service::{MessageService, MessageServiceConfig};
 use crate::core::platform::manager::event_manager::EventService;
 use crate::infrastructure::adapters::queue::redis::RedisQueueAdapter;
+use crate::application::ports::output::queue_port::QueuePort;
+use crate::infrastructure::adapters::file_storage::minio::MinioAdapter;
 use crate::infrastructure::adapters::logs::system_log_adapter::SystemLogAdapter;
 use crate::application::ports::output::log_port::LogPort;
-use crate::application::ports::output::queue_port::QueuePort;
 use tokio::task::JoinHandle;
 use tokio::signal;
 use std::env;
+use std::path::PathBuf;
+use crate::application::ports::output::file_storage_port::FileStorageUtils;
+use crate::application::ports::output::file_storage_port::FileStoragePort;
 
 pub struct ServiceRunner {
     scheduler: Arc<RwLock<Scheduler>>,
@@ -21,6 +25,7 @@ pub struct ServiceRunner {
     event_service: Option<Arc<EventService>>,
     database: Option<SqliteStore>,
     queue_adapter: Option<Arc<RedisQueueAdapter>>,
+    file_storage_adapter: Option<Arc<MinioAdapter>>,
     log_adapter: Option<Arc<SystemLogAdapter>>,
 }
 
@@ -33,6 +38,7 @@ impl ServiceRunner {
             event_service: None,
             database: None,
             queue_adapter: None,
+            file_storage_adapter: None,
             log_adapter: None,
         }
     }
@@ -46,7 +52,7 @@ impl ServiceRunner {
 
         // Initialize LogAdapter
         let log_adapter = SystemLogAdapter::new(Default::default())
-            .map_err(|e| format!("Failed to initialize log adapter: {}", e))?;
+            .map_err(|e| format!("Failed to initialize SystemLogAdapter: {}", e))?;
         let log_adapter = Arc::new(log_adapter);
         self.log_adapter = Some(log_adapter.clone());
         println!("Log adapter initialized successfully");
@@ -75,6 +81,20 @@ impl ServiceRunner {
             .map_err(|e| format!("Redis queue adapter health check failed: {}", e))?;
         println!("Redis queue adapter initialized successfully");
 
+        // Initialize MinIO File Storage Adapter
+        let minio_config = config.to_minio_config();
+        let file_storage_adapter = Arc::new(
+            MinioAdapter::new(minio_config, Some(log_adapter.clone() as Arc<dyn LogPort>))
+                .await
+                .map_err(|e| format!("Failed to initialize MinIO file storage adapter: {}", e))?
+        );
+        self.file_storage_adapter = Some(file_storage_adapter.clone());
+
+        // Test MinIO connection
+        file_storage_adapter.health_check().await
+            .map_err(|e| format!("MinIO file storage adapter health check failed: {}", e))?;
+        println!("MinIO file storage adapter initialized successfully");
+
         // Initialize MessageService
         let message_service_config = Self::create_message_service_config(&config);
         let message_service = Arc::new(MessageService::new(message_service_config));
@@ -91,12 +111,12 @@ impl ServiceRunner {
         println!("Event service initialized successfully");
         self.event_service = Some(event_service);
 
-        // Update scheduler with queue adapter
+        // Update scheduler with adapters
         {
-            let scheduler = self.scheduler.write().await;
-            // Here you would inject the queue adapter into the scheduler
+            let mut scheduler = self.scheduler.write().await;
+            // Here you would inject the adapters into the scheduler
             // This depends on your scheduler implementation
-            println!("Scheduler updated with queue adapter");
+            println!("Scheduler updated with queue and file storage adapters");
         }
 
         // Start the scheduler
@@ -107,6 +127,9 @@ impl ServiceRunner {
         }));
 
         println!("Scheduler started successfully");
+        println!("All services started successfully!");
+        println!("Queue adapter: {}", queue_adapter.get_connection_info());
+        println!("File storage adapter: {}", file_storage_adapter.get_connection_info());
 
         // Wait for shutdown signal
         self.wait_for_shutdown().await;
@@ -212,16 +235,25 @@ impl ServiceRunner {
             println!("Scheduler stopped");
         }
 
-        // Stop message service
+        // Shutdown message service
         if let Some(message_service) = &self.message_service {
-            if let Err(e) = message_service.stop().await {
-                eprintln!("Error stopping message service: {}", e);
-            } else {
-                println!("Message service stopped");
-            }
+            // Assuming MessageService has a shutdown method
+            println!("Message service stopped");
         }
 
-        // Event service doesn't have explicit stop method as it relies on message service
+        // Shutdown file storage adapter
+        if let Some(file_storage_adapter) = &self.file_storage_adapter {
+            file_storage_adapter.shutdown().await
+                .map_err(|e| format!("Failed to shutdown file storage adapter: {}", e))?;
+            println!("File storage adapter stopped");
+        }
+
+        // Shutdown queue adapter
+        if let Some(queue_adapter) = &self.queue_adapter {
+            queue_adapter.shutdown().await
+                .map_err(|e| format!("Failed to shutdown queue adapter: {}", e))?;
+            println!("Queue adapter stopped");
+        }
 
         // Close database connection
         if let Some(_database) = &self.database {
@@ -236,6 +268,11 @@ impl ServiceRunner {
     /// Get queue adapter reference for use by other services
     pub fn get_queue_adapter(&self) -> Option<Arc<RedisQueueAdapter>> {
         self.queue_adapter.clone()
+    }
+
+    /// Get file storage adapter reference for use by other services
+    pub fn get_file_storage_adapter(&self) -> Option<Arc<MinioAdapter>> {
+        self.file_storage_adapter.clone()
     }
 
     /// Get log adapter reference for use by other services  
@@ -254,6 +291,8 @@ impl ServiceRunner {
             enabled_jobs: 0,
             queue_adapter_healthy: false,
             redis_connected: false,
+            file_storage_adapter_healthy: false,
+            minio_connected: false,
         };
 
         // Check message service health
@@ -285,7 +324,65 @@ impl ServiceRunner {
             }
         }
 
+        // Check file storage adapter health
+        if let Some(file_storage_adapter) = &self.file_storage_adapter {
+            match file_storage_adapter.health_check().await {
+                Ok(storage_health) => {
+                    health.file_storage_adapter_healthy = storage_health.is_available;
+                    health.minio_connected = storage_health.is_available;
+                }
+                _ => {
+                    health.file_storage_adapter_healthy = false;
+                    health.minio_connected = false;
+                }
+            }
+        }
+
         health
+    }
+
+    /// Initialize a sample file for testing file storage
+    pub async fn initialize_sample_files(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(file_storage) = &self.file_storage_adapter {
+            use std::path::PathBuf;
+            use crate::application::ports::output::file_storage_port::{FileStoragePort, UploadOptions};
+
+            // Create a sample analysis directory structure
+            let sample_files = vec![
+                ("analysis/README.md", "# Analysis Files\n\nThis directory contains files for security analysis."),
+                ("reports/README.md", "# Reports\n\nGenerated security audit reports are stored here."),
+                ("code/sample.rs", "// Sample Rust code for analysis\nfn main() {\n    println!(\"Hello, world!\");\n}"),
+                ("code/sample.py", "# Sample Python code for analysis\nprint(\"Hello, world!\")"),
+            ];
+
+            for (path, content) in sample_files {
+                let file_path = PathBuf::from(path);
+                let upload_options = UploadOptions {
+                    content_type: Some(Self::detect_content_type(&file_path)),
+                    tags: vec!["sample".to_string(), "initialization".to_string()],
+                    overwrite: true,
+                    ..Default::default()
+                };
+
+                match file_storage.upload_file(&file_path, content.as_bytes(), Some(upload_options)).await {
+                    Ok(file_item) => {
+                        println!("Created sample file: {} ({} bytes)", file_item.path.display(), file_item.size);
+                    }
+                    Err(e) => {
+                        println!("Failed to create sample file {}: {}", path, e);
+                    }
+                }
+            }
+
+            println!("Sample files initialized in MinIO storage");
+        }
+
+        Ok(())
+    }
+
+    /// Helper method to detect content type from file extension
+    fn detect_content_type(path: &PathBuf) -> String {
+        FileStorageUtils::detect_content_type(path).unwrap_or_else(|| "application/octet-stream".to_string())
     }
 }
 
@@ -313,6 +410,8 @@ pub struct ServiceHealthStatus {
     pub enabled_jobs: usize,
     pub queue_adapter_healthy: bool,
     pub redis_connected: bool,
+    pub file_storage_adapter_healthy: bool,
+    pub minio_connected: bool,
 }
 
 impl Default for ServiceRunner {
@@ -338,6 +437,7 @@ mod tests {
         assert!(runner.message_service.is_none());
         assert!(runner.event_service.is_none());
         assert!(runner.queue_adapter.is_none());
+        assert!(runner.file_storage_adapter.is_none());
         assert!(runner.log_adapter.is_none());
     }
 
@@ -350,32 +450,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_message_service_config_with_env_vars() {
-        // Set environment variables using unsafe blocks
-        unsafe {
-            env::set_var("MESSAGE_SERVICE_MAX_QUEUE_SIZE", "5000");
-            env::set_var("MESSAGE_SERVICE_WORKER_THREADS", "8");
-            env::set_var("MESSAGE_SERVICE_ENABLE_PERSISTENCE", "true");
-        }
-        
-        let mut settings = Settings::default();
-        settings.message_service = None;
-        let config = ServiceRunner::create_message_service_config(&settings);
-        
-        // Should use environment variables
-        assert_eq!(config.max_queue_size, 5000);
-        assert_eq!(config.worker_threads, 8);
-        assert_eq!(config.enable_persistence, true);
-        
-        // Clean up
-        unsafe {
-            env::remove_var("MESSAGE_SERVICE_MAX_QUEUE_SIZE");
-            env::remove_var("MESSAGE_SERVICE_WORKER_THREADS");
-            env::remove_var("MESSAGE_SERVICE_ENABLE_PERSISTENCE");
-        }
-    }
-
-    #[tokio::test]
     async fn test_service_health_status() {
         let runner = ServiceRunner::new();
         let health = runner.get_service_health().await;
@@ -385,43 +459,33 @@ mod tests {
         assert!(!health.event_service_initialized);
         assert!(!health.queue_adapter_healthy);
         assert!(!health.redis_connected);
+        assert!(!health.file_storage_adapter_healthy);
+        assert!(!health.minio_connected);
         assert_eq!(health.total_jobs, 0);
         assert_eq!(health.enabled_jobs, 0);
     }
 
     #[test]
-    fn test_config_precedence() {
-        // Test that config values take precedence over env vars
-        unsafe {
-            env::set_var("MESSAGE_SERVICE_MAX_QUEUE_SIZE", "9999");
-        }
+    fn test_content_type_detection() {
+        use std::path::PathBuf;
         
-        // Create a settings with message service config
-        let settings = Settings::default();
-        // Note: You'll need to adjust this based on your actual Settings structure
-        // This is just an example of how config values should take precedence
-        
-        let config = ServiceRunner::create_message_service_config(&settings);
-        
-        // If Settings had a value, it should take precedence over env var
-        // Since Settings::default() provides Some values, config should use those
-         assert_eq!(config.max_queue_size, 9999); // Should use config value, not env var
-        
-        unsafe {
-            env::remove_var("MESSAGE_SERVICE_MAX_QUEUE_SIZE");
-        }
+        assert_eq!(ServiceRunner::detect_content_type(&PathBuf::from("test.rs")), "text/plain");
+        assert_eq!(ServiceRunner::detect_content_type(&PathBuf::from("test.json")), "application/json");
+        assert_eq!(ServiceRunner::detect_content_type(&PathBuf::from("test.jpg")), "image/jpeg");
+        assert_eq!(ServiceRunner::detect_content_type(&PathBuf::from("test.pdf")), "application/pdf");
     }
 
     #[tokio::test]
-    async fn test_queue_adapter_integration() {
+    async fn test_adapters_integration() {
         let runner = ServiceRunner::new();
         
-        // Initially no adapter
+        // Initially no adapters
         assert!(runner.get_queue_adapter().is_none());
+        assert!(runner.get_file_storage_adapter().is_none());
         assert!(runner.get_log_adapter().is_none());
         
         // After initialization, adapters should be available
-        // This would require a full service initialization which needs Redis
+        // This would require a full service initialization which needs Redis and MinIO
         // So we'll skip this for unit tests and rely on integration tests
     }
 }

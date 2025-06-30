@@ -1,14 +1,80 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+    
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+    
+    - name: Run clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+    
+    - name: Run unit tests
+      run: cargo test --lib --bins
+    
+    - name: Pull Docker images for integration tests
+      run: |
+        docker pull minio/minio:latest
+        docker pull redis:7-alpine
+    
+    - name: Run integration tests
+      run: |
+        RUST_LOG=debug cargo test file_storage_integration_tests --test integration -- --test-threads=1
+      env:
+        DOCKER_HOST: unix:///var/run/docker.sock
+
   build:
     runs-on: ubuntu-latest
+    needs: test
+    
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-      - run: cargo build --verbose
-      - run: cargo test --verbose
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Build
+      run: cargo build --release
+    
+    - name: Build Docker image
+      run: |
+        cd docker
+        docker build -t in4me:latest -f Dockerfile ..

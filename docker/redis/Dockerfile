@@ -2,7 +2,7 @@
 
 # Multi-stage build for the in4me application with Redis queue support
 
-FROM rust:1.75 as base
+FROM rust:latest as base
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \

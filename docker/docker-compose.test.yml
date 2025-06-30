@@ -6,11 +6,16 @@ services:
     container_name: in4me-redis-test
     ports:
       - "6380:6379"
-    command: redis-server --appendonly no --save ""
+    command: redis-server --appendonly no --save "" --protected-mode no
     tmpfs:
       - /data
     networks:
       - in4me-test-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   minio-test:
     image: minio/minio:latest
@@ -21,24 +26,32 @@ services:
     environment:
       MINIO_ROOT_USER: testuser
       MINIO_ROOT_PASSWORD: testpass123
+      MINIO_CONSOLE_ADDRESS: ":9001"
     command: server /data --console-address ":9001"
     tmpfs:
       - /data
     networks:
       - in4me-test-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 
   minio-test-init:
     image: minio/mc:latest
     container_name: in4me-minio-test-init
     depends_on:
-      - minio-test
+      minio-test:
+        condition: service_healthy
     environment:
       MINIO_ROOT_USER: testuser
       MINIO_ROOT_PASSWORD: testpass123
     entrypoint: |
       /bin/sh -c "
       echo 'Waiting for MinIO test to be ready...'
-      until mc alias set minio http://minio-test:9000 \$MINIO_ROOT_USER \$MINIO_ROOT_PASSWORD; do
+      until mc alias set minio http://minio-test:9000 \$$MINIO_ROOT_USER \$$MINIO_ROOT_PASSWORD; do
         echo 'MinIO test not ready, waiting...'
         sleep 2
       done
@@ -50,33 +63,33 @@ services:
     networks:
       - in4me-test-network
 
-  test-runner:
+  # Service for running integration tests
+  integration-tests:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: docker/testserver/Dockerfile
       target: test
-    container_name: in4me-test-runner
+    container_name: in4me-integration-tests
     depends_on:
-      - redis-test
-      - minio-test
-      - minio-test-init
+      minio-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+      minio-test-init:
+        condition: service_completed_successfully
     environment:
+      - RUST_LOG=debug
+      - RUST_BACKTRACE=1
       - APP_REDIS_HOST=redis-test
       - APP_REDIS_PORT=6379
-      - APP_REDIS_DB=0
       - APP_MINIO_ENDPOINT=minio-test:9000
       - APP_MINIO_ACCESS_KEY=testuser
       - APP_MINIO_SECRET_KEY=testpass123
       - APP_MINIO_BUCKET=test-bucket
       - APP_MINIO_SECURE=false
-      - RUST_LOG=debug
-      - RUST_BACKTRACE=1
-    command: cargo test file_storage_integration_tests
+    command: cargo test file_storage_integration_tests --test integration -- --test-threads=1 --nocapture
     networks:
       - in4me-test-network
-    volumes:
-      - ../target:/app/target
-      - ../tests:/app/tests:ro
 
 networks:
   in4me-test-network:

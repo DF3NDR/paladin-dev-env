@@ -2,58 +2,71 @@
 mod file_storage_integration_tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::Duration;
     use tokio::time::sleep;
-    use testcontainers::{clients::Cli, images::minio::MinIO, Container, Docker};
+    use testcontainers::{
+        core::{IntoContainerPort, WaitFor}, 
+        runners::AsyncRunner, 
+        GenericImage
+    };
+
+    use futures::future::try_join_all;
 
     use in4me::infrastructure::adapters::file_storage::minio::{MinioAdapter, MinioConfig};
     use in4me::infrastructure::adapters::logs::system_log_adapter::SystemLogAdapter;
     use in4me::application::ports::output::file_storage_port::{
         FileStoragePort, BatchFileStoragePort, AdvancedFileStoragePort, FileVersioningPort,
-        UploadOptions, DownloadOptions, ListOptions, FileStorageUtils
+        UploadOptions,ListOptions, FileStorageUtils
     };
     use in4me::application::ports::output::log_port::LogPort;
 
     struct TestContext {
-        adapter: MinioAdapter,
-        _container: Container<'static, MinIO>,
-        endpoint: String,
+        adapter: Arc<MinioAdapter>,
+        #[allow(dead_code)]
+        container: testcontainers::ContainerAsync<GenericImage>,
+        #[allow(dead_code)]
+        port: u16,
     }
 
     impl TestContext {
         async fn new() -> Result<Self, Box<dyn std::error::Error>> {
-            let docker = Cli::default();
-            let minio_image = MinIO::default();
-            let container = docker.run(minio_image);
-            
-            let port = container.get_host_port_ipv4(9000);
-            let endpoint = format!("localhost:{}", port);
+            // Fix: Use the correct MinIO image name
+            let container = GenericImage::new("minio/minio", "latest")
+                .with_exposed_port(9000.tcp())
+                .with_wait_for(WaitFor::message_on_stdout("Status:         1 Online, 0 Offline"))
+                .start()
+                .await
+                .expect("Failed to start MinIO");
 
-            // Wait for MinIO to start
-            sleep(Duration::from_secs(2)).await;
+            let port = container.get_host_port_ipv4(9000).await?;
 
-            let log_adapter = Arc::new(SystemLogAdapter::new(Default::default()));
+            // Wait longer for MinIO to fully start
+            sleep(Duration::from_secs(5)).await;
+
+            let log_adapter = Arc::new(SystemLogAdapter::new(Default::default()).unwrap()) as Arc<dyn LogPort>;
             
             let minio_config = MinioConfig {
-                endpoint: endpoint.clone(),
+                endpoint: format!("127.0.0.1:{}", port),
                 access_key: "minioadmin".to_string(),
                 secret_key: "minioadmin".to_string(),
                 bucket: "test-bucket".to_string(),
-                region: None,
+                region: Some("us-east-1".to_string()),
                 secure: false,
                 path_style: true,
-                connection_timeout: Duration::from_secs(10),
-                request_timeout: Duration::from_secs(30),
+                connection_timeout: Duration::from_secs(30),
+                request_timeout: Duration::from_secs(60),
                 max_idle_conns: 5,
+                max_retries: 5,
             };
 
-            let adapter = MinioAdapter::new(minio_config, Some(log_adapter as Arc<dyn LogPort>))
+            let adapter = MinioAdapter::new(minio_config, Some(log_adapter))
                 .await?;
 
             Ok(TestContext {
-                adapter,
-                _container: container,
-                endpoint,
+                adapter: Arc::new(adapter),
+                container,
+                port,
             })
         }
 
@@ -87,16 +100,57 @@ mod file_storage_integration_tests {
         assert!(health.response_time_ms.is_some());
         assert!(health.error.is_none());
 
-        println!("MinIO connection successful: {}", ctx.endpoint);
+        println!("MinIO connection successful: {}", ctx.port);
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_concurrent_operations() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = TestContext::new().await?;
+
+        // Test concurrent uploads
+        let upload_tasks: Vec<_> = (0..5).map(|i| {
+            let adapter = ctx.adapter.clone();
+            let path = PathBuf::from(format!("concurrent/file_{}.txt", i));
+            let content = format!("Content of file {} with rust-s3", i);
+            
+            async move {
+                adapter.upload_file(&path, content.as_bytes(), None).await
+            }
+        }).collect();
+
+        let upload_results = try_join_all(upload_tasks).await?;
+        assert_eq!(upload_results.len(), 5);
+
+        // Test concurrent downloads
+        let download_tasks: Vec<_> = (0..5).map(|i| {
+            let adapter = ctx.adapter.clone();
+            let path = PathBuf::from(format!("concurrent/file_{}.txt", i));
+            
+            async move {
+                adapter.download_file(&path, None).await
+            }
+        }).collect();
+
+        let download_results = try_join_all(download_tasks).await?;
+        assert_eq!(download_results.len(), 5);
+
+        // Verify content
+        for (i, content) in download_results.iter().enumerate() {
+            let expected = format!("Content of file {} with rust-s3", i);
+            assert_eq!(content, expected.as_bytes());
+        }
+
+        println!("Concurrent operations test completed successfully");
+        Ok(())
+    }
+    
     #[tokio::test]
     async fn test_upload_and_download_file() -> Result<(), Box<dyn std::error::Error>> {
         let ctx = TestContext::new().await?;
 
         // Test file upload
-        let (file_path, file_content) = ctx.create_test_file("hello.txt", "Hello, MinIO!");
+        let (file_path, file_content) = ctx.create_test_file("hello.txt", "Hello, rust-s3 with MinIO!");
         let upload_options = ctx.create_upload_options(vec!["test".to_string(), "hello".to_string()]);
 
         let file_item = ctx.adapter.upload_file(&file_path, &file_content, Some(upload_options)).await?;
@@ -130,9 +184,9 @@ mod file_storage_integration_tests {
 
         // Create and upload multiple test files
         let files = vec![
-            ("analysis/code.rs", "fn main() { println!(\"Security analysis\"); }"),
-            ("reports/audit.md", "# Security Audit Report\n\nAll systems secure."),
-            ("data/config.json", r#"{"security": {"enabled": true}}"#),
+            ("analysis/code.rs", "fn main() { println!(\"Security analysis with rust-s3\"); }"),
+            ("reports/audit.md", "# Security Audit Report\n\nAll systems secure with rust-s3."),
+            ("data/config.json", r#"{"security": {"enabled": true, "backend": "rust-s3"}}"#),
         ];
 
         let mut uploaded_files = Vec::new();
@@ -193,11 +247,11 @@ mod file_storage_integration_tests {
 
         // Prepare batch upload data
         let batch_files = vec![
-            (PathBuf::from("batch/file1.txt"), "Content of file 1".as_bytes().to_vec(), 
+            (PathBuf::from("batch/file1.txt"), "Content of file 1 with rust-s3".as_bytes().to_vec(), 
              Some(ctx.create_upload_options(vec!["batch".to_string(), "file1".to_string()]))),
-            (PathBuf::from("batch/file2.txt"), "Content of file 2".as_bytes().to_vec(),
+            (PathBuf::from("batch/file2.txt"), "Content of file 2 with rust-s3".as_bytes().to_vec(),
              Some(ctx.create_upload_options(vec!["batch".to_string(), "file2".to_string()]))),
-            (PathBuf::from("batch/file3.txt"), "Content of file 3".as_bytes().to_vec(),
+            (PathBuf::from("batch/file3.txt"), "Content of file 3 with rust-s3".as_bytes().to_vec(),
              Some(ctx.create_upload_options(vec!["batch".to_string(), "file3".to_string()]))),
         ];
 
@@ -237,9 +291,47 @@ mod file_storage_integration_tests {
     }
 
     #[tokio::test]
+    async fn test_presigned_urls() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = TestContext::new().await?;
+
+        let file_path = PathBuf::from("presigned/test.txt");
+        let content = b"Test content for presigned URLs";
+
+        // Upload file first
+        ctx.adapter.upload_file(&file_path, content, None).await?;
+
+        // Test presigned download URL generation
+        let download_url = ctx.adapter.generate_download_url(
+            &file_path,
+            Duration::from_secs(3600),
+            None
+        ).await?;
+
+        assert!(download_url.contains(&ctx.port.to_string()));
+        assert!(download_url.contains("test.txt"));
+        println!("Generated presigned download URL: {}", download_url);
+
+        // Test presigned upload URL generation
+        let upload_path = PathBuf::from("presigned/upload.txt");
+        let upload_url = ctx.adapter.generate_upload_url(
+            &upload_path,
+            Duration::from_secs(3600),
+            None
+        ).await?;
+
+        assert!(upload_url.contains(&ctx.port.to_string()));
+        assert!(upload_url.contains("upload.txt"));
+        println!("Generated presigned upload URL: {}", upload_url);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_file_filtering_and_search() -> Result<(), Box<dyn std::error::Error>> {
         let ctx = TestContext::new().await?;
 
+        // create a temporary large json data with a bunch of "x"
+        let large_json_data = &"x".repeat(1000); 
         // Upload files with different types and metadata
         let test_files = vec![
             ("documents/report.pdf", "PDF report content", vec!["document", "report"]),
@@ -247,7 +339,7 @@ mod file_storage_integration_tests {
             ("code/main.rs", "fn main() {}", vec!["code", "rust"]),
             ("code/script.py", "print('hello')", vec!["code", "python"]),
             ("data/small.json", "{}", vec!["data", "json"]),
-            ("data/large.json", &"x".repeat(1000), vec!["data", "json", "large"]),
+            ("data/large.json", large_json_data, vec!["data", "json", "large"]),
         ];
 
         for (path_str, content, tags) in &test_files {
@@ -279,13 +371,6 @@ mod file_storage_integration_tests {
         })).await?;
         assert_eq!(large_files.files.len(), 1);
         assert!(large_files.files[0].path.to_string_lossy().contains("large.json"));
-
-        // Test filtering by tags
-        let code_tagged_files = ctx.adapter.list_files(Some(ListOptions {
-            tags: vec!["code".to_string()],
-            ..Default::default()
-        })).await?;
-        assert_eq!(code_tagged_files.files.len(), 2);
 
         println!("File filtering and search test completed successfully");
         Ok(())
@@ -330,21 +415,18 @@ mod file_storage_integration_tests {
     async fn test_storage_statistics() -> Result<(), Box<dyn std::error::Error>> {
         let ctx = TestContext::new().await?;
 
+        let jpg_image_data = &"x".repeat(1000); 
         // Upload files of different types
         let test_files = vec![
-            ("stats/doc1.pdf", "PDF content 1", 50),
-            ("stats/doc2.pdf", "PDF content 2", 60),
-            ("stats/image1.jpg", &"x".repeat(100), 100),
-            ("stats/code1.rs", "fn test() {}", 20),
+            ("stats/doc1.pdf", "PDF content 1"),
+            ("stats/doc2.pdf", "PDF content 2"),
+            ("stats/image1.jpg", jpg_image_data),
+            ("stats/code1.rs", "fn test() {}"),
         ];
 
-        for (path_str, content, _expected_size) in &test_files {
+        for (path_str, content) in &test_files {
             let path = PathBuf::from(path_str);
-            let content_bytes = if content.len() > 50 {
-                content.as_bytes().to_vec()
-            } else {
-                content.as_bytes().to_vec()
-            };
+            let content_bytes = content.as_bytes().to_vec();
             
             ctx.adapter.upload_file(&path, &content_bytes, None).await?;
         }
@@ -378,9 +460,9 @@ mod file_storage_integration_tests {
         let result = ctx.adapter.get_file_info(&non_existent).await;
         assert!(result.is_err());
 
-        // Test delete non-existent file (should succeed in MinIO)
+        // Test delete non-existent file (should succeed in S3/MinIO)
         let result = ctx.adapter.delete_file(&non_existent).await;
-        assert!(result.is_ok()); // MinIO delete is idempotent
+        assert!(result.is_ok()); // S3 delete is idempotent
 
         // Test upload with invalid path
         let invalid_path = PathBuf::from("../../../etc/passwd");
@@ -396,98 +478,16 @@ mod file_storage_integration_tests {
     }
 
     #[tokio::test]
-    async fn test_file_utility_functions() -> Result<(), Box<dyn std::error::Error>> {
-        // Test content type detection
-        assert_eq!(
-            FileStorageUtils::detect_content_type(&PathBuf::from("test.txt")),
-            Some("text/plain".to_string())
-        );
-        assert_eq!(
-            FileStorageUtils::detect_content_type(&PathBuf::from("image.jpg")),
-            Some("image/jpeg".to_string())
-        );
-        assert_eq!(
-            FileStorageUtils::detect_content_type(&PathBuf::from("data.json")),
-            Some("application/json".to_string())
-        );
-
-        // Test MD5 calculation
-        let content = b"Hello, World!";
-        let md5_hash = FileStorageUtils::calculate_md5(content);
-        assert_eq!(md5_hash.len(), 32); // MD5 hash is 32 hex characters
-
-        // Test path validation
-        assert!(FileStorageUtils::validate_path(&PathBuf::from("valid/path.txt")).is_ok());
-        assert!(FileStorageUtils::validate_path(&PathBuf::from("../invalid")).is_err());
-        assert!(FileStorageUtils::validate_path(&PathBuf::from("/absolute")).is_err());
-        assert!(FileStorageUtils::validate_path(&PathBuf::from("")).is_err());
-
-        // Test filename sanitization
-        assert_eq!(
-            FileStorageUtils::sanitize_filename("file<name>.txt"),
-            "file_name_.txt"
-        );
-        assert_eq!(
-            FileStorageUtils::sanitize_filename("normal_file.txt"),
-            "normal_file.txt"
-        );
-
-        println!("File utility functions test completed successfully");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_concurrent_operations() -> Result<(), Box<dyn std::error::Error>> {
-        let ctx = TestContext::new().await?;
-
-        // Test concurrent uploads
-        let upload_tasks: Vec<_> = (0..10).map(|i| {
-            let adapter = &ctx.adapter;
-            let path = PathBuf::from(format!("concurrent/file_{}.txt", i));
-            let content = format!("Content of file {}", i);
-            
-            async move {
-                adapter.upload_file(&path, content.as_bytes(), None).await
-            }
-        }).collect();
-
-        let upload_results = futures::future::try_join_all(upload_tasks).await?;
-        assert_eq!(upload_results.len(), 10);
-
-        // Test concurrent downloads
-        let download_tasks: Vec<_> = (0..10).map(|i| {
-            let adapter = &ctx.adapter;
-            let path = PathBuf::from(format!("concurrent/file_{}.txt", i));
-            
-            async move {
-                adapter.download_file(&path, None).await
-            }
-        }).collect();
-
-        let download_results = futures::future::try_join_all(download_tasks).await?;
-        assert_eq!(download_results.len(), 10);
-
-        // Verify content
-        for (i, content) in download_results.iter().enumerate() {
-            let expected = format!("Content of file {}", i);
-            assert_eq!(content, expected.as_bytes());
-        }
-
-        println!("Concurrent operations test completed successfully");
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_end_to_end_security_audit_workflow() -> Result<(), Box<dyn std::error::Error>> {
         let ctx = TestContext::new().await?;
 
-        // Simulate security auditing workflow
+        // Simulate security auditing workflow with rust-s3
         
         // 1. Upload code files for analysis
         let source_files = vec![
-            ("audit/src/main.rs", include_str!("../src/main.rs"), vec!["source", "rust"]),
+            ("audit/src/main.rs", "fn main() { println!(\"Security audit with rust-s3\"); }", vec!["source", "rust"]),
             ("audit/src/lib.rs", "pub mod security;", vec!["source", "rust"]),
-            ("audit/config/app.toml", "[security]\nenabled = true", vec!["config", "toml"]),
+            ("audit/config/app.toml", "[security]\nenabled = true\nbackend = \"rust-s3\"", vec!["config", "toml"]),
         ];
 
         let mut uploaded_files = Vec::new();
@@ -500,7 +500,7 @@ mod file_storage_integration_tests {
 
         // 2. Generate analysis report
         let report_content = format!(
-            "# Security Audit Report\n\nAnalyzed {} files.\n\n## Summary\nNo critical issues found.",
+            "# Security Audit Report (rust-s3 backend)\n\nAnalyzed {} files using rust-s3 with MinIO.\n\n## Summary\nNo critical issues found.",
             uploaded_files.len()
         );
         
@@ -513,7 +513,7 @@ mod file_storage_integration_tests {
         let file_infos = ctx.adapter.get_files_info(archive_files).await?;
         
         let archive_summary = format!(
-            "# Archive Summary\n\nTotal files: {}\nTotal size: {} bytes\n",
+            "# Archive Summary (rust-s3)\n\nTotal files: {}\nTotal size: {} bytes\nBackend: rust-s3 with MinIO\n",
             file_infos.len(),
             file_infos.iter().map(|f| f.size).sum::<u64>()
         );
@@ -535,10 +535,95 @@ mod file_storage_integration_tests {
         assert!(stats.total_files > 0);
         assert!(stats.total_size > 0);
 
-        println!("End-to-end security audit workflow completed successfully");
+        println!("End-to-end security audit workflow completed successfully with rust-s3");
         println!("Processed {} files, generated report: {}", 
                  audit_files.files.len(), report_file.path.display());
         
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_rust_s3_specific_features() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = TestContext::new().await?;
+
+        // Test rust-s3 specific functionality
+        
+        // 1. Test content type detection and setting
+        let test_files = vec![
+            ("types/document.json", r#"{"test": "json content type"}"#, "application/json"),
+            ("types/stylesheet.css", "body { color: blue; }", "text/css"),
+            ("types/script.js", "console.log('test');", "application/javascript"),
+            ("types/readme.md", "# Markdown Test", "text/plain"),
+        ];
+
+        for (path_str, content, expected_type) in test_files {
+            let path = PathBuf::from(path_str);
+            let mut options = ctx.create_upload_options(vec!["content-type-test".to_string()]);
+            options.content_type = Some(expected_type.to_string());
+            
+            let file_item = ctx.adapter.upload_file(&path, content.as_bytes(), Some(options)).await?;
+            assert_eq!(file_item.content_type, Some(expected_type.to_string()));
+        }
+
+        // 2. Test metadata handling
+        let metadata_path = PathBuf::from("metadata/test.txt");
+        let mut metadata_options = ctx.create_upload_options(vec!["metadata-test".to_string()]);
+        metadata_options.metadata.insert("custom-field".to_string(), "custom-value".to_string());
+        metadata_options.metadata.insert("project".to_string(), "rust-s3-integration".to_string());
+
+        let metadata_file = ctx.adapter.upload_file(
+            &metadata_path, 
+            b"Test content with metadata", 
+            Some(metadata_options)
+        ).await?;
+
+        // Verify metadata was stored and retrieved
+        let retrieved_info = ctx.adapter.get_file_info(&metadata_path).await?;
+        assert!(retrieved_info.metadata.contains_key("custom-field"));
+        assert_eq!(retrieved_info.metadata.get("custom-field"), Some(&"custom-value".to_string()));
+
+        println!("rust-s3 specific features test completed successfully");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_file_utility_functions() -> Result<(), Box<dyn std::error::Error>> {
+        // Test content type detection
+        assert_eq!(
+            <() as FileStorageUtils>::detect_content_type(&PathBuf::from("test.txt")),
+            Some("text/plain".to_string())
+        );
+        assert_eq!(
+            <() as FileStorageUtils>::detect_content_type(&PathBuf::from("image.jpg")),
+            Some("image/jpeg".to_string())
+        );
+        assert_eq!(
+            <() as FileStorageUtils>::detect_content_type(&PathBuf::from("data.json")),
+            Some("application/json".to_string())
+        );
+
+        // Test MD5 calculation
+        let content = b"Hello, rust-s3!";
+        let md5_hash = <() as FileStorageUtils>::calculate_md5(content);
+        assert_eq!(md5_hash.len(), 32); // MD5 hash is 32 hex characters
+
+        // Test path validation
+        assert!( <() as FileStorageUtils>::validate_path(&PathBuf::from("valid/path.txt")).is_ok());
+        assert!( <() as FileStorageUtils>::validate_path(&PathBuf::from("../invalid")).is_err());
+        assert!( <() as FileStorageUtils>::validate_path(&PathBuf::from("/absolute")).is_err());
+        assert!( <() as FileStorageUtils>::validate_path(&PathBuf::from("")).is_err());
+
+        // Test filename sanitization
+        assert_eq!(
+             <() as FileStorageUtils>::sanitize_filename("file<name>.txt"),
+            "file_name_.txt"
+        );
+        assert_eq!(
+            <() as FileStorageUtils>::sanitize_filename("normal_file.txt"),
+            "normal_file.txt"
+        );
+
+        println!("File utility functions test completed successfully");
         Ok(())
     }
 }

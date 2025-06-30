@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use config::{Config, ConfigError, File, Environment};
 use std::fs;
 use std::time::Duration;
+use crate::infrastructure::adapters::file_storage::minio::MinioConfig;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SourceConfig {
@@ -255,10 +256,10 @@ impl Settings {
     }
 
     /// Convert FileStorageConfig to MinioConfig
-    pub fn to_minio_config(&self) -> crate::infrastructure::adapters::file_storage::minio::MinioConfig {
+    pub fn to_minio_config(&self) -> MinioConfig {
         let fs_config = self.get_file_storage_config();
         
-        crate::infrastructure::adapters::file_storage::minio::MinioConfig {
+        MinioConfig {
             endpoint: fs_config.minio_endpoint,
             access_key: fs_config.minio_access_key,
             secret_key: fs_config.minio_secret_key,
@@ -269,6 +270,7 @@ impl Settings {
             connection_timeout: Duration::from_secs(fs_config.connection_timeout.unwrap_or(30)),
             request_timeout: Duration::from_secs(fs_config.request_timeout.unwrap_or(300)),
             max_idle_conns: fs_config.max_idle_conns.unwrap_or(10),
+            max_retries: fs_config.max_idle_conns.unwrap_or(3),
         }
     }
 }

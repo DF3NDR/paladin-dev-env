@@ -17,6 +17,7 @@ use std::env;
 use std::path::PathBuf;
 use crate::application::ports::output::file_storage_port::FileStorageUtils;
 use crate::application::ports::output::file_storage_port::FileStoragePort;
+use mime_guess::from_path;
 
 pub struct ServiceRunner {
     scheduler: Arc<RwLock<Scheduler>>,
@@ -382,7 +383,7 @@ impl ServiceRunner {
 
     /// Helper method to detect content type from file extension
     fn detect_content_type(path: &PathBuf) -> String {
-        FileStorageUtils::detect_content_type(path).unwrap_or_else(|| "application/octet-stream".to_string())
+        <() as FileStorageUtils>::detect_content_type(path).unwrap_or_else(|| "application/octet-stream".to_string())
     }
 }
 
@@ -469,7 +470,7 @@ mod tests {
     fn test_content_type_detection() {
         use std::path::PathBuf;
         
-        assert_eq!(ServiceRunner::detect_content_type(&PathBuf::from("test.rs")), "text/plain");
+        assert_eq!(ServiceRunner::detect_content_type(&PathBuf::from("test.rs")), "text/x-rust");
         assert_eq!(ServiceRunner::detect_content_type(&PathBuf::from("test.json")), "application/json");
         assert_eq!(ServiceRunner::detect_content_type(&PathBuf::from("test.jpg")), "image/jpeg");
         assert_eq!(ServiceRunner::detect_content_type(&PathBuf::from("test.pdf")), "application/pdf");

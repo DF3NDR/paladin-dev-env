@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 use uuid::Uuid;
 use md5::compute;
+use mime_guess::from_path;
 
 /// Result type for file storage operations
 pub type FileStorageResult<T> = Result<T, FileStorageError>;
@@ -417,6 +418,10 @@ pub trait FullFileStoragePort:
 pub trait FileStorageUtils {
     /// Detect content type from file extension
     fn detect_content_type(path: &PathBuf) -> Option<String>;
+    
+    fn detect_content_type_with_fallback(path: &PathBuf, fallback: &str) -> String;
+    
+    fn validate_content_type_for_domain(path: &PathBuf, expected_types: &[&str]) -> FileStorageResult<String>;
 
     /// Generate MD5 hash of content
     fn calculate_md5(content: &[u8]) -> String;
@@ -430,35 +435,27 @@ pub trait FileStorageUtils {
 
 impl FileStorageUtils for () {
     fn detect_content_type(path: &PathBuf) -> Option<String> {
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| match ext.to_lowercase().as_str() {
-                "txt" => "text/plain",
-                "json" => "application/json",
-                "xml" => "application/xml",
-                "html" | "htm" => "text/html",
-                "css" => "text/css",
-                "js" => "application/javascript",
-                "pdf" => "application/pdf",
-                "doc" => "application/msword",
-                "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "xls" => "application/vnd.ms-excel",
-                "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "jpg" | "jpeg" => "image/jpeg",
-                "png" => "image/png",
-                "gif" => "image/gif",
-                "bmp" => "image/bmp",
-                "svg" => "image/svg+xml",
-                "mp3" => "audio/mpeg",
-                "wav" => "audio/wav",
-                "mp4" => "video/mp4",
-                "avi" => "video/x-msvideo",
-                "zip" => "application/zip",
-                "tar" => "application/x-tar",
-                "gz" => "application/gzip",
-                _ => "application/octet-stream",
-            })
-            .map(String::from)
+        Some(from_path(path).first_or_text_plain().to_string())
+    }
+    
+    fn detect_content_type_with_fallback(path: &PathBuf, fallback: &str) -> String {
+        from_path(path)
+            .first()
+            .map(|mime| mime.to_string())
+            .unwrap_or_else(|| fallback.to_string())
+    }
+    
+    fn validate_content_type_for_domain(path: &PathBuf, expected_types: &[&str]) -> FileStorageResult<String> {
+        let detected = Self::detect_content_type(path)
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        
+        if expected_types.is_empty() || expected_types.contains(&detected.as_str()) {
+            Ok(detected)
+        } else {
+            Err(FileStorageError::InvalidPath(
+                format!("File type '{}' not allowed. Expected one of: {:?}", detected, expected_types)
+            ))
+        }
     }
 
     fn calculate_md5(content: &[u8]) -> String {

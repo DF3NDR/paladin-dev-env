@@ -17,7 +17,6 @@ use std::env;
 use std::path::PathBuf;
 use crate::application::ports::output::file_storage_port::FileStorageUtils;
 use crate::application::ports::output::file_storage_port::FileStoragePort;
-use mime_guess::from_path;
 
 pub struct ServiceRunner {
     scheduler: Arc<RwLock<Scheduler>>,
@@ -114,7 +113,7 @@ impl ServiceRunner {
 
         // Update scheduler with adapters
         {
-            let mut scheduler = self.scheduler.write().await;
+            let _scheduler = self.scheduler.write().await;
             // Here you would inject the adapters into the scheduler
             // This depends on your scheduler implementation
             println!("Scheduler updated with queue and file storage adapters");
@@ -237,7 +236,7 @@ impl ServiceRunner {
         }
 
         // Shutdown message service
-        if let Some(message_service) = &self.message_service {
+        if let Some(_message_service) = &self.message_service {
             // Assuming MessageService has a shutdown method
             println!("Message service stopped");
         }

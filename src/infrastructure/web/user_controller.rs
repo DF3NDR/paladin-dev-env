@@ -414,6 +414,11 @@ mod tests {
         use crate::application::storage::user_store::UserRepositoryPort;
         use crate::application::ports::output::log_port::LogPort;
         use crate::application::ports::output::notification_port::NotificationPublisherPort;
+        use crate::application::ports::output::notification_port::{
+            NotificationResponse, NotificationStatus, NotificationRequest, 
+            NotificationPublisherService, NotificationError, NotificationRecipient,
+            NotificationChannel, NotificationStats
+        };
         use std::sync::Arc;
         use async_trait::async_trait;
 
@@ -445,16 +450,66 @@ mod tests {
         }
 
         #[async_trait]
-        impl NotificationPublisherPort for MockNotificationPublisher {
-            async fn publish(&self, _notification: crate::core::platform::manager::notification_publisher::NotificationRequest) -> Result<crate::core::platform::manager::notification_publisher::NotificationResponse, Box<dyn std::error::Error + Send + Sync>> {
-                use uuid::Uuid;
-                Ok(crate::core::platform::manager::notification_publisher::NotificationResponse {
+        impl NotificationPublisherService for MockNotificationPublisher {
+            async fn send_notification<'a>(&'a self, _request: NotificationRequest) -> Result<NotificationResponse, NotificationError> {
+                Ok(NotificationResponse {
                     id: Uuid::new_v4(),
-                    status: crate::core::platform::manager::notification_publisher::NotificationStatus::Delivered,
+                    status: NotificationStatus::Delivered,
                     delivered_at: Some(chrono::Utc::now()),
-                    failure_reason: None,
+                    sent_at: Some(chrono::Utc::now()),
+                    read_at: None,
+                    error_message: None,
                     retry_count: 0,
                     metadata: None,
+                    external_id: None,
+                })
+            }
+
+            async fn schedule_notification<'a>(&'a self, _request: NotificationRequest) -> Result<NotificationResponse, NotificationError> {
+                Ok(NotificationResponse {
+                    id: Uuid::new_v4(),
+                    status: NotificationStatus::Scheduled,
+                    delivered_at: None,
+                    sent_at: Some(chrono::Utc::now()),
+                    read_at: None,
+                    error_message: None,
+                    retry_count: 0,
+                    metadata: None,
+                    external_id: None,
+                })
+            }
+
+            async fn cancel_notification<'a>(&'a self, _notification_id: Uuid) -> Result<(), NotificationError> {
+                Ok(())
+            }
+
+            async fn get_notification_status<'a>(&'a self, _notification_id: Uuid) -> Result<NotificationResponse, NotificationError> {
+                Ok(NotificationResponse {
+                    id: _notification_id,
+                    status: NotificationStatus::Delivered,
+                    delivered_at: Some(chrono::Utc::now()),
+                    sent_at: Some(chrono::Utc::now()),
+                    read_at: None,
+                    error_message: None,
+                    retry_count: 0,
+                    metadata: None,
+                    external_id: None,
+                })
+            }
+
+            async fn list_notifications(&self, _recipient: &NotificationRecipient, _limit: Option<u32>) -> Result<Vec<NotificationResponse>, NotificationError> {
+                Ok(vec![])
+            }
+
+            async fn get_notification_stats(&self, _channel: Option<NotificationChannel>) -> Result<NotificationStats, NotificationError> {
+                Ok(NotificationStats {
+                    total_sent: 0,
+                    total_delivered: 0,
+                    total_failed: 0,
+                    total_pending: 0,
+                    delivery_rate: 0.0,
+                    average_delivery_time_ms: 0,
+                    channel_breakdown: Default::default(),
                 })
             }
         }

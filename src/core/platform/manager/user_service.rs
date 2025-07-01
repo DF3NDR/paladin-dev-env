@@ -6,11 +6,12 @@ and profile management. This service coordinates between domain entities and
 infrastructure adapters.
 */
 
-use crate::core::platform::container::user::{User, Email, UserData, UserProfile, UserError};
-use crate::application::ports::output::user_repository_port::UserRepositoryPort;
+use crate::core::platform::container::user::{User, Email, UserProfile, UserError};
+use crate::application::storage::user_store::UserRepositoryPort;
 use crate::application::ports::output::log_port::LogPort;
-use crate::application::ports::output::notification_publisher_port::NotificationPublisherPort;
-use crate::core::platform::container::log_entry::LogLevel;
+use crate::application::ports::output::notification_port::NotificationPublisherService;
+use crate::core::platform::container::log::{LogLevel, LogEntryBuilder, LogDestination};
+use crate::core::base::entity::message::Location;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::{rand_core::OsRng, SaltString};
 use std::sync::Arc;
@@ -84,7 +85,7 @@ pub trait UserServiceTrait: Send + Sync {
 pub struct UserService {
     user_repository: Arc<dyn UserRepositoryPort>,
     log_port: Arc<dyn LogPort>,
-    notification_publisher: Arc<dyn NotificationPublisherPort>,
+    notification_publisher: Arc<dyn NotificationPublisherService + Send + Sync>,
     argon2: Argon2<'static>,
 }
 
@@ -93,7 +94,7 @@ impl UserService {
     pub fn new(
         user_repository: Arc<dyn UserRepositoryPort>,
         log_port: Arc<dyn LogPort>,
-        notification_publisher: Arc<dyn NotificationPublisherPort>,
+        notification_publisher: Arc<dyn NotificationPublisherService + Send + Sync>,
     ) -> Self {
         Self {
             user_repository,
@@ -104,7 +105,7 @@ impl UserService {
     }
 
     /// Hash password using Argon2
-    fn hash_password(&self, password: &str) -> Result<String, UserError> {
+    pub fn hash_password(&self, password: &str) -> Result<String, UserError> {
         if password.len() < 8 {
             return Err(UserError::InvalidPassword("Password must be at least 8 characters".to_string()));
         }
@@ -121,7 +122,7 @@ impl UserService {
     }
 
     /// Verify password against hash
-    fn verify_password(&self, password: &str, hash: &str) -> Result<bool, UserError> {
+    pub fn verify_password(&self, password: &str, hash: &str) -> Result<bool, UserError> {
         let parsed_hash = PasswordHash::new(hash)
             .map_err(|e| UserError::HashError(e.to_string()))?;
         
@@ -150,7 +151,7 @@ impl UserService {
 
     /// Send welcome notification
     async fn send_welcome_notification(&self, user: &User) -> Result<(), UserError> {
-        use crate::core::platform::manager::notification_publisher::{
+        use crate::application::ports::output::notification_port::{
             NotificationRequest, NotificationRecipient, NotificationContent, 
             NotificationChannel, NotificationPriority
         };
@@ -174,7 +175,7 @@ impl UserService {
             metadata: None,
         };
 
-        self.notification_publisher.publish(notification).await
+        self.notification_publisher.send_notification(notification)
             .map_err(|e| UserError::RepositoryError(format!("Failed to send welcome notification: {}", e)))?;
 
         Ok(())
@@ -187,7 +188,16 @@ impl UserService {
             None => message,
         };
         
-        if let Err(e) = self.log_port.log(level, enhanced_message).await {
+        // Create a proper log entry using LogEntryBuilder
+        let log_entry = LogEntryBuilder::new_entry(
+            Location::service("user-service"),
+            LogDestination::System,
+            level,
+            enhanced_message,
+        );
+        
+        // Use write_entry instead of log
+        if let Err(e) = self.log_port.write_entry(log_entry).await {
             eprintln!("Failed to log user action: {}", e);
         }
     }

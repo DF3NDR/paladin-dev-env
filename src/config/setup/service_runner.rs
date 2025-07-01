@@ -17,6 +17,7 @@ use std::env;
 use std::path::PathBuf;
 use crate::application::ports::output::file_storage_port::FileStorageUtils;
 use crate::application::ports::output::file_storage_port::FileStoragePort;
+use crate::application::ports::output::notification_port::NotificationPublisherService;
 use crate::core::platform::manager::user_service::UserService;
 use crate::infrastructure::repositories::sqlite_user_repository::SqliteUserRepository;
 use crate::infrastructure::web::user_controller::create_user_routes;
@@ -26,6 +27,8 @@ pub struct ServiceRunner {
     scheduler_handle: Option<JoinHandle<()>>,
     message_service: Option<Arc<MessageService>>,
     event_service: Option<Arc<EventService>>,
+    notification_service: Option<Arc<NotificationService>>,
+    user_service: Option<Arc<UserService>>,
     database: Option<SqliteStore>,
     queue_adapter: Option<Arc<RedisQueueAdapter>>,
     file_storage_adapter: Option<Arc<MinioAdapter>>,
@@ -40,6 +43,7 @@ impl ServiceRunner {
             scheduler_handle: None,
             message_service: None,
             event_service: None,
+            user_service: None,
             database: None,
             queue_adapter: None,
             file_storage_adapter: None,

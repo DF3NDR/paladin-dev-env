@@ -148,7 +148,6 @@ impl SqliteUserRepository {
             ("version", Box::new(user.version as i64)),
             ("created_at", Box::new(user.created.to_rfc3339())),
             ("modified_at", Box::new(user.modified.to_rfc3339())),
-            ("title", Box::new(user.title.clone())),
             ("username", Box::new(user.node.username.clone())),
             ("email", Box::new(user.node.email.value().to_string())),
             ("password_hash", Box::new(user.node.password_hash.clone())),

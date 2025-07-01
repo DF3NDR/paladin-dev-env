@@ -1,3 +1,4 @@
+// src/core/platform/container/user.rs
 /*
 User Container
 
@@ -12,6 +13,7 @@ use crate::core::base::entity::node::Node;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use uuid::Uuid;
+use chrono::Utc;
 
 /// Email value object that encapsulates email validation logic
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -125,8 +127,9 @@ impl User {
             is_verified: false,
             profile: profile.unwrap_or_default(),
         };
-        
-        Node::new(user_data, Some(format!("User: {}", user_data.username)))
+
+        let name = Some(format!("User: {}", user_data.username.clone()));
+        Node::new(user_data, name)
     }
 
     /// Gets the username
@@ -172,7 +175,7 @@ impl User {
         }
         
         self.node.username = new_username;
-        self.touch(); // Update modified timestamp
+        self.modified = Utc::now(); // Update modified timestamp directly
         Ok(())
     }
 
@@ -180,38 +183,38 @@ impl User {
     pub fn update_email(&mut self, new_email: Email) -> Result<(), UserError> {
         self.node.email = new_email;
         self.node.is_verified = false; // Reset verification on email change
-        self.touch();
+        self.modified = Utc::now(); // Update modified timestamp directly
         Ok(())
     }
 
     /// Updates password hash
     pub fn update_password_hash(&mut self, new_password_hash: String) {
         self.node.password_hash = new_password_hash;
-        self.touch();
+        self.modified = Utc::now(); // Update modified timestamp directly
     }
 
     /// Activates the user
     pub fn activate(&mut self) {
         self.node.is_active = true;
-        self.touch();
+        self.modified = Utc::now(); // Update modified timestamp directly
     }
 
     /// Deactivates the user
     pub fn deactivate(&mut self) {
         self.node.is_active = false;
-        self.touch();
+        self.modified = Utc::now(); // Update modified timestamp directly
     }
 
     /// Verifies the user
     pub fn verify(&mut self) {
         self.node.is_verified = true;
-        self.touch();
+        self.modified = Utc::now(); // Update modified timestamp directly
     }
 
     /// Updates the user profile
     pub fn update_profile(&mut self, profile: UserProfile) {
         self.node.profile = profile;
-        self.touch();
+        self.modified = Utc::now(); // Update modified timestamp directly
     }
 }
 
@@ -242,4 +245,208 @@ pub enum UserError {
     RepositoryError(String),
     #[error("Hash error: {0}")]
     HashError(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_email_validation() {
+        // Valid emails
+        assert!(Email::new("test@example.com".to_string()).is_ok());
+        assert!(Email::new("user.name+tag@domain.co.uk".to_string()).is_ok());
+        assert!(Email::new("123@test.org".to_string()).is_ok());
+
+        // Invalid emails
+        assert!(Email::new("invalid-email".to_string()).is_err());
+        assert!(Email::new("@domain.com".to_string()).is_err());
+        assert!(Email::new("user@".to_string()).is_err());
+        assert!(Email::new("".to_string()).is_err());
+    }
+
+    #[test]
+    fn test_email_methods() {
+        let email = Email::new("Test.User@Example.COM".to_string()).unwrap();
+        
+        // Email should be normalized to lowercase
+        assert_eq!(email.value(), "test.user@example.com");
+        assert_eq!(email.domain(), Some("example.com"));
+        assert_eq!(email.local_part(), Some("test.user"));
+        assert_eq!(email.to_string(), "test.user@example.com");
+    }
+
+    #[test]
+    fn test_user_creation() {
+        let email = Email::new("user@example.com".to_string()).unwrap();
+        let user = User::new_user(
+            "testuser".to_string(),
+            email.clone(),
+            "password_hash".to_string(),
+            None,
+        );
+
+        assert_eq!(user.username(), "testuser");
+        assert_eq!(user.email(), &email);
+        assert_eq!(user.password_hash(), "password_hash");
+        assert!(user.is_active());
+        assert!(!user.is_verified());
+    }
+
+    #[test]
+    fn test_user_updates() {
+        let email = Email::new("user@example.com".to_string()).unwrap();
+        let mut user = User::new_user(
+            "testuser".to_string(),
+            email,
+            "password_hash".to_string(),
+            None,
+        );
+
+        let initial_modified = user.modified;
+
+        // Small delay to ensure timestamp difference
+        std::thread::sleep(std::time::Duration::from_millis(1));
+
+        // Test username update
+        assert!(user.update_username("newusername".to_string()).is_ok());
+        assert_eq!(user.username(), "newusername");
+        assert!(user.modified > initial_modified);
+
+        // Test invalid username
+        assert!(user.update_username("a".to_string()).is_err());
+        assert!(user.update_username("".to_string()).is_err());
+
+        // Test email update
+        let new_email = Email::new("new@example.com".to_string()).unwrap();
+        let before_email_update = user.modified;
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        
+        assert!(user.update_email(new_email.clone()).is_ok());
+        assert_eq!(user.email(), &new_email);
+        assert!(!user.is_verified()); // Should reset verification
+        assert!(user.modified > before_email_update);
+
+        // Test activation/deactivation
+        let before_deactivate = user.modified;
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        
+        user.deactivate();
+        assert!(!user.is_active());
+        assert!(user.modified > before_deactivate);
+        
+        let before_activate = user.modified;
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        
+        user.activate();
+        assert!(user.is_active());
+        assert!(user.modified > before_activate);
+
+        // Test verification
+        let before_verify = user.modified;
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        
+        user.verify();
+        assert!(user.is_verified());
+        assert!(user.modified > before_verify);
+    }
+
+    #[test]
+    fn test_user_profile_update() {
+        let email = Email::new("user@example.com".to_string()).unwrap();
+        let mut user = User::new_user(
+            "testuser".to_string(),
+            email,
+            "password_hash".to_string(),
+            None,
+        );
+
+        let new_profile = UserProfile {
+            first_name: Some("John".to_string()),
+            last_name: Some("Doe".to_string()),
+            bio: Some("Software developer".to_string()),
+            avatar_url: Some("https://example.com/avatar.jpg".to_string()),
+            timezone: Some("America/New_York".to_string()),
+            locale: Some("en-US".to_string()),
+        };
+
+        let before_update = user.modified;
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        
+        user.update_profile(new_profile.clone());
+        assert_eq!(user.profile(), &new_profile);
+        assert!(user.modified > before_update);
+    }
+
+    #[test]
+    fn test_username_validation() {
+        let email = Email::new("user@example.com".to_string()).unwrap();
+        let mut user = User::new_user(
+            "testuser".to_string(),
+            email,
+            "password_hash".to_string(),
+            None,
+        );
+
+        // Valid usernames
+        assert!(user.update_username("validuser".to_string()).is_ok());
+        assert!(user.update_username("user_123".to_string()).is_ok());
+        assert!(user.update_username("test-user".to_string()).is_ok());
+
+        // Invalid usernames
+        assert!(user.update_username("".to_string()).is_err());
+        assert!(user.update_username("ab".to_string()).is_err());
+        
+        // Username too long
+        let long_username = "a".repeat(51);
+        assert!(user.update_username(long_username).is_err());
+    }
+
+    #[test]
+    fn test_user_versioning() {
+        let email = Email::new("user@example.com".to_string()).unwrap();
+        let user = User::new_user(
+            "testuser".to_string(),
+            email,
+            "password_hash".to_string(),
+            None,
+        );
+
+        // User should have versioning enabled by default
+        assert!(user.is_versioning_enabled());
+        
+        // UUID should be generated
+        assert!(!user.uuid.is_nil());
+        
+        // Timestamps should be set
+        assert_eq!(user.created, user.modified);
+    }
+
+    #[test]
+    fn test_user_serialization() {
+        let email = Email::new("user@example.com".to_string()).unwrap();
+        let user = User::new_user(
+            "testuser".to_string(),
+            email,
+            "password_hash".to_string(),
+            Some(UserProfile {
+                first_name: Some("Test".to_string()),
+                last_name: Some("User".to_string()),
+                bio: None,
+                avatar_url: None,
+                timezone: Some("UTC".to_string()),
+                locale: Some("en-US".to_string()),
+            }),
+        );
+
+        // Test serialization
+        let serialized = serde_json::to_string(&user).unwrap();
+        assert!(!serialized.is_empty());
+
+        // Test deserialization
+        let deserialized: User = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(user.uuid, deserialized.uuid);
+        assert_eq!(user.node.username, deserialized.node.username);
+        assert_eq!(user.node.email.value(), deserialized.node.email.value());
+    }
 }

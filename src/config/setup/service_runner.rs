@@ -17,8 +17,10 @@ use std::env;
 use std::path::PathBuf;
 use crate::application::ports::output::file_storage_port::FileStorageUtils;
 use crate::application::ports::output::file_storage_port::FileStoragePort;
-use crate::core::platform::manager::notification_service::NotificationService;
-
+use crate::core::platform::manager::user_service::UserService;
+use crate::infrastructure::repositories::sqlite_user_repository::SqliteUserRepository;
+use crate::infrastructure::web::user_controller::create_user_routes;
+use crate::config::user_config::UserServiceFactory;
 pub struct ServiceRunner {
     scheduler: Arc<RwLock<Scheduler>>,
     scheduler_handle: Option<JoinHandle<()>>,
@@ -396,6 +398,33 @@ impl ServiceRunner {
     /// Helper method to detect content type from file extension
     fn detect_content_type(path: &PathBuf) -> String {
         <() as FileStorageUtils>::detect_content_type(path).unwrap_or_else(|| "application/octet-stream".to_string())
+    }
+    
+    async fn init_user_service(
+        &mut self,
+        config: Arc<Settings>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let log_adapter = self.log_adapter.as_ref()
+            .ok_or("LogAdapter must be initialized before UserService")?;
+
+        let notification_publisher = self.notification_publisher.as_ref()
+            .ok_or("NotificationPublisher must be initialized before UserService")?;
+
+        self.user_service = Some(
+            UserServiceFactory::create_user_service(
+                &config,
+                log_adapter.clone(),
+                notification_publisher.clone(),
+            ).await?
+        );
+
+        println!("User service initialized successfully");
+        Ok(())
+    }
+
+    /// Get user service
+    pub fn get_user_service(&self) -> Option<Arc<UserService>> {
+        self.user_service.clone()
     }
 
     async fn init_notification_service(

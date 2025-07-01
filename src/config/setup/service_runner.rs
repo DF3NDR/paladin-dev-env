@@ -17,6 +17,12 @@ use std::env;
 use std::path::PathBuf;
 use crate::application::ports::output::file_storage_port::FileStorageUtils;
 use crate::application::ports::output::file_storage_port::FileStoragePort;
+use crate::core::platform::manager::notification_service::NotificationService;
+use crate::infrastructure::adapters::notifications::{
+    EmailNotificationAdapter, EmailAdapterConfig,
+    SystemNotificationAdapter, SystemAdapterConfig,
+};
+use crate::application::ports::output::notification_port::NotificationDeliveryPort;
 
 pub struct ServiceRunner {
     scheduler: Arc<RwLock<Scheduler>>,
@@ -27,6 +33,7 @@ pub struct ServiceRunner {
     queue_adapter: Option<Arc<RedisQueueAdapter>>,
     file_storage_adapter: Option<Arc<MinioAdapter>>,
     log_adapter: Option<Arc<SystemLogAdapter>>,
+    notification_service: Option<Arc<NotificationService>>,
 }
 
 impl ServiceRunner {
@@ -40,6 +47,7 @@ impl ServiceRunner {
             queue_adapter: None,
             file_storage_adapter: None,
             log_adapter: None,
+            notification_service: None,
         }
     }
 
@@ -109,7 +117,12 @@ impl ServiceRunner {
             .map_err(|e| format!("Failed to create event service: {}", e))?);
         
         println!("Event service initialized successfully");
-        self.event_service = Some(event_service);
+        self.event_service = Some(event_service.clone());
+
+        // Initialize Notification Service
+        let notification_service = Self::init_notification_service(&config, message_service.clone()).await?;
+        self.notification_service = Some(notification_service);
+        println!("Notification service initialized successfully");
 
         // Update scheduler with adapters
         {
@@ -280,6 +293,11 @@ impl ServiceRunner {
         self.log_adapter.clone()
     }
 
+    /// Get notification service reference for use by other services
+    pub fn get_notification_service(&self) -> Option<Arc<NotificationService>> {
+        self.notification_service.clone()
+    }
+
     /// Get service health status
     pub async fn get_service_health(&self) -> ServiceHealthStatus {
         let mut health = ServiceHealthStatus {
@@ -383,6 +401,40 @@ impl ServiceRunner {
     /// Helper method to detect content type from file extension
     fn detect_content_type(path: &PathBuf) -> String {
         <() as FileStorageUtils>::detect_content_type(path).unwrap_or_else(|| "application/octet-stream".to_string())
+    }
+
+    async fn init_notification_service(
+        config: &Settings,
+        message_service: Arc<MessageService>,
+    ) -> Result<Arc<NotificationService>, Box<dyn std::error::Error>> {
+        let notification_config = config.get_notification_config();
+        
+        // Create service config from notification config
+        let service_config = crate::core::platform::manager::notification_service::NotificationServiceConfig {
+            default_max_retries: notification_config.max_retries,
+            default_expiry_seconds: 86400, // 24 hours
+            enable_persistence: true,
+            batch_size: 100,
+            processing_interval_ms: 1000,
+            template_cache_size: 1000,
+            max_attachment_size: 25 * 1024 * 1024, // 25MB
+        };
+
+        // Create notification service
+        let notification_service = NotificationService::new(service_config, message_service);
+
+        if !notification_config.enabled {
+            println!("Notification service is disabled in configuration");
+            return Ok(Arc::new(notification_service));
+        }
+
+        // TODO: Create adapter wrappers that implement NotificationChannelHandler
+        // The current adapters implement NotificationDeliveryPort but we need NotificationChannelHandler
+        // This will be implemented in a future phase when we create adapter bridges
+
+        println!("Notification service configured (adapter registration pending)");
+        
+        Ok(Arc::new(notification_service))
     }
 }
 

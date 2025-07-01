@@ -3,6 +3,7 @@ use config::{Config, ConfigError, File, Environment};
 use std::fs;
 use std::time::Duration;
 use crate::infrastructure::adapters::file_storage::minio::MinioConfig;
+use crate::infrastructure::adapters::notifications::{EmailAdapterConfig, SystemAdapterConfig};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SourceConfig {
@@ -99,6 +100,37 @@ impl Default for FileStorageConfig {
     }
 }
 
+/// Configuration for notification system
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationConfig {
+    /// Enable/disable notification system
+    pub enabled: bool,
+    /// Email notification configuration
+    pub email: Option<EmailAdapterConfig>,
+    /// System notification configuration  
+    pub system: Option<SystemAdapterConfig>,
+    /// Global notification settings
+    pub max_retries: u32,
+    pub retry_delay_seconds: u64,
+    pub enable_delivery_tracking: bool,
+    /// Rate limiting settings
+    pub global_rate_limit_per_minute: Option<u32>,
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            email: Some(EmailAdapterConfig::default()),
+            system: Some(SystemAdapterConfig::default()),
+            max_retries: 3,
+            retry_delay_seconds: 60,
+            enable_delivery_tracking: true,
+            global_rate_limit_per_minute: Some(100),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub llm_type: String,
@@ -110,6 +142,7 @@ pub struct Settings {
     pub message_service: Option<MessageServiceSettings>,
     pub queue: Option<QueueConfig>,
     pub file_storage: Option<FileStorageConfig>,
+    pub notifications: Option<NotificationConfig>,
 }
 
 impl Settings {
@@ -255,6 +288,49 @@ impl Settings {
         config
     }
 
+    /// Get notification configuration with environment variable overrides
+    pub fn get_notification_config(&self) -> NotificationConfig {
+        let mut config = self.notifications.clone().unwrap_or_default();
+
+        // Override with environment variables if present
+        if let Ok(enabled_str) = std::env::var("APP_NOTIFICATIONS_ENABLED") {
+            if let Ok(enabled) = enabled_str.parse::<bool>() {
+                config.enabled = enabled;
+            }
+        }
+
+        // Email configuration overrides
+        if let Some(ref mut email_config) = config.email {
+            if let Ok(smtp_host) = std::env::var("APP_EMAIL_SMTP_HOST") {
+                email_config.smtp_host = smtp_host;
+            }
+            if let Ok(smtp_port_str) = std::env::var("APP_EMAIL_SMTP_PORT") {
+                if let Ok(smtp_port) = smtp_port_str.parse::<u16>() {
+                    email_config.smtp_port = smtp_port;
+                }
+            }
+            if let Ok(username) = std::env::var("APP_EMAIL_USERNAME") {
+                email_config.username = username;
+            }
+            if let Ok(password) = std::env::var("APP_EMAIL_PASSWORD") {
+                email_config.password = password;
+            }
+            if let Ok(from_address) = std::env::var("APP_EMAIL_FROM_ADDRESS") {
+                email_config.from_address = from_address;
+            }
+            if let Ok(from_name) = std::env::var("APP_EMAIL_FROM_NAME") {
+                email_config.from_name = Some(from_name);
+            }
+            if let Ok(use_tls_str) = std::env::var("APP_EMAIL_USE_TLS") {
+                if let Ok(use_tls) = use_tls_str.parse::<bool>() {
+                    email_config.use_tls = use_tls;
+                }
+            }
+        }
+
+        config
+    }
+
     /// Convert FileStorageConfig to MinioConfig
     pub fn to_minio_config(&self) -> MinioConfig {
         let fs_config = self.get_file_storage_config();
@@ -297,6 +373,7 @@ impl Default for Settings {
             }),
             queue: Some(QueueConfig::default()),
             file_storage: Some(FileStorageConfig::default()),
+            notifications: Some(NotificationConfig::default()),
         }
     }
 }

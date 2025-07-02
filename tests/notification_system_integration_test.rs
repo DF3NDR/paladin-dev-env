@@ -104,7 +104,7 @@ async fn test_system_notification_end_to_end() {
     );
 
     let notification = Notification::new(
-        NotificationRecipient::UserId("admin123".to_string()),
+        NotificationRecipient::SystemComponent("admin123".to_string()),
         content,
         NotificationChannel::System,
         NotificationPriority::High,
@@ -251,7 +251,7 @@ async fn test_multi_channel_notification_flow() {
     ).unwrap();
 
     let system_notification = Notification::new(
-        NotificationRecipient::UserId("user123".to_string()),
+        NotificationRecipient::SystemComponent("user123".to_string()),
         NotificationContent::new(
             "Multi-channel Test".to_string(),
             "This is a system notification".to_string(),

@@ -201,7 +201,7 @@ mod tests {
         );
         
         Notification::new(
-            NotificationRecipient::UserId("user123".to_string()),
+            NotificationRecipient::SystemComponent("user123".to_string()),
             content,
             NotificationChannel::System,
             NotificationPriority::High,

@@ -5,10 +5,10 @@ Command-line interface for user operations, useful for administrative tasks
 and testing.
 */
 
-use crate::application::services::user_service::{
-    UserService, UserRegistrationRequest, UserLoginRequest, UserProfileUpdateRequest
+use crate::core::platform::manager::user_service::{
+    UserService, UserServiceTrait, UserRegistrationRequest, UserLoginRequest, UserProfileUpdateRequest
 };
-use crate::core::platform::container::user::{Email, UserProfile};
+use crate::core::platform::container::user::{User, UserProfile};
 use clap::{Args, Subcommand};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -324,7 +324,7 @@ impl UserCommandHandler {
         Ok(())
     }
 
-    fn print_user_list(&self, users: &[crate::core::platform::container::user::User], limit: u32) {
+    fn print_user_list(&self, users: &[User], limit: u32) {
         let displayed_users = users.iter().take(limit as usize);
         
         for user in displayed_users {
@@ -366,17 +366,3 @@ impl UserCommandHandler {
     }
 }
 
-// Add methods to UserService to support CLI commands
-impl UserService {
-    pub async fn find_by_active_status(&self, is_active: bool) -> Result<Vec<crate::core::platform::container::user::User>, crate::core::platform::container::user::UserError> {
-        self.user_repository.find_by_active_status(is_active).await
-    }
-
-    pub async fn find_by_verification_status(&self, is_verified: bool) -> Result<Vec<crate::core::platform::container::user::User>, crate::core::platform::container::user::UserError> {
-        self.user_repository.find_by_verification_status(is_verified).await
-    }
-
-    pub async fn count_users(&self) -> Result<u64, crate::core::platform::container::user::UserError> {
-        self.user_repository.count_users().await
-    }
-}

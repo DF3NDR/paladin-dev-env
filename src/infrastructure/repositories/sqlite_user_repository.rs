@@ -20,8 +20,9 @@ pub struct SqliteUserRepository {
 
 impl SqliteUserRepository {
     /// Create a new SQLite user repository
-    pub async fn new(settings: &Settings) -> Result<Self, UserError> {
-        let database_url = &settings.server.database_url;
+    pub async fn new(_settings: &Settings) -> Result<Self, UserError> {
+        // For now, use the same database as the main store
+        let database_url = "sqlite:database.db";
         
         let pool = SqlitePoolOptions::new()
             .max_connections(10)
@@ -128,7 +129,7 @@ impl SqliteUserRepository {
             profile,
         };
 
-        let mut user = User {
+        let user = User {
             uuid,
             version: row.try_get("version")
                 .map_err(|e| UserError::RepositoryError(format!("Failed to get version: {}", e)))?,
@@ -139,27 +140,6 @@ impl SqliteUserRepository {
         };
 
         Ok(user)
-    }
-
-    /// Convert User to database parameters
-    fn user_to_params(&self, user: &User) -> Vec<(&str, Box<dyn sqlx::Encode<'_, sqlx::Sqlite> + Send>)> {
-        vec![
-            ("uuid", Box::new(user.uuid.to_string())),
-            ("version", Box::new(user.version as i64)),
-            ("created_at", Box::new(user.created.to_rfc3339())),
-            ("modified_at", Box::new(user.modified.to_rfc3339())),
-            ("username", Box::new(user.node.username.clone())),
-            ("email", Box::new(user.node.email.value().to_string())),
-            ("password_hash", Box::new(user.node.password_hash.clone())),
-            ("is_active", Box::new(user.node.is_active)),
-            ("is_verified", Box::new(user.node.is_verified)),
-            ("first_name", Box::new(user.node.profile.first_name.clone())),
-            ("last_name", Box::new(user.node.profile.last_name.clone())),
-            ("bio", Box::new(user.node.profile.bio.clone())),
-            ("avatar_url", Box::new(user.node.profile.avatar_url.clone())),
-            ("timezone", Box::new(user.node.profile.timezone.clone())),
-            ("locale", Box::new(user.node.profile.locale.clone())),
-        ]
     }
 }
 
@@ -219,7 +199,7 @@ impl UserRepositoryPort for SqliteUserRepository {
         .bind(user.version as i64)
         .bind(user.created.to_rfc3339())
         .bind(user.modified.to_rfc3339())
-        .bind(&user.title)
+        .bind(&user.name)
         .bind(&user.node.username)
         .bind(user.node.email.value())
         .bind(&user.node.password_hash)
@@ -252,7 +232,7 @@ impl UserRepositoryPort for SqliteUserRepository {
         )
         .bind(user.version as i64)
         .bind(user.modified.to_rfc3339())
-        .bind(&user.title)
+        .bind(&user.name)
         .bind(&user.node.username)
         .bind(user.node.email.value())
         .bind(&user.node.password_hash)

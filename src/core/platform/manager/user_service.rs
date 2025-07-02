@@ -9,7 +9,7 @@ infrastructure adapters.
 use crate::core::platform::container::user::{User, Email, UserProfile, UserError};
 use crate::application::storage::user_store::UserRepositoryPort;
 use crate::application::ports::output::log_port::LogPort;
-use crate::application::ports::output::notification_port::NotificationPublisherService;
+use crate::core::platform::manager::notification_service::NotificationService;
 use crate::core::platform::container::log::{LogLevel, LogEntryBuilder, LogDestination};
 use crate::core::base::entity::message::Location;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
@@ -79,13 +79,24 @@ pub trait UserServiceTrait: Send + Sync {
     
     /// Verify user email
     async fn verify_user(&self, user_id: Uuid) -> Result<(), UserError>;
+    
+    /// CLI support methods
+    
+    /// Find users by active status
+    async fn find_by_active_status(&self, is_active: bool) -> Result<Vec<User>, UserError>;
+    
+    /// Find users by verification status  
+    async fn find_by_verification_status(&self, is_verified: bool) -> Result<Vec<User>, UserError>;
+    
+    /// Count total users
+    async fn count_users(&self) -> Result<u64, UserError>;
 }
 
 /// Concrete implementation of UserService
 pub struct UserService {
     user_repository: Arc<dyn UserRepositoryPort>,
     log_port: Arc<dyn LogPort>,
-    notification_publisher: Arc<dyn NotificationPublisherService + Send + Sync>,
+    notification_service: Arc<NotificationService>,
     argon2: Argon2<'static>,
 }
 
@@ -94,12 +105,12 @@ impl UserService {
     pub fn new(
         user_repository: Arc<dyn UserRepositoryPort>,
         log_port: Arc<dyn LogPort>,
-        notification_publisher: Arc<dyn NotificationPublisherService + Send + Sync>,
+        notification_service: Arc<NotificationService>,
     ) -> Self {
         Self {
             user_repository,
             log_port,
-            notification_publisher,
+            notification_service,
             argon2: Argon2::default(),
         }
     }
@@ -151,31 +162,36 @@ impl UserService {
 
     /// Send welcome notification
     async fn send_welcome_notification(&self, user: &User) -> Result<(), UserError> {
-        use crate::application::ports::output::notification_port::{
-            NotificationRequest, NotificationRecipient, NotificationContent, 
+        use crate::core::platform::container::notification::{
+            NotificationRecipient, NotificationContent, 
             NotificationChannel, NotificationPriority
         };
 
-        let notification = NotificationRequest {
-            id: None,
-            recipient: NotificationRecipient::Email(user.email().value().to_string()),
-            content: NotificationContent {
-                title: "Welcome to in4me!".to_string(),
-                body: format!("Hello {}, welcome to our platform!", user.username()),
-                category: "welcome".to_string(),
-                action_url: None,
-                attachments: None,
-                template_id: Some("user_welcome".to_string()),
-                template_variables: None,
-            },
-            channel: NotificationChannel::Email,
-            priority: NotificationPriority::Normal,
-            scheduled_time: None,
-            expiry_time: None,
-            metadata: None,
+        let recipient = NotificationRecipient::Email(user.email().value().to_string());
+        let content = NotificationContent {
+            title: "Welcome to in4me!".to_string(),
+            body: format!("Hello {}, welcome to our platform!", user.username()),
+            category: "welcome".to_string(),
+            action_url: None,
+            attachments: Vec::new(),
+            template_id: Some("user_welcome".to_string()),
+            template_variables: std::collections::HashMap::new(),
+            metadata: std::collections::HashMap::new(),
         };
 
-        self.notification_publisher.send_notification(notification)
+        let notification = self.notification_service
+            .create_notification(
+                recipient,
+                content,
+                NotificationChannel::Email,
+                NotificationPriority::Normal,
+            )
+            .await
+            .map_err(|e| UserError::RepositoryError(format!("Failed to create welcome notification: {}", e)))?;
+
+        self.notification_service
+            .send_notification(notification.id)
+            .await
             .map_err(|e| UserError::RepositoryError(format!("Failed to send welcome notification: {}", e)))?;
 
         Ok(())
@@ -385,5 +401,22 @@ impl UserServiceTrait for UserService {
         ).await;
 
         Ok(())
+    }
+
+    /// CLI support methods
+    
+    /// Find users by active status
+    async fn find_by_active_status(&self, is_active: bool) -> Result<Vec<User>, UserError> {
+        self.user_repository.find_by_active_status(is_active).await
+    }
+
+    /// Find users by verification status  
+    async fn find_by_verification_status(&self, is_verified: bool) -> Result<Vec<User>, UserError> {
+        self.user_repository.find_by_verification_status(is_verified).await
+    }
+
+    /// Count total users
+    async fn count_users(&self) -> Result<u64, UserError> {
+        self.user_repository.count_users().await
     }
 }

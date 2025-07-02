@@ -17,11 +17,9 @@ use std::env;
 use std::path::PathBuf;
 use crate::application::ports::output::file_storage_port::FileStorageUtils;
 use crate::application::ports::output::file_storage_port::FileStoragePort;
-use crate::application::ports::output::notification_port::NotificationPublisherService;
 use crate::core::platform::manager::user_service::UserService;
-use crate::infrastructure::repositories::sqlite_user_repository::SqliteUserRepository;
-use crate::infrastructure::web::user_controller::create_user_routes;
 use crate::config::user_config::UserServiceFactory;
+use crate::core::platform::manager::notification_service::NotificationService;
 pub struct ServiceRunner {
     scheduler: Arc<RwLock<Scheduler>>,
     scheduler_handle: Option<JoinHandle<()>>,
@@ -33,7 +31,6 @@ pub struct ServiceRunner {
     queue_adapter: Option<Arc<RedisQueueAdapter>>,
     file_storage_adapter: Option<Arc<MinioAdapter>>,
     log_adapter: Option<Arc<SystemLogAdapter>>,
-    notification_service: Option<Arc<NotificationService>>,
 }
 
 impl ServiceRunner {
@@ -124,6 +121,9 @@ impl ServiceRunner {
         let notification_service = Self::init_notification_service(&config, message_service.clone()).await?;
         self.notification_service = Some(notification_service);
         println!("Notification service initialized successfully");
+
+        // Initialize User Service
+        self.init_user_service(config.clone()).await?;
 
         // Update scheduler with adapters
         {
@@ -411,14 +411,14 @@ impl ServiceRunner {
         let log_adapter = self.log_adapter.as_ref()
             .ok_or("LogAdapter must be initialized before UserService")?;
 
-        let notification_publisher = self.notification_publisher.as_ref()
-            .ok_or("NotificationPublisher must be initialized before UserService")?;
+        let notification_service = self.notification_service.as_ref()
+            .ok_or("NotificationService must be initialized before UserService")?;
 
         self.user_service = Some(
             UserServiceFactory::create_user_service(
                 &config,
                 log_adapter.clone(),
-                notification_publisher.clone(),
+                notification_service.clone(),
             ).await?
         );
 

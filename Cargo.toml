@@ -47,7 +47,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 testcontainers-modules = { version = "0.12.1", features = ["minio"]}
 argon2 = "0.5.3"
 axum = "0.8.4"
-clap = "4.5.40"
+clap = { version = "4.5.40", features = ["derive"] }
 
 [dev-dependencies]
 mockito = "1.7.0"

@@ -474,7 +474,7 @@ impl NotificationTemplatePort for EmailNotificationAdapter {
     }
 
     async fn validate_template(&self, template: &NotificationTemplate) -> NotificationPortResult<()> {
-        let engine = self.template_engine.read().map_err(|_| {
+        let _engine = self.template_engine.read().map_err(|_| {
             NotificationPortError::ServiceUnavailable("Template engine unavailable".to_string())
         })?;
 

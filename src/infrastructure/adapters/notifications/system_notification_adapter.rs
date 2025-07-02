@@ -278,7 +278,7 @@ mod tests {
         // Add more notifications than the limit
         {
             let mut notifications = adapter.notifications.write().unwrap();
-            for i in 0..5 {
+            for _i in 0..5 {
                 let mut notification = create_test_system_notification();
                 notification.id = uuid::Uuid::new_v4();
                 notifications.push(notification);

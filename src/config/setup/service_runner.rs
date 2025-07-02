@@ -18,11 +18,6 @@ use std::path::PathBuf;
 use crate::application::ports::output::file_storage_port::FileStorageUtils;
 use crate::application::ports::output::file_storage_port::FileStoragePort;
 use crate::core::platform::manager::notification_service::NotificationService;
-use crate::infrastructure::adapters::notifications::{
-    EmailNotificationAdapter, EmailAdapterConfig,
-    SystemNotificationAdapter, SystemAdapterConfig,
-};
-use crate::application::ports::output::notification_port::NotificationDeliveryPort;
 
 pub struct ServiceRunner {
     scheduler: Arc<RwLock<Scheduler>>,

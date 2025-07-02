@@ -630,8 +630,8 @@ impl NotificationService {
     /// Start scheduled notification processor
     async fn start_scheduled_processor(&self) -> tokio::task::JoinHandle<()> {
         let active_notifications = self.active_notifications.clone();
-        let channel_handlers = self.channel_handlers.clone();
-        let stats = self.stats.clone();
+        let _channel_handlers = self.channel_handlers.clone();
+        let _stats = self.stats.clone();
         let interval = self.config.processing_interval_ms;
         
         tokio::spawn(async move {
@@ -662,8 +662,8 @@ impl NotificationService {
     /// Start retry processor
     async fn start_retry_processor(&self) -> tokio::task::JoinHandle<()> {
         let active_notifications = self.active_notifications.clone();
-        let channel_handlers = self.channel_handlers.clone();
-        let stats = self.stats.clone();
+        let _channel_handlers = self.channel_handlers.clone();
+        let _stats = self.stats.clone();
         let interval = self.config.processing_interval_ms * 2; // Less frequent than scheduled processor
         
         tokio::spawn(async move {
@@ -718,7 +718,9 @@ impl NotificationService {
 
 /// Message handler for notifications
 struct NotificationMessageHandler {
+    #[allow(dead_code)]
     channel_handlers: Arc<RwLock<HashMap<NotificationChannel, Arc<dyn NotificationChannelHandler>>>>,
+    #[allow(dead_code)]
     stats: Arc<RwLock<NotificationServiceStats>>,
 }
 

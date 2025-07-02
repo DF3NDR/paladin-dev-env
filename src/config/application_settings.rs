@@ -382,6 +382,7 @@ impl Default for Settings {
 mod tests {
     use super::*;
     use std::env;
+    use serial_test::serial;
 
     #[test]
     fn test_default_file_storage_config() {
@@ -400,6 +401,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_file_storage_config_env_override() {
         // Set environment variables
         unsafe {

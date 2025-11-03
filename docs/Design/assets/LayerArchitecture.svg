@@ -19,7 +19,7 @@
   </defs>
   
   <!-- Title -->
-  <text x="500" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold" text-anchor="middle" fill="#2C3E50">In4me Layer Architecture</text>
+  <text x="500" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold" text-anchor="middle" fill="#2C3E50">paladin Layer Architecture</text>
   
   <!-- Infrastructure Layer -->
   <rect x="100" y="80" width="800" height="150" rx="15" fill="url(#infraGrad)" stroke="#2471A3" stroke-width="3"/>

@@ -3,7 +3,7 @@ version: '3.8'
 services:
   redis:
     image: redis:7-alpine
-    container_name: in4me-redis
+    container_name: paladin-redis
     ports:
       - "6379:6379"
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
@@ -19,12 +19,12 @@ services:
       retries: 3
       start_period: 30s
     networks:
-      - in4me-network
+      - paladin-network
     restart: unless-stopped
 
   minio:
     image: minio/minio:latest
-    container_name: in4me-minio
+    container_name: paladin-minio
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -42,13 +42,13 @@ services:
       retries: 3
       start_period: 30s
     networks:
-      - in4me-network
+      - paladin-network
     restart: unless-stopped
 
   # MinIO Client for bucket initialization
   minio-init:
     image: minio/mc:latest
-    container_name: in4me-minio-init
+    container_name: paladin-minio-init
     depends_on:
       minio:
         condition: service_healthy
@@ -63,22 +63,22 @@ services:
         sleep 2
       done
       echo 'MinIO is ready. Creating buckets...'
-      mc mb minio/in4me-files --ignore-existing
-      mc mb minio/in4me-analysis --ignore-existing  
-      mc mb minio/in4me-reports --ignore-existing
-      mc mb minio/in4me-backups --ignore-existing
+      mc mb minio/paladin-files --ignore-existing
+      mc mb minio/paladin-analysis --ignore-existing  
+      mc mb minio/paladin-reports --ignore-existing
+      mc mb minio/paladin-backups --ignore-existing
       echo 'Setting bucket policies...'
-      mc anonymous set public minio/in4me-files
+      mc anonymous set public minio/paladin-files
       echo 'Bucket initialization complete'
       "
     networks:
-      - in4me-network
+      - paladin-network
 
-  in4me-app:
+  paladin-app:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: in4me-app
+    container_name: paladin-app
     ports:
       - "8080:8080"
     depends_on:
@@ -95,7 +95,7 @@ services:
       - APP_REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - APP_REDIS_DB=0
       - APP_REDIS_CONNECTION_TIMEOUT=30
-      - APP_REDIS_KEY_PREFIX=in4me:queue
+      - APP_REDIS_KEY_PREFIX=paladin:queue
       - APP_REDIS_MAX_RETRIES=3
       - APP_REDIS_ENABLE_PRIORITY_QUEUES=true
       
@@ -103,7 +103,7 @@ services:
       - APP_MINIO_ENDPOINT=minio:9000
       - APP_MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
       - APP_MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
-      - APP_MINIO_BUCKET=in4me-files
+      - APP_MINIO_BUCKET=paladin-files
       - APP_MINIO_SECURE=false
       - APP_MINIO_PATH_STYLE=true
       - APP_MINIO_CONNECTION_TIMEOUT=30
@@ -135,7 +135,7 @@ services:
       - app_data:/app/data
       - ./config:/app/config:ro
     networks:
-      - in4me-network
+      - paladin-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -146,7 +146,7 @@ services:
 
   redis-commander:
     image: rediscommander/redis-commander:latest
-    container_name: in4me-redis-commander
+    container_name: paladin-redis-commander
     ports:
       - "8081:8081"
     depends_on:
@@ -156,7 +156,7 @@ services:
       - HTTP_USER=${REDIS_COMMANDER_USER:-admin}
       - HTTP_PASSWORD=${REDIS_COMMANDER_PASSWORD:-admin}
     networks:
-      - in4me-network
+      - paladin-network
     restart: unless-stopped
     profiles:
       - dev
@@ -165,7 +165,7 @@ services:
   # Optional: Redis Insight for advanced Redis monitoring
   redis-insight:
     image: redislabs/redisinsight:latest
-    container_name: in4me-redis-insight
+    container_name: paladin-redis-insight
     ports:
       - "8001:8001"
     depends_on:
@@ -173,7 +173,7 @@ services:
     volumes:
       - redis_insight_data:/db
     networks:
-      - in4me-network
+      - paladin-network
     restart: unless-stopped
     profiles:
       - dev
@@ -190,5 +190,5 @@ volumes:
     driver: local
 
 networks:
-  in4me-network:
+  paladin-network:
     driver: bridge

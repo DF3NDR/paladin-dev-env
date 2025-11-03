@@ -1,10 +1,10 @@
-# Makefile for in4me project
+# Makefile for paladin project
 
 # Variables
 CARGO := cargo
 DOCKER := docker
 DOCKER_COMPOSE := docker-compose
-PROJECT_NAME := in4me
+PROJECT_NAME := paladin
 
 # Docker compose files
 COMPOSE_FILE := docker/docker-compose.yml
@@ -229,8 +229,8 @@ minio-console: ## Open MinIO console
 .PHONY: db-reset
 db-reset: ## Reset database
 	@echo "$(CYAN)Resetting database...$(NC)"
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec in4me-app rm -f database.db || true
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) restart in4me-app
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec paladin-app rm -f database.db || true
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) restart paladin-app
 
 .PHONY: storage-reset
 storage-reset: ## Reset MinIO storage

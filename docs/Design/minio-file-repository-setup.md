@@ -1,6 +1,6 @@
 # MinIO File Storage Adapter Setup (with rust-s3)
 
-This section describes how to set up and use the MinIO file storage adapter for the in4me framework using the `rust-s3` crate, alongside the Redis queue adapter.
+This section describes how to set up and use the MinIO file storage adapter for the paladin framework using the `rust-s3` crate, alongside the Redis queue adapter.
 
 ## Why rust-s3 instead of minio crate?
 
@@ -27,7 +27,7 @@ The easiest way to get started with both Redis and MinIO:
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd in4me
+cd paladin
 
 # Start Redis, MinIO, and the application
 docker-compose -f docker/docker-compose.yml up -d
@@ -85,7 +85,7 @@ export APP_REDIS_DB=0
 export APP_MINIO_ENDPOINT=localhost:9000
 export APP_MINIO_ACCESS_KEY=minioadmin
 export APP_MINIO_SECRET_KEY=minioadmin
-export APP_MINIO_BUCKET=in4me-files
+export APP_MINIO_BUCKET=paladin-files
 export APP_MINIO_SECURE=false
 export APP_MINIO_MAX_FILE_SIZE=104857600  # 100MB
 export APP_MINIO_ALLOWED_EXTENSIONS=txt,md,json,pdf,doc,rs,py
@@ -106,7 +106,7 @@ redis_db = 0
 minio_endpoint = "localhost:9000"
 minio_access_key = "minioadmin"
 minio_secret_key = "minioadmin"
-minio_bucket = "in4me-files"
+minio_bucket = "paladin-files"
 minio_secure = false
 max_file_size = 104857600  # 100MB
 allowed_extensions = ["txt", "md", "json", "pdf", "doc", "rs", "py"]
@@ -117,8 +117,8 @@ allowed_extensions = ["txt", "md", "json", "pdf", "doc", "rs", "py"]
 ### Basic Usage
 
 ```rust
-use in4me::infrastructure::adapters::file_storage::minio::MinioAdapter;
-use in4me::application::ports::output::file_storage_port::{FileStoragePort, UploadOptions};
+use paladin::infrastructure::adapters::file_storage::minio::MinioAdapter;
+use paladin::application::ports::output::file_storage_port::{FileStoragePort, UploadOptions};
 use std::path::PathBuf;
 
 // Initialize the adapter (uses rust-s3 internally)
@@ -258,7 +258,7 @@ let config = MinioConfig {
 ### Uploading Code for Analysis
 
 ```rust
-use in4me::application::ports::output::file_storage_port::*;
+use paladin::application::ports::output::file_storage_port::*;
 
 // Upload source code files with rust-s3
 let rust_files = vec!["main.rs", "lib.rs", "security.rs"];
@@ -476,7 +476,7 @@ The easiest way to get started with both Redis and MinIO:
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd in4me
+cd paladin
 
 # Start Redis, MinIO, and the application
 docker-compose -f docker/docker-compose.yml up -d
@@ -534,7 +534,7 @@ export APP_REDIS_DB=0
 export APP_MINIO_ENDPOINT=localhost:9000
 export APP_MINIO_ACCESS_KEY=minioadmin
 export APP_MINIO_SECRET_KEY=minioadmin
-export APP_MINIO_BUCKET=in4me-files
+export APP_MINIO_BUCKET=paladin-files
 export APP_MINIO_SECURE=false
 export APP_MINIO_MAX_FILE_SIZE=104857600  # 100MB
 export APP_MINIO_ALLOWED_EXTENSIONS=txt,md,json,pdf,doc,rs,py
@@ -555,7 +555,7 @@ redis_db = 0
 minio_endpoint = "localhost:9000"
 minio_access_key = "minioadmin"
 minio_secret_key = "minioadmin"
-minio_bucket = "in4me-files"
+minio_bucket = "paladin-files"
 minio_secure = false
 max_file_size = 104857600  # 100MB
 allowed_extensions = ["txt", "md", "json", "pdf", "doc", "rs", "py"]
@@ -566,8 +566,8 @@ allowed_extensions = ["txt", "md", "json", "pdf", "doc", "rs", "py"]
 ### Basic Usage
 
 ```rust
-use in4me::infrastructure::adapters::file_storage::minio::MinioAdapter;
-use in4me::application::ports::output::file_storage_port::{FileStoragePort, UploadOptions};
+use paladin::infrastructure::adapters::file_storage::minio::MinioAdapter;
+use paladin::application::ports::output::file_storage_port::{FileStoragePort, UploadOptions};
 use std::path::PathBuf;
 
 // Initialize the adapter
@@ -631,7 +631,7 @@ let versions = adapter.list_file_versions(&file_path).await?;
 ### Uploading Code for Analysis
 
 ```rust
-use in4me::application::ports::output::file_storage_port::*;
+use paladin::application::ports::output::file_storage_port::*;
 
 // Upload source code files
 let rust_files = vec!["main.rs", "lib.rs", "security.rs"];
@@ -710,8 +710,8 @@ if health.is_available {
 ### Combined Queue and Storage Operations
 
 ```rust
-use in4me::infrastructure::adapters::queue::redis::RedisQueueAdapter;
-use in4me::application::ports::output::queue_port::QueuePort;
+use paladin::infrastructure::adapters::queue::redis::RedisQueueAdapter;
+use paladin::application::ports::output::queue_port::QueuePort;
 
 // Upload file and queue analysis task
 let file_item = storage_adapter.upload_file(&file_path, &content, None).await?;
@@ -733,7 +733,7 @@ println!("File uploaded: {}, Analysis queued: {}", file_item.id, task_id);
 The adapter organizes files in a logical structure:
 
 ```
-in4me-files/
+paladin-files/
 ├── analysis/           # Source code files for analysis
 │   ├── src/           # Source code
 │   ├── config/        # Configuration files
@@ -751,7 +751,7 @@ in4me-files/
 The adapter provides comprehensive error handling:
 
 ```rust
-use in4me::application::ports::output::file_storage_port::FileStorageError;
+use paladin::application::ports::output::file_storage_port::FileStorageError;
 
 match adapter.upload_file(&path, &content, None).await {
     Ok(file_item) => println!("Uploaded: {}", file_item.path.display()),

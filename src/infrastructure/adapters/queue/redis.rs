@@ -36,7 +36,7 @@ impl Default for RedisQueueConfig {
             redis_password: None,
             redis_db: 0,
             connection_timeout: 30,
-            key_prefix: "in4me:queue".to_string(),
+            key_prefix: "paladin:queue".to_string(),
             max_retries: 3,
         }
     }

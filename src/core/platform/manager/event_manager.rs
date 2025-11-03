@@ -57,7 +57,7 @@ impl MessageHandler<Event> for EventMessageHandler {
 /// Manages event publishing and subscription using the MessageService.
 /// 
 /// This service provides a high-level interface for event-driven communication
-/// within the In4me system. It handles event routing, subscription management,
+/// within the paladin system. It handles event routing, subscription management,
 /// and integrates with the underlying MessageService for transport.
 pub struct EventService {
     message_service: Arc<MessageService>,

@@ -169,7 +169,7 @@ impl UserService {
 
         let recipient = NotificationRecipient::Email(user.email().value().to_string());
         let content = NotificationContent {
-            title: "Welcome to in4me!".to_string(),
+            title: "Welcome to paladin!".to_string(),
             body: format!("Hello {}, welcome to our platform!", user.username()),
             category: "welcome".to_string(),
             action_url: None,

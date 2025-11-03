@@ -15,18 +15,18 @@ across multiple channels following DDD and Hexagonal Architecture patterns.
 use tokio;
 use std::collections::HashMap;
 
-use in4me::core::platform::container::notification::{
+use paladin::core::platform::container::notification::{
     Notification, NotificationContent, NotificationChannel, NotificationPriority,
     NotificationRecipient, NotificationTemplate,
 };
-use in4me::application::ports::output::notification_port::{
+use paladin::application::ports::output::notification_port::{
     NotificationDeliveryPort, NotificationTemplatePort,
 };
-use in4me::infrastructure::adapters::notifications::{
+use paladin::infrastructure::adapters::notifications::{
     EmailNotificationAdapter, EmailAdapterConfig,
     SystemNotificationAdapter, SystemAdapterConfig,
 };
-use in4me::config::application_settings::{NotificationConfig};
+use paladin::config::application_settings::{NotificationConfig};
 
 /// Integration test for email notification flow
 #[tokio::test]

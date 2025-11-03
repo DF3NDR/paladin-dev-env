@@ -26,7 +26,7 @@ SPECIFIC_TESTS=""
 # Print usage
 usage() {
     cat << EOF
-Integration Test Runner for in4me
+Integration Test Runner for paladin
 
 USAGE:
     $0 [OPTIONS]

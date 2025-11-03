@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy the binary from builder stage
-COPY --from=builder /app/target/release/in4me /app/in4me
+COPY --from=builder /app/target/release/paladin /app/paladin
 
 # Copy configuration files
 COPY config /app/config
@@ -41,7 +41,7 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-CMD ["./in4me"]
+CMD ["./paladin"]
 
 # Development stage
 FROM rust:latest AS development

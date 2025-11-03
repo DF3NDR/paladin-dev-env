@@ -1,5 +1,5 @@
 [package]
-name = "in4me"
+name = "paladin"
 version = "0.1.0"
 edition = "2024"
 
@@ -63,7 +63,7 @@ name = "system_log_integration"
 path = "tests/integration/system_log_integration_test.rs"
 
 [[bin]]
-name = "in4me"
+name = "paladin"
 path = "src/main.rs"
 
 [features]

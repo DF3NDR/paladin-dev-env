@@ -2,7 +2,7 @@
 Action Component
 
 An Action Component represents an action that can be taken in the system.
-It is the base abstraction for all executable entities in the In4me system.
+It is the base abstraction for all executable entities in the paladin system.
 
 Actions contain:
 - Identity and metadata (id, name, description)

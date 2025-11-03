@@ -14,7 +14,7 @@
   </defs>
   
   <!-- Title -->
-  <text x="600" y="40" font-family="Arial, sans-serif" font-size="28" font-weight="bold" text-anchor="middle" fill="#2C3E50">In4me Architecture Overview</text>
+  <text x="600" y="40" font-family="Arial, sans-serif" font-size="28" font-weight="bold" text-anchor="middle" fill="#2C3E50">paladin Architecture Overview</text>
   
   <!-- External Systems -->
   <g id="external-systems">

@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod functional_tests {
-    use in4me::core::platform::container::content::{ContentItem, ContentType, TextContent};
-    use in4me::core::base::service::node_version_service::{
+    use paladin::core::platform::container::content::{ContentItem, ContentType, TextContent};
+    use paladin::core::base::service::node_version_service::{
         InMemoryNodeVersionRepository, ChangeType, VersioningError, NodeVersionRepository
     };
-    use in4me::core::platform::manager::content_service::{ContentItemService, ContentItemServiceError};
+    use paladin::core::platform::manager::content_service::{ContentItemService, ContentItemServiceError};
     use std::sync::Arc;
     use uuid::Uuid;
     use chrono::Utc;
@@ -252,7 +252,7 @@ mod functional_tests {
 
     #[test]
     fn test_content_type_variations() {
-        use in4me::core::platform::container::content::{VideoContent, AudioContent, ImageContent};
+        use paladin::core::platform::container::content::{VideoContent, AudioContent, ImageContent};
         
         // Test Text Content
         let text_content = TextContent::new(None, Some("Text content".to_string())).unwrap();

@@ -2,12 +2,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 // Import from your actual project structure
-use in4me::core::platform::container::content::{ContentItem, ContentType, TextContent};
-use in4me::core::base::service::node_version_service::{
+use paladin::core::platform::container::content::{ContentItem, ContentType, TextContent};
+use paladin::core::base::service::node_version_service::{
     InMemoryNodeVersionRepository, ChangeType
 };
-use in4me::core::platform::manager::content_service::ContentItemService;
-use in4me::application::use_cases::content::content_fetching_service::{
+use paladin::core::platform::manager::content_service::ContentItemService;
+use paladin::application::use_cases::content::content_fetching_service::{
     ContentFetchingService, FetchContent
 };
 

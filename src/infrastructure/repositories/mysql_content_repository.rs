@@ -30,7 +30,7 @@ pub struct MySqlConfig {
 impl Default for MySqlConfig {
     fn default() -> Self {
         Self {
-            database_url: "mysql://user:password@localhost:3306/in4me".to_string(),
+            database_url: "mysql://user:password@localhost:3306/paladin".to_string(),
             max_connections: 10,
             min_connections: 1,
             connect_timeout_seconds: 30,

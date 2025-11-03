@@ -234,7 +234,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: false
-          tags: in4me:test
+          tags: paladin:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -51,7 +51,7 @@ impl Default for QueueConfig {
             redis_password: None,
             redis_db: 0,
             connection_timeout: Some(30),
-            key_prefix: Some("in4me:queue".to_string()),
+            key_prefix: Some("paladin:queue".to_string()),
             max_retries: Some(3),
             enable_priority_queues: Some(true),
         }
@@ -81,7 +81,7 @@ impl Default for FileStorageConfig {
             minio_endpoint: "localhost:9000".to_string(),
             minio_access_key: "minioadmin".to_string(),
             minio_secret_key: "minioadmin".to_string(),
-            minio_bucket: "in4me-files".to_string(),
+            minio_bucket: "paladin-files".to_string(),
             minio_region: None,
             minio_secure: Some(false),
             minio_path_style: Some(true),
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(config.minio_endpoint, "localhost:9000");
         assert_eq!(config.minio_access_key, "minioadmin");
         assert_eq!(config.minio_secret_key, "minioadmin");
-        assert_eq!(config.minio_bucket, "in4me-files");
+        assert_eq!(config.minio_bucket, "paladin-files");
         assert_eq!(config.minio_secure, Some(false));
         assert_eq!(config.minio_path_style, Some(true));
         assert_eq!(config.connection_timeout, Some(30));
@@ -490,7 +490,7 @@ mod tests {
         assert_eq!(minio_config.endpoint, "localhost:9000");
         assert_eq!(minio_config.access_key, "minioadmin");
         assert_eq!(minio_config.secret_key, "minioadmin");
-        assert_eq!(minio_config.bucket, "in4me-files");
+        assert_eq!(minio_config.bucket, "paladin-files");
         assert!(!minio_config.secure);
         assert!(minio_config.path_style);
         assert_eq!(minio_config.connection_timeout, Duration::from_secs(30));

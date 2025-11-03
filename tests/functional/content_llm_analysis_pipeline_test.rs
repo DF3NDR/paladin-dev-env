@@ -16,19 +16,19 @@ use tokio;
 use async_trait::async_trait;
 use futures::stream;
 
-use in4me::application::use_cases::content::content_llm_analysis_service::{
+use paladin::application::use_cases::content::content_llm_analysis_service::{
     LlmContentAnalyzer, LlmContentAnalysisInput, LlmContentAnalysisConfig
 };
-use in4me::core::platform::container::content::{
+use paladin::core::platform::container::content::{
     ContentItem, ContentType, TextContent, VideoContent, AudioContent, ImageContent
 };
-use in4me::core::platform::container::prompt::{
+use paladin::core::platform::container::prompt::{
     PromptItem, PromptType, TextPrompt, PromptRole
 };
-use in4me::application::ports::output::llm_port::{
+use paladin::application::ports::output::llm_port::{
     LlmPort, LlmRequest, LlmResponse, LlmError, TokenUsage, FinishReason, StreamingResponse
 };
-use in4me::application::use_cases::analysis::llm_analysis_service::{
+use paladin::application::use_cases::analysis::llm_analysis_service::{
     LlmAnalysisService, LlmAnalysisConfig
 };
 

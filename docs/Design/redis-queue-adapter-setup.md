@@ -1,6 +1,6 @@
 # Redis Queue Adapter Setup
 
-This section describes how to set up and use the Redis queue adapter for the in4me framework.
+This section describes how to set up and use the Redis queue adapter for the paladin framework.
 
 ## Prerequisites
 
@@ -17,7 +17,7 @@ The easiest way to get started is using Docker Compose:
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd in4me
+cd paladin
 
 # Start Redis and the application
 docker-compose -f docker/docker-compose.yml up -d
@@ -68,7 +68,7 @@ export APP_REDIS_DB=0
 export APP_REDIS_CONNECTION_TIMEOUT=30
 
 # Queue settings
-export APP_REDIS_KEY_PREFIX=in4me:queue
+export APP_REDIS_KEY_PREFIX=paladin:queue
 export APP_REDIS_MAX_RETRIES=3
 export APP_REDIS_ENABLE_PRIORITY_QUEUES=true
 ```
@@ -84,7 +84,7 @@ redis_port = 6379
 redis_password = ""  # Optional
 redis_db = 0
 connection_timeout = 30
-key_prefix = "in4me:queue"
+key_prefix = "paladin:queue"
 max_retries = 3
 enable_priority_queues = true
 ```
@@ -94,8 +94,8 @@ enable_priority_queues = true
 ### Basic Usage
 
 ```rust
-use in4me::infrastructure::adapters::queue::redis::RedisQueueAdapter;
-use in4me::application::ports::output::queue_port::QueuePort;
+use paladin::infrastructure::adapters::queue::redis::RedisQueueAdapter;
+use paladin::application::ports::output::queue_port::QueuePort;
 
 // Initialize the adapter
 let config = RedisQueueConfig::default();
@@ -127,7 +127,7 @@ if let Some(item) = adapter.dequeue("my-queue").await? {
 ### Priority Queues
 
 ```rust
-use in4me::core::base::entity::message::MessagePriority;
+use paladin::core::base::entity::message::MessagePriority;
 
 // Enqueue with priority
 adapter.enqueue_with_priority("priority-queue", high_priority_item, MessagePriority::High).await?;
@@ -219,16 +219,16 @@ adapter.resume_queue("my-queue").await?;
 The adapter uses the following Redis key patterns:
 
 ```
-in4me:queue:{queue_name}                    # Main queue (FIFO list)
-in4me:queue:{queue_name}:high              # High priority queue
-in4me:queue:{queue_name}:normal            # Normal priority queue
-in4me:queue:{queue_name}:low               # Low priority queue
-in4me:queue:{queue_name}:critical          # Critical priority queue
+paladin:queue:{queue_name}                    # Main queue (FIFO list)
+paladin:queue:{queue_name}:high              # High priority queue
+paladin:queue:{queue_name}:normal            # Normal priority queue
+paladin:queue:{queue_name}:low               # Low priority queue
+paladin:queue:{queue_name}:critical          # Critical priority queue
 
-in4me:queue:meta:{queue_name}              # Queue metadata (hash)
-in4me:queue:processing:{queue_name}        # Items being processed (hash)
-in4me:queue:completed:{queue_name}         # Completed items (hash)
-in4me:queue:failed:{queue_name}            # Failed items (hash)
+paladin:queue:meta:{queue_name}              # Queue metadata (hash)
+paladin:queue:processing:{queue_name}        # Items being processed (hash)
+paladin:queue:completed:{queue_name}         # Completed items (hash)
+paladin:queue:failed:{queue_name}            # Failed items (hash)
 ```
 
 ## Error Handling
@@ -236,7 +236,7 @@ in4me:queue:failed:{queue_name}            # Failed items (hash)
 The adapter provides comprehensive error handling:
 
 ```rust
-use in4me::core::platform::manager::queue_service::QueueError;
+use paladin::core::platform::manager::queue_service::QueueError;
 
 match adapter.enqueue("my-queue", item).await {
     Ok(item_id) => println!("Enqueued item: {}", item_id),
@@ -320,7 +320,7 @@ Check Redis logs for connection and operation issues:
 
 ```bash
 # Docker logs
-docker logs in4me-redis
+docker logs paladin-redis
 
 # Or check Redis info
 redis-cli info

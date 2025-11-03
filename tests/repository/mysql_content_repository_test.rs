@@ -1,7 +1,7 @@
-use in4me::infrastructure::repositories::mysql_content_repository::{MySqlContentRepository, MySqlConfig};
-use in4me::core::platform::container::content::{ContentItem, ContentType, TextContent, ContentData};
-use in4me::core::base::entity::node::Node;
-use in4me::application::storage::sql_store::ContentRepository;
+use paladin::infrastructure::repositories::mysql_content_repository::{MySqlContentRepository, MySqlConfig};
+use paladin::core::platform::container::content::{ContentItem, ContentType, TextContent, ContentData};
+use paladin::core::base::entity::node::Node;
+use paladin::application::storage::sql_store::ContentRepository;
 use uuid::Uuid;
 use chrono::Utc;
 use serde_json;

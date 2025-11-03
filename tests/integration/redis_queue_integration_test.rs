@@ -12,13 +12,13 @@ mod queue_integration_tests {
         GenericImage
     };
 
-    use in4me::infrastructure::adapters::queue::redis::{RedisQueueAdapter, RedisQueueConfig};
-    use in4me::infrastructure::adapters::logs::system_log_adapter::SystemLogAdapter;
-    use in4me::application::ports::output::queue_port::{QueuePort, BatchQueuePort, PriorityQueuePort, QueueManagementPort};
-    use in4me::application::ports::output::log_port::LogPort;
-    use in4me::core::platform::container::queue_item::{QueueItem, QueueItemConfig};
-    use in4me::core::platform::manager::queue_service::{QueueConfig, QueueError};
-    use in4me::core::base::entity::message::{Message, Location, MessagePriority};
+    use paladin::infrastructure::adapters::queue::redis::{RedisQueueAdapter, RedisQueueConfig};
+    use paladin::infrastructure::adapters::logs::system_log_adapter::SystemLogAdapter;
+    use paladin::application::ports::output::queue_port::{QueuePort, BatchQueuePort, PriorityQueuePort, QueueManagementPort};
+    use paladin::application::ports::output::log_port::LogPort;
+    use paladin::core::platform::container::queue_item::{QueueItem, QueueItemConfig};
+    use paladin::core::platform::manager::queue_service::{QueueConfig, QueueError};
+    use paladin::core::base::entity::message::{Message, Location, MessagePriority};
 
     struct TestContext {
         adapter: Arc<RedisQueueAdapter>,

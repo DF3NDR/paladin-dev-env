@@ -54,7 +54,7 @@
 //         Self {
 //             log_level: "error".to_string(),
 //             format: LogFormat::Json, // JSON is better for error analysis
-//             target: "in4me-errors".to_string(),
+//             target: "paladin-errors".to_string(),
 //             structured: true,
 //             include_stack_traces: true,
 //             error_cache_size: 1000,
@@ -74,7 +74,7 @@
 //                 "text" => LogFormat::Text,
 //                 template => LogFormat::Structured(template.to_string()),
 //             },
-//             target: env::var("ERROR_LOG_TARGET").unwrap_or_else(|_| "in4me-errors".to_string()),
+//             target: env::var("ERROR_LOG_TARGET").unwrap_or_else(|_| "paladin-errors".to_string()),
 //             structured: env::var("ERROR_LOG_STRUCTURED")
 //                 .unwrap_or_else(|_| "true".to_string())
 //                 .parse()

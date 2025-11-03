@@ -6,13 +6,13 @@ use std::time::Duration;
 use testcontainers::{ ContainerAsync, runners::AsyncRunner};
 use testcontainers_modules::{ minio::MinIO };
 
-use in4me::infrastructure::adapters::file_storage::minio::{MinioAdapter, MinioConfig};
-use in4me::infrastructure::adapters::logs::system_log_adapter::SystemLogAdapter;
-use in4me::application::ports::output::file_storage_port::{
+use paladin::infrastructure::adapters::file_storage::minio::{MinioAdapter, MinioConfig};
+use paladin::infrastructure::adapters::logs::system_log_adapter::SystemLogAdapter;
+use paladin::application::ports::output::file_storage_port::{
     FileStoragePort, BatchFileStoragePort, AdvancedFileStoragePort,
     UploadOptions, ListOptions
 };
-use in4me::application::ports::output::log_port::LogPort;
+use paladin::application::ports::output::log_port::LogPort;
 
 pub struct FileStorageTestContext {
     pub adapter: MinioAdapter,

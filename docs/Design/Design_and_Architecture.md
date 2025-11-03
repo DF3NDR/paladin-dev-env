@@ -1,4 +1,4 @@
-# In4me Framework: Design and Architecture Outline
+# paladin Framework: Design and Architecture Outline
 
 ## Table of Contents
 1. [Executive Summary](#executive-summary)
@@ -15,7 +15,7 @@
 
 ## Executive Summary
 
-In4me is a Rust-based information collection and processing framework designed using Hexagonal Architecture principles. It provides a robust, scalable, and flexible platform for:
+paladin is a Rust-based information collection and processing framework designed using Hexagonal Architecture principles. It provides a robust, scalable, and flexible platform for:
 
 - **Content Aggregation**: Collecting information from diverse sources (web, files, APIs, databases)
 - **Content Processing**: Analyzing, transforming, and enriching content through ML/NLP services
@@ -24,7 +24,7 @@ In4me is a Rust-based information collection and processing framework designed u
 
 The framework emphasizes modularity, testability, and clear separation of concerns through Domain-Driven Design (DDD) and Test-Driven Development (TDD) practices.
 
-The In4me framework provides a robust, scalable, and maintainable solution for content aggregation and processing. By leveraging:
+The paladin framework provides a robust, scalable, and maintainable solution for content aggregation and processing. By leveraging:
 
 - **Hexagonal Architecture** for clean separation of concerns
 - **Domain-Driven Design** for rich business modeling
@@ -33,7 +33,7 @@ The In4me framework provides a robust, scalable, and maintainable solution for c
 
 The system is well-positioned to handle diverse content sources, complex processing requirements, and multiple delivery channels while maintaining high performance and reliability standards.
 
-The modular design ensures that new features can be added without disrupting existing functionality, and the comprehensive testing strategy provides confidence in system behavior. With proper implementation of these architectural principles, In4me can serve as a powerful platform for information management and processing needs.
+The modular design ensures that new features can be added without disrupting existing functionality, and the comprehensive testing strategy provides confidence in system behavior. With proper implementation of these architectural principles, paladin can serve as a powerful platform for information management and processing needs.
 
 ## Architecture Overview
 
@@ -185,7 +185,7 @@ host = "127.0.0.1"
 port = 8080
 
 [database]
-url = "mysql://user:pass@localhost/in4me"
+url = "mysql://user:pass@localhost/paladin"
 max_connections = 10
 
 [processing]

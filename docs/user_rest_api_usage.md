@@ -47,26 +47,26 @@ POST /users/{user_id}/verify
 CLI Usage Examples:
 
 1. Register user:
-./in4me user register -u johndoe -e john@example.com -p secure_password123 --first-name John --last-name Doe
+./paladin user register -u johndoe -e john@example.com -p secure_password123 --first-name John --last-name Doe
 
 2. Login:
-./in4me user login -e john@example.com -p secure_password123
+./paladin user login -e john@example.com -p secure_password123
 
 3. Get user:
-./in4me user get -i john@example.com
-./in4me user get -i 550e8400-e29b-41d4-a716-446655440000
+./paladin user get -i john@example.com
+./paladin user get -i 550e8400-e29b-41d4-a716-446655440000
 
 4. Update user:
-./in4me user update -u 550e8400-e29b-41d4-a716-446655440000 --username johnsmith --first-name John
+./paladin user update -u 550e8400-e29b-41d4-a716-446655440000 --username johnsmith --first-name John
 
 5. List active users:
-./in4me user list --active true --limit 20
+./paladin user list --active true --limit 20
 
 6. Activate user:
-./in4me user activate -u 550e8400-e29b-41d4-a716-446655440000
+./paladin user activate -u 550e8400-e29b-41d4-a716-446655440000
 
 7. Verify user:
-./in4me user verify -u 550e8400-e29b-41d4-a716-446655440000
+./paladin user verify -u 550e8400-e29b-41d4-a716-446655440000
 */
 
 // =============================================================================
@@ -129,7 +129,7 @@ Integration Points:
 - Message system for event publishing (existing)
 
 This implementation provides a complete, production-ready user management system
-that seamlessly integrates with your existing in4me framework architecture.
+that seamlessly integrates with your existing paladin framework architecture.
 */_123").is_ok());
         assert!(user_service.validate_username("test-user").is_ok());
 

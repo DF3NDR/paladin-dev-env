@@ -45,7 +45,7 @@ impl Default for SystemLogAdapterConfig {
         Self {
             log_level: "info".to_string(),
             format: LogFormat::Text,
-            target: "in4me".to_string(),
+            target: "paladin".to_string(),
             structured: true,
         }
     }
@@ -63,7 +63,7 @@ impl SystemLogAdapterConfig {
                 "text" => LogFormat::Text,
                 template => LogFormat::Structured(template.to_string()),
             },
-            target: env::var("SYSTEM_LOG_TARGET").unwrap_or_else(|_| "in4me".to_string()),
+            target: env::var("SYSTEM_LOG_TARGET").unwrap_or_else(|_| "paladin".to_string()),
             structured: env::var("SYSTEM_LOG_STRUCTURED")
                 .unwrap_or_else(|_| "true".to_string())
                 .parse()

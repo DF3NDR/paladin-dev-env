@@ -4,15 +4,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'in4me'",
+            "name": "Debug executable 'paladin'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=in4me",
-                    "--package=in4me"
+                    "--bin=paladin",
+                    "--package=paladin"
                 ],
                 "filter": {
-                    "name": "in4me",
+                    "name": "paladin",
                     "kind": "bin"
                 }
             },
@@ -28,10 +28,10 @@
                     "test",
                     "--no-run",
                     "--lib",
-                    "--package=in4me"
+                    "--package=paladin"
                 ],
                 "filter": {
-                    "name": "in4me",
+                    "name": "paladin",
                     "kind": "lib"
                 }
             },
@@ -50,7 +50,7 @@
                     "test",
                     "--no-run",
                     "--test=repository",
-                    "--package=in4me"
+                    "--package=paladin"
                 ],
                 "filter": {
                     "name": "repository",
@@ -72,11 +72,11 @@
                     "test",
                     "--no-run",
                     "--lib",
-                    "--package=in4me",
+                    "--package=paladin",
                     "${input:testName}"
                 ],
                 "filter": {
-                    "name": "in4me",
+                    "name": "paladin",
                     "kind": "lib"
                 }
             },
@@ -106,7 +106,7 @@
                     "test",
                     "--no-run",
                     "--test=integration",
-                    "--package=in4me"
+                    "--package=paladin"
                 ],
                 "filter": {
                     "name": "integration",
@@ -145,7 +145,7 @@
                     "test",
                     "--no-run",
                     "--test=functional",
-                    "--package=in4me"
+                    "--package=paladin"
                 ],
                 "filter": {
                     "name": "functional",
@@ -167,7 +167,7 @@
                     "test",
                     "--no-run",
                     "--test=integration_test",
-                    "--package=in4me"
+                    "--package=paladin"
                 ],
                 "filter": {
                     "name": "integration_test",
@@ -189,10 +189,10 @@
                     "test",
                     "--no-run",
                     "--lib",
-                    "--package=in4me"
+                    "--package=paladin"
                 ],
                 "filter": {
-                    "name": "in4me",
+                    "name": "paladin",
                     "kind": "lib"
                 }
             },
@@ -211,10 +211,10 @@
                     "test",
                     "--no-run",
                     "--tests",
-                    "--package=in4me"
+                    "--package=paladin"
                 ],
                 "filter": {
-                    "name": "in4me",
+                    "name": "paladin",
                     "kind": "test"
                 }
             },

@@ -36,7 +36,7 @@ use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-/// Represents an event in the In4me system.
+/// Represents an event in the paladin system.
 /// 
 /// Events are domain entities that represent significant occurrences within the system.
 /// They are used for communication between different parts of the system, triggering

@@ -71,7 +71,7 @@ impl ServiceRunner {
             redis_password: queue_config.redis_password,
             redis_db: queue_config.redis_db,
             connection_timeout: queue_config.connection_timeout.unwrap_or(30),
-            key_prefix: queue_config.key_prefix.unwrap_or_else(|| "in4me:queue".to_string()),
+            key_prefix: queue_config.key_prefix.unwrap_or_else(|| "paladin:queue".to_string()),
             max_retries: queue_config.max_retries.unwrap_or(3),
         };
 

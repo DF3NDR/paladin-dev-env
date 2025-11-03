@@ -30,7 +30,7 @@ pub struct SqliteConfig {
 impl Default for SqliteConfig {
     fn default() -> Self {
         Self {
-            database_url: "sqlite:in4me.db".to_string(),
+            database_url: "sqlite:paladin.db".to_string(),
             max_connections: 10,
             min_connections: 1,
             connect_timeout_seconds: 30,

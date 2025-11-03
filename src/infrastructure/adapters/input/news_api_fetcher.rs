@@ -139,7 +139,7 @@ impl ContentListFetchingService for NewsApiFetcher {
         
         let response = self.http_client
             .get(&url)
-            .header("User-Agent", "in4me-content-fetcher/1.0")
+            .header("User-Agent", "paladin-content-fetcher/1.0")
             .send()
             .map_err(|e| format!("Failed to fetch from News API: {}", e))?;
 

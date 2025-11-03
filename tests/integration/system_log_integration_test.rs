@@ -9,14 +9,14 @@ use std::time::Duration;
 use tokio::time::sleep;
 use uuid::Uuid;
 
-use in4me::infrastructure::adapters::logs::system_log_adapter::{
+use paladin::infrastructure::adapters::logs::system_log_adapter::{
     SystemLogAdapter, SystemLogAdapterConfig
 };
-use in4me::application::ports::output::log_port::{LogPort, LogFormat};
-use in4me::core::platform::container::log::{
+use paladin::application::ports::output::log_port::{LogPort, LogFormat};
+use paladin::core::platform::container::log::{
     LogEntry, LogLevel, LogDestination, LogEntryBuilder
 };
-use in4me::core::base::entity::message::Location;
+use paladin::core::base::entity::message::Location;
 
 /// Test that the adapter can be created and write entries
 #[tokio::test]

@@ -45,7 +45,7 @@ impl Default for MinioConfig {
             endpoint: "localhost:9000".to_string(),
             access_key: "minioadmin".to_string(),
             secret_key: "minioadmin".to_string(),
-            bucket: "in4me-files".to_string(),
+            bucket: "paladin-files".to_string(),
             region: Some("us-east-1".to_string()),
             secure: false,
             path_style: true,

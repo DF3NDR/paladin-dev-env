@@ -1,6 +1,6 @@
 # docker/Dockerfile
 
-# Multi-stage build for the in4me application with Redis queue support
+# Multi-stage build for the paladin application with Redis queue support
 
 FROM rust:latest as base
 
@@ -81,7 +81,7 @@ RUN mkdir -p /app/data /app/config && \
     chown -R appuser:appuser /app
 
 # Copy the binary from builder stage
-COPY --from=builder /app/target/release/in4me /app/in4me
+COPY --from=builder /app/target/release/paladin /app/paladin
 COPY --from=builder /app/target/release/deps /app/deps
 
 # Copy configuration files
@@ -104,7 +104,7 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
 # Run the application
-CMD ["./in4me"]
+CMD ["./paladin"]
 
 # Default target is production
 FROM runtime as default

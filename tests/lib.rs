@@ -1,6 +1,6 @@
 // tests/lib.rs - Test library configuration
 
-//! Integration test library for in4me
+//! Integration test library for paladin
 //! 
 //! This module provides common functionality for integration tests including:
 //! - Environment detection (local vs CI/CD)

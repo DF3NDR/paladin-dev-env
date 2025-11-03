@@ -21,7 +21,7 @@ services:
       MINIO_ROOT_USER: devuser
       MINIO_ROOT_PASSWORD: devpassword123
 
-  in4me-app:
+  paladin-app:
     build:
       target: development
     volumes:

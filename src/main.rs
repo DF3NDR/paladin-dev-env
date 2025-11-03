@@ -1,8 +1,8 @@
 use structopt::StructOpt;
 use env_logger::Env;
 use log::info;
-use in4me::config::application_settings::Settings;
-use in4me::config::setup::setup_and_run;
+use paladin::config::application_settings::Settings;
+use paladin::config::setup::setup_and_run;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "smartcontent-aggregator")]

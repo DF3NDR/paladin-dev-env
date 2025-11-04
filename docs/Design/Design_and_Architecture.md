@@ -1,4 +1,4 @@
-# paladin Framework: Design and Architecture Outline
+# Paladin Framework: Design and Architecture Outline
 
 ## Table of Contents
 1. [Executive Summary](#executive-summary)
@@ -15,7 +15,7 @@
 
 ## Executive Summary
 
-paladin is a Rust-based information collection and processing framework designed using Hexagonal Architecture principles. It provides a robust, scalable, and flexible platform for:
+Paladin is a Rust-based information collection and processing framework designed using Hexagonal Architecture principles. It provides a robust, scalable, and flexible platform for:
 
 - **Content Aggregation**: Collecting information from diverse sources (web, files, APIs, databases)
 - **Content Processing**: Analyzing, transforming, and enriching content through ML/NLP services
@@ -24,7 +24,7 @@ paladin is a Rust-based information collection and processing framework designed
 
 The framework emphasizes modularity, testability, and clear separation of concerns through Domain-Driven Design (DDD) and Test-Driven Development (TDD) practices.
 
-The paladin framework provides a robust, scalable, and maintainable solution for content aggregation and processing. By leveraging:
+The Paladin framework provides a robust, scalable, and maintainable solution for content aggregation and processing. By leveraging:
 
 - **Hexagonal Architecture** for clean separation of concerns
 - **Domain-Driven Design** for rich business modeling
@@ -33,7 +33,7 @@ The paladin framework provides a robust, scalable, and maintainable solution for
 
 The system is well-positioned to handle diverse content sources, complex processing requirements, and multiple delivery channels while maintaining high performance and reliability standards.
 
-The modular design ensures that new features can be added without disrupting existing functionality, and the comprehensive testing strategy provides confidence in system behavior. With proper implementation of these architectural principles, paladin can serve as a powerful platform for information management and processing needs.
+The modular design ensures that new features can be added without disrupting existing functionality, and the comprehensive testing strategy provides confidence in system behavior. With proper implementation of these architectural principles, Paladin can serve as a powerful platform for information management and processing needs.
 
 ## Architecture Overview
 
@@ -185,7 +185,7 @@ host = "127.0.0.1"
 port = 8080
 
 [database]
-url = "mysql://user:pass@localhost/paladin"
+url = "mysql://user:pass@localhost/Paladin"
 max_connections = 10
 
 [processing]

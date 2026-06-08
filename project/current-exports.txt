@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-06-05 14:14:10 UTC
+# Public API Surface - Generated 2026-06-08 14:27:01 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -1705,6 +1705,33 @@ pub use paladin::config::SanctumConfig
 pub use paladin::config::VisionConfig
 pub use paladin::config::VisionProviderConfig
 pub use paladin::config::VisionRetryConfig
+pub mod paladin::config::agents
+pub struct paladin::config::agents::AgentDefinition
+pub paladin::config::agents::AgentDefinition::id: alloc::string::String
+pub paladin::config::agents::AgentDefinition::max_loops: core::option::Option<u32>
+pub paladin::config::agents::AgentDefinition::model: alloc::string::String
+pub paladin::config::agents::AgentDefinition::provider: core::option::Option<alloc::string::String>
+pub paladin::config::agents::AgentDefinition::stop_words: alloc::vec::Vec<alloc::string::String>
+pub paladin::config::agents::AgentDefinition::system_prompt: alloc::string::String
+pub paladin::config::agents::AgentDefinition::temperature: core::option::Option<f32>
+impl core::clone::Clone for paladin::config::agents::AgentDefinition
+pub fn paladin::config::agents::AgentDefinition::clone(&self) -> paladin::config::agents::AgentDefinition
+impl core::cmp::PartialEq for paladin::config::agents::AgentDefinition
+pub fn paladin::config::agents::AgentDefinition::eq(&self, &paladin::config::agents::AgentDefinition) -> bool
+impl core::fmt::Debug for paladin::config::agents::AgentDefinition
+pub fn paladin::config::agents::AgentDefinition::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::agents::AgentDefinition
+impl serde_core::ser::Serialize for paladin::config::agents::AgentDefinition
+pub fn paladin::config::agents::AgentDefinition::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::agents::AgentDefinition
+pub fn paladin::config::agents::AgentDefinition::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::agents::AgentDefinition
+impl core::marker::Send for paladin::config::agents::AgentDefinition
+impl core::marker::Sync for paladin::config::agents::AgentDefinition
+impl core::marker::Unpin for paladin::config::agents::AgentDefinition
+impl core::marker::UnsafeUnpin for paladin::config::agents::AgentDefinition
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::agents::AgentDefinition
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::agents::AgentDefinition
 pub mod paladin::config::arsenal
 pub struct paladin::config::arsenal::ArsenalConfig
 pub paladin::config::arsenal::ArsenalConfig::default_timeout_seconds: u64
@@ -1964,6 +1991,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::scheduler::Sch
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::scheduler::SchedulerConfig
 pub mod paladin::config::settings
 pub struct paladin::config::settings::Settings
+pub paladin::config::settings::Settings::agents: alloc::vec::Vec<paladin::config::agents::AgentDefinition>
 pub paladin::config::settings::Settings::arsenal: core::option::Option<paladin::config::arsenal::ArsenalConfig>
 pub paladin::config::settings::Settings::citadel: core::option::Option<paladin::config::citadel::CitadelConfig>
 pub paladin::config::settings::Settings::file_storage: core::option::Option<paladin::config::file_storage::FileStorageConfig>
@@ -2149,6 +2177,32 @@ impl core::marker::Unpin for paladin::config::web_server::SourceConfig
 impl core::marker::UnsafeUnpin for paladin::config::web_server::SourceConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::web_server::SourceConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::web_server::SourceConfig
+pub struct paladin::config::AgentDefinition
+pub paladin::config::AgentDefinition::id: alloc::string::String
+pub paladin::config::AgentDefinition::max_loops: core::option::Option<u32>
+pub paladin::config::AgentDefinition::model: alloc::string::String
+pub paladin::config::AgentDefinition::provider: core::option::Option<alloc::string::String>
+pub paladin::config::AgentDefinition::stop_words: alloc::vec::Vec<alloc::string::String>
+pub paladin::config::AgentDefinition::system_prompt: alloc::string::String
+pub paladin::config::AgentDefinition::temperature: core::option::Option<f32>
+impl core::clone::Clone for paladin::config::agents::AgentDefinition
+pub fn paladin::config::agents::AgentDefinition::clone(&self) -> paladin::config::agents::AgentDefinition
+impl core::cmp::PartialEq for paladin::config::agents::AgentDefinition
+pub fn paladin::config::agents::AgentDefinition::eq(&self, &paladin::config::agents::AgentDefinition) -> bool
+impl core::fmt::Debug for paladin::config::agents::AgentDefinition
+pub fn paladin::config::agents::AgentDefinition::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::agents::AgentDefinition
+impl serde_core::ser::Serialize for paladin::config::agents::AgentDefinition
+pub fn paladin::config::agents::AgentDefinition::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::agents::AgentDefinition
+pub fn paladin::config::agents::AgentDefinition::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::agents::AgentDefinition
+impl core::marker::Send for paladin::config::agents::AgentDefinition
+impl core::marker::Sync for paladin::config::agents::AgentDefinition
+impl core::marker::Unpin for paladin::config::agents::AgentDefinition
+impl core::marker::UnsafeUnpin for paladin::config::agents::AgentDefinition
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::agents::AgentDefinition
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::agents::AgentDefinition
 pub struct paladin::config::ArsenalConfig
 pub paladin::config::ArsenalConfig::default_timeout_seconds: u64
 pub paladin::config::ArsenalConfig::max_concurrent_tools: usize
@@ -2408,6 +2462,7 @@ impl core::marker::UnsafeUnpin for paladin::config::web_server::ServerConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::web_server::ServerConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::web_server::ServerConfig
 pub struct paladin::config::Settings
+pub paladin::config::Settings::agents: alloc::vec::Vec<paladin::config::agents::AgentDefinition>
 pub paladin::config::Settings::arsenal: core::option::Option<paladin::config::arsenal::ArsenalConfig>
 pub paladin::config::Settings::citadel: core::option::Option<paladin::config::citadel::CitadelConfig>
 pub paladin::config::Settings::file_storage: core::option::Option<paladin::config::file_storage::FileStorageConfig>
@@ -3161,4 +3216,4 @@ impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services
 impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::paladin::paladin_builder::PaladinBuilder
 
 ## Summary
-Total public items: 1798
+Total public items: 1827

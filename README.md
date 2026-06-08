@@ -112,6 +112,22 @@ to build and run your first agent, or the
 [Orchestration guide](https://df3ndr.github.io/paladin-dev-env/user-guides/orchestration.html) to
 coordinate several.
 
+### Running agents behind an HTTP API
+
+To serve configured agents over HTTP (the *HTTP service-host* topology), copy
+[`config.example.yml`](config.example.yml) to `config.yml`, edit its `agents:` section, and run
+the `paladin-server` binary:
+
+```bash
+# API keys come from the environment, not the config file.
+OPENAI_API_KEY=sk-... cargo run --bin paladin-server --features web-server
+# or point at a specific config: PALADIN_CONFIG=./config.yml paladin-server
+```
+
+It exposes `GET/POST /agents`, `GET/DELETE /agents/{id}`, and `POST /agents/{id}/execute`, and
+shuts down gracefully on Ctrl-C / SIGTERM. (Authentication arrives in a later milestone epic; put
+it behind a trusted proxy for now.)
+
 ## Project Status
 
 Current version: **0.5.1**. Stability guarantees and the public-API policy are documented in the

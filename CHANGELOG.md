@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Milestone 12 — Epic 2: Configurable web host & `paladin-server` binary
+
+Makes the HTTP service-host topology runnable with no Rust required: a config schema, a
+registry-from-config builder, a runtime provisioner, and a server binary that serves the agent
+API from Epic 1.
+
+#### Added
+
+- **`agents` configuration** (`config.yml`): a list of `AgentDefinition`s
+  (`id`/`model`/`system_prompt` required; optional `provider`/`temperature`/`max_loops`/
+  `stop_words`). The bind address reuses the existing `server` (`host`/`port`) section. API keys
+  continue to come from the `llm:` provider env vars, never the agent definitions.
+- **Registry-from-config builder** (`paladin::infrastructure::web::agent_host`):
+  `build_agent_registry`, `build_agent`, `validate_config` (fail-fast, key-free pre-flight:
+  non-empty fields, no duplicate ids, provider available), and `bind_address`. Agents are
+  **LLM + prompt only** (no garrison/arsenal this epic).
+- **Runtime provisioner** (`paladin::infrastructure::web::facade_provisioner::FacadeProvisioner`):
+  the concrete `AgentProvisioner` so `POST /agents` builds and registers agents at runtime, sharing
+  the same build path as config load.
+- **`paladin-server` binary** (`--features web-server`): loads `config.yml`, builds the agents,
+  serves the `/agents/*` API with `axum`, logs the bound address + agent ids, and shuts down
+  gracefully on Ctrl-C / SIGTERM. Config path via `PALADIN_CONFIG` or the first CLI argument.
+
+#### Build
+
+- Added an **optional `axum`** dependency to `paladin-ai`, gated by the `web-server` feature (used
+  only by the `paladin-server` binary).
+
 ### Milestone 12 — Epic 1: Agent registry & execution API (`paladin-web`)
 
 The HTTP service-host topology previously shipped no agent-execution endpoint — consumers had to

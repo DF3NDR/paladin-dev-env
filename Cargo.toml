@@ -58,6 +58,9 @@ paladin-storage = { workspace = true, features = ["sqlite"] }
 paladin-notifications = { workspace = true, optional = true }
 paladin-content = { workspace = true, optional = true }
 paladin-web = { workspace = true, optional = true }
+# axum is only needed by the `paladin-server` binary (the `web-server` feature) to
+# serve the agent router; gated so default builds don't pull it in.
+axum = { version = "0.8.4", optional = true }
 reqwest = { workspace = true, features = ["blocking", "stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -200,6 +203,11 @@ name = "paladin-cli"
 path = "src/bin/paladin-cli.rs"
 required-features = ["cli"]
 
+[[bin]]
+name = "paladin-server"
+path = "src/bin/paladin-server.rs"
+required-features = ["web-server"]
+
 [[bench]]
 name = "config_benchmarks"
 harness = false
@@ -222,7 +230,7 @@ llm-all = ["llm-openai", "llm-anthropic", "llm-deepseek"]
 # Subsystem feature flags
 vision = []
 content-processing = ["dep:paladin-content", "paladin-content/web-scraping", "paladin-content/rss", "paladin-content/news-api", "paladin-content/tiktoken", "paladin-content/llm", "paladin-memory/content-processing"]
-web-server = ["dep:paladin-web"]
+web-server = ["dep:paladin-web", "dep:axum"]
 notifications = ["dep:paladin-notifications", "paladin-notifications/email", "paladin-notifications/push", "paladin-notifications/system"]
 # SQLite repositories are always available: `paladin-storage` is a non-optional
 # dependency with its `sqlite` feature enabled (see [dependencies]).

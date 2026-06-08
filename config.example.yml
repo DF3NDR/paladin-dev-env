@@ -1,0 +1,31 @@
+# Example Paladin configuration for the HTTP service host (`paladin-server`).
+#
+# Copy to `config.yml` and edit. API keys are read from the ENVIRONMENT
+# (e.g. OPENAI_API_KEY / ANTHROPIC_API_KEY / DEEPSEEK_API_KEY), never from this file.
+#
+#   cp config.example.yml config.yml
+#   OPENAI_API_KEY=sk-... cargo run --bin paladin-server --features web-server
+
+# Top-level LLM fields (legacy; unused by the agent host but required by the schema).
+llm_type: "openai"
+llm_url: "https://api.openai.com/v1"
+llm_api_key: "" # unused — keys come from environment variables
+
+max_file_size: 10485760 # 10 MiB
+sources: []
+
+# Address the HTTP server binds to.
+server:
+  host: "0.0.0.0"
+  port: 3000
+
+# Agents served behind the HTTP API. Each becomes resident at /agents/<id>.
+agents:
+  - id: "researcher"
+    provider: "openai" # optional; defaults to llm.default_provider
+    model: "gpt-4"
+    system_prompt: "You research topics thoroughly."
+    temperature: 0.7 # optional
+  - id: "summarizer"
+    model: "gpt-4"
+    system_prompt: "You write concise summaries."

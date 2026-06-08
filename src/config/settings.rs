@@ -12,9 +12,10 @@ use std::time::Duration;
 #[cfg(feature = "notifications")]
 use super::NotificationConfig;
 use super::{
-    ArsenalConfig, CitadelConfig, FileStorageConfig, GarrisonSettings, HeraldConfig, LlmConfig,
-    MemoryExtractionConfig, MessageServiceSettings, QueueConfig, RagConfig, SanctumAdapterType,
-    SanctumConfig, SchedulerConfig, ServerConfig, SourceConfig, VisionConfig,
+    AgentDefinition, ArsenalConfig, CitadelConfig, FileStorageConfig, GarrisonSettings,
+    HeraldConfig, LlmConfig, MemoryExtractionConfig, MessageServiceSettings, QueueConfig,
+    RagConfig, SanctumAdapterType, SanctumConfig, SchedulerConfig, ServerConfig, SourceConfig,
+    VisionConfig,
 };
 
 /// Top-level application configuration struct.
@@ -45,6 +46,10 @@ pub struct Settings {
     pub herald: Option<HeraldConfig>,
     pub vision: Option<VisionConfig>,
     pub scheduler: Option<SchedulerConfig>,
+    /// Agents to load into the HTTP service host (`paladin-server`). Defaults to empty
+    /// when the `agents:` key is absent, so non-server configs are unaffected.
+    #[serde(default)]
+    pub agents: Vec<AgentDefinition>,
 }
 
 impl Settings {
@@ -328,6 +333,7 @@ impl Default for Settings {
             herald: Some(HeraldConfig::default()),
             vision: Some(VisionConfig::default()),
             scheduler: Some(SchedulerConfig::default()),
+            agents: Vec::new(),
         }
     }
 }

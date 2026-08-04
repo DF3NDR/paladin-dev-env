@@ -27,6 +27,8 @@ pub mod scheduler_port;
 pub mod search_engine_port;
 /// Streaming counterpart to `paladin_executor_port` (SSE / token streaming).
 pub mod streaming_executor_port;
+/// Token-tally contract (`TokenCounter`) the `Quartermaster` measures prompts against.
+pub mod token_counter_port;
 /// User persistence repository port.
 pub mod user_repository_port;
 /// Workflow persistence repository port.

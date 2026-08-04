@@ -1,29 +1,20 @@
 //! Token Counting Utilities
 //!
 //! Provides token counting capabilities for different LLM providers.
-//! Uses tiktoken for OpenAI models and provides a trait for extensibility.
+//!
+//! The [`TokenCounter`] CONTRACT is lifted to `paladin-ports`
+//! (`paladin_ports::output::token_counter_port`) so callers in other crates (notably the
+//! `Quartermaster` in `paladin-llm`) can measure a prompt against a provider's declared
+//! context window without depending on `paladin-memory` or its optional `tiktoken-rs`
+//! dependency. This module keeps the concrete tiktoken-backed ADAPTER
+//! ([`TiktokenCounter`]) and re-exports the lifted trait so existing call sites resolve
+//! unchanged.
 
-use paladin_ports::output::garrison_port::GarrisonError;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use tiktoken_rs::{CoreBPE, get_bpe_from_model};
 
-/// Trait for counting tokens in text.
-pub trait TokenCounter: Send + Sync {
-    /// Counts the number of tokens in the given text.
-    ///
-    /// # Arguments
-    ///
-    /// * `text` - The text to count tokens for
-    ///
-    /// # Returns
-    ///
-    /// The number of tokens, or an error if tokenization fails
-    fn count_tokens(&self, text: &str) -> Result<u32, GarrisonError>;
-
-    /// Returns the model name this counter is configured for.
-    fn model_name(&self) -> &str;
-}
+pub use paladin_ports::output::token_counter_port::{TokenCountError, TokenCounter};
 
 /// Token counter using tiktoken for OpenAI models.
 ///
@@ -60,7 +51,7 @@ impl TiktokenCounter {
     ///
     /// # Errors
     ///
-    /// Returns [`GarrisonError::TokenizationError`] if the model name is not
+    /// Returns [`TokenCountError::UnsupportedModel`] if the model name is not
     /// supported by `tiktoken_rs`.
     ///
     /// # Examples
@@ -70,9 +61,9 @@ impl TiktokenCounter {
     ///
     /// let counter = TiktokenCounter::new("gpt-4").unwrap();
     /// ```
-    pub fn new(model_name: &str) -> Result<Self, GarrisonError> {
+    pub fn new(model_name: &str) -> Result<Self, TokenCountError> {
         let bpe = get_bpe_from_model(model_name).map_err(|e| {
-            GarrisonError::TokenizationError(format!(
+            TokenCountError::UnsupportedModel(format!(
                 "Failed to initialize tokenizer for model '{}': {}",
                 model_name, e
             ))
@@ -99,7 +90,7 @@ impl TiktokenCounter {
 }
 
 impl TokenCounter for TiktokenCounter {
-    fn count_tokens(&self, text: &str) -> Result<u32, GarrisonError> {
+    fn count_tokens(&self, text: &str) -> Result<u32, TokenCountError> {
         // Check cache first
         if let Ok(cache) = self.cache.read()
             && let Some(&count) = cache.get(text)
@@ -147,7 +138,7 @@ impl TokenCounterFactory {
     ///
     /// # Errors
     ///
-    /// Returns [`GarrisonError::TokenizationError`] if the model is not supported.
+    /// Returns [`TokenCountError::UnsupportedModel`] if the model is not supported.
     ///
     /// # Examples
     ///
@@ -157,7 +148,7 @@ impl TokenCounterFactory {
     /// let counter = TokenCounterFactory::for_model("gpt-4").unwrap();
     /// let count = counter.count_tokens("Test message").unwrap();
     /// ```
-    pub fn for_model(model_name: &str) -> Result<Box<dyn TokenCounter>, GarrisonError> {
+    pub fn for_model(model_name: &str) -> Result<Box<dyn TokenCounter>, TokenCountError> {
         let counter = TiktokenCounter::new(model_name)?;
         Ok(Box::new(counter))
     }
@@ -194,9 +185,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tiktoken_counter_unsupported_model() {
-        let result = TiktokenCounter::new("unsupported-model-xyz");
-        assert!(result.is_err());
+    fn tiktoken_counter_rejects_an_unknown_model_with_unsupported_model() {
+        let result = TiktokenCounter::new("a-model-tiktoken-has-never-heard-of");
+        assert!(matches!(result, Err(TokenCountError::UnsupportedModel(_))));
     }
 
     #[test]

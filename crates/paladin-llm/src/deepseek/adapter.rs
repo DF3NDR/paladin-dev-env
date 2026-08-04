@@ -163,6 +163,27 @@ struct DeepSeekUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
     total_tokens: u32,
+    /// The reasoning/content split within `completion_tokens`. Absent on
+    /// non-reasoning responses and on every pre-existing test fixture, so
+    /// `#[serde(default)]` is required, not stylistic.
+    #[serde(default)]
+    completion_tokens_details: Option<DeepSeekCompletionTokensDetails>,
+}
+
+/// The reasoning/content split DeepSeek reports on reasoning-model
+/// completions.
+///
+/// Reasoning models (e.g. the `-flash`/`-pro` variants) split their
+/// `max_tokens` budget between hidden `reasoning_content` and visible
+/// `content` (see [`deserialize_null_as_empty_string`]). Before this type
+/// existed, `completion_tokens` was a single opaque number: a caller could
+/// not tell "reasoning consumed the whole budget" from "content generation
+/// itself ran long" — diagnosis E7. `reasoning_tokens` is the number that
+/// makes that split observable.
+#[derive(Debug, Deserialize, Default)]
+struct DeepSeekCompletionTokensDetails {
+    #[serde(default)]
+    reasoning_tokens: Option<u32>,
 }
 
 // ── DeepSeek streaming response structures ───────────────────────────────────
@@ -230,19 +251,32 @@ fn detect_empty_completion(content: &str, finish_reason: &FinishReason) -> Optio
 /// change [`detect_empty_completion`]'s own signature — five existing tests
 /// call it with two arguments and are left untouched.
 ///
-/// **Known, deliberate limitation.** The reasoning/content token SPLIT stays
-/// unobservable: [`DeepSeekUsage`] does not deserialize
-/// `completion_tokens_details.reasoning_tokens`. Recording `prompt_tokens`
-/// here is a strictly smaller, separately-scoped change — splitting
-/// reasoning from content is a distinct upstream change left for its own
-/// task, not silently implied as solved by this one.
+/// **Reasoning-token observability (diagnosis E7).** When the provider
+/// reports `completion_tokens_details.reasoning_tokens`, the annotation
+/// names it alongside the existing three counts — this is the number that
+/// distinguishes "ran out mid-answer" (reasoning consumed the whole budget,
+/// content generation never started) from "never started answering" (a
+/// prompt-sizing problem), and without it this failure class stayed
+/// permanently indirect to diagnose. The clause is appended ONLY when the
+/// provider reports it, so the message stays byte-identical to before on
+/// every response that omits it (non-reasoning models, and every
+/// pre-existing test fixture).
 fn annotate_with_usage(err: LlmError, usage: &DeepSeekUsage) -> LlmError {
     match err {
-        LlmError::EmptyCompletion(msg) => LlmError::EmptyCompletion(format!(
-            "{msg} (provider-reported usage: prompt_tokens={}, completion_tokens={}, \
-             total_tokens={})",
-            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
-        )),
+        LlmError::EmptyCompletion(msg) => {
+            let reasoning_clause = usage
+                .completion_tokens_details
+                .as_ref()
+                .and_then(|details| details.reasoning_tokens)
+                .map(|reasoning_tokens| format!(", reasoning_tokens={reasoning_tokens}"))
+                .unwrap_or_default();
+
+            LlmError::EmptyCompletion(format!(
+                "{msg} (provider-reported usage: prompt_tokens={}, completion_tokens={}, \
+                 total_tokens={}{reasoning_clause})",
+                usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
+            ))
+        }
         other => other,
     }
 }
@@ -915,6 +949,7 @@ mod tests {
             prompt_tokens: 31_000,
             completion_tokens: 32_000,
             total_tokens: 63_000,
+            completion_tokens_details: None,
         };
 
         let annotated = annotate_with_usage(err, &usage);
@@ -945,6 +980,7 @@ mod tests {
             prompt_tokens: 1,
             completion_tokens: 2,
             total_tokens: 3,
+            completion_tokens_details: None,
         };
 
         let annotated = annotate_with_usage(err, &usage);
@@ -952,6 +988,101 @@ mod tests {
         match annotated {
             LlmError::Timeout(msg) => assert_eq!(msg, "request timed out"),
             other => panic!("expected Timeout to round-trip unchanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_annotate_with_usage_names_reasoning_tokens_when_present() {
+        let err = LlmError::EmptyCompletion("finish_reason=length with empty content".to_string());
+        let usage = DeepSeekUsage {
+            prompt_tokens: 31_000,
+            completion_tokens: 32_000,
+            total_tokens: 63_000,
+            completion_tokens_details: Some(DeepSeekCompletionTokensDetails {
+                reasoning_tokens: Some(32_000),
+            }),
+        };
+
+        let annotated = annotate_with_usage(err, &usage);
+
+        match annotated {
+            LlmError::EmptyCompletion(msg) => {
+                assert!(msg.contains("prompt_tokens=31000"), "got: {msg}");
+                assert!(msg.contains("completion_tokens=32000"), "got: {msg}");
+                assert!(msg.contains("total_tokens=63000"), "got: {msg}");
+                assert!(
+                    msg.contains("reasoning_tokens=32000"),
+                    "must name the reasoning/content split, got: {msg}"
+                );
+            }
+            other => {
+                panic!("expected EmptyCompletion to round-trip as EmptyCompletion, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn test_annotate_with_usage_is_byte_identical_when_completion_tokens_details_is_absent() {
+        // No `completion_tokens_details` key at all in the JSON — the field must default
+        // rather than fail deserialization (backward compatible with every non-reasoning
+        // response and every pre-existing fixture).
+        let json = r#"{"prompt_tokens":31000,"completion_tokens":32000,"total_tokens":63000}"#;
+        let usage: DeepSeekUsage = serde_json::from_str(json).expect("should deserialize");
+        assert!(usage.completion_tokens_details.is_none());
+
+        let err = LlmError::EmptyCompletion("finish_reason=length with empty content".to_string());
+
+        let annotated = annotate_with_usage(err, &usage);
+
+        match annotated {
+            LlmError::EmptyCompletion(msg) => {
+                assert_eq!(
+                    msg,
+                    "finish_reason=length with empty content (provider-reported usage: \
+                     prompt_tokens=31000, completion_tokens=32000, total_tokens=63000)",
+                    "message must be byte-identical to the pre-reasoning-token-observability \
+                     shape when the provider omits completion_tokens_details"
+                );
+            }
+            other => {
+                panic!("expected EmptyCompletion to round-trip as EmptyCompletion, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn test_annotate_with_usage_accepts_completion_tokens_details_omitting_reasoning_tokens() {
+        // `completion_tokens_details` present but its own `reasoning_tokens` key absent —
+        // must deserialize (not error) and annotate_with_usage must not fabricate a
+        // reasoning_tokens clause it was never given.
+        let json = r#"{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30,"completion_tokens_details":{}}"#;
+        let usage: DeepSeekUsage = serde_json::from_str(json).expect("should deserialize");
+
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 20);
+        assert_eq!(usage.total_tokens, 30);
+        assert_eq!(
+            usage
+                .completion_tokens_details
+                .as_ref()
+                .and_then(|d| d.reasoning_tokens),
+            None
+        );
+
+        let err = LlmError::EmptyCompletion("finish_reason=length with empty content".to_string());
+        let annotated = annotate_with_usage(err, &usage);
+
+        match annotated {
+            LlmError::EmptyCompletion(msg) => {
+                assert!(
+                    !msg.contains("reasoning_tokens"),
+                    "must not fabricate a reasoning_tokens clause when the key is absent, \
+                     got: {msg}"
+                );
+            }
+            other => {
+                panic!("expected EmptyCompletion to round-trip as EmptyCompletion, got {other:?}")
+            }
         }
     }
 

@@ -29,8 +29,9 @@ the plans that follow in this same phase):
 | 0007 | `battalion-cancellation-deferral` | Battalion-wide cancellation deferred to Phalanx-only, per D-05/D-08 (Phase 2) |
 | 0008 | `workspace-version-0-7-0` | Workspace version converges on 0.7.0, per D-01/D-02 (Phase 4) |
 | 0009 | `workspace-rust-edition-2024` | Workspace Rust edition converges on 2024, per D-04/D-06 (Phase 4) |
+| 0010 | `prompt-context-budgeting` | Prompt/context budgeting against declared `max_context_tokens` (LLMR-04, Phase 41) |
 
-**Next free ADR number: 0010**
+**Next free ADR number: 0011**
 
 Phases 5, 7, 10 and 13 take the next free number from this line when they author further ADRs —
 they do not need to `ls` the directory to find it. Each phase updates this line when it appends.

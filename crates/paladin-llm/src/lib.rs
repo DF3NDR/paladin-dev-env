@@ -53,6 +53,8 @@ pub mod llm_analysis_service;
 /// Factory for selecting provider adapters from runtime configuration.
 #[allow(missing_docs)]
 pub mod provider_factory;
+/// Services that compose port traits — the Quartermaster prompt-budgeting service.
+pub mod services;
 
 #[cfg(feature = "openai")]
 /// OpenAI provider adapter and related configuration.

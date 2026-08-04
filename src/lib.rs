@@ -166,6 +166,13 @@ pub use application::cli;
 // LLM adapter implementations (from paladin-llm crate)
 pub use paladin_llm::provider_factory::LlmProviderFactory;
 
+// Quartermaster prompt-context-budgeting service (from paladin-llm crate; LLMR-04).
+// Confirmed consumer: plan 41-10 (crates/audit-agents/src/deductive.rs).
+pub use paladin_llm::services::quartermaster::{
+    Allotment, AllotmentConfig, ApportionedItem, Convoy, ConvoyItem, Quartermaster,
+    QuartermasterError, ShedItem,
+};
+
 #[cfg(feature = "llm-openai")]
 pub use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 

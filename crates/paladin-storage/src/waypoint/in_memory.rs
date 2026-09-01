@@ -3,8 +3,11 @@ In-Memory Waypoint Store
 
 An `Arc<tokio::sync::RwLock<HashMap<ThreadId, Vec<Waypoint>>>>`-backed
 implementation of `WaypointPort`, for tests and local development (ENG-FR-15,
-D-01: always available, no feature gate). Waypoints are stored append-only,
-oldest-first, per thread.
+D-01: always available, no feature gate). `save` appends a new waypoint_id or
+upserts (replaces in place) an existing one, per the WaypointPort::save
+contract; ordering for `history`/`latest` is never inferred from storage
+position -- both are computed by explicit sort/max over `created_at` and
+`superstep`, per the documented tiebreak.
 */
 
 use std::collections::HashMap;
@@ -51,16 +54,31 @@ impl InMemoryWaypointStore {
 impl WaypointPort for InMemoryWaypointStore {
     async fn save(&self, wp: &Waypoint) -> Result<(), WaypointError> {
         let mut threads = self.threads.write().await;
-        threads
-            .entry(wp.thread_id.clone())
-            .or_default()
-            .push(wp.clone());
+        let entries = threads.entry(wp.thread_id.clone()).or_default();
+        // Upsert: re-saving an existing waypoint_id replaces its entry
+        // in place rather than appending a duplicate (WaypointPort::save
+        // rustdoc contract, contract_tests::resave_existing_waypoint_id_upserts).
+        match entries
+            .iter_mut()
+            .find(|existing| existing.waypoint_id == wp.waypoint_id)
+        {
+            Some(existing) => *existing = wp.clone(),
+            None => entries.push(wp.clone()),
+        }
         Ok(())
     }
 
     async fn latest(&self, thread: &ThreadId) -> Result<Option<Waypoint>, WaypointError> {
         let threads = self.threads.read().await;
-        Ok(threads.get(thread).and_then(|wps| wps.last().cloned()))
+        Ok(threads.get(thread).and_then(|wps| {
+            wps.iter()
+                .max_by(|a, b| {
+                    a.created_at
+                        .cmp(&b.created_at)
+                        .then_with(|| a.superstep.cmp(&b.superstep))
+                })
+                .cloned()
+        }))
     }
 
     async fn get(
@@ -85,8 +103,15 @@ impl WaypointPort for InMemoryWaypointStore {
             return Ok(vec![]);
         };
 
-        // Stored oldest-first; present newest-first.
-        let mut newest_first: Vec<&Waypoint> = wps.iter().rev().collect();
+        // Sort explicitly by created_at descending, superstep descending as
+        // the documented tiebreak (WaypointPort::history rustdoc) -- do not
+        // rely on insertion order, which `save`'s upsert can disturb.
+        let mut newest_first: Vec<&Waypoint> = wps.iter().collect();
+        newest_first.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.superstep.cmp(&a.superstep))
+        });
 
         if let Some(before_id) = before {
             let cut = newest_first
@@ -146,83 +171,102 @@ impl WaypointPort for InMemoryWaypointStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
-    use paladin_core::platform::container::waypoint::{GraphFingerprint, WaypointStatus};
+    use crate::waypoint::contract_tests;
 
-    fn fixture_waypoint(thread: &ThreadId, superstep: u64) -> Waypoint {
-        Waypoint {
-            thread_id: thread.clone(),
-            waypoint_id: WaypointId::new(),
-            parent_waypoint_id: None,
-            superstep,
-            graph_fingerprint: GraphFingerprint::from_canonical_bytes(b"fixture"),
-            battlefield: Battlefield::new(BattlefieldSchema::new(vec![])),
-            vanguard: vec![],
-            completed: vec![],
-            status: WaypointStatus::Completed,
-            created_at: Utc::now(),
-            schema_version: Waypoint::current_schema_version(),
-        }
+    // One #[tokio::test] per shared contract function (D-09), each against a
+    // fresh store, so a failure names the violated contract clause. See
+    // `contract_tests` for the assertions themselves -- this file only wires
+    // InMemoryWaypointStore into them.
+
+    #[tokio::test]
+    async fn save_then_latest_returns_saved_waypoint_round_tripped() {
+        contract_tests::save_then_latest_returns_saved_waypoint_round_tripped(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
     }
 
     #[tokio::test]
-    async fn save_then_latest_round_trips() {
-        let store = InMemoryWaypointStore::new();
-        let thread = ThreadId::new("t1").unwrap();
-        let wp = fixture_waypoint(&thread, 0);
-        store.save(&wp).await.unwrap();
-
-        let loaded = store.latest(&thread).await.unwrap().unwrap();
-        assert_eq!(loaded, wp);
+    async fn latest_on_unknown_thread_is_none() {
+        contract_tests::latest_on_unknown_thread_is_none(&InMemoryWaypointStore::new()).await;
     }
 
     #[tokio::test]
-    async fn latest_on_unknown_thread_is_none_not_error() {
-        let store = InMemoryWaypointStore::new();
-        let thread = ThreadId::new("unknown").unwrap();
-        assert!(store.latest(&thread).await.unwrap().is_none());
+    async fn get_on_known_thread_unknown_id_is_none() {
+        contract_tests::get_on_known_thread_unknown_id_is_none(&InMemoryWaypointStore::new()).await;
     }
 
     #[tokio::test]
-    async fn history_is_newest_first_and_paginated() {
-        let store = InMemoryWaypointStore::new();
-        let thread = ThreadId::new("t1").unwrap();
-        for i in 0..3 {
-            store.save(&fixture_waypoint(&thread, i)).await.unwrap();
-        }
-
-        let history = store.history(&thread, None, None).await.unwrap();
-        assert_eq!(history.len(), 3);
-        assert_eq!(history[0].superstep, 2);
-        assert_eq!(history[1].superstep, 1);
-        assert_eq!(history[2].superstep, 0);
-
-        let limited = store.history(&thread, Some(2), None).await.unwrap();
-        assert_eq!(limited.len(), 2);
-        assert_eq!(limited[0].superstep, 2);
+    async fn get_on_known_thread_known_id_returns_exact_waypoint() {
+        contract_tests::get_on_known_thread_known_id_returns_exact_waypoint(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
     }
 
     #[tokio::test]
-    async fn delete_thread_removes_all_waypoints_and_counts_them() {
-        let store = InMemoryWaypointStore::new();
-        let thread = ThreadId::new("t1").unwrap();
-        store.save(&fixture_waypoint(&thread, 0)).await.unwrap();
-        store.save(&fixture_waypoint(&thread, 1)).await.unwrap();
-
-        let deleted = store.delete_thread(&thread).await.unwrap();
-        assert_eq!(deleted, 2);
-        assert!(store.latest(&thread).await.unwrap().is_none());
+    async fn history_with_no_pagination_returns_all_newest_first() {
+        contract_tests::history_with_no_pagination_returns_all_newest_first(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
     }
 
     #[tokio::test]
-    async fn list_threads_reflects_latest_status_per_thread() {
-        let store = InMemoryWaypointStore::new();
-        let t1 = ThreadId::new("t1").unwrap();
-        let t2 = ThreadId::new("t2").unwrap();
-        store.save(&fixture_waypoint(&t1, 0)).await.unwrap();
-        store.save(&fixture_waypoint(&t2, 0)).await.unwrap();
+    async fn history_limit_and_before_paginate_with_no_overlap_or_gap() {
+        contract_tests::history_limit_and_before_paginate_with_no_overlap_or_gap(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
+    }
 
-        let threads = store.list_threads(None, None).await.unwrap();
-        assert_eq!(threads.len(), 2);
+    #[tokio::test]
+    async fn history_limit_zero_returns_empty() {
+        contract_tests::history_limit_zero_returns_empty(&InMemoryWaypointStore::new()).await;
+    }
+
+    #[tokio::test]
+    async fn history_on_unknown_thread_returns_empty() {
+        contract_tests::history_on_unknown_thread_returns_empty(&InMemoryWaypointStore::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn history_same_created_at_tiebreaks_by_descending_superstep_stably() {
+        contract_tests::history_same_created_at_tiebreaks_by_descending_superstep_stably(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_threads_empty_then_three_threads_newest_activity_first() {
+        contract_tests::list_threads_empty_then_three_threads_newest_activity_first(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn delete_thread_removes_count_and_unknown_returns_zero() {
+        contract_tests::delete_thread_removes_count_and_unknown_returns_zero(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn resave_existing_waypoint_id_upserts() {
+        contract_tests::resave_existing_waypoint_id_upserts(&InMemoryWaypointStore::new()).await;
+    }
+
+    #[tokio::test]
+    async fn child_lineage_survives_round_trip() {
+        contract_tests::child_lineage_survives_round_trip(&InMemoryWaypointStore::new()).await;
+    }
+
+    #[tokio::test]
+    async fn run_all_contract_functions_smoke_aggregate() {
+        contract_tests::run_all(&InMemoryWaypointStore::new()).await;
     }
 }

@@ -16,9 +16,14 @@ pub mod contract_tests;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
-/// Credential redaction for connection-string-derived error text (T-22-18).
-/// Consumed by the `sqlite` backend now; the `postgres` backend (Task 2)
-/// will widen this gate to `any(feature = "sqlite", feature = "postgres")`
-/// once that feature exists in this crate's `Cargo.toml`.
-#[cfg(feature = "sqlite")]
+/// PostgreSQL implementation of `WaypointPort`, behind the `postgres`
+/// feature, over a versioned migration (Plan 22-06, ENG-05, D-01).
+#[cfg(feature = "postgres")]
+pub mod postgres;
+
+/// Credential redaction for connection-string-derived error text (T-22-18),
+/// shared by the `sqlite` and `postgres` backends. Gated the same as its
+/// consumers so a build with neither SQL feature enabled does not warn about
+/// unused code.
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
 pub(crate) mod redact;

@@ -114,6 +114,33 @@ services:
     networks:
       - paladin-test-network
 
+  # PostgreSQL Tier 2 suite (Phase 22 Plan 22-06, D-10): the only place in
+  # the workspace `PostgresWaypointStore` runs against a real Postgres
+  # server, proving the shared WaypointPort contract suite (from Plan 22-03)
+  # passes unchanged across all three backends. Mapped host port 5433 avoids
+  # colliding with a locally-running Postgres instance on the default 5432.
+  # Credentials are scoped to this test compose file only -- never used
+  # outside a throwaway, tmpfs-backed container.
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: paladin-postgres-test
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: paladin
+      POSTGRES_PASSWORD: paladin
+      POSTGRES_DB: paladin_waypoint_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks:
+      - paladin-test-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U paladin -d paladin_waypoint_test" ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   # Service for running integration tests
   integration-tests:
     build:

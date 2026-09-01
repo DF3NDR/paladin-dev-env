@@ -325,7 +325,11 @@ notifications = ["dep:paladin-notifications", "paladin-notifications/email", "pa
 # SQLite repositories are always available: `paladin-storage` is a non-optional
 # dependency with its `sqlite` feature enabled (see [dependencies]).
 storage-mysql = ["paladin-storage/mysql"]
-storage = ["storage-mysql"]
+# PostgreSQL `WaypointPort` adapter (ENG-05, D-01). Deliberately NOT part of
+# `default` or `full`'s implicit set beyond this explicit passthrough -- see
+# X-11.4: the default `paladin-ai` build must gain no Postgres driver.
+storage-postgres = ["paladin-storage/postgres"]
+storage = ["storage-mysql", "storage-postgres"]
 
 # CLI (binary and test tooling only — not compiled into the library)
 cli = ["dep:clap", "dep:dialoguer", "dep:indicatif", "dep:console", "dep:serde_yaml", "dep:colored", "dep:comfy-table", "paladin-herald/table", "paladin-herald/color"]

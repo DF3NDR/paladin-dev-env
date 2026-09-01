@@ -235,7 +235,7 @@ Runtime" — are detailed in full below.*
 **Plans**: 11 plans (7 waves)
 **Wave 1**
 
-- [ ] 22-01-PLAN.md — Tracer: one typed node checkpointed end-to-end and resumed with zero re-execution (wave 1, blocking D-04 fingerprint decision)
+- [x] 22-01-PLAN.md — Tracer: one typed node checkpointed end-to-end and resumed with zero re-execution (wave 1, blocking D-04 fingerprint decision)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

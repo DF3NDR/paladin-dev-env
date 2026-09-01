@@ -477,8 +477,7 @@ impl<W: WaypointPort> WarEngine<W> {
         graph.validate()?;
 
         let registry = CustomDispatchRegistry::new();
-        let mut battlefield = Battlefield::new(graph.schema().clone());
-        battlefield.merge(&initial, &registry)?;
+        let mut battlefield = Battlefield::initialize(graph.schema().clone(), &initial)?;
         battlefield.validate_required()?;
 
         if graph.entry().len() != 1 || !graph.edges().is_empty() {
@@ -515,7 +514,7 @@ impl<W: WaypointPort> WarEngine<W> {
         let delta = node.run(&snapshot, &ctx).await?;
         let duration_ms = (Utc::now() - started_at).num_milliseconds().max(0) as u64;
 
-        battlefield.merge(&delta, &registry)?;
+        battlefield.merge(vec![(node_id.clone(), delta)], 0, &registry)?;
 
         let waypoint_id = WaypointId::new();
         let waypoint = Waypoint {
@@ -778,7 +777,11 @@ mod tests {
         let mut delta = StateDelta::new();
         delta.set(FieldName::new("name").unwrap(), "world").unwrap();
         battlefield
-            .merge(&delta, &CustomDispatchRegistry::new())
+            .merge(
+                vec![(NodeId::new("writer"), delta)],
+                0,
+                &CustomDispatchRegistry::new(),
+            )
             .unwrap();
 
         let mapping = InputMapping::new("hello {name}!");

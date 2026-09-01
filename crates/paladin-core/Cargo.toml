@@ -2,6 +2,7 @@
 name = "paladin-ai-core"
 version = "0.9.0"
 edition = "2024"
+rust-version = "1.85"
 authors = ["Am0rfu5"]
 license = "MIT OR Apache-2.0"
 description = "Pure domain types for the Paladin framework — zero infrastructure dependencies"

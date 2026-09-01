@@ -231,6 +231,37 @@ jobs:
           echo "  3. Update the baseline: ./scripts/extract-public-api.sh .project/current-exports.txt"
           echo "  4. Commit the updated baseline"
 
+  # MSRV verification (X-11.1, D-07). Dedicated job pinned to the workspace's
+  # declared `rust-version = "1.85"` (all 11 publishable manifests, see
+  # MIGRATION.md §9.3), independent of and parallel with every other job --
+  # no `needs:` edge, so it cannot gate or be gated by anything else. The
+  # pinned dev toolchain (rust-toolchain.toml, 1.97.1) would otherwise
+  # override whatever this job installs; RUSTUP_TOOLCHAIN is the same
+  # documented opt-out the `test` job below already uses for its stable/beta
+  # matrix. `--all-features --all-targets` builds the full workspace,
+  # including every optional adapter, at the floor version -- not just the
+  # default feature set -- so a feature-gated dependency that silently needs
+  # a newer compiler cannot hide behind `default-features`.
+  msrv:
+    name: MSRV (Rust 1.85)
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: "1.85"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust 1.85 toolchain
+        uses: dtolnay/rust-toolchain@1.85
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.85
+
+      - name: Check workspace at MSRV (all features, all targets)
+        run: cargo check --workspace --all-features --all-targets
+
   # Unit tests
   test:
     name: Unit Tests

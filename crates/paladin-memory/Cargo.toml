@@ -2,6 +2,7 @@
 name = "paladin-memory"
 version = "0.9.0"
 edition = "2024"
+rust-version = "1.85"
 authors = ["Am0rfu5"]
 license = "MIT OR Apache-2.0"
 description = "Memory adapters for the Paladin framework — Garrison (conversation history) and Sanctum (vector search)"

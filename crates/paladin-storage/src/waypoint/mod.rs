@@ -27,3 +27,11 @@ pub mod postgres;
 /// unused code.
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
 pub(crate) mod redact;
+
+/// Retention/cleanup routine for pruning old Waypoints, bounded by age
+/// and/or per-thread count, with hard exclusions for a thread's latest
+/// Waypoint and any `AwaitingInput` Waypoint (ENG-FR-18). Backend-agnostic:
+/// built entirely over the existing `WaypointPort` surface, so it runs
+/// unchanged over `InMemoryWaypointStore`, `SqliteWaypointStore`, and
+/// `PostgresWaypointStore`.
+pub mod retention;

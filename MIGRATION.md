@@ -65,18 +65,18 @@ Columns: **Crate · Type/Trait · Change · Mitigation (`#[non_exhaustive]` / de
 
 Every new runtime behavior this phase introduces is tunable and **disabled or defaulted to today's behavior out of the box** (X-09), so a v0.9 configuration file boots v0.10 with identical behavior. This claim will be backed by an integration test that boots the server with the v0.9 sample config and asserts feature/config resolution to legacy behavior — TBD, owner SHIP-02, Phase 29.
 
-Planned config structs (mirroring the existing `CitadelConfig` shape at `src/config/citadel.rs`: `Default` + `validate()` + `EnvOverridable`). **Neither struct exists in the tree yet as of this plan (22-04); both land in this phase's engine-wiring plan (ENG-01…ENG-05).**
+Config structs mirror the existing `CitadelConfig` shape at `src/config/citadel.rs`: `Default` + `validate()` + `EnvOverridable`.
 
-- **`EngineConfig`** (planned path `src/config/engine.rs`):
+- **`EngineConfig`** (planned path `src/config/engine.rs`) — **not yet in the tree**; lands in a later engine-wiring plan of this phase:
   - `max_supersteps: u64` — default `50`. Env: `APP_ENGINE_MAX_SUPERSTEPS`.
   - `max_node_visits: u32` — default `25`. Env: `APP_ENGINE_MAX_NODE_VISITS`.
   - `run_timeout_secs: Option<u64>` — default `None` (plumbing-only this phase; Doc 04/`FT-03` owns timeout semantics). Env: `APP_ENGINE_RUN_TIMEOUT_SECS`.
   - `waypoint_durability: WaypointDurability` (`Strict` | `BestEffort`) — default `Strict`. Env: `APP_ENGINE_WAYPOINT_DURABILITY`.
-- **`WaypointRetentionConfig`** (planned path `src/config/waypoint_retention.rs`):
-  - `enabled: bool` — default `false` (no pruning runs until an operator opts in — the new subsystem is off by default).
-  - `max_age_days: Option<u32>` — default `None`. Env: `APP_WAYPOINT_RETENTION_MAX_AGE_DAYS`.
-  - `max_waypoints_per_thread: Option<u32>` — default `None`. Env: `APP_WAYPOINT_RETENTION_MAX_WAYPOINTS_PER_THREAD`.
-  - Env: `APP_WAYPOINT_RETENTION_ENABLED` for the `enabled` field.
+- **`WaypointRetentionConfig`** (`src/config/waypoint_retention.rs`) — **landed this plan (22-06, Task 3)**:
+  - `enabled: bool` — default `false` (no pruning runs until an operator opts in — the new subsystem is off by default). Env: `APP_WAYPOINT_RETENTION_ENABLED`.
+  - `max_age_days: Option<u32>` — default `None`. Env: `APP_WAYPOINT_RETENTION_MAX_AGE_DAYS`. `validate()` rejects `Some(0)`.
+  - `max_waypoints_per_thread: Option<u32>` — default `None`. Env: `APP_WAYPOINT_RETENTION_MAX_WAYPOINTS_PER_THREAD`. `validate()` rejects `Some(0)`.
+  - The `paladin_storage::waypoint::retention::prune` routine this config feeds enforces two hard exclusions as invariants of the routine itself, not left to any caller: a thread's latest Waypoint is never a deletion candidate, and no `AwaitingInput` Waypoint is ever a deletion candidate (ENG-FR-18, T-22-21). It composes only the existing `WaypointPort` surface (`history`/`get`/`delete_thread`/`save`) rather than adding a per-waypoint delete primitive to the port, so it runs unchanged over `InMemoryWaypointStore`, `SqliteWaypointStore`, and `PostgresWaypointStore`.
 
 Since every new field either defaults to today's absent behavior (`enabled: false`, no retention pruning) or to a bounded-but-generous limit that only applies to the *new* `WarEngine` path (legacy Formation/Phalanx/Campaign call sites never construct an `EngineConfig`), a v0.9 configuration file — which has no `engine:`/`waypoint_retention:` section at all — resolves to identical runtime behavior.
 

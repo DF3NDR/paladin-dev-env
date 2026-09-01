@@ -102,6 +102,7 @@ frozen at 311 lines that two milestones made invisible.
 | **Milestone 9-12 + Deferred-QA close-out** | 12-16 | ✅ **Shipped v0.8.0 (2026-08-24)** — [archive](milestones/v0.8.0-ROADMAP.md) | Ingest run 5 (FINAL) — `.project/Milestone_9-Classic-Orchestrator-Completion` + `.project/Milestone_10-CI-Hardening-Release-Automation` + `.project/Milestone_11-Documentation-Overhaul-Publish` + `.project/Milestone_12-Web-API` + `.project/Deferred-QA-CICD-Completion` + `.project/project-management` (46 docs) |
 | **Provider Expansion** | 17 | ✅ **Shipped v0.8.0 (2026-08-24)** — [archive](milestones/v0.8.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-15 per *Roadmap Extension Protocol* item 1. |
 | **Security Tooling** | 18-21 | ✅ **Shipped v0.9.0 (2026-09-01)** — [archive](milestones/v0.9.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-24 per *Roadmap Extension Protocol* item 1, closing the Rust-SAST gap the v0.8.0 milestone audit left as its one genuinely open item; extended 2026-08-25 with Phases 19-21 (publish credential, publish operations, release artifacts). |
+| **Durable Agent Execution Runtime** | 22-29 | 🔲 Not started | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. |
 
 **The ingest is complete.** All 263 documents in `.project/` are covered — 199 classified across
 five runs and 64 `tasks-*.md` measured deterministically by `intel/task-completion-state.md`. There
@@ -191,6 +192,17 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 
 </details>
 
+**Durable Agent Execution Runtime (Phases 22-29)** — not started (added 2026-09-01)
+
+- [ ] **Phase 22: Battlefield State & Superstep Engine** - Typed shared state, cyclic superstep execution, and automatic per-superstep checkpointing that resumes with zero re-execution after a crash
+- [ ] **Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs** - Directive-based routing, Muster dynamic fan-out, nested Battalion subgraphs, LLM-evaluated routing, and the BUG-01 fail-closed fix
+- [ ] **Phase 24: Pause/Resume, History & Graceful Shutdown** - Indefinite Parley pauses, typed resume validation, an inspectable/forkable Chronicle, graceful shutdown, and Thread endpoints over HTTP
+- [ ] **Phase 25: Node-Level Fault Tolerance** - Typed error transience, per-node Aegis retry, wall/idle timeouts, typed compensation handlers, provider fallback, and node result caching
+- [ ] **Phase 26: Agent Runtime Enhancements** - Execution middleware chain, context-window management, cross-session Vault memory, structured output, provider conformance close-out, and a one-line reasoning agent
+- [ ] **Phase 27: Platform API** - Durable background runs on a worker pool, Parley/streaming integration, versioned assistants, and API-managed schedules/webhooks
+- [ ] **Phase 28: Observability & Tooling** - Machine-consumable trace stream, OTel/log/SSE consumers, graph/run visualization, and the paladin-eval regression harness
+- [ ] **Phase 29: Program Gates & Release** - Complete MIGRATION.md, proven backward compatibility, the program acceptance audit, and a releasable v0.10.0
+
 ## Phase Details
 
 *Phases 1-4 are archived in [`milestones/v0.7.1-ROADMAP.md`](milestones/v0.7.1-ROADMAP.md).
@@ -204,7 +216,103 @@ of the v0.9.0 Security Tooling milestone — are archived in
 [`v0.9.0-REQUIREMENTS.md`](milestones/v0.9.0-REQUIREMENTS.md) and
 [`v0.9.0-MILESTONE-AUDIT.md`](milestones/v0.9.0-MILESTONE-AUDIT.md). Only phases in the current
 and future milestones are detailed below, which is what keeps this file a constant size per
-milestone. No next milestone is defined yet — start one with `/gsd-new-milestone`.*
+milestone. Phases 22-29 — the current milestone, v0.10.0 "Durable Agent Execution
+Runtime" — are detailed in full below.*
+
+### Phase 22: Battlefield State & Superstep Engine
+**Goal**: A Rust developer can declare typed shared state exchanged through per-field dispatch rules, and run cyclic multi-agent graphs in supersteps that checkpoint automatically and resume with zero re-execution after a crash.
+**Depends on**: Nothing (first phase of v0.10.0; builds on the v0.9.0 baseline)
+**Requirements**: ENG-01, ENG-02, ENG-03, ENG-04, ENG-05, ENG-06, ENG-07, ENG-08
+**Success Criteria** (what must be TRUE):
+  1. A developer can declare a `BattlefieldSchema` and nodes exchange typed `StateDelta`s through per-field dispatch rules (`LastWrite`, `Append`, `MergeObject`, `Sum`, `Custom`), with unknown-field and missing-required schema violations surfacing as hard, structured `BattlefieldError`s, in `paladin-core` with no new core dependencies (ENG-01)
+  2. The `WarEngine` executes cyclic graphs, self-loops included, in bounded supersteps with deterministic frontier and merge order — byte-identical Battlefields over 20+ randomized-scheduling iterations — and join/defer semantics that never deadlock on a not-firing branch (ENG-02)
+  3. Exactly one Waypoint is persisted automatically after every superstep, addressed by `(thread_id, waypoint_id)` with parent lineage and a stable graph fingerprint, and a Waypoint write failure fails the run under the default `Strict` durability (ENG-03)
+  4. Program scenario E2E-1 passes: an engine killed after superstep 3 is reconstructed fresh from the same backend and `thread_id`, resumes with zero re-execution of already-completed nodes, and reaches a final Battlefield identical to an uninterrupted control run, with exactly one Waypoint per completed superstep (ENG-04)
+  5. Three `WaypointPort` backends (InMemory, SQLite, Postgres) all pass one shared contract suite; legacy `from_formation`/`from_phalanx`/`from_campaign` constructors reproduce today's data flow with golden output-equivalence tests; `MIGRATION.md` exists at the repository root with the §9 skeleton and pre-populated register entries; and the `cargo semver-checks` and MSRV CI jobs run green on every PR (ENG-05, ENG-06, ENG-07, ENG-08)
+**Plans**: TBD
+
+### Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
+**Goal**: Nodes steer their own routing at runtime, dynamically fan out into map-reduce workers, nest Battalions as subgraphs, and optionally route by LLM evaluation — with the BUG-01 custom-edge-condition defect fixed fail-closed.
+**Depends on**: Phase 22
+**Requirements**: CF-01, CF-02, CF-03, CF-04, CF-05
+**Success Criteria** (what must be TRUE):
+  1. BUG-01 is fixed fail-closed: an unregistered `EdgeCondition::Custom(name)` fails graph validation with `BattalionError::InvalidGraph`, naming every unregistered condition, before any node executes — on both `CampaignExecutionService` and the `WarEngine` — with the fix's failing-then-passing test visible in history (CF-01)
+  2. A node's returned `Directive` (`NextStep::{Edges, Goto, End, Muster, Parley}`) steers execution with validated `Goto` targets and documented, tested End-over-Goto precedence, via a configurable `DirectiveParser` that defaults to backward-compatible `PlainOutput` (CF-02)
+  3. A planner node's Directive musters a runtime-determined number of worker tasks in one superstep with payload isolation, deterministic `task_key`-ordered aggregation, duplicate-key rejection, a `max_muster_tasks` limit, and mid-muster resume that re-runs only unfinished tasks (CF-03)
+  4. A Battalion can embed a child WarGraph via `NodeSpec::Battalion` with `StateMap` input/output mapping and private child fields, namespaced checkpoint inheritance with resume-mid-child, and recursive embedding rejected at validation (CF-04)
+  5. An `LlmDecision` edge evaluator and Commander `StrategySelection::Semantic` are available and off by default, falling back to Heuristic on any LLM error with the fallback recorded, and existing Commander tests pass unmodified (CF-05)
+**Plans**: TBD
+
+### Phase 24: Pause/Resume, History & Graceful Shutdown
+**Goal**: A workflow can pause indefinitely for human input without holding compute, resume from a different process, expose an inspectable and forkable Chronicle, shut down without losing in-flight work, and be driven over HTTP.
+**Depends on**: Phase 22, Phase 23
+**Requirements**: HITL-01, HITL-02, HITL-03, HITL-04, HITL-05
+**Success Criteria** (what must be TRUE):
+  1. A node (or a first-class `Gate` node with Battlefield templating) raising a `ParleyRequest` suspends the run, persists an `AwaitingInput` Waypoint carrying all of the superstep's parleys, releases every resource, and is resumable from a different process sharing the same backend (HITL-01)
+  2. Program scenario E2E-2 passes: `resume_with(graph, thread, responses)` validates typed responses per kind (Approval/Choice/FreeText/StateEdit) with typed errors that leave the thread suspended, honors `expires_at`, and correctly routes both branches of an approval gate across a process drop/recreate (HITL-02)
+  3. History/inspect over `WaypointPort` supports `replay` and `fork`-with-edit, creating a new chain with `fork_of` lineage while the original chain stays byte-identical, with branch-aware latest resolution (HITL-03)
+  4. Graceful shutdown finishes the in-flight superstep within `shutdown_grace` (default 30s), records over-grace nodes `Skipped` and re-lists them in the vanguard, `resume` continues a `Halted` thread, and SIGTERM/SIGINT are wired to all in-flight runs with `k8s/` manifests and docs updated and a documented disable switch (HITL-04)
+  5. `GET /threads/{id}/state`, `POST /threads/{id}/resume` (with 409/400/404 semantics), and `GET /threads/{id}/history` (paginated) are reachable over HTTP following existing utoipa + error-envelope conventions, with `openapi.json` regenerated (HITL-05)
+**Plans**: TBD
+
+### Phase 25: Node-Level Fault Tolerance
+**Goal**: Individual nodes retry with provable backoff, distinguish stalled from slow work via nested timeouts, compensate typed errors instead of failing the run, fail over across LLM providers, and cache expensive deterministic results.
+**Depends on**: Phase 22, Phase 23 (FT-04's E2E-3 depends on CF-03/Muster)
+**Requirements**: FT-01, FT-02, FT-03, FT-04, FT-05, FT-06
+**Success Criteria** (what must be TRUE):
+  1. `transience()` on `PaladinError` and `LlmError` is table-driven per variant, provider adapters carry status-carrying error variants with no string parsing, and `BattalionError::Node(NodeError)` carries a structured `NodeError` through engine execution — every touched pre-existing public enum handled per X-10 and registered in `MIGRATION.md` §9.2 (FT-01)
+  2. Per-node Aegis retry follows an exact backoff sequence under a paused clock with asserted jitter bounds, gates on the transience predicate (Permanent → 1 attempt), discards failed-attempt deltas while keeping `AttemptRecord` history, and retries per-task inside a Muster (FT-02)
+  3. A wall-clock `run_timeout` and a progress-aware `idle_timeout` (stream chunks, trace events, `ctx.heartbeat()`) are distinguished and nested with engine/Battalion bounds so the tightest fires and the error names which (FT-03)
+  4. Program scenario E2E-3 passes together with CF-03: a `Route`/`Absorb`/registered-`Custom` typed error handler compensates a transiently-failing Muster worker without failing the run, unregistered `Custom` names fail closed, and handler loops are bounded by `max_node_visits` (FT-04)
+  5. `FallbackLlmAdapter` fails over across a provider chain on Transient/Unknown errors only (short-circuiting on Permanent) without silently switching providers mid-stream, and a `CachePolicy`-keyed node hits its `NodeCachePort` cache with `cache_hit: true` and no re-execution while failures are never cached (FT-05, FT-06)
+**Plans**: TBD
+
+### Phase 26: Agent Runtime Enhancements
+**Goal**: `PaladinExecutionService` gains a middleware pipeline, context-window management, confined cross-session memory, first-class structured output, verified provider conformance, and a one-line tool-loop agent preset.
+**Depends on**: Phase 22 (mostly standalone; parallelizable with Phases 24/25)
+**Requirements**: RT-01, RT-02, RT-03, RT-04, RT-05, RT-06, RT-07
+**Success Criteria** (what must be TRUE):
+  1. An ordered `ExecutionMiddleware` chain (before/after model, around tool) applies onion ordering and short-circuit semantics under per-run state isolation, and the same chain applies when a Paladin runs as an engine node (RT-01)
+  2. Built-in middleware ships config-structured per X-09: `ModelCallLimit`/`TokenBudget` (new `StopReason` variants), `ToolCallLimit` denying without failing the run, `Guardrail` prompt/response screens, and retry/fallback middleware that delegates to the FT-05 implementation without duplicating logic (RT-02)
+  3. A `TokenCounterPort`, a stable never-splits-a-message `HistoryTrimmer`, and a compounding `SummarizationMiddleware` keep long conversations within the context window, degrading to trimming on summarizer failure and never failing the run (RT-03)
+  4. A `VaultPort` (InMemory/SQLite/semantic) confines `vault_get`/`vault_put` Armaments to a host-granted namespace subtree (rejecting traversal), and `execute_structured<T>` returns schema-validated output through a bounded, typed repair loop that preserves raw output on exhaustion (RT-04, RT-05)
+  5. The shipped v0.8.0 OpenAI-compatible/Gemini/Ollama paths pass a shared conformance suite with FT-01-correct 429/5xx transience mapping, and `reasoning_agent(llm, tools, opts)` runs as a ≤15-line doc-tested one-liner with tool failures fed back to the model by default (RT-06, RT-07)
+**Plans**: TBD
+
+### Phase 27: Platform API
+**Goal**: Runs execute durably in the background on a worker pool, integrate with Parley pauses and live streaming, and are managed through versioned assistants, cron schedules and webhooks — all reachable over a production-shaped HTTP API.
+**Depends on**: Phase 22, Phase 24
+**Requirements**: PLAT-01, PLAT-02, PLAT-03, PLAT-04, PLAT-05, PLAT-06
+**Success Criteria** (what must be TRUE):
+  1. `POST /runs` returns 202 within 250ms p99 (enqueue only), a `RunRepositoryPort` persists every status transition, and the status machine is monotonic with typed illegal-transition errors (PLAT-01)
+  2. A worker pool executes runs via `RunQueuePort` (InMemory/Redis) with lease heartbeats, at-least-once redelivery that resumes a kill-mid-run thread rather than restarting it, cross-instance cancellation observed at superstep boundaries, and a `409 ThreadBusy` invariant holding under 10 concurrent submits (PLAT-02)
+  3. `AwaitingInput` releases the worker, `POST /threads/{id}/resume` re-enqueues under the same `run_id`, and `GET /runs/{id}/stream` bridges live TraceSink events to SSE with a documented polling-backed degraded mode and 15s heartbeats (PLAT-03)
+  4. Assistants are append-only immutable versions (no PUT, ever) with `latest` frozen at submit time, and `WarGraphDoc` compiles through a registry-resolving `compile()` with a restart-stable fingerprint round-trip (PLAT-04)
+  5. Cron schedules survive restart without duplicate or missed-then-double firing; HMAC-signed webhook delivery retries bounded on 5xx/timeout with an SSRF guard rejecting non-http(s)/loopback/link-local/private/metadata targets; and every new endpoint carries existing auth, rate limiting, scopes and pagination, with `openapi.json` regenerated and Python/TypeScript clients generated and smoke-tested in CI (PLAT-05, PLAT-06)
+**Plans**: TBD
+
+### Phase 28: Observability & Tooling
+**Goal**: Every run emits a machine-consumable trace that reaches real consumers, graphs and runs are visualizable, and agent behavior is regression-testable.
+**Depends on**: Phase 22 (trace seam), Phase 27 (WarGraphDoc)
+**Requirements**: OBS-01, OBS-02, OBS-03, OBS-04
+**Success Criteria** (what must be TRUE):
+  1. The authoritative `TraceEvent` enum carries a per-run monotonic `seq` with a gapless-or-counted-drops guarantee, and a `TraceSinkPort` whose slow or panicking implementations cannot stall or fail a run fans out via `CompositeSink` (OBS-01)
+  2. Traces reach a default-on structured-log sink, an `otel`-gated OpenTelemetry exporter with span-per-attempt trees verified against a collector stub, and the SSE bridge for `GET /runs/{id}/stream` as a TraceSink adapter (OBS-02)
+  3. Golden-tested `WarGraphDoc → Mermaid/DOT` exporters and an execution-overlay export let a human answer "which branch fired and why did node X run 3 times" via `paladin-cli graph export`/`run export` and a minimal auth-gated `dev-ui` inspector page (OBS-03)
+  4. The new `paladin-eval` crate runs scripted mock-LLM scenario files through a `cargo test`-integrable runner macro and `paladin-cli eval run --repeat`/`--bless`, with the three program E2E fixtures dogfooded as eval scenarios (OBS-04)
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 29: Program Gates & Release
+**Goal**: v0.10.0 is releasable — the migration record is complete, backward compatibility is proven rather than asserted, the program acceptance audit passes, and every crate publishes.
+**Depends on**: Phase 22, Phase 23, Phase 24, Phase 25, Phase 26, Phase 27, Phase 28 (all)
+**Requirements**: SHIP-01, SHIP-02, SHIP-03, SHIP-04
+**Success Criteria** (what must be TRUE):
+  1. `MIGRATION.md` has every §9 section filled with no "TBD" — M-B-01…03 resolved with chosen defaults and worked examples, the §9.2 register matching the `cargo semver-checks` allowlist exactly — and is linked from the README and the mdBook "Upgrading" page (SHIP-01)
+  2. An integration test boots v0.10 with a v0.9 sample config and asserts legacy behavior (all new subsystems disabled by default), and a golden diff of `openapi.json` restricted to pre-existing paths is empty (SHIP-02)
+  3. E2E-1/2/3 pass green as integration tests in `tests/`, the doc-08 verification protocol confirms every FR has a passing test with no orphan behavior and ubiquitous-language names conform, and BUG-01's old warn-and-default-true path is grep-absent with the fix's failing-then-passing test order visible in history (SHIP-03)
+  4. All workspace crates are at `0.10.0` with changelogs updated, `cargo publish --dry-run` is green for every publishable crate in dependency order, mdBook + rustdoc are updated with no new broken intra-doc links, and the semver and MSRV CI jobs are green on the release commit (SHIP-04)
+**Plans**: TBD
 
 ## Progress
 
@@ -226,6 +334,14 @@ milestone. No next milestone is defined yet — start one with `/gsd-new-milesto
 | 16. Documentation Currency & the Architecture Gap | v0.8.0 | 14/14 | ✅ Complete | 2026-08-24 |
 | 17. Additional LLM Provider Adapters | v0.8.0 | 22/22 | ✅ Complete | 2026-08-23 |
 | 18-21 | v0.9.0 | 25/25 | ✅ Shipped | 2026-09-01 |
+| 22. Battlefield State & Superstep Engine | v0.10.0 | 0/0 | Not started | - |
+| 23. Control Flow — Dynamic Routing, Fan-Out & Subgraphs | v0.10.0 | 0/0 | Not started | - |
+| 24. Pause/Resume, History & Graceful Shutdown | v0.10.0 | 0/0 | Not started | - |
+| 25. Node-Level Fault Tolerance | v0.10.0 | 0/0 | Not started | - |
+| 26. Agent Runtime Enhancements | v0.10.0 | 0/0 | Not started | - |
+| 27. Platform API | v0.10.0 | 0/0 | Not started | - |
+| 28. Observability & Tooling | v0.10.0 | 0/0 | Not started | - |
+| 29. Program Gates & Release | v0.10.0 | 0/0 | Not started | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see
@@ -516,3 +632,16 @@ deliverable, and PROV-02's size is set by PROV-01's verdicts.*
 requirements). Phase detail moved to `milestones/v0.9.0-ROADMAP.md` per protocol item 2; the
 `<details>` wrapper above is the completed-milestone form the parser strips. Phases 1-21 are now
 all shipped; the next milestone starts at Phase 22.*
+
+*Extended: 2026-09-01 — **v0.10.0 "Durable Agent Execution Runtime" roadmap created.** Phases
+22-29 added under a new milestone label, forward work sourced from the user-authored design corpus
+in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`)
+rather than the historical `.project/Milestone_*` ingest — the same pattern as Phases 17-21. Eight
+new requirement ID prefixes — the nineteenth through twenty-sixth, recycling none of the eighteen
+spent: `ENG-*`, `CF-*`, `HITL-*`, `FT-*`, `RT-*`, `PLAT-*`, `OBS-*`, `SHIP-*` (45 requirements).
+Phase order follows the program's stated dependency chain (overview §2): 22 (ENG) is the keystone;
+23 (CF) depends on 22; 24 (HITL) depends on 22+23; 25 (FT) depends on 22+23 (FT-04's E2E-3 needs
+CF-03/Muster); 26 (RT) is mostly standalone, depending only on 22; 27 (PLAT) depends on 22+24;
+28 (OBS) depends on 22's trace seam and 27's WarGraphDoc; 29 (SHIP) is the program-gates/release
+phase, depending on all of 22-28. Phases 1-21 unchanged and unrenumbered; every `### Phase N:`
+header is verbatim.*

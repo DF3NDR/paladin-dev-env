@@ -309,12 +309,56 @@ Which phases cover which requirements. Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| — | — | — |
+| ENG-01 | Phase 22 | Pending |
+| ENG-02 | Phase 22 | Pending |
+| ENG-03 | Phase 22 | Pending |
+| ENG-04 | Phase 22 | Pending |
+| ENG-05 | Phase 22 | Pending |
+| ENG-06 | Phase 22 | Pending |
+| ENG-07 | Phase 22 | Pending |
+| ENG-08 | Phase 22 | Pending |
+| CF-01 | Phase 23 | Pending |
+| CF-02 | Phase 23 | Pending |
+| CF-03 | Phase 23 | Pending |
+| CF-04 | Phase 23 | Pending |
+| CF-05 | Phase 23 | Pending |
+| HITL-01 | Phase 24 | Pending |
+| HITL-02 | Phase 24 | Pending |
+| HITL-03 | Phase 24 | Pending |
+| HITL-04 | Phase 24 | Pending |
+| HITL-05 | Phase 24 | Pending |
+| FT-01 | Phase 25 | Pending |
+| FT-02 | Phase 25 | Pending |
+| FT-03 | Phase 25 | Pending |
+| FT-04 | Phase 25 | Pending |
+| FT-05 | Phase 25 | Pending |
+| FT-06 | Phase 25 | Pending |
+| RT-01 | Phase 26 | Pending |
+| RT-02 | Phase 26 | Pending |
+| RT-03 | Phase 26 | Pending |
+| RT-04 | Phase 26 | Pending |
+| RT-05 | Phase 26 | Pending |
+| RT-06 | Phase 26 | Pending |
+| RT-07 | Phase 26 | Pending |
+| PLAT-01 | Phase 27 | Pending |
+| PLAT-02 | Phase 27 | Pending |
+| PLAT-03 | Phase 27 | Pending |
+| PLAT-04 | Phase 27 | Pending |
+| PLAT-05 | Phase 27 | Pending |
+| PLAT-06 | Phase 27 | Pending |
+| OBS-01 | Phase 28 | Pending |
+| OBS-02 | Phase 28 | Pending |
+| OBS-03 | Phase 28 | Pending |
+| OBS-04 | Phase 28 | Pending |
+| SHIP-01 | Phase 29 | Pending |
+| SHIP-02 | Phase 29 | Pending |
+| SHIP-03 | Phase 29 | Pending |
+| SHIP-04 | Phase 29 | Pending |
 
 **Coverage:**
 - v1 requirements: 45 total
-- Mapped to phases: 0
-- Unmapped: 45 ⚠️ (roadmap pending)
+- Mapped to phases: 45
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-01*

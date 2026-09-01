@@ -12,7 +12,7 @@ resolver = "2"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
-uuid = { version = "1.8.0", features = ["v4", "serde"] }
+uuid = { version = "1.8.0", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4.38", features = ["serde"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
@@ -242,6 +242,10 @@ path = "tests/cli_isolation_test.rs"
 name = "ollama_docker"
 path = "tests/integration/ollama_docker_test.rs"
 required-features = ["integration-tests", "llm-ollama"]
+
+[[test]]
+name = "war_engine_tracer"
+path = "tests/integration/war_engine_tracer_test.rs"
 
 [[example]]
 name = "vision_analysis"

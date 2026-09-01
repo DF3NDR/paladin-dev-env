@@ -3291,6 +3291,7 @@ dependencies = [
  "log",
  "paladin-ai-core",
  "paladin-ports",
+ "paladin-storage",
  "petgraph",
  "rand 0.8.6",
  "regex",

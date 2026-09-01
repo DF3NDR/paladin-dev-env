@@ -32,6 +32,8 @@ pub mod chain_of_command_service;
 pub mod commander;
 pub mod conclave_execution_service;
 pub mod council_service;
+/// Superstep execution engine over typed `Battlefield` state (Phase 22).
+pub mod engine;
 pub mod error_aggregation;
 pub mod formation_service;
 pub mod grove_service;

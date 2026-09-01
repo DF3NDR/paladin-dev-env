@@ -1,6 +1,8 @@
 pub mod arsenal;
 pub mod autonomous_config;
 pub mod battalion;
+pub mod battlefield;
+pub mod battlefield_error;
 pub mod citadel;
 pub mod citadel_error;
 pub mod comment;
@@ -33,4 +35,5 @@ pub mod trigger;
 pub mod user;
 pub mod user_group;
 pub mod vision;
+pub mod waypoint;
 pub mod workflow;

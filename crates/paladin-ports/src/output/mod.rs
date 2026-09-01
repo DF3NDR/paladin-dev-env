@@ -29,6 +29,8 @@ pub mod search_engine_port;
 pub mod streaming_executor_port;
 /// User persistence repository port.
 pub mod user_repository_port;
+/// Waypoint (superstep checkpoint) persistence port.
+pub mod waypoint_port;
 /// Workflow persistence repository port.
 pub mod workflow_repository_port;
 // Vision ports are unconditional in paladin-ports; the root `paladin` crate

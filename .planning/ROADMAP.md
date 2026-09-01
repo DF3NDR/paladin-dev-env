@@ -239,9 +239,9 @@ Runtime" — are detailed in full below.*
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 22-02-PLAN.md — Battlefield: typed accessors, schema enforcement, five-rule deterministic multi-writer merge (wave 2)
-- [ ] 22-03-PLAN.md — WaypointPort contract, ThreadId validation, shared generic contract suite on InMemory (wave 2)
-- [ ] 22-04-PLAN.md — Program scaffolding: MIGRATION.md §9, semver CI job, MSRV 1.85 CI job (wave 2)
+- [x] 22-02-PLAN.md — Battlefield: typed accessors, schema enforcement, five-rule deterministic multi-writer merge (wave 2)
+- [x] 22-03-PLAN.md — WaypointPort contract, ThreadId validation, shared generic contract suite on InMemory (wave 2)
+- [x] 22-04-PLAN.md — Program scaffolding: MIGRATION.md §9, semver CI job, MSRV 1.85 CI job (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

@@ -94,6 +94,7 @@ for the full table, dependency graph, and copy-paste `Cargo.toml` profiles.
 - **Guide (mdBook):** <https://df3ndr.github.io/paladin-dev-env/> — installation, orchestration, content processing, the agent↔orchestrator bridge, architecture, deployment, and operations.
 - **API docs (docs.rs):** <https://docs.rs/paladin-ai>
 - **Demos:** [`docs/DEMOS.md`](docs/DEMOS.md) — terminal recordings of Basic Paladin Execution, Battalion Formation, Council Discussion, and Grove Routing.
+- **Upgrading:** [`MIGRATION.md`](MIGRATION.md) — behavioral changes, Rust API changes, and the upgrade checklist for each release.
 
 ## Getting Started
 

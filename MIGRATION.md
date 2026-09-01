@@ -1,0 +1,92 @@
+# Upgrading from v0.9.0 to v0.10.0
+
+> **Scope note:** this file is the root Markdown deliverable required by `.project/v0.10.0/00-program-overview.md`
+> §9. It is a **living document**, created in the first epic of the v0.10.0 program (Phase 22,
+> `ENG-08`) and appended to by every later epic that touches an item below. The mdBook "Upgrading"
+> page the program's Definition of Done (overview §5.4) also requires is **not** added by this
+> phase — that is Phase 29 / `SHIP-01` scope. Every `TBD` below carries the requirement or phase
+> that owns closing it; `SHIP-01` (Phase 29) is responsible for clearing every remaining `TBD`
+> before the v0.10.0 release, per overview §9's living-document contract.
+
+## 9.1 Behavioral changes (user-visible without code changes)
+
+| ID | Change | Who is affected | Required user action |
+|---|---|---|---|
+| M-B-01 | **BUG-01 fix.** `EdgeCondition::Custom(name)` no longer evaluates to `true` when no evaluator is registered. Campaign/graph validation now fails with `BattalionError::InvalidGraph` naming each unregistered condition, before any node executes. | Any v0.9 workflow using `EdgeCondition::Custom`. Such workflows were routing *incorrectly* (always following the custom edge); after upgrade they fail loudly at validation. | Register an evaluator for each name via the new registry API (CF-FR-01), or replace the condition with `Contains`/`Regex`/`Always`. |
+| M-B-02 | **Graceful shutdown.** On SIGTERM/SIGINT the process now waits up to `shutdown_grace` (default 30 s) for in-flight engine runs to halt at a superstep boundary before exiting. | Operators; container orchestration. | Set `terminationGracePeriodSeconds` ≥ 2 × `shutdown_grace` (`k8s/` manifests are updated by HITL-FR-15). A documented disable switch will be provided for legacy-only deployments. |
+| M-B-03 | **Tool errors fed to the model by default** (RT-FR-24, `tool_error_mode = FeedToModel`). | Users of the Arsenal tool loop who relied on a tool failure aborting the run. | Set `tool_error_mode = FailRun` globally or per tool to restore the previous behavior. |
+| M-B-04 | **Automatic per-superstep checkpointing.** Any graph executed through the new `WarEngine` (via `WarGraph`/`WarEngine::start`/`WarEngine::resume`) now writes one `Waypoint` — a **full `Battlefield` snapshot**, including whatever a workflow places in shared state (which may include raw LLM prompts and model outputs) — after every superstep, by default (`WaypointDurability::Strict`). The write goes to whichever `WaypointPort` backend the caller wires in: `InMemoryWaypointStore` (ungated, tests/dev) or, once landed, `SqliteWaypointStore`/`PostgresWaypointStore` (ENG-05) for durable deployments. Growth is bounded by `EngineLimits` (`max_supersteps` default 50, `max_node_visits` default 25) and, once configured, by `WaypointRetentionConfig` (`max_age_days`, `max_waypoints_per_thread` — see §9.5). | Any workflow author who adopts the new `WarEngine`/`WarGraph` APIs (ENG-01…ENG-08). | **Legacy `FormationExecutionService`, `PhalanxExecutionService`, `CampaignExecutionService`, and `Commander` execution paths are completely unaffected — they write no Waypoints and their behavior is byte-for-byte unchanged (ENG-FR-20).** A v0.9 workflow gains **no new persistence** unless it is explicitly rebuilt against the new engine. To adopt it: choose a `WaypointPort` backend, review `WaypointDurability` (default `Strict` fails the run on a write error; `BestEffort` downgrades to a logged warning), and configure `WaypointRetentionConfig` if snapshots — which may contain raw prompts/outputs — must not accumulate unbounded. |
+
+**Worked examples** (owed alongside the rows above, per D-08's rule that a pending item is acceptable only in later-epic-owned content):
+
+- M-B-01: TBD — owner CF-01, Phase 23. A concrete before/after `EdgeCondition::Custom` configuration diff lands when CF-01 ships the registered-evaluator mechanism.
+- M-B-02: TBD — owner HITL-04, Phase 24. A concrete `terminationGracePeriodSeconds` before/after example lands when HITL-04 ships graceful shutdown.
+- M-B-03: TBD — owner RT-07, Phase 26. A concrete `tool_error_mode` before/after example lands when RT-07 ships the tool-loop default and records its rationale here.
+- M-B-04: no worked example owed — this phase (ENG-08) both introduces the behavior and documents it in full above.
+
+## 9.2 Rust API changes (compile-affecting; the X-10 register)
+
+Columns: **Crate · Type/Trait · Change · Mitigation (`#[non_exhaustive]` / default method / new trait / `#[serde(default)]`) · Deliberate-breaking? (Y/N, justification) · Requirement ID**.
+
+| Crate | Type / Trait | Change | Mitigation | Deliberate-breaking? | Req |
+|---|---|---|---|---|---|
+| `paladin-ports` | `StopReason` | new variants `CallLimit`, `TokenBudget` | TBD — owner RT-02, Phase 26 | TBD — owner RT-02, Phase 26 | RT-FR-04, RT-FR-06 |
+| `paladin-core` | `BattalionError` | new variant `Node(NodeError)` | TBD — owner FT-01, Phase 25 | TBD — owner FT-01, Phase 25 | FT-FR-02 |
+| `paladin-core` | `PaladinError` | new/extended variants carrying HTTP status / transience; new method `transience()` | TBD — owner FT-01, Phase 25 | TBD — owner FT-01, Phase 25 | FT-FR-01 |
+| `paladin-llm` / `paladin-ports` | `LlmError` | new/extended variants carrying HTTP status; new variant `AllProvidersFailed`; new method `transience()` | TBD — owner FT-01 (transience), FT-05 (`AllProvidersFailed`), Phase 25 | TBD — owner FT-01, FT-05, Phase 25 | FT-FR-01, FT-FR-16 |
+| `paladin-ports` | LLM request struct (the type passed to `LlmPort::generate`) | new optional field `response_format` | TBD — owner RT-05, Phase 26 | TBD — owner RT-05, Phase 26 | RT-FR-17 |
+| `paladin-ports` / `paladin-memory` | Garrison entry type | new field `is_summary: bool` (+ SQLite column) | TBD — owner RT-03, Phase 26 | TBD — owner RT-03, Phase 26 | RT-FR-12 |
+| `paladin-ports` | `PaladinResult` | new metadata (serving provider from fallback) | TBD — owner FT-05, Phase 25 | TBD — owner FT-05, Phase 25 | FT-FR-17 |
+| `paladin-core` | `EdgeCondition` | *no variant change*, but semantics of `Custom` change (see M-B-01) | TBD — owner CF-01, Phase 23 | TBD — owner CF-01, Phase 23 | CF-FR-01 |
+| `paladin-battalion` | `Commander` / `CommanderBuilder` | new `StrategySelection` option (additive method; verify no public field added) | TBD — owner CF-05, Phase 23 | TBD — owner CF-05, Phase 23 | CF-FR-19 |
+| `paladin-battalion` | `CampaignExecutionService` | new evaluator-registry builder method (constructor unchanged) | TBD — owner CF-01, Phase 23 | TBD — owner CF-01, Phase 23 | CF-FR-01 |
+| `paladin-core` | `Waypoint` (new in 0.10; listed for completeness) | `AwaitingInput` carries `Vec<ParleyRequest>` — settle before first release, no compat needed | N/A — new type introduced in v0.10, not a pre-existing public API. Stub landed in Plan 22-01; payload finalized by HITL-01, Phase 24. | N/A (new type; X-10 governs only pre-existing types) | HITL-FR-03 |
+
+**Note on Plan 22-01 (this phase's tracer plan):** Plan 22-01 added the `battlefield`, `battlefield_error`, and `waypoint` modules to `paladin-core`, `waypoint_port` to `paladin-ports`, the `waypoint` adapter module to `paladin-storage`, and the `engine` module to `paladin-battalion`. All of these are **new** modules/types — none of Plan 22-01's changes touched a *pre-existing* public type's signature (its "modified" files were module-registration edits, e.g. adding a `mod battlefield;` line). **This is a deliberate zero**, not an omission: no register row is added for Plan 22-01.
+
+## 9.3 Toolchain & dependencies
+
+- **Final MSRV: 1.85** (Rust, edition 2024) — no bump required. The workspace's existing pinned dependencies already satisfy this floor (see `cargo tree` note below); this is the X-11.1 baseline, not an X-11.2 stop-and-flag case.
+- **New feature added to an existing dependency — `uuid`'s `v7` feature.** Added to the existing pinned `uuid = 1.8.0` workspace dependency (D-03) to generate time-ordered `WaypointId`s via `Uuid::now_v7()`. No new crate name. Landed in Plan 22-01 (`Cargo.toml`'s `[workspace.dependencies] uuid` feature array now reads `["v4", "v7", "serde"]`).
+- **New cargo feature — `postgres` on `paladin-storage`.** `sqlx/postgres` (mirroring the existing `sqlite`/`mysql` feature-gate pattern) enabling `PostgresWaypointStore` (ENG-05/D-01), plus a corresponding facade passthrough feature (planned name `storage-postgres` on `paladin-ai`, mirroring the existing `storage-mysql` passthrough) so a consumer of the facade crate can reach it via `cargo build -p paladin-ai --features storage-postgres`. **Status: planned, lands in this phase's Waypoint-backend plan (ENG-05); not yet present in the tree as of this plan (22-04).**
+- **Default feature set impact (X-11.4):** `cargo tree -p paladin-ai -e features --depth 1` was run against the tree at this plan's HEAD and shows no `postgres`-related crate anywhere in the default feature graph (the `postgres` feature does not exist yet and, once added, will not be enabled by default — mirroring how `mysql`/`s3`/`redis-queue` are all opt-in today). The default `paladin-ai` build gains no heavyweight dependency from this phase's `uuid`/`v7` addition either — `v7` only pulls in `uuid`'s own `atomic`/`rng` sub-features, not a new crate.
+
+## 9.4 Persistence & schema migrations
+
+- **New table: `waypoints`.** Planned migration file `crates/paladin-storage/migrations/001_create_waypoints_table.sql` (this crate has no `migrations/` directory yet; `001_` continues the per-crate numbering convention established by `crates/paladin-memory/migrations/001_create_garrison_tables.sql`). Targets **both SQLite and PostgreSQL** (ENG-05): SQLite stores `payload` as `TEXT` holding serialized JSON (D-02, for debuggability and because the `sqlx` `json` feature is already enabled workspace-wide); PostgreSQL stores `payload` as `JSONB`. Both share the same logical schema: `thread_id`, `waypoint_id` (primary key), `parent_id` (nullable), `superstep`, `status`, `payload`, `created_at`, with an index on `(thread_id, created_at DESC)`.
+- **Runs automatically, not manually.** Following the existing `SqliteGarrisonAdapter::initialize` convention (`crates/paladin-memory/src/garrison/sqlite_garrison.rs`), the migration runs automatically when `SqliteWaypointStore`/`PostgresWaypointStore` is constructed — no manual `sqlx migrate run` step is required of the operator.
+- **Reversibility:** not reversible without data loss (dropping `waypoints` discards all checkpoint history). No `down` migration is provided, consistent with every existing migration in this workspace (`garrison`, `workflow`, `content`, `user` tables), none of which ship a reverse migration.
+- **Storage growth guidance:** unbounded by default — every completed superstep writes one `waypoints` row containing a full `Battlefield` snapshot. Configure `WaypointRetentionConfig` (`max_age_days`, `max_waypoints_per_thread`; see §9.5) to bound growth. Pruning MUST NOT (and, per ENG-FR-18, will not) delete a thread's single latest Waypoint or any Waypoint with status `AwaitingInput`.
+- **Existing state is unaffected.** Existing Citadel JSON/SQLite state files remain readable unchanged — the `waypoints` table is entirely new and additive. `WaypointPort` is deliberately separate from `CitadelPort` (see the rustdoc rationale on `crates/paladin-ports/src/output/waypoint_port.rs`: Waypoints are high-frequency and append-mostly, addressed by thread; Citadel remains for coarse, explicitly-invoked whole-entity snapshots). No Citadel schema or file format is touched by this phase.
+- **Persisted `GraphFingerprint` format.** Every Waypoint's payload embeds a `GraphFingerprint` string in the form `v1:{blake3_hex}` — a versioned tag (`v1:`) over the blake3 hex digest of the canonical, deterministically sorted byte stream of node ids, edge specs, and schema field names (excludes prompts/models, per D-04). This format was decided at Plan 22-01's Task 1 checkpoint (option-b), specifically so a future algorithm change is a detectable `v2:` rather than a silent invalidation of every stored thread's `resume`.
+
+## 9.5 Configuration & environment
+
+Every new runtime behavior this phase introduces is tunable and **disabled or defaulted to today's behavior out of the box** (X-09), so a v0.9 configuration file boots v0.10 with identical behavior. This claim will be backed by an integration test that boots the server with the v0.9 sample config and asserts feature/config resolution to legacy behavior — TBD, owner SHIP-02, Phase 29.
+
+Planned config structs (mirroring the existing `CitadelConfig` shape at `src/config/citadel.rs`: `Default` + `validate()` + `EnvOverridable`). **Neither struct exists in the tree yet as of this plan (22-04); both land in this phase's engine-wiring plan (ENG-01…ENG-05).**
+
+- **`EngineConfig`** (planned path `src/config/engine.rs`):
+  - `max_supersteps: u64` — default `50`. Env: `APP_ENGINE_MAX_SUPERSTEPS`.
+  - `max_node_visits: u32` — default `25`. Env: `APP_ENGINE_MAX_NODE_VISITS`.
+  - `run_timeout_secs: Option<u64>` — default `None` (plumbing-only this phase; Doc 04/`FT-03` owns timeout semantics). Env: `APP_ENGINE_RUN_TIMEOUT_SECS`.
+  - `waypoint_durability: WaypointDurability` (`Strict` | `BestEffort`) — default `Strict`. Env: `APP_ENGINE_WAYPOINT_DURABILITY`.
+- **`WaypointRetentionConfig`** (planned path `src/config/waypoint_retention.rs`):
+  - `enabled: bool` — default `false` (no pruning runs until an operator opts in — the new subsystem is off by default).
+  - `max_age_days: Option<u32>` — default `None`. Env: `APP_WAYPOINT_RETENTION_MAX_AGE_DAYS`.
+  - `max_waypoints_per_thread: Option<u32>` — default `None`. Env: `APP_WAYPOINT_RETENTION_MAX_WAYPOINTS_PER_THREAD`.
+  - Env: `APP_WAYPOINT_RETENTION_ENABLED` for the `enabled` field.
+
+Since every new field either defaults to today's absent behavior (`enabled: false`, no retention pruning) or to a bounded-but-generous limit that only applies to the *new* `WarEngine` path (legacy Formation/Phalanx/Campaign call sites never construct an `EngineConfig`), a v0.9 configuration file — which has no `engine:`/`waypoint_retention:` section at all — resolves to identical runtime behavior.
+
+## 9.6 HTTP API
+
+TBD — no HTTP surface is added or changed by this phase (Phase 22 ships no engine-backed endpoints; see CONTEXT.md's phase boundary). Owner for the two halves of this section: the golden `openapi.json` diff proof that pre-existing `/v1` paths are unchanged is SHIP-02, Phase 29; the list of new engine-backed endpoints (`GET /threads/{id}/state`, `POST /threads/{id}/resume`, `GET /threads/{id}/history`) is HITL-05, Phase 24, with the broader platform surface (background runs, assistants, schedules) under PLAT-01…PLAT-06, Phase 27.
+
+## 9.7 Deprecations
+
+TBD — no item is marked `#[deprecated]` by this phase. Entries are added here as producing epics ship theirs; this section is finalized (or confirmed empty) at closeout, owner SHIP-01, Phase 29.
+
+## 9.8 Upgrade checklist
+
+TBD — a full ordered, copy-pasteable operator checklist (back up state dirs/DBs → apply migrations → update config → adjust termination grace → register custom evaluators if used → deploy → verify with `paladin-cli` health/graph-validate commands) is written once the subsystems it references exist to check against (migrations land with ENG-05; termination grace lands with HITL-04, Phase 24; custom evaluator registration lands with CF-01, Phase 23). Finalized at closeout, owner SHIP-01, Phase 29.

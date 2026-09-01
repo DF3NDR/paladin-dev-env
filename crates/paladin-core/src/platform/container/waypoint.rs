@@ -14,12 +14,20 @@ use uuid::Uuid;
 use crate::platform::container::battlefield::{BATTLEFIELD_SCHEMA_VERSION, Battlefield};
 
 /// Maximum length, in bytes, of a [`ThreadId`].
+///
+/// This is a **byte** limit (`str::len()`, the UTF-8 encoded length), not a
+/// Unicode scalar value count. A multi-byte string is measured by its UTF-8
+/// byte length, so e.g. 129 two-byte characters (258 bytes) is rejected even
+/// though it is only 129 Unicode scalar values. See
+/// `thread_id_multibyte_string_measured_in_bytes_at_boundary` for the
+/// boundary proof.
 pub const THREAD_ID_MAX_LEN: usize = 256;
 
 /// Caller-supplied identity of a run. Validated non-empty, at most
-/// [`THREAD_ID_MAX_LEN`] characters, and free of whitespace, so it is safe to
-/// use as a storage key (file name component, SQL parameter, HTTP path
-/// segment) without further sanitization.
+/// [`THREAD_ID_MAX_LEN`] **bytes** (UTF-8 encoded length, not Unicode scalar
+/// count — see that constant's rustdoc), and free of whitespace, so it is
+/// safe to use as a storage key (file name component, SQL parameter, HTTP
+/// path segment) without further sanitization.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ThreadId(String);
@@ -79,6 +87,15 @@ impl WaypointId {
     /// Generate a fresh, time-ordered `WaypointId`.
     pub fn new() -> Self {
         Self(Uuid::now_v7())
+    }
+
+    /// Generate a fresh, time-ordered `WaypointId`, wrapping [`Uuid::now_v7`].
+    ///
+    /// Alias of [`WaypointId::new`], named for call sites (e.g.
+    /// [`Waypoint::new_root`], [`Waypoint::new_child`]) that read more clearly
+    /// as "generate a new id" than "construct a default-like value".
+    pub fn generate() -> Self {
+        Self::new()
     }
 
     /// Borrow the underlying `Uuid`.
@@ -276,6 +293,67 @@ impl Waypoint {
     pub fn current_schema_version() -> String {
         BATTLEFIELD_SCHEMA_VERSION.to_string()
     }
+
+    /// Construct the first `Waypoint` of a thread.
+    ///
+    /// `parent_waypoint_id` is always `None`: this is the lineage root. Use
+    /// [`Waypoint::new_child`] for every subsequent `Waypoint` in the thread,
+    /// so lineage cannot be constructed incorrectly by hand.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_root(
+        thread_id: ThreadId,
+        superstep: u64,
+        graph_fingerprint: GraphFingerprint,
+        battlefield: Battlefield,
+        vanguard: Vec<NodeId>,
+        completed: Vec<NodeExecutionRecord>,
+        status: WaypointStatus,
+    ) -> Self {
+        Self {
+            thread_id,
+            waypoint_id: WaypointId::generate(),
+            parent_waypoint_id: None,
+            superstep,
+            graph_fingerprint,
+            battlefield,
+            vanguard,
+            completed,
+            status,
+            created_at: Utc::now(),
+            schema_version: Self::current_schema_version(),
+        }
+    }
+
+    /// Construct a `Waypoint` chained from `parent`.
+    ///
+    /// `thread_id` is copied from `parent` (a child always belongs to its
+    /// parent's thread) and `parent_waypoint_id` is set to
+    /// `Some(parent.waypoint_id)`, so lineage is exactly the previous
+    /// `Waypoint` of that thread by construction.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_child(
+        parent: &Waypoint,
+        superstep: u64,
+        graph_fingerprint: GraphFingerprint,
+        battlefield: Battlefield,
+        vanguard: Vec<NodeId>,
+        completed: Vec<NodeExecutionRecord>,
+        status: WaypointStatus,
+    ) -> Self {
+        Self {
+            thread_id: parent.thread_id.clone(),
+            waypoint_id: WaypointId::generate(),
+            parent_waypoint_id: Some(parent.waypoint_id),
+            superstep,
+            graph_fingerprint,
+            battlefield,
+            vanguard,
+            completed,
+            status,
+            created_at: Utc::now(),
+            schema_version: Self::current_schema_version(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -313,9 +391,71 @@ mod tests {
     }
 
     #[test]
+    fn thread_id_rejects_tab() {
+        assert_eq!(
+            ThreadId::new("has\ttab"),
+            Err(ThreadIdError::ContainsWhitespace)
+        );
+    }
+
+    #[test]
+    fn thread_id_rejects_newline() {
+        assert_eq!(
+            ThreadId::new("has\nnewline"),
+            Err(ThreadIdError::ContainsWhitespace)
+        );
+    }
+
+    #[test]
+    fn thread_id_rejects_non_breaking_space() {
+        // U+00A0 NO-BREAK SPACE carries Unicode White_Space=Yes, so
+        // char::is_whitespace() rejects it the same as an ordinary space.
+        assert_eq!(
+            ThreadId::new("has\u{00A0}nbsp"),
+            Err(ThreadIdError::ContainsWhitespace)
+        );
+    }
+
+    #[test]
+    fn thread_id_accepts_exactly_max_len() {
+        let at_max = "a".repeat(THREAD_ID_MAX_LEN);
+        assert!(ThreadId::new(at_max).is_ok());
+    }
+
+    #[test]
+    fn thread_id_multibyte_string_measured_in_bytes_at_boundary() {
+        // "é" (U+00E9) encodes as 2 UTF-8 bytes. 128 of them is exactly
+        // THREAD_ID_MAX_LEN (256) bytes -- accepted -- while 128 Unicode
+        // scalar values alone would be well under any reasonable char-count
+        // limit, proving the boundary is enforced in bytes, not chars.
+        let at_boundary: String = "é".repeat(THREAD_ID_MAX_LEN / 2);
+        assert_eq!(at_boundary.len(), THREAD_ID_MAX_LEN);
+        assert!(ThreadId::new(at_boundary).is_ok());
+
+        // One "é" over the boundary is 258 bytes (129 scalar values), and
+        // must be rejected with the byte length in the error, not 129.
+        let over_boundary: String = "é".repeat((THREAD_ID_MAX_LEN / 2) + 1);
+        assert_eq!(over_boundary.len(), THREAD_ID_MAX_LEN + 2);
+        assert_eq!(
+            ThreadId::new(over_boundary.clone()),
+            Err(ThreadIdError::TooLong {
+                len: over_boundary.len()
+            })
+        );
+    }
+
+    #[test]
     fn waypoint_id_is_time_ordered() {
         let a = WaypointId::new();
         let b = WaypointId::new();
+        assert!(a <= b);
+    }
+
+    #[test]
+    fn waypoint_id_generate_never_collides_and_sorts_in_creation_order() {
+        let a = WaypointId::generate();
+        let b = WaypointId::generate();
+        assert_ne!(a, b);
         assert!(a <= b);
     }
 
@@ -360,6 +500,48 @@ mod tests {
         let restored: Waypoint = serde_json::from_str(&json).unwrap();
         assert_eq!(waypoint, restored);
         assert_eq!(restored.schema_version, BATTLEFIELD_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn new_root_has_no_parent() {
+        let schema = BattlefieldSchema::new(vec![]);
+        let root = Waypoint::new_root(
+            ThreadId::new("thread-1").unwrap(),
+            0,
+            GraphFingerprint::from_canonical_bytes(b"fixture"),
+            Battlefield::new(schema),
+            vec![],
+            vec![],
+            WaypointStatus::Running,
+        );
+        assert_eq!(root.parent_waypoint_id, None);
+        assert_eq!(root.superstep, 0);
+    }
+
+    #[test]
+    fn new_child_points_at_parent_and_inherits_thread() {
+        let schema = BattlefieldSchema::new(vec![]);
+        let root = Waypoint::new_root(
+            ThreadId::new("thread-1").unwrap(),
+            0,
+            GraphFingerprint::from_canonical_bytes(b"fixture"),
+            Battlefield::new(schema.clone()),
+            vec![],
+            vec![],
+            WaypointStatus::Running,
+        );
+        let child = Waypoint::new_child(
+            &root,
+            1,
+            GraphFingerprint::from_canonical_bytes(b"fixture"),
+            Battlefield::new(schema),
+            vec![],
+            vec![],
+            WaypointStatus::Running,
+        );
+        assert_eq!(child.parent_waypoint_id, Some(root.waypoint_id));
+        assert_eq!(child.thread_id, root.thread_id);
+        assert_ne!(child.waypoint_id, root.waypoint_id);
     }
 
     #[test]

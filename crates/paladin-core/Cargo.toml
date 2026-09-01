@@ -29,3 +29,11 @@ murmur3 = "0.5.2"
 url = { version = "2.5.2", features = ["serde"] }
 regex = "1.11.1"
 futures = "0.3.31"
+
+[dev-dependencies]
+# Test-only: seeded shuffling for Battlefield::merge's ENG-FR-08 determinism
+# test (20 shuffled-input iterations must produce byte-identical output).
+# Never a production dependency — paladin-core stays dependency-pure at
+# runtime; `rand` is already a vetted workspace dependency used elsewhere
+# (paladin-battalion, paladin-llm).
+rand = { workspace = true }

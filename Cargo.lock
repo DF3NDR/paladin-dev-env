@@ -3270,6 +3270,7 @@ dependencies = [
  "futures",
  "murmur3",
  "petgraph",
+ "rand 0.8.6",
  "regex",
  "serde",
  "serde_json",

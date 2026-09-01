@@ -9,29 +9,33 @@
 //! Phase 22 Plan 01 proved the tracer: a single-entry, single-`Function`-node,
 //! zero-edge graph, run through [`WarEngine::start`], checkpointed as exactly
 //! one `Waypoint`, and resumed by a freshly constructed `WarEngine` with zero
-//! re-execution. This plan (05) starts the general superstep engine's build-
-//! out: `WarGraph`/`NodeSpec`/`EdgeSpec`/`EngineLimits` move into their own
-//! `graph` module and `StateNode`/`NodeContext`/`NodeError` into `node`, with
-//! `WarGraph::validate` gaining the full structural checks (edge/entry
-//! endpoints, unregistered custom dispatch) while still never rejecting a
-//! cycle. The general multi-node superstep loop is this plan's next task.
+//! re-execution. Plan 05 expands this into the real superstep engine
+//! (`engine::superstep`): the general multi-node loop with cycles, snapshot
+//! isolation, bounded concurrency, and both engine limits. Dispatch-conflict
+//! surfacing, precise join/defer semantics and full `resume` are later
+//! plans' expansion (22-07, 22-08) — this module's types are shaped so that
+//! expansion does not require changing these signatures.
 //!
 //! Submodules:
 //! - [`graph`] — `WarGraph`, `NodeSpec`, `EdgeSpec`, `EngineLimits`,
 //!   `InputMapping`, and `WarGraph::validate`/`fingerprint`.
 //! - [`node`] — `StateNode`, `NodeContext`, `NodeError`.
+//! - `superstep` (private) — the superstep loop `start`/`resume` reduce to.
+//! - `test_support` (`#[cfg(test)]`) — `RecordingWaypointStore` and
+//!   `CountingFunctionNode`, the doubles this and later engine plans assert
+//!   against.
 
 pub mod graph;
 pub mod node;
+mod superstep;
+#[cfg(test)]
+pub(crate) mod test_support;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use chrono::Utc;
-use log::warn;
 use thiserror::Error;
 
-#[cfg(test)]
-use paladin_core::platform::container::battlefield::CustomDispatchRegistry;
 use paladin_core::platform::container::battlefield::{
     Battlefield, CustomDispatchResolver, StateDelta,
 };
@@ -39,8 +43,7 @@ use paladin_core::platform::container::battlefield_error::BattlefieldError;
 #[cfg(test)]
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::waypoint::{
-    GraphFingerprint, NodeExecutionRecord, NodeId, NodeOutcomeKind, ParleyRequest, ThreadId,
-    Waypoint, WaypointId, WaypointStatus,
+    GraphFingerprint, NodeId, ParleyRequest, ThreadId, WaypointId, WaypointStatus,
 };
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
@@ -55,7 +58,12 @@ pub enum WaypointDurability {
     /// (default; durable-by-default, ENG-FR-11).
     #[default]
     Strict,
-    /// A `save` failure is logged as a warning and the run continues.
+    /// A `save` failure is logged as a warning and the run continues. **Do
+    /// not** select this in any example, doc snippet, config template or
+    /// shared test helper: a failed checkpoint write silently downgrades to
+    /// a logged warning, and a whole superstep of work can be lost with no
+    /// other signal. Opt in explicitly and locally, only where the
+    /// consequence is understood and accepted.
     BestEffort,
 }
 
@@ -81,11 +89,15 @@ pub enum RunOutcome {
         /// The waypoint recording the halt.
         waypoint: WaypointId,
     },
-    /// The run failed.
+    /// The run failed — a bounded-iteration limit was hit, or a node's
+    /// execution or the merge it fed returned an error. A Waypoint carrying
+    /// `WaypointStatus::Failed` has already been persisted (subject to
+    /// `WaypointDurability`) by the time this variant is returned.
     Failed {
-        /// A human-readable description of the failure.
-        error: String,
-        /// The last waypoint written before the failure, if any.
+        /// The engine error that caused the run to fail.
+        error: EngineError,
+        /// The waypoint just written recording the failure, if persistence
+        /// was attempted.
         waypoint: Option<WaypointId>,
     },
 }
@@ -123,6 +135,13 @@ pub enum EngineError {
     /// not present in the graph's node map.
     #[error("unknown node referenced in graph: {0}")]
     UnknownNode(NodeId),
+
+    /// An `EdgeCondition::Regex` pattern failed to compile.
+    #[error("invalid edge condition: {reason}")]
+    InvalidEdgeCondition {
+        /// Why the condition was rejected.
+        reason: String,
+    },
 
     /// Persisting a Waypoint failed under `WaypointDurability::Strict`.
     #[error("failed to persist waypoint: {source}")]
@@ -168,20 +187,26 @@ pub enum EngineError {
 /// [`Battlefield`], and automatically checkpoints a [`Waypoint`] after every
 /// superstep through `W: WaypointPort` (ENG-FR-11).
 pub struct WarEngine<W: WaypointPort> {
-    #[allow(dead_code)] // wired for NodeSpec::Paladin execution in a later plan
+    #[allow(dead_code)] // wired for NodeSpec::Paladin execution in Plan 22-08
     paladin_port: Arc<dyn PaladinPort>,
     waypoint_port: Arc<W>,
     durability: WaypointDurability,
+    /// In-flight node execution cap per superstep. `None` defaults to the
+    /// Vanguard's own size (D-12) — i.e. effectively unbounded unless
+    /// explicitly lowered.
+    parallelism: Option<usize>,
 }
 
 impl<W: WaypointPort> WarEngine<W> {
     /// Construct a `WarEngine` over the given Paladin execution port and
-    /// Waypoint persistence port, with `WaypointDurability::Strict`.
+    /// Waypoint persistence port, with `WaypointDurability::Strict` and no
+    /// explicit parallelism cap.
     pub fn new(paladin_port: Arc<dyn PaladinPort>, waypoint_port: Arc<W>) -> Self {
         Self {
             paladin_port,
             waypoint_port,
             durability: WaypointDurability::Strict,
+            parallelism: None,
         }
     }
 
@@ -191,12 +216,21 @@ impl<W: WaypointPort> WarEngine<W> {
         self
     }
 
+    /// Bound the number of nodes executed concurrently within one
+    /// superstep. Defaults to the Vanguard's own size (D-12) when not set.
+    pub fn with_parallelism(mut self, limit: usize) -> Self {
+        self.parallelism = Some(limit);
+        self
+    }
+
     /// Start a new run of `graph` under `thread`, seeded with `initial`.
     ///
-    /// This plan's Task 1 only lands `WarGraph::validate`'s full structural
-    /// checks; `start` still implements the single-entry, single-`Function`-
-    /// node, zero-edge case proven by the tracer. The general multi-node
-    /// superstep loop is this plan's Task 2.
+    /// Runs the full superstep loop (ENG-FR-01): validates the graph,
+    /// resolves the initial Battlefield state, then executes supersteps
+    /// until the Vanguard is empty (`RunOutcome::Completed`) or a limit or
+    /// node/merge failure intervenes (`RunOutcome::Failed`). `NodeSpec::
+    /// Paladin` execution is Plan 22-08's expansion; a graph containing one
+    /// fails with a typed `EngineError::Node` before any Paladin runs.
     pub async fn start(
         &self,
         graph: &WarGraph,
@@ -206,88 +240,35 @@ impl<W: WaypointPort> WarEngine<W> {
         let registry = CustomDispatchResolver::new();
         graph.validate(&registry)?;
 
-        let mut battlefield = Battlefield::initialize(graph.schema().clone(), &initial)?;
+        let battlefield = Battlefield::initialize(graph.schema().clone(), &initial)?;
         battlefield.validate_required()?;
 
-        if graph.entry().len() != 1 || !graph.edges().is_empty() {
-            return Err(EngineError::Node(NodeError(
-                "WarEngine::start (Phase 22 Plan 05 Task 1) only supports a single-entry, \
-                 zero-edge graph; the general superstep loop is this plan's Task 2"
-                    .to_string(),
-            )));
-        }
-
-        let node_id = graph.entry()[0].clone();
-        let spec = graph.node(&node_id).ok_or_else(|| {
-            EngineError::Node(NodeError(format!(
-                "entry node {node_id} not found in graph"
-            )))
-        })?;
-
-        let node = match spec {
-            NodeSpec::Function(node) => Arc::clone(node),
-            NodeSpec::Paladin { .. } => {
-                return Err(EngineError::Node(NodeError(
-                    "WarEngine::start only supports Function nodes this phase".to_string(),
-                )));
-            }
-        };
-
-        let ctx = NodeContext {
-            node_id: node_id.clone(),
-            thread_id: thread.clone(),
-            superstep: 0,
-        };
-
-        let started_at = Utc::now();
-        let snapshot = Arc::new(battlefield.clone());
-        let delta = node.run(&snapshot, &ctx).await?;
-        let duration_ms = (Utc::now() - started_at).num_milliseconds().max(0) as u64;
-
-        battlefield.merge(vec![(node_id.clone(), delta)], 0, &registry)?;
-
-        let waypoint_id = WaypointId::new();
-        let waypoint = Waypoint {
-            thread_id: thread.clone(),
-            waypoint_id,
-            parent_waypoint_id: None,
-            superstep: 0,
-            graph_fingerprint: graph.fingerprint(),
-            battlefield: battlefield.clone(),
-            vanguard: Vec::new(),
-            completed: vec![NodeExecutionRecord {
-                node_id,
-                paladin_id: None,
-                started_at,
-                duration_ms,
-                token_count: 0,
-                outcome: NodeOutcomeKind::Succeeded,
-                attempt: 1,
-            }],
-            status: WaypointStatus::Completed,
-            created_at: Utc::now(),
-            schema_version: Waypoint::current_schema_version(),
-            visit_counts: Default::default(),
-        };
-
-        if let Err(source) = self.waypoint_port.save(&waypoint).await {
-            match self.durability {
-                WaypointDurability::Strict => return Err(EngineError::WaypointWrite { source }),
-                WaypointDurability::BestEffort => {
-                    warn!(
-                        "waypoint save failed under BestEffort durability for thread {thread}: {source}"
-                    );
-                }
-            }
-        }
-
-        Ok(RunOutcome::Completed {
-            final_state: battlefield,
-            waypoint: waypoint_id,
-        })
+        superstep::run(
+            self.waypoint_port.as_ref(),
+            self.durability,
+            self.parallelism,
+            &registry,
+            graph,
+            thread,
+            battlefield,
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            1,
+        )
+        .await
     }
 
     /// Resume `thread` from its latest Waypoint.
+    ///
+    /// This phase implements the case the tracer proves: loads the latest
+    /// Waypoint (absent -> `ThreadNotFound`), compares its
+    /// `graph_fingerprint` against `graph.fingerprint()` (differing ->
+    /// `GraphMismatch`), and when the loaded status is `Completed` returns
+    /// `RunOutcome::Completed` immediately without executing anything
+    /// (ENG-FR-12). Resuming a `Running`/`Failed`/`AwaitingInput`/`Halted`
+    /// waypoint through the same superstep loop `start` uses is Plan
+    /// 22-08's expansion.
     pub async fn resume(
         &self,
         graph: &WarGraph,
@@ -314,7 +295,8 @@ impl<W: WaypointPort> WarEngine<W> {
                 waypoint: latest.waypoint_id,
             }),
             _ => Err(EngineError::Node(NodeError(
-                "WarEngine::resume only supports resuming a Completed waypoint".to_string(),
+                "WarEngine::resume only supports resuming a Completed waypoint until Plan 22-08"
+                    .to_string(),
             ))),
         }
     }
@@ -340,7 +322,7 @@ mod tests {
             _paladin: &Paladin,
             _input: &str,
         ) -> Result<PaladinResult, PaladinError> {
-            unimplemented!("not exercised by this task's Function-node tracer")
+            unimplemented!("not exercised by this plan's Function-node tests")
         }
 
         async fn execute_stream(
@@ -348,7 +330,7 @@ mod tests {
             _paladin: &Paladin,
             _input: &str,
         ) -> Result<PaladinStream, PaladinError> {
-            unimplemented!("not exercised by this task's Function-node tracer")
+            unimplemented!("not exercised by this plan's Function-node tests")
         }
 
         fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
@@ -449,7 +431,7 @@ mod tests {
             .merge(
                 vec![(NodeId::new("writer"), delta)],
                 0,
-                &CustomDispatchRegistry::new(),
+                &CustomDispatchResolver::new(),
             )
             .unwrap();
 

@@ -1,0 +1,35 @@
+# cargo-semver-checks per-item deliberate-breaking allowlist (X-10.5, D-06).
+#
+# Source of truth: `MIGRATION.md` §9.2 ("Rust API changes"). This file is the
+# machine-checked mirror of that table's rows marked `Deliberate-breaking? = Y`
+# -- NOT a config the `cargo semver-checks` CLI reads directly. The `semver`
+# CI job in `.github/workflows/ci.yml` runs a set-equality check between this
+# file's `[[entry]]` list and MIGRATION.md §9.2's deliberate-breaking rows, in
+# both directions: every entry here must have a matching §9.2 row, and every
+# §9.2 row marked `Y` must have a matching entry here. Neither direction may
+# be satisfied by a blanket wildcard -- every entry names one crate and one
+# specific lint.
+#
+# When a change genuinely needs to ship as deliberate-breaking (X-10.6, the
+# v0.10.0 minor bump's one sanctioned use of semver-breaking permission), the
+# actual suppression at the `cargo semver-checks` tool level is applied via
+# that crate's own `Cargo.toml` under `[package.metadata.cargo_semver_checks.lints]`
+# (see the tool's lint-level configuration docs) -- this file is the review
+# register that keeps that per-crate suppression traceable to a requirement,
+# not the mechanism that silences the tool.
+#
+# EMPTY AS OF THIS PLAN (22-04): no pre-existing public type has been touched
+# by Phase 22 as of Plan 22-01 (see MIGRATION.md's "Note on Plan 22-01").
+# Every §9.2 row inherited from the program overview is still `TBD`, not `Y`,
+# so this file correctly holds zero entries. A future plan in this phase (or
+# a later phase, per §9.2's per-row owners) adds an `[[entry]]` here in the
+# SAME commit that marks its MIGRATION.md row `Y`.
+#
+# Schema per entry:
+#   crate           = "<published crates.io package name>"
+#   lint            = "<cargo-semver-checks lint id being suppressed>"
+#   migration_row   = "<the MIGRATION.md §9.2 Crate/Type row this mirrors>"
+#   requirement_id  = "<owning requirement, e.g. FT-01>"
+#   justification   = "<one line: why this is deliberate-breaking, not a mitigation>"
+#
+# entries = []

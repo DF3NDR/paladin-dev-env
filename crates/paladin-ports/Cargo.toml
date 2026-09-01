@@ -2,6 +2,7 @@
 name = "paladin-ports"
 version = "0.9.0"
 edition = "2024"
+rust-version = "1.85"
 authors = ["Am0rfu5"]
 description = "Port trait definitions (hexagonal architecture contracts) for the Paladin framework"
 readme = "README.md"

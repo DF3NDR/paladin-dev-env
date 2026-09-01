@@ -231,6 +231,161 @@ jobs:
           echo "  3. Update the baseline: ./scripts/extract-public-api.sh .project/current-exports.txt"
           echo "  4. Commit the updated baseline"
 
+  # MSRV verification (X-11.1, D-07). Dedicated job pinned to the workspace's
+  # declared `rust-version = "1.85"` (all 11 publishable manifests, see
+  # MIGRATION.md §9.3), independent of and parallel with every other job --
+  # no `needs:` edge, so it cannot gate or be gated by anything else. The
+  # pinned dev toolchain (rust-toolchain.toml, 1.97.1) would otherwise
+  # override whatever this job installs; RUSTUP_TOOLCHAIN is the same
+  # documented opt-out the `test` job below already uses for its stable/beta
+  # matrix. `--all-features --all-targets` builds the full workspace,
+  # including every optional adapter, at the floor version -- not just the
+  # default feature set -- so a feature-gated dependency that silently needs
+  # a newer compiler cannot hide behind `default-features`.
+  msrv:
+    name: MSRV (Rust 1.85)
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: "1.85"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust 1.85 toolchain
+        uses: dtolnay/rust-toolchain@1.85
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.85
+
+      - name: Check workspace at MSRV (all features, all targets)
+        run: cargo check --workspace --all-features --all-targets
+
+  # cargo-semver-checks (X-10.5, D-06). Guards every pre-existing public Rust
+  # API against the PUBLISHED v0.9.0 baseline on crates.io. Two things the
+  # tool's own defaults get wrong for this repo, both overridden explicitly
+  # below (RESEARCH.md Pitfalls 1-2):
+  #   - Baseline: the tool defaults to "latest published", not a fixed
+  #     version. `--baseline-version 0.9.0` pins the comparison so an
+  #     out-of-band crates.io patch release cannot silently move it.
+  #   - Package identity: this workspace's `crates/*` directory names differ
+  #     from their published crates.io package names -- `crates/paladin-core`
+  #     publishes as `paladin-ai-core`. Every publishable crate below is
+  #     addressed by its PUBLISHED name, not its directory name; a
+  #     directory-named `--package` flag would match zero packages and report
+  #     a silent, meaningless pass (the exact failure mode this job exists to
+  #     prevent, T-22-12).
+  # `--default-features` (verified locally against every one of the 11
+  # packages before landing this job): without it, cargo-semver-checks's own
+  # "enable everything except unstable/nightly" heuristic pulls in every
+  # optional feature combination at once, which trips a PRE-EXISTING,
+  # unrelated compile break -- `paladin-memory`'s `qdrant` adapter fails to
+  # build rustdoc against the `qdrant-client` 1.18.0 resolved today (pinned
+  # `^1.14`), because that version added a required `memory` field to
+  # `VectorParams`. That defect belongs to whichever phase next touches the
+  # Sanctum/Qdrant adapter, not this one (deferred:
+  # .planning/phases/22-battlefield-state-superstep-engine/22-deferred-items.md)
+  # -- Phase 22 does not touch `paladin-memory`'s qdrant module at all.
+  # Checking under each crate's own default features is also arguably the
+  # more correct semver-gate scope: it is the build a crates.io consumer gets
+  # by just adding the dependency, and it is what every one of the 11
+  # packages was verified to pass cleanly against the 0.9.0 baseline with.
+  # No `needs:` edge; the job writes no baseline/artifact file into the
+  # working tree, so re-running it on an unchanged commit reaches an
+  # identical verdict every time.
+  semver:
+    name: Semver Checks (vs v0.9.0)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: semver-checks
+
+      # Pinned to a tagged release rather than a moving branch ref
+      # (RESEARCH.md Standard Stack note; T-22-SC).
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks@0.50.0
+
+      # Every publishable crate, addressed by its crates.io PACKAGE name (see
+      # the job comment above) -- never a `crates/` directory path.
+      - name: Check semver against the published v0.9.0 baseline
+        run: |
+          set -euo pipefail
+          PACKAGES=(
+            paladin-ai
+            paladin-ai-core
+            paladin-ports
+            paladin-battalion
+            paladin-herald
+            paladin-llm
+            paladin-memory
+            paladin-storage
+            paladin-notifications
+            paladin-content
+            paladin-web
+          )
+          for pkg in "${PACKAGES[@]}"; do
+            echo "::group::cargo semver-checks -- ${pkg} vs 0.9.0"
+            cargo semver-checks check-release --package "${pkg}" --default-features --baseline-version 0.9.0
+            echo "::endgroup::"
+          done
+
+      # X-10.5 set-equality gate: every allowlist entry in
+      # .cargo/semver-checks-allowlist.toml must correspond to a MIGRATION.md
+      # §9.2 row marked deliberate-breaking (`Y`), and every such row must
+      # have a matching allowlist entry. Reads both files directly -- a
+      # missing file fails this step rather than silently treating either
+      # side as an empty set.
+      - name: Verify allowlist is set-equal to the MIGRATION.md §9.2 register
+        run: |
+          set -euo pipefail
+          test -f .cargo/semver-checks-allowlist.toml
+          test -f MIGRATION.md
+
+          # Deliberate-breaking §9.2 rows: the "Deliberate-breaking?" column
+          # (6th pipe-delimited field) starting with "Y". Scoped to the §9.2
+          # section only, so a "Y" elsewhere in the document can't leak in.
+          # Trimming happens inside awk (no sed backreferences) to keep this
+          # script shellcheck-clean.
+          awk '/^## 9\.2 /{flag=1; next} /^## 9\.3 /{flag=0} flag' MIGRATION.md \
+            | grep -E '^\|' \
+            | awk -F'|' '{
+                crate=$2; gsub(/^[ \t`]+|[ \t`]+$/, "", crate);
+                deliberate=$6; gsub(/^[ \t]+|[ \t]+$/, "", deliberate);
+                if (deliberate ~ /^Y/) print crate
+              }' \
+            | sort -u > /tmp/migration-deliberate-crates.txt
+
+          # Allowlist entries: each [[entry]] carries a `crate = "..."` key.
+          # Extracted via awk field-splitting on the quote character rather
+          # than a sed backreference, for the same shellcheck-cleanliness reason.
+          grep -E '^\s*crate\s*=' .cargo/semver-checks-allowlist.toml \
+            | awk -F'"' '{print $2}' \
+            | sort -u > /tmp/allowlist-crates.txt
+
+          echo "MIGRATION.md §9.2 deliberate-breaking crates:"
+          cat /tmp/migration-deliberate-crates.txt
+          echo "Allowlist crates:"
+          cat /tmp/allowlist-crates.txt
+
+          if ! diff -u /tmp/migration-deliberate-crates.txt /tmp/allowlist-crates.txt; then
+            echo "::error::Allowlist and MIGRATION.md §9.2 deliberate-breaking rows are not set-equal (see diff above)."
+            exit 1
+          fi
+          echo "Allowlist is set-equal to the MIGRATION.md §9.2 deliberate-breaking register."
+
   # Unit tests
   test:
     name: Unit Tests

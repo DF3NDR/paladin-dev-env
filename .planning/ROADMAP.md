@@ -229,7 +229,18 @@ Runtime" — are detailed in full below.*
   3. Exactly one Waypoint is persisted automatically after every superstep, addressed by `(thread_id, waypoint_id)` with parent lineage and a stable graph fingerprint, and a Waypoint write failure fails the run under the default `Strict` durability (ENG-03)
   4. Program scenario E2E-1 passes: an engine killed after superstep 3 is reconstructed fresh from the same backend and `thread_id`, resumes with zero re-execution of already-completed nodes, and reaches a final Battlefield identical to an uninterrupted control run, with exactly one Waypoint per completed superstep (ENG-04)
   5. Three `WaypointPort` backends (InMemory, SQLite, Postgres) all pass one shared contract suite; legacy `from_formation`/`from_phalanx`/`from_campaign` constructors reproduce today's data flow with golden output-equivalence tests; `MIGRATION.md` exists at the repository root with the §9 skeleton and pre-populated register entries; and the `cargo semver-checks` and MSRV CI jobs run green on every PR (ENG-05, ENG-06, ENG-07, ENG-08)
-**Plans**: TBD
+**Plans**: 11 plans (7 waves)
+- [ ] 22-01-PLAN.md — Tracer: one typed node checkpointed end-to-end and resumed with zero re-execution (wave 1, blocking D-04 fingerprint decision)
+- [ ] 22-02-PLAN.md — Battlefield: typed accessors, schema enforcement, five-rule deterministic multi-writer merge (wave 2)
+- [ ] 22-03-PLAN.md — WaypointPort contract, ThreadId validation, shared generic contract suite on InMemory (wave 2)
+- [ ] 22-04-PLAN.md — Program scaffolding: MIGRATION.md §9, semver CI job, MSRV 1.85 CI job (wave 2)
+- [ ] 22-05-PLAN.md — Engine core: WarGraph validation permitting cycles, superstep loop, bounded iteration (wave 3)
+- [ ] 22-06-PLAN.md — SQL Waypoint backends: SQLite, Postgres, migrations, retention config (wave 3)
+- [ ] 22-07-PLAN.md — Engine frontier: join/defer, custom dispatch registry, determinism + stress test (wave 4)
+- [ ] 22-08-PLAN.md — Paladin nodes, InputMapping, full resume, program scenario E2E-1 (wave 5)
+- [ ] 22-09-PLAN.md — Engine seams: TraceSink, NodeInterceptor chain, CancellationToken to Halted (wave 6)
+- [ ] 22-10-PLAN.md — ENG-NFR benchmarks: Waypoint save overhead and engine memory per superstep (wave 6)
+- [ ] 22-11-PLAN.md — Legacy bridges, golden output-equivalence tests, coverage close-out (wave 7)
 
 ### Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 **Goal**: Nodes steer their own routing at runtime, dynamically fan out into map-reduce workers, nest Battalions as subgraphs, and optionally route by LLM evaluation — with the BUG-01 custom-edge-condition defect fixed fail-closed.

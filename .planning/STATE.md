@@ -1,19 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.9.0
-milestone_name: Security Tooling
-status: Awaiting next milestone
-stopped_at: Phase 21 complete (UAT 2/2 passed, security threat-secure, verification passed) — v0.9.0 all 4 phases done; ready for /gsd-complete-milestone
-last_updated: "2026-09-01T13:18:37.211Z"
+milestone: v0.10.0
+milestone_name: Durable Agent Execution Runtime
+status: planning
+last_updated: "2026-09-01T19:50:37.762Z"
 last_activity: 2026-09-01
-last_activity_desc: Milestone v0.9.0 completed and archived
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 25
-  completed_plans: 25
-current_phase: 21
-current_phase_name: release-artifacts-curated-release-notes-and-attached-distrib
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -51,10 +48,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: Milestone v0.9.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-09-01 — Milestone v0.9.0 completed and archived
+Status: Defining requirements
+Last activity: 2026-09-01 — Milestone v0.10.0 started
 
 ## Performance Metrics
 

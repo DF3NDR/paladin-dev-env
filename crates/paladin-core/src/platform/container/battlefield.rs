@@ -178,10 +178,28 @@ impl StateDelta {
 
     /// Set a typed value for `field`, serializing it to JSON.
     ///
+    /// A `StateDelta` carries no schema of its own, so `set` cannot reject an
+    /// undeclared field here — that check happens when the delta is folded
+    /// into a `Battlefield` via [`Battlefield::merge`], which returns
+    /// `UnknownField` and leaves the Battlefield untouched (ENG-FR-10).
+    ///
     /// Returns `BattlefieldError::TypeMismatch` if `value` cannot be
     /// serialized (practically unreachable for well-formed `Serialize`
     /// implementations); the error carries type names only, never the
     /// offending value (T-22-02).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
+    ///
+    /// let mut delta = StateDelta::new();
+    /// delta.set(FieldName::new("count").unwrap(), 42_i64).unwrap();
+    /// assert_eq!(
+    ///     delta.values.get(&FieldName::new("count").unwrap()),
+    ///     Some(&serde_json::json!(42))
+    /// );
+    /// ```
     pub fn set<T: Serialize>(
         &mut self,
         field: FieldName,
@@ -251,11 +269,42 @@ impl Battlefield {
 
     /// Read and deserialize a field's value into `T`.
     ///
-    /// Returns `Ok(None)` if the field has no value (not an error).
+    /// Returns `Ok(None)` if the field is declared but has no value (not an
+    /// error). Returns `BattlefieldError::UnknownField` if `field` is not
+    /// declared in this Battlefield's schema at all (ENG-FR-10) — schema
+    /// enforcement is a hard error on every accessor, not just `merge`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::battlefield::{
+    ///     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
+    ///     CustomDispatchRegistry,
+    /// };
+    ///
+    /// let field = FieldName::new("greeting").unwrap();
+    /// let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+    ///     field.clone(),
+    ///     DispatchRule::LastWrite,
+    ///     None,
+    ///     false,
+    /// )]);
+    /// let mut battlefield = Battlefield::new(schema);
+    /// let mut delta = StateDelta::new();
+    /// delta.set(field.clone(), "hello").unwrap();
+    /// battlefield.merge(&delta, &CustomDispatchRegistry::new()).unwrap();
+    ///
+    /// assert_eq!(battlefield.get::<String>(&field).unwrap(), Some("hello".to_string()));
+    /// ```
     pub fn get<T: DeserializeOwned>(
         &self,
         field: &FieldName,
     ) -> Result<Option<T>, BattlefieldError> {
+        self.schema
+            .field_spec(field)
+            .ok_or_else(|| BattlefieldError::UnknownField {
+                field: field.clone(),
+            })?;
         match self.values.get(field) {
             None => Ok(None),
             Some(value) => serde_json::from_value(value.clone())
@@ -281,20 +330,135 @@ impl Battlefield {
         Ok(())
     }
 
+    /// Resolve a run's initial state from `schema` and `initial_delta`
+    /// (ENG-FR-10): for each declared field, in schema declaration order,
+    /// `initial_delta`'s value is used if present, else the field's
+    /// `default`. This runs before any node executes.
+    ///
+    /// Returns `UnknownField` if `initial_delta` touches a field the schema
+    /// does not declare, `SchemaVersionUnsupported` if `schema` was not
+    /// authored under [`BATTLEFIELD_SCHEMA_VERSION`], and
+    /// `MissingRequiredField` for the first `required` field (in schema
+    /// declaration order) that neither `initial_delta` nor a `default` can
+    /// resolve.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::battlefield::{
+    ///     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
+    /// };
+    ///
+    /// let field = FieldName::new("topic").unwrap();
+    /// let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+    ///     field.clone(),
+    ///     DispatchRule::LastWrite,
+    ///     None,
+    ///     true,
+    /// )]);
+    /// let mut initial = StateDelta::new();
+    /// initial.set(field.clone(), "rust").unwrap();
+    ///
+    /// let battlefield = Battlefield::initialize(schema, &initial).unwrap();
+    /// assert_eq!(battlefield.get::<String>(&field).unwrap(), Some("rust".to_string()));
+    /// ```
+    pub fn initialize(
+        schema: BattlefieldSchema,
+        initial_delta: &StateDelta,
+    ) -> Result<Self, BattlefieldError> {
+        if schema.schema_version != BATTLEFIELD_SCHEMA_VERSION {
+            return Err(BattlefieldError::SchemaVersionUnsupported {
+                found: schema.schema_version.clone(),
+                supported: BATTLEFIELD_SCHEMA_VERSION.to_string(),
+            });
+        }
+
+        for field in initial_delta.values.keys() {
+            if schema.field_spec(field).is_none() {
+                return Err(BattlefieldError::UnknownField {
+                    field: field.clone(),
+                });
+            }
+        }
+
+        let mut values = HashMap::new();
+        for field_spec in &schema.fields {
+            if let Some(value) = initial_delta.values.get(&field_spec.name) {
+                values.insert(field_spec.name.clone(), value.clone());
+            } else if let Some(default) = &field_spec.default {
+                values.insert(field_spec.name.clone(), default.clone());
+            } else if field_spec.required {
+                return Err(BattlefieldError::MissingRequiredField {
+                    field: field_spec.name.clone(),
+                });
+            }
+        }
+
+        Ok(Self { schema, values })
+    }
+
+    /// Deserialize a `Battlefield` from its JSON representation, enforcing
+    /// (X-04) that its embedded `schema.schema_version` is the one this
+    /// build supports before accepting the rest of the payload.
+    ///
+    /// A payload whose `schema_version` cannot even be read (malformed JSON,
+    /// or a structurally different shape entirely) is reported the same way,
+    /// with `found` set to `"<unparseable>"` — this method's contract is
+    /// version enforcement, not general JSON-diagnostic reporting, and
+    /// `BattlefieldError` deliberately has no free-form parse-error variant
+    /// that could carry arbitrary (possibly sensitive) payload content
+    /// (T-22-04).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::battlefield::Battlefield;
+    /// use paladin_core::platform::container::battlefield_error::BattlefieldError;
+    ///
+    /// let stale = r#"{"schema":{"fields":[],"schema_version":"0.0.1"},"values":{}}"#;
+    /// let err = Battlefield::from_json(stale).unwrap_err();
+    /// assert!(matches!(err, BattlefieldError::SchemaVersionUnsupported { .. }));
+    /// ```
+    pub fn from_json(json: &str) -> Result<Self, BattlefieldError> {
+        let value: serde_json::Value =
+            serde_json::from_str(json).unwrap_or(serde_json::Value::Null);
+        let found = value
+            .get("schema")
+            .and_then(|s| s.get("schema_version"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("<unparseable>")
+            .to_string();
+        if found != BATTLEFIELD_SCHEMA_VERSION {
+            return Err(BattlefieldError::SchemaVersionUnsupported {
+                found,
+                supported: BATTLEFIELD_SCHEMA_VERSION.to_string(),
+            });
+        }
+        serde_json::from_value(value).map_err(|_| BattlefieldError::SchemaVersionUnsupported {
+            found,
+            supported: BATTLEFIELD_SCHEMA_VERSION.to_string(),
+        })
+    }
+
     /// Apply a single node's [`StateDelta`], merging each touched field via
     /// its declared [`DispatchRule`].
     ///
+    /// Schema membership is validated for every touched field before any
+    /// mutation is applied: if any field is undeclared, this returns
+    /// `UnknownField` and the Battlefield is left byte-identical to its
+    /// pre-merge form (ENG-FR-10).
+    ///
     /// This is a **single-writer** merge: it does not detect conflicts
-    /// between multiple concurrent deltas targeting the same superstep — that
-    /// is Plan 22-02's expansion (multi-writer `DispatchConflict` detection
-    /// happens at the engine layer, which calls `merge` once per delta and
-    /// tracks writers itself).
+    /// between multiple concurrent deltas targeting the same superstep.
+    /// Multi-writer `DispatchConflict` detection across a superstep's
+    /// deltas is this method's next expansion within this same plan.
     pub fn merge(
         &mut self,
         delta: &StateDelta,
         custom_dispatch: &CustomDispatchRegistry,
     ) -> Result<(), BattlefieldError> {
-        for (field, delta_value) in &delta.values {
+        let mut specs = Vec::with_capacity(delta.values.len());
+        for field in delta.values.keys() {
             let spec = self
                 .schema
                 .field_spec(field)
@@ -302,6 +466,12 @@ impl Battlefield {
                     field: field.clone(),
                 })?
                 .clone();
+            specs.push((field.clone(), spec));
+        }
+
+        for (field, spec) in specs {
+            let field = &field;
+            let delta_value = &delta.values[field];
 
             match &spec.dispatch {
                 DispatchRule::LastWrite => {
@@ -643,5 +813,233 @@ mod tests {
         )]);
         let bf = Battlefield::new(schema);
         assert!(bf.validate_required().is_ok());
+    }
+
+    // --- Task 1: typed accessors and hard schema enforcement ---
+
+    #[test]
+    fn get_on_declared_present_well_typed_field_returns_value() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field("x"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut bf = Battlefield::new(schema);
+        let mut d = StateDelta::new();
+        d.set(field("x"), 7_u64).unwrap();
+        bf.merge(&d, &CustomDispatchRegistry::new()).unwrap();
+        assert_eq!(bf.get::<u64>(&field("x")).unwrap(), Some(7));
+    }
+
+    #[test]
+    fn get_on_declared_absent_field_with_no_default_returns_none() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field("x"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let bf = Battlefield::new(schema);
+        assert_eq!(bf.get::<u64>(&field("x")).unwrap(), None);
+    }
+
+    #[test]
+    fn get_on_undeserializable_value_returns_type_mismatch_with_type_names() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field("x"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut bf = Battlefield::new(schema);
+        let mut d = StateDelta::new();
+        d.set(field("x"), "not a number").unwrap();
+        bf.merge(&d, &CustomDispatchRegistry::new()).unwrap();
+        let err = bf.get::<u64>(&field("x")).unwrap_err();
+        match &err {
+            BattlefieldError::TypeMismatch {
+                field: f,
+                expected,
+                got,
+            } => {
+                assert_eq!(f, &field("x"));
+                assert!(expected.contains("u64"));
+                assert_eq!(got, "string");
+            }
+            other => panic!("expected TypeMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_on_undeclared_field_returns_unknown_field() {
+        let bf = Battlefield::new(BattlefieldSchema::new(vec![]));
+        let err = bf.get::<u64>(&field("ghost")).unwrap_err();
+        assert_eq!(
+            err,
+            BattlefieldError::UnknownField {
+                field: field("ghost")
+            }
+        );
+    }
+
+    #[test]
+    fn set_on_undeclared_field_rejected_at_merge_time_and_battlefield_unchanged() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field("known"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut bf = Battlefield::new(schema);
+        let mut known_delta = StateDelta::new();
+        known_delta.set(field("known"), "pre-existing").unwrap();
+        bf.merge(&known_delta, &CustomDispatchRegistry::new())
+            .unwrap();
+        let before = serde_json::to_string(&bf).unwrap();
+
+        let mut bad_delta = StateDelta::new();
+        bad_delta.set(field("ghost"), 1_u64).unwrap();
+        let err = bf
+            .merge(&bad_delta, &CustomDispatchRegistry::new())
+            .unwrap_err();
+        assert_eq!(
+            err,
+            BattlefieldError::UnknownField {
+                field: field("ghost")
+            }
+        );
+
+        let after = serde_json::to_string(&bf).unwrap();
+        assert_eq!(
+            before, after,
+            "Battlefield must be byte-identical after a rejected merge"
+        );
+    }
+
+    #[test]
+    fn initialize_resolves_required_fields_from_initial_delta_and_defaults() {
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(field("topic"), DispatchRule::LastWrite, None, true),
+            FieldSpec::new(
+                field("count"),
+                DispatchRule::Sum,
+                Some(serde_json::json!(0)),
+                true,
+            ),
+        ]);
+        let mut initial = StateDelta::new();
+        initial.set(field("topic"), "rust").unwrap();
+
+        let bf = Battlefield::initialize(schema, &initial).unwrap();
+        assert_eq!(
+            bf.get::<String>(&field("topic")).unwrap(),
+            Some("rust".to_string())
+        );
+        assert_eq!(bf.get::<i64>(&field("count")).unwrap(), Some(0));
+    }
+
+    #[test]
+    fn initialize_missing_required_field_with_no_default_errors() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field("topic"),
+            DispatchRule::LastWrite,
+            None,
+            true,
+        )]);
+        let initial = StateDelta::new();
+
+        let err = Battlefield::initialize(schema, &initial).unwrap_err();
+        assert_eq!(
+            err,
+            BattlefieldError::MissingRequiredField {
+                field: field("topic")
+            }
+        );
+    }
+
+    #[test]
+    fn initialize_rejects_unknown_field_in_initial_delta() {
+        let schema = BattlefieldSchema::new(vec![]);
+        let mut initial = StateDelta::new();
+        initial.set(field("ghost"), 1_u64).unwrap();
+
+        let err = Battlefield::initialize(schema, &initial).unwrap_err();
+        assert_eq!(
+            err,
+            BattlefieldError::UnknownField {
+                field: field("ghost")
+            }
+        );
+    }
+
+    #[test]
+    fn from_json_rejects_unsupported_schema_version() {
+        let stale = r#"{"schema":{"fields":[],"schema_version":"0.0.1"},"values":{}}"#;
+        let err = Battlefield::from_json(stale).unwrap_err();
+        assert_eq!(
+            err,
+            BattlefieldError::SchemaVersionUnsupported {
+                found: "0.0.1".to_string(),
+                supported: BATTLEFIELD_SCHEMA_VERSION.to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn from_json_accepts_supported_schema_version() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field("x"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let bf = Battlefield::new(schema);
+        let json = serde_json::to_string(&bf).unwrap();
+        let restored = Battlefield::from_json(&json).unwrap();
+        assert_eq!(bf, restored);
+    }
+
+    #[test]
+    fn no_error_display_contains_a_value_placed_in_state() {
+        let secret = "sk-super-secret-credential-value";
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field("token"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut bf = Battlefield::new(schema);
+        let mut d = StateDelta::new();
+        d.set(field("token"), secret).unwrap();
+        bf.merge(&d, &CustomDispatchRegistry::new()).unwrap();
+
+        // Trigger every error variant reachable from this state and assert
+        // none of their Display output contains the value stored above.
+        let errors: Vec<BattlefieldError> = vec![
+            bf.get::<u64>(&field("token")).unwrap_err(), // TypeMismatch
+            bf.get::<u64>(&field("nonexistent")).unwrap_err(), // UnknownField
+            BattlefieldError::MissingRequiredField {
+                field: field("token"),
+            },
+            BattlefieldError::SchemaVersionUnsupported {
+                found: "0.0.1".to_string(),
+                supported: BATTLEFIELD_SCHEMA_VERSION.to_string(),
+            },
+            BattlefieldError::CustomDispatchNotRegistered {
+                name: "missing_rule".to_string(),
+            },
+            BattlefieldError::DispatchConflict {
+                field: field("token"),
+                superstep: 0,
+                writers: vec![],
+            },
+        ];
+        for err in errors {
+            assert!(
+                !err.to_string().contains(secret),
+                "error Display leaked a state value: {err}"
+            );
+        }
     }
 }

@@ -47,6 +47,7 @@ pub fn sample_waypoint_at(
         status: WaypointStatus::Running,
         created_at,
         schema_version: Waypoint::current_schema_version(),
+        visit_counts: std::collections::BTreeMap::new(),
     }
 }
 
@@ -265,6 +266,7 @@ pub async fn child_lineage_survives_round_trip(port: &dyn WaypointPort) {
         vec![],
         vec![],
         WaypointStatus::Running,
+        std::collections::BTreeMap::new(),
     );
     port.save(&root).await.unwrap();
 
@@ -276,6 +278,7 @@ pub async fn child_lineage_survives_round_trip(port: &dyn WaypointPort) {
         vec![],
         vec![],
         WaypointStatus::Running,
+        std::collections::BTreeMap::new(),
     );
     port.save(&child).await.unwrap();
 

@@ -6,6 +6,8 @@
 //! itself — a full `Battlefield` snapshot plus enough bookkeeping to resume
 //! the run with zero re-execution of completed work (ENG-FR-11, ENG-FR-12).
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -284,6 +286,15 @@ pub struct Waypoint {
     pub created_at: DateTime<Utc>,
     /// Schema version this waypoint was persisted under (X-04).
     pub schema_version: String,
+    /// Per-node visit counts accumulated so far this run, keyed by `NodeId`.
+    ///
+    /// A `BTreeMap` (never a `HashMap`) so this field serializes
+    /// byte-identically regardless of insertion order (RESEARCH.md Pitfall
+    /// 5). Carried on every waypoint so a later `resume` (ENG-FR-12) can
+    /// restore each node's visit count without re-deriving it from
+    /// `completed` records across the thread's whole history.
+    #[serde(default)]
+    pub visit_counts: BTreeMap<NodeId, u32>,
 }
 
 impl Waypoint {
@@ -308,6 +319,7 @@ impl Waypoint {
         vanguard: Vec<NodeId>,
         completed: Vec<NodeExecutionRecord>,
         status: WaypointStatus,
+        visit_counts: BTreeMap<NodeId, u32>,
     ) -> Self {
         Self {
             thread_id,
@@ -321,6 +333,7 @@ impl Waypoint {
             status,
             created_at: Utc::now(),
             schema_version: Self::current_schema_version(),
+            visit_counts,
         }
     }
 
@@ -339,6 +352,7 @@ impl Waypoint {
         vanguard: Vec<NodeId>,
         completed: Vec<NodeExecutionRecord>,
         status: WaypointStatus,
+        visit_counts: BTreeMap<NodeId, u32>,
     ) -> Self {
         Self {
             thread_id: parent.thread_id.clone(),
@@ -352,6 +366,7 @@ impl Waypoint {
             status,
             created_at: Utc::now(),
             schema_version: Self::current_schema_version(),
+            visit_counts,
         }
     }
 }
@@ -494,6 +509,7 @@ mod tests {
             status: WaypointStatus::Completed,
             created_at: Utc::now(),
             schema_version: Waypoint::current_schema_version(),
+            visit_counts: BTreeMap::new(),
         };
 
         let json = serde_json::to_string(&waypoint).unwrap();
@@ -513,6 +529,7 @@ mod tests {
             vec![],
             vec![],
             WaypointStatus::Running,
+            BTreeMap::new(),
         );
         assert_eq!(root.parent_waypoint_id, None);
         assert_eq!(root.superstep, 0);
@@ -529,6 +546,7 @@ mod tests {
             vec![],
             vec![],
             WaypointStatus::Running,
+            BTreeMap::new(),
         );
         let child = Waypoint::new_child(
             &root,
@@ -538,6 +556,7 @@ mod tests {
             vec![],
             vec![],
             WaypointStatus::Running,
+            BTreeMap::new(),
         );
         assert_eq!(child.parent_waypoint_id, Some(root.waypoint_id));
         assert_eq!(child.thread_id, root.thread_id);

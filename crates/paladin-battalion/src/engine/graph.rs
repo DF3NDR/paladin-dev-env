@@ -8,7 +8,7 @@
 //! indirectly — validation is built over the plain node map and edge vector
 //! instead.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -167,6 +167,13 @@ impl Default for EngineLimits {
 /// though Campaign cannot express them.
 pub struct WarGraph {
     nodes: HashMap<NodeId, NodeSpec>,
+    /// Node ids in registration order (ENG-FR-04): a `HashMap`'s own
+    /// iteration order is randomized per process, so any iteration over
+    /// "all nodes" that must be deterministic (defer tie-breaking, the
+    /// dead-frontier fixpoint) walks this `Vec` instead of `nodes` directly.
+    node_order: Vec<NodeId>,
+    /// Node ids registered via [`WarGraph::add_deferred_node`] (ENG-FR-06).
+    defer_flags: HashSet<NodeId>,
     edges: Vec<EdgeSpec>,
     schema: BattlefieldSchema,
     entry: Vec<NodeId>,
@@ -178,6 +185,8 @@ impl WarGraph {
     pub fn new(schema: BattlefieldSchema, limits: EngineLimits) -> Self {
         Self {
             nodes: HashMap::new(),
+            node_order: Vec::new(),
+            defer_flags: HashSet::new(),
             edges: Vec::new(),
             schema,
             entry: Vec::new(),
@@ -187,8 +196,33 @@ impl WarGraph {
 
     /// Register a node under `id`.
     pub fn add_node(&mut self, id: NodeId, spec: NodeSpec) -> &mut Self {
+        if !self.nodes.contains_key(&id) {
+            self.node_order.push(id.clone());
+        }
         self.nodes.insert(id, spec);
         self
+    }
+
+    /// Register a node under `id`, marked `defer` (ENG-FR-06): an otherwise
+    /// executable `defer` node is held back from the computed Vanguard
+    /// until it contains no non-deferred executable node, giving
+    /// aggregate-after-all-branches semantics. Multiple deferred nodes
+    /// released in the same superstep are ordered by this graph's node
+    /// registration order (`node_order`), never by `HashMap` order.
+    pub fn add_deferred_node(&mut self, id: NodeId, spec: NodeSpec) -> &mut Self {
+        self.add_node(id.clone(), spec);
+        self.defer_flags.insert(id);
+        self
+    }
+
+    /// Whether `id` was registered via [`WarGraph::add_deferred_node`].
+    pub fn is_deferred(&self, id: &NodeId) -> bool {
+        self.defer_flags.contains(id)
+    }
+
+    /// This graph's node ids in registration order (ENG-FR-04).
+    pub fn node_order(&self) -> &[NodeId] {
+        &self.node_order
     }
 
     /// Add a static edge.

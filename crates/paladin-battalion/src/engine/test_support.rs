@@ -248,3 +248,46 @@ impl StateNode for FailingFunctionNode {
         Err(NodeError(self.message.clone()))
     }
 }
+
+/// A [`StateNode`] wrapper that awaits `tokio::task::yield_now()` a
+/// caller-supplied number of times before delegating to `inner`, used to
+/// perturb concurrent scheduling for the ENG-FR-08 randomized-scheduling
+/// determinism tests (Phase 22 Plan 07): a different yield count per node
+/// per iteration forces different real completion interleavings across
+/// iterations, so a determinism assertion that only holds by accident of a
+/// single-threaded runtime's incidental scheduling is caught rather than
+/// passing silently.
+pub struct YieldingNode {
+    inner: Arc<dyn StateNode>,
+    yields: usize,
+}
+
+impl YieldingNode {
+    /// Construct a node that yields `yields` times before running `inner`.
+    pub fn new(inner: Arc<dyn StateNode>, yields: usize) -> Arc<Self> {
+        Arc::new(Self { inner, yields })
+    }
+}
+
+#[async_trait]
+impl StateNode for YieldingNode {
+    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<StateDelta, NodeError> {
+        for _ in 0..self.yields {
+            tokio::task::yield_now().await;
+        }
+        self.inner.run(state, ctx).await
+    }
+}
+
+/// Shuffle `items` in place with a seeded, reproducible RNG (ENG-FR-08): a
+/// determinism test perturbs node spawn order (e.g. the order a
+/// [`crate::engine::graph::WarGraph`]'s entries are declared) by shuffling
+/// with a different `seed` per iteration, so a failure is reproducible from
+/// the seed printed in the assertion message rather than depending on
+/// whatever order the process happened to run in.
+pub fn shuffle_seeded<T>(items: &mut [T], seed: u64) {
+    use rand::SeedableRng;
+    use rand::seq::SliceRandom;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    items.shuffle(&mut rng);
+}

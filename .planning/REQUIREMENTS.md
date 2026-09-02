@@ -24,13 +24,13 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
 
 ### Battlefield State & Superstep Engine (Doc 01, epic `ENG`)
 
-- [ ] **ENG-01**: A developer can declare a `BattlefieldSchema` and nodes exchange typed
+- [x] **ENG-01**: A developer can declare a `BattlefieldSchema` and nodes exchange typed
   `StateDelta`s instead of bare strings — per-field dispatch rules (`LastWrite`, `Append`,
   `MergeObject`, `Sum`, `Custom`), typed accessors, schema enforcement (unknown-field and
   missing-required hard errors), and structured `BattlefieldError` variants, in `paladin-core`
   with no new core dependencies (PRD 01 §3.1-3.2; ENG-FR-07…10)
 
-- [ ] **ENG-02**: The `WarEngine` executes cyclic graphs (self-loops included) in supersteps with
+- [x] **ENG-02**: The `WarEngine` executes cyclic graphs (self-loops included) in supersteps with
   bounded iteration (`max_supersteps`, `max_node_visits`, typed limit errors), deterministic
   frontier and merge order (byte-identical Battlefields over ≥20 randomized-scheduling
   iterations), same-superstep snapshot isolation, and precise join/defer semantics that never
@@ -348,8 +348,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ENG-01 | Phase 22 | Pending |
-| ENG-02 | Phase 22 | Pending |
+| ENG-01 | Phase 22 | Complete |
+| ENG-02 | Phase 22 | Complete |
 | ENG-03 | Phase 22 | Pending |
 | ENG-04 | Phase 22 | Pending |
 | ENG-05 | Phase 22 | Complete |

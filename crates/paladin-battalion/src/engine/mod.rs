@@ -1296,6 +1296,14 @@ mod tests {
 
     #[tokio::test]
     async fn resume_restores_visit_counts_and_trips_limit_on_next_post_resume_visit() {
+        // `a` is this graph's ONLY node, self-looping and declared entry.
+        // Readiness dodge, not a strandedness workaround (Phase 22 Plan 16
+        // audit, `22-deferred-items.md`): `a`'s self-loop is its sole
+        // incoming edge, and `Frontier::is_ready` (`engine::superstep`)
+        // leaves a self-loop `Pending` until the node has run once, so a
+        // non-entry `a` could never take its first turn. Entry status
+        // bootstraps it; it has nothing to do with BUG-02 eligible-set
+        // reachability, which `a` would satisfy either way.
         let schema = BattlefieldSchema::new(vec![FieldSpec::new(
             FieldName::new("status").unwrap(),
             DispatchRule::LastWrite,

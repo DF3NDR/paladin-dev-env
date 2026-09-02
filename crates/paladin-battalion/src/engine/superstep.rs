@@ -1217,6 +1217,14 @@ mod tests {
 
     // --- Task 3: bounded iteration -----------------------------------
 
+    /// `a` is this graph's only node, self-looping and declared entry.
+    /// Readiness dodge, not a strandedness workaround (Phase 22 Plan 16
+    /// audit, `22-deferred-items.md`): with no other node to be fed by, `a`'s
+    /// self-loop is its sole incoming edge, and [`Frontier::is_ready`] leaves
+    /// a self-loop edge `Pending` until the node has run once -- a non-entry
+    /// `a` could never take its first turn regardless of reachability.
+    /// Declaring it entry is what bootstraps it; `a` would satisfy BUG-02's
+    /// eligible-set check either way, since entry nodes are always eligible.
     fn self_loop_graph(node: Arc<CountingFunctionNode>, limits: EngineLimits) -> WarGraph {
         let s = schema(vec![FieldSpec::new(
             field("status"),

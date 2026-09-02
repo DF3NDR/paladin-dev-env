@@ -3,8 +3,11 @@
 use crate::config::env_utils::{EnvOverridable, read_env};
 use serde::{Deserialize, Serialize};
 
-/// Configuration for the `paladin_storage::waypoint::retention::prune`
-/// routine.
+/// Configuration for the Waypoint retention routine, driven through
+/// [`crate::application::services::waypoint_retention::WaypointRetentionService`]
+/// (the entry point -- it owns the one definition of "protected" and wires
+/// this config into `paladin_storage::waypoint::retention::prune`, which
+/// this config's fields no longer address directly).
 ///
 /// Mirrors [`crate::config::citadel::CitadelConfig`]'s shape field-for-field
 /// (`Default` + `validate()` + `EnvOverridable`). `enabled` defaults to

@@ -1217,6 +1217,14 @@ mod tests {
 
     // --- Task 3: bounded iteration -----------------------------------
 
+    /// `a` is this graph's only node, self-looping and declared entry.
+    /// Readiness dodge, not a strandedness workaround (Phase 22 Plan 16
+    /// audit, `22-deferred-items.md`): with no other node to be fed by, `a`'s
+    /// self-loop is its sole incoming edge, and [`Frontier::is_ready`] leaves
+    /// a self-loop edge `Pending` until the node has run once -- a non-entry
+    /// `a` could never take its first turn regardless of reachability.
+    /// Declaring it entry is what bootstraps it; `a` would satisfy BUG-02's
+    /// eligible-set check either way, since entry nodes are always eligible.
     fn self_loop_graph(node: Arc<CountingFunctionNode>, limits: EngineLimits) -> WarGraph {
         let s = schema(vec![FieldSpec::new(
             field("status"),
@@ -1329,6 +1337,117 @@ mod tests {
 
         assert!(matches!(outcome, RunOutcome::Completed { .. }));
         assert_eq!(node.run_count(), 4);
+    }
+
+    /// **Known defect, distinct from BUG-02** (Phase 22 Plan 16 audit,
+    /// `22-deferred-items.md`): a node that is BOTH self-looping AND fed by
+    /// a separate upstream edge can never take its first turn, and the run
+    /// still reports `Completed` regardless.
+    ///
+    /// Mechanism: `Frontier::is_ready` requires every incoming edge of a
+    /// node to be resolved (not `Pending`) before that node is scheduled.
+    /// A node's own self-edge is `Pending` until the node has executed at
+    /// least once. So `b` here -- reachable from `entry` by a normal edge,
+    /// AND self-looping -- has two incoming edges: `entry -> b` (which
+    /// fires once `entry` runs) and `b -> b` (which stays `Pending`
+    /// forever, since nothing but `b`'s own first run could resolve it).
+    /// `is_ready` requires ALL incoming edges resolved, so `b` can never be
+    /// placed in a Vanguard: its self-edge blocks the very first execution
+    /// that would resolve it.
+    ///
+    /// This is the SAME truthful-outcome violation as BUG-02 (a
+    /// `RunOutcome::Completed` reported over a node that never ran) reached
+    /// by a DIFFERENT mechanism. Plan 22-15's eligible-set reachability
+    /// check (`WarGraph::validate`) does NOT and CANNOT catch it: `b` is
+    /// statically reachable from `entry` over a declared edge, so
+    /// `validate` accepts this graph cleanly (asserted below) -- the defect
+    /// is a property of `Frontier::is_ready`'s RUNTIME readiness
+    /// computation, not of static reachability. Fixing it would be a
+    /// change to the readiness rule itself (a self-edge should not gate a
+    /// node's first execution, e.g. by seeding it as trivially resolved
+    /// until the node's first run) -- a frontier semantics change, not a
+    /// validation change, and out of scope for this plan.
+    ///
+    /// Ignored so the default workspace run stays green; run on demand with
+    /// `cargo test -p paladin-battalion --lib engine::superstep --
+    /// --ignored` to reproduce. The assertions below describe CORRECT
+    /// behaviour (per the plan: never invert a reproduction to match
+    /// today's wrong behaviour) and fail today because `b` never runs.
+    #[tokio::test]
+    #[ignore = "known defect (Phase 22 Plan 16 audit): a node that is both \
+                self-looping and fed by an upstream edge can never take its \
+                first turn -- Frontier::is_ready treats its own unresolved \
+                self-edge as blocking, and the run reports Completed with \
+                the node's run_count() at 0. Distinct from BUG-02 (fixed in \
+                Plan 22-15): this node IS statically reachable, so \
+                WarGraph::validate accepts the graph cleanly. See \
+                22-deferred-items.md for the recommended disposition."]
+    async fn self_looping_node_fed_by_upstream_edge_can_never_take_first_turn() {
+        let s = schema(vec![
+            FieldSpec::new(field("entry_ran"), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(field("status"), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let entry_id = NodeId::new("entry");
+        let b_id = NodeId::new("b");
+
+        let entry_node = CountingFunctionNode::fixed(field("entry_ran"), serde_json::json!(true));
+        // Bounded so a correct engine would terminate: "looping" on its
+        // first run, "done" from its second run on -- if `b` could ever
+        // take a first turn, this self-loop would resolve after two visits.
+        let b_node = CountingFunctionNode::new(|run_index, _state| {
+            let status = if run_index == 0 { "looping" } else { "done" };
+            let mut d = paladin_core::platform::container::battlefield::StateDelta::new();
+            d.set(field("status"), status).unwrap();
+            d
+        });
+
+        graph.add_node(entry_id.clone(), NodeSpec::Function(entry_node));
+        graph.add_node(b_id.clone(), NodeSpec::Function(b_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: entry_id.clone(),
+            to: b_id.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: b_id.clone(),
+            to: b_id.clone(),
+            condition: Some(EdgeCondition::Contains("looping".to_string())),
+        });
+        graph.add_entry(entry_id);
+
+        // The defect survives Plan 22-15's fix: `b` is statically reachable
+        // from `entry` over a declared edge, so eligible-set validation
+        // accepts this graph. This is NOT a reachability problem.
+        assert!(
+            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            "b is reachable from entry over a static edge, so validate() must accept this \
+             graph -- the defect this test reproduces is a runtime readiness problem, not a \
+             reachability one"
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("readiness-defect-repro").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        // Correct behaviour: `b` must execute at least once before the run
+        // can complete, since it is legitimately reachable and its self-loop
+        // is bounded to resolve after two visits.
+        assert!(
+            b_node.run_count() >= 1,
+            "b must execute at least once -- it is reachable from entry and its self-loop is \
+             bounded to terminate, so a correct engine schedules it; got run_count() == 0, \
+             meaning Frontier::is_ready never placed it in any Vanguard"
+        );
+        // Correct behaviour: the run must never report Completed while a
+        // reachable, never-executed node's visit count is zero.
+        assert!(
+            !(matches!(outcome, RunOutcome::Completed { .. }) && b_node.run_count() == 0),
+            "the run must not report Completed while b's run_count() is 0 -- that is the exact \
+             truthful-outcome violation BUG-02 fixed by a different mechanism; got outcome = \
+             {outcome:?}, b.run_count() = {}",
+            b_node.run_count()
+        );
     }
 
     fn linear_chain_graph(length: usize, limits: EngineLimits) -> WarGraph {

@@ -121,10 +121,24 @@ fn field(name: &str) -> FieldName {
 /// its OWN node has executed at least once -- so a node that is BOTH
 /// self-looping AND fed by a separate upstream edge could never execute at
 /// all (its self-edge blocks its first run, and its first run is what would
-/// resolve the self-edge). Every existing self-loop test in this workspace
-/// sidesteps this the same way: the looping node is a graph entry, so its
-/// FIRST execution is seeded directly into the initial Vanguard and never
-/// consults `is_ready`.
+/// resolve the self-edge). `loop_gate` itself has no separate upstream feed
+/// -- it is a standalone self-loop, the simplest instance of the same
+/// bootstrap problem: with no OTHER incoming edge either, it could never
+/// take its first turn unless seeded directly into the initial Vanguard as a
+/// graph entry.
+///
+/// (Phase 22 Plan 16 audit, `22-deferred-items.md`: every self-loop test in
+/// this workspace that actually EXECUTES its looping node uses this same
+/// graph-entry arrangement, confirmed by direct enumeration rather than
+/// assumed. One exception exists --
+/// `engine::graph::tests::validate_accepts_self_loop_on_node_reachable_from_entry_by_normal_edge`
+/// constructs the harder self-loop-plus-upstream-edge shape this comment
+/// describes, but only calls `validate`, never runs the graph -- so it never
+/// reaches `is_ready` and needs no entry-point workaround. The general
+/// "self-looping AND fed by a separate upstream edge" case this comment
+/// warns about is exactly what Plan 16's ignored reproduction test,
+/// `engine::superstep::tests::self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`,
+/// demonstrates is a live, unfixed defect distinct from BUG-02.)
 ///
 /// An uninterrupted run takes exactly `LOOP_BOUND + 5` supersteps:
 /// `loop_gate` x `LOOP_BOUND` (supersteps 1..=LOOP_BOUND), then researcher,

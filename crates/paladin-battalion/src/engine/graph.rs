@@ -492,6 +492,17 @@ mod tests {
 
     #[test]
     fn validate_accepts_self_loop() {
+        // `a` is declared entry here for a reason unrelated to strandedness
+        // (this is a `validate`-only test; nothing runs). It is a readiness
+        // dodge: `a` has no other node to be fed by, so its self-loop edge
+        // is its ONLY incoming edge -- `Frontier::is_ready`
+        // (`engine::superstep`) treats that edge as `Pending` until `a` has
+        // executed once, meaning a non-entry `a` could never take its first
+        // turn regardless of reachability. Making it entry is what lets it
+        // run at all; this is the readiness-dodge classification audited in
+        // Phase 22 Plan 16 (`22-deferred-items.md`), not a stranded-node
+        // workaround -- `a` was never at risk of BUG-02's rejection since
+        // entry nodes are always eligible.
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
         graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
         graph.add_edge(EdgeSpec {
@@ -856,6 +867,13 @@ mod tests {
 
     #[tokio::test]
     async fn self_loop_on_entry_node_still_validates_and_runs() {
+        // Readiness dodge, not a strandedness workaround: `a` is the only
+        // node in this graph, so its self-loop is its only incoming edge.
+        // `Frontier::is_ready` (`engine::superstep`) leaves a self-loop edge
+        // `Pending` until the node has executed once, so a non-entry `a`
+        // could never take its first turn -- entry status is what bootstraps
+        // it, independent of BUG-02 (Phase 22 Plan 16 audit,
+        // `22-deferred-items.md`).
         let field_name = FieldName::new("status").unwrap();
         let node = CountingFunctionNode::new(move |run_index, _state| {
             let status = if run_index == 1 {
@@ -894,6 +912,18 @@ mod tests {
 
     #[test]
     fn validate_accepts_self_loop_on_node_reachable_from_entry_by_normal_edge() {
+        // Deliberately `validate`-only -- this is the "unrelated" bucket of
+        // the Phase 22 Plan 16 fixture audit (`22-deferred-items.md`): `b`
+        // here has BOTH a self-loop and an external incoming edge, which is
+        // exactly the combination the readiness rule (`Frontier::is_ready`
+        // in `engine::superstep`) can never schedule -- a `Pending` self-loop
+        // edge blocks `b`'s first turn even though the external edge from
+        // `a` fires. Running this graph to completion would reproduce that
+        // defect rather than test what this fixture is actually pinning
+        // (that `validate` itself, a static check, has no opinion about
+        // runtime readiness). See the ignored reproduction
+        // `self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`
+        // in `engine::superstep` for the runnable defect.
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
         graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
         graph.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));

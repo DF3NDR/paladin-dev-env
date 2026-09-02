@@ -253,6 +253,10 @@ name = "e2e_crash_resume"
 path = "tests/integration/e2e_crash_resume_test.rs"
 
 [[test]]
+name = "waypoint_retention_fault_injection"
+path = "tests/integration/waypoint_retention_fault_injection_test.rs"
+
+[[test]]
 name = "golden_bridge_equivalence"
 path = "tests/integration/golden_bridge_equivalence_test.rs"
 

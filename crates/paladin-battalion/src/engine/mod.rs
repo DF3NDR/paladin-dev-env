@@ -206,6 +206,32 @@ pub enum EngineError {
     /// (X-03).
     #[error("input mapping error: {0}")]
     InputMapping(#[from] input_mapping::InputMappingError),
+
+    /// `resume` with `allow_graph_change` restored a Vanguard `NodeId` the
+    /// new graph does not declare (ENG-FR-14's explicit-override path).
+    /// Never silently dropped: a resume that continued without a vanguard
+    /// node the caller expected to run would look like a successful resume
+    /// that quietly skipped work.
+    #[error("resume vanguard node missing from the new graph: {node}")]
+    VanguardNodeMissing {
+        /// The restored vanguard node absent from the new graph.
+        node: NodeId,
+    },
+}
+
+/// Options controlling [`WarEngine::resume_with_options`]'s behavior.
+///
+/// The default (`allow_graph_change: false`, matching [`WarEngine::resume`])
+/// is the safe choice: a graph-fingerprint mismatch always fails resume
+/// unless the caller explicitly opts into continuing against a changed
+/// graph.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResumeOptions {
+    /// When `true`, a graph-fingerprint mismatch does not fail `resume` on
+    /// its own (ENG-FR-14's explicit override); a restored vanguard
+    /// `NodeId` absent from the new graph still fails, with
+    /// `EngineError::VanguardNodeMissing`.
+    pub allow_graph_change: bool,
 }
 
 /// Executes [`WarGraph`]s: runs nodes, merges their deltas into the shared
@@ -307,20 +333,38 @@ impl<W: WaypointPort> WarEngine<W> {
         .await
     }
 
-    /// Resume `thread` from its latest Waypoint.
-    ///
-    /// This phase implements the case the tracer proves: loads the latest
-    /// Waypoint (absent -> `ThreadNotFound`), compares its
-    /// `graph_fingerprint` against `graph.fingerprint()` (differing ->
-    /// `GraphMismatch`), and when the loaded status is `Completed` returns
-    /// `RunOutcome::Completed` immediately without executing anything
-    /// (ENG-FR-12). Resuming a `Running`/`Failed`/`AwaitingInput`/`Halted`
-    /// waypoint through the same superstep loop `start` uses is Plan
-    /// 22-08 Task 2's expansion.
+    /// Resume `thread` from its latest Waypoint, with the default
+    /// [`ResumeOptions`] (`allow_graph_change: false`) — a graph-fingerprint
+    /// mismatch always fails. Use [`WarEngine::resume_with_options`] to opt
+    /// into resuming against a changed graph.
     pub async fn resume(
         &self,
         graph: &WarGraph,
         thread: ThreadId,
+    ) -> Result<RunOutcome, EngineError> {
+        self.resume_with_options(graph, thread, ResumeOptions::default())
+            .await
+    }
+
+    /// Resume `thread` from its latest Waypoint (ENG-FR-12).
+    ///
+    /// Loads the latest Waypoint through the port (absent ->
+    /// `ThreadNotFound`); compares its `graph_fingerprint` against
+    /// `graph.fingerprint()` (differing -> `GraphMismatch`, unless
+    /// `options.allow_graph_change` is set); when the loaded status is
+    /// `Completed`, returns `RunOutcome::Completed` immediately, executing
+    /// nothing and writing no Waypoint. Otherwise every restored Vanguard
+    /// `NodeId` is checked against the (possibly new) graph -- one absent is
+    /// `VanguardNodeMissing` -- and the Battlefield, Vanguard and per-node
+    /// visit counts are restored and handed to the SAME superstep loop
+    /// `start` uses, continuing from the superstep after the loaded
+    /// Waypoint's, so a divergence between fresh and resumed execution is
+    /// structurally impossible.
+    pub async fn resume_with_options(
+        &self,
+        graph: &WarGraph,
+        thread: ThreadId,
+        options: ResumeOptions,
     ) -> Result<RunOutcome, EngineError> {
         let latest = self
             .waypoint_port
@@ -330,24 +374,44 @@ impl<W: WaypointPort> WarEngine<W> {
             .ok_or_else(|| EngineError::ThreadNotFound(thread.clone()))?;
 
         let expected = graph.fingerprint();
-        if latest.graph_fingerprint != expected {
+        if latest.graph_fingerprint != expected && !options.allow_graph_change {
             return Err(EngineError::GraphMismatch {
                 expected,
                 got: latest.graph_fingerprint,
             });
         }
 
-        match latest.status {
-            WaypointStatus::Completed => Ok(RunOutcome::Completed {
+        if matches!(latest.status, WaypointStatus::Completed) {
+            return Ok(RunOutcome::Completed {
                 final_state: latest.battlefield,
                 waypoint: latest.waypoint_id,
-            }),
-            _ => Err(EngineError::Node(NodeError(
-                "WarEngine::resume only supports resuming a Completed waypoint until Plan 22-08 \
-                 Task 2"
-                    .to_string(),
-            ))),
+            });
         }
+
+        for node in &latest.vanguard {
+            if graph.node(node).is_none() {
+                return Err(EngineError::VanguardNodeMissing { node: node.clone() });
+            }
+        }
+
+        let registry = self.dispatch_registry.resolver();
+        graph.validate(registry)?;
+
+        superstep::run(
+            self.waypoint_port.as_ref(),
+            self.durability,
+            self.parallelism,
+            registry,
+            graph,
+            thread,
+            latest.battlefield,
+            latest.vanguard,
+            latest.visit_counts,
+            Some(latest.waypoint_id),
+            latest.superstep + 1,
+            &self.paladin_port,
+        )
+        .await
     }
 }
 
@@ -355,13 +419,19 @@ impl<W: WaypointPort> WarEngine<W> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use paladin_core::platform::container::battalion::campaign::EdgeCondition;
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
     };
     use paladin_core::platform::container::paladin_error::PaladinError;
-    use paladin_core::platform::container::waypoint::NodeOutcomeKind;
+    use paladin_core::platform::container::waypoint::{NodeOutcomeKind, Waypoint};
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream};
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+
+    use crate::engine::graph::EdgeSpec;
+    use crate::engine::test_support::{
+        CountingFunctionNode, RecordingPaladinPort, RecordingWaypointStore,
+    };
 
     struct UnimplementedPaladinPort;
 
@@ -896,6 +966,403 @@ mod tests {
                 assert!(waypoint.is_some());
             }
             other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+    // --- Task 2: full resume -- restore state, vanguard, visit counts ----
+
+    /// Fetch a thread's full Waypoint history, sorted ascending by
+    /// superstep (`RecordingWaypointStore::saved_waypoints`'s own order
+    /// follows `history()`'s descending-`created_at` contract, which is not
+    /// what these tests want to iterate over).
+    async fn ascending_history(store: &RecordingWaypointStore, thread: &ThreadId) -> Vec<Waypoint> {
+        let mut waypoints = store.saved_waypoints(thread).await;
+        waypoints.sort_by_key(|w| w.superstep);
+        waypoints
+    }
+
+    fn two_node_chain_graph() -> (WarGraph, NodeId, NodeId) {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("trace").unwrap(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let a = NodeId::new("a");
+        let b = NodeId::new("b");
+        graph.add_node(
+            a.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("trace").unwrap(),
+                serde_json::json!("a"),
+            )),
+        );
+        graph.add_node(
+            b.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("trace").unwrap(),
+                serde_json::json!("b"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: b.clone(),
+            condition: None,
+        });
+        graph.add_entry(a.clone());
+        (graph, a, b)
+    }
+
+    #[tokio::test]
+    async fn resume_completed_short_circuit_writes_no_new_waypoint() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("solo");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("done"),
+            )),
+        );
+        graph.add_entry(node_id);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("resume-completed").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert_eq!(store.save_call_count(), 1);
+
+        let resumed = engine.resume(&graph, thread).await.unwrap();
+        assert!(matches!(resumed, RunOutcome::Completed { .. }));
+        assert_eq!(
+            store.save_call_count(),
+            1,
+            "resume on an already-Completed waypoint must write no new Waypoint"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_with_graph_mismatch_fails_without_allow_graph_change() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("solo");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("done"),
+            )),
+        );
+        graph.add_entry(node_id);
+
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("resume-mismatch").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let mut altered_schema = one_field_schema();
+        altered_schema.fields.push(FieldSpec::new(
+            FieldName::new("extra").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        ));
+        let altered_graph = WarGraph::new(altered_schema, EngineLimits::default());
+
+        let err = engine.resume(&altered_graph, thread).await.unwrap_err();
+        assert!(matches!(err, EngineError::GraphMismatch { .. }));
+    }
+
+    #[tokio::test]
+    async fn resume_allow_graph_change_missing_vanguard_node_fails_precisely() {
+        let (graph, _a, b) = two_node_chain_graph();
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("resume-vanguard-missing").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let waypoints = ascending_history(&store, &thread).await;
+        assert_eq!(waypoints.len(), 2, "a two-node chain takes two supersteps");
+        let waypoint_after_a = waypoints[0].clone();
+
+        let store2 = InMemoryWaypointStore::new();
+        store2.save(&waypoint_after_a).await.unwrap();
+        let engine2 = WarEngine::new(Arc::new(UnimplementedPaladinPort), Arc::new(store2));
+
+        // An altered graph containing only "a" -- "b" (the restored
+        // Vanguard node) is absent.
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("trace").unwrap(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut altered = WarGraph::new(schema, EngineLimits::default());
+        altered.add_node(
+            NodeId::new("a"),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("trace").unwrap(),
+                serde_json::json!("a"),
+            )),
+        );
+        altered.add_entry(NodeId::new("a"));
+        assert_ne!(graph.fingerprint(), altered.fingerprint());
+
+        let err = engine2
+            .resume_with_options(
+                &altered,
+                thread,
+                ResumeOptions {
+                    allow_graph_change: true,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::VanguardNodeMissing { node } if node == b));
+    }
+
+    #[tokio::test]
+    async fn resume_allow_graph_change_proceeds_when_vanguard_node_present() {
+        let (graph, _a, _b) = two_node_chain_graph();
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("resume-allow-change-ok").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let waypoints = ascending_history(&store, &thread).await;
+        assert_eq!(waypoints.len(), 2);
+        let waypoint_after_a = waypoints[0].clone();
+
+        let store2 = InMemoryWaypointStore::new();
+        store2.save(&waypoint_after_a).await.unwrap();
+        let engine2 = WarEngine::new(Arc::new(UnimplementedPaladinPort), Arc::new(store2));
+
+        // Altered graph: the same two nodes, PLUS an unconnected extra node
+        // "c" -- fingerprint differs, but the restored vanguard node ("b")
+        // is still present.
+        let (mut altered, _a2, _b2) = two_node_chain_graph();
+        altered.add_node(
+            NodeId::new("c"),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("trace").unwrap(),
+                serde_json::json!("c"),
+            )),
+        );
+        assert_ne!(graph.fingerprint(), altered.fingerprint());
+
+        let outcome = engine2
+            .resume_with_options(
+                &altered,
+                thread,
+                ResumeOptions {
+                    allow_graph_change: true,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn resume_restores_visit_counts_and_trips_limit_on_next_post_resume_visit() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("status").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let limits = EngineLimits {
+            max_supersteps: 20,
+            max_node_visits: 5,
+            run_timeout: None,
+        };
+        let mut graph = WarGraph::new(schema, limits);
+        let a = NodeId::new("a");
+        graph.add_node(
+            a.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("status").unwrap(),
+                serde_json::json!("looping"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: a.clone(),
+            condition: Some(EdgeCondition::Contains("looping".to_string())),
+        });
+        graph.add_entry(a);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("resume-visit-counts").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        match outcome {
+            RunOutcome::Failed { error, .. } => {
+                assert!(matches!(
+                    error,
+                    EngineError::NodeVisitLimitExceeded { limit: 5, .. }
+                ));
+            }
+            other => panic!(
+                "expected the uninterrupted control run to trip the visit limit, got {other:?}"
+            ),
+        }
+
+        let waypoints = ascending_history(&store, &thread).await;
+        // 4 successful (Running) visits + 1 Failed waypoint (the tripped
+        // 5th attempt, which never executed) = 5.
+        assert_eq!(waypoints.len(), 5);
+
+        let store2 = InMemoryWaypointStore::new();
+        for wp in &waypoints[0..4] {
+            store2.save(wp).await.unwrap();
+        }
+        let engine2 = WarEngine::new(Arc::new(UnimplementedPaladinPort), Arc::new(store2));
+        let resumed = engine2.resume(&graph, thread).await.unwrap();
+        match resumed {
+            RunOutcome::Failed { error, .. } => {
+                assert!(
+                    matches!(error, EngineError::NodeVisitLimitExceeded { limit: 5, .. }),
+                    "restored visit counts must trip the SAME limit on the very next post-resume \
+                     visit, not silently reset and allow four more; got {error:?}"
+                );
+            }
+            other => panic!("expected Failed(NodeVisitLimitExceeded), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_parameterized_at_every_superstep_index_matches_control_and_skips_completed_nodes()
+     {
+        // A deterministic 5-superstep linear chain of Paladin nodes, driven
+        // by a call-recording port -- ENG-FR-12's parameterized proof.
+        let field_names: Vec<FieldName> = (1..=5)
+            .map(|i| FieldName::new(format!("f{i}")).unwrap())
+            .collect();
+        let mut schema_fields = vec![FieldSpec::new(
+            FieldName::new("topic").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            true,
+        )];
+        for f in &field_names {
+            schema_fields.push(FieldSpec::new(
+                f.clone(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ));
+        }
+        let schema = BattlefieldSchema::new(schema_fields);
+
+        let node_ids: Vec<NodeId> = (1..=5).map(|i| NodeId::new(format!("n{i}"))).collect();
+
+        let build_graph = || {
+            let mut graph = WarGraph::new(schema.clone(), EngineLimits::default());
+            for (i, node_id) in node_ids.iter().enumerate() {
+                let input_field = if i == 0 {
+                    "topic".to_string()
+                } else {
+                    format!("f{i}")
+                };
+                graph.add_node(
+                    node_id.clone(),
+                    NodeSpec::Paladin {
+                        paladin: Box::new(make_paladin(&format!("n{}", i + 1))),
+                        input_template: InputMapping::new(format!("{{{input_field}}}")),
+                        output_field: field_names[i].clone(),
+                    },
+                );
+            }
+            for pair in node_ids.windows(2) {
+                graph.add_edge(EdgeSpec {
+                    from: pair[0].clone(),
+                    to: pair[1].clone(),
+                    condition: None,
+                });
+            }
+            graph.add_entry(node_ids[0].clone());
+            graph
+        };
+
+        let control_port = Arc::new(RecordingPaladinPort::new());
+        for i in 1..=5 {
+            control_port.set_output(format!("n{i}"), format!("out{i}"));
+        }
+        let control_store = Arc::new(RecordingWaypointStore::new());
+        let control_graph = build_graph();
+        let control_engine = WarEngine::new(control_port, control_store.clone());
+        let mut initial = StateDelta::new();
+        initial
+            .set(FieldName::new("topic").unwrap(), "seed")
+            .unwrap();
+        let control_thread = ThreadId::new("resume-parameterized-control").unwrap();
+        let control_outcome = control_engine
+            .start(&control_graph, control_thread.clone(), initial.clone())
+            .await
+            .unwrap();
+        let control_final = match control_outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected control run to complete, got {other:?}"),
+        };
+
+        let control_waypoints = ascending_history(&control_store, &control_thread).await;
+        assert_eq!(
+            control_waypoints.len(),
+            5,
+            "5 linear nodes take 5 supersteps"
+        );
+
+        for k in 1..=5usize {
+            let completed_before_drop: std::collections::HashSet<String> = control_waypoints[0..k]
+                .iter()
+                .flat_map(|wp| wp.completed.iter().map(|r| r.node_id.as_str().to_string()))
+                .collect();
+
+            let store2 = InMemoryWaypointStore::new();
+            for wp in &control_waypoints[0..k] {
+                store2.save(wp).await.unwrap();
+            }
+            let resume_port = Arc::new(RecordingPaladinPort::new());
+            for i in 1..=5 {
+                resume_port.set_output(format!("n{i}"), format!("out{i}"));
+            }
+            let graph_for_resume = build_graph();
+            let engine2 = WarEngine::new(resume_port.clone(), Arc::new(store2));
+            let resumed = engine2
+                .resume(&graph_for_resume, control_thread.clone())
+                .await
+                .unwrap();
+
+            let resumed_final = match resumed {
+                RunOutcome::Completed { final_state, .. } => final_state,
+                other => panic!("k={k}: expected resumed run to complete, got {other:?}"),
+            };
+            assert_eq!(
+                resumed_final, control_final,
+                "k={k}: resumed final Battlefield must equal the control run's"
+            );
+
+            for (name, _input) in resume_port.call_log() {
+                assert!(
+                    !completed_before_drop.contains(&name),
+                    "k={k}: node {name} completed before the drop but appears again post-resume"
+                );
+            }
         }
     }
 }

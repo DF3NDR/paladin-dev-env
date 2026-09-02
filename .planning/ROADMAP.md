@@ -232,7 +232,7 @@ Runtime" — are detailed in full below.*
   4. Program scenario E2E-1 passes: an engine killed after superstep 3 is reconstructed fresh from the same backend and `thread_id`, resumes with zero re-execution of already-completed nodes, and reaches a final Battlefield identical to an uninterrupted control run, with exactly one Waypoint per completed superstep (ENG-04)
   5. Three `WaypointPort` backends (InMemory, SQLite, Postgres) all pass one shared contract suite; legacy `from_formation`/`from_phalanx`/`from_campaign` constructors reproduce today's data flow with golden output-equivalence tests; `MIGRATION.md` exists at the repository root with the §9 skeleton and pre-populated register entries; and the `cargo semver-checks` and MSRV CI jobs run green on every PR (ENG-05, ENG-06, ENG-07, ENG-08)
 
-**Plans**: 11 plans (7 waves)
+**Plans**: 17 plans (10 waves) — 11 original, plus 6 gap-closure plans from the UAT
 **Wave 1**
 
 - [x] 22-01-PLAN.md — Tracer: one typed node checkpointed end-to-end and resumed with zero re-execution (wave 1, blocking D-04 fingerprint decision)
@@ -264,6 +264,23 @@ Runtime" — are detailed in full below.*
 **Wave 7** *(blocked on Wave 6 completion)*
 
 - [x] 22-11-PLAN.md — Legacy bridges, golden output-equivalence tests, coverage close-out (wave 7)
+
+**Gap closure** *(from `22-UAT.md`: G-22-1 major, G-22-2 blocker, G-22-3 major)*
+
+**Wave 8** *(gap-closure wave 1; blocked on Wave 7 completion)*
+
+- [ ] 22-12-PLAN.md — G-22-1: postgres-integration CI job so the Postgres Tier 2 contract suite executes somewhere, with reachability, skip and empty-selection assertions (wave 8)
+- [ ] 22-13-PLAN.md — G-22-2: WaypointPort delete-one primitive and prune_thread keep-set contract, transactional on both SQL backends (wave 8)
+- [ ] 22-15-PLAN.md — G-22-3 / BUG-02: eligible-set reachability validation on WarGraph::validate with an explicit dynamic-target marker, test-first (wave 8)
+
+**Wave 9** *(gap-closure wave 2)*
+
+- [ ] 22-14-PLAN.md — G-22-2: prune rebuilt on the keep-set primitive, protected set defined once in the application layer, fault-injection and resume acceptance test (wave 9)
+- [ ] 22-16-PLAN.md — G-22-3: fixture audit per acceptance 2a, plus the readiness defect it surfaces recorded with a runnable reproduction (wave 9)
+
+**Wave 10** *(gap-closure wave 3)*
+
+- [ ] 22-17-PLAN.md — Blocking checkpoint: confirm the CI run actually exercised the Postgres suite, and settle the readiness defect's disposition (wave 10)
 
 ### Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 

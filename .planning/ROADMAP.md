@@ -254,7 +254,7 @@ Runtime" — are detailed in full below.*
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 22-08-PLAN.md — Paladin nodes, InputMapping, full resume, program scenario E2E-1 (wave 5)
+- [x] 22-08-PLAN.md — Paladin nodes, InputMapping, full resume, program scenario E2E-1 (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

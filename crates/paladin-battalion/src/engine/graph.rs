@@ -115,6 +115,12 @@ pub struct WarGraph {
     node_order: Vec<NodeId>,
     /// Node ids registered via [`WarGraph::add_deferred_node`] (ENG-FR-06).
     defer_flags: HashSet<NodeId>,
+    /// Node ids marked via [`WarGraph::mark_dynamic_target`] (ENG-FR-02a).
+    /// TODO(22-15 Task 2): full rustdoc and eligible-set wiring land with
+    /// the `validate` implementation; the field and its accessors exist
+    /// here only so Task 1's regression tests compile against the real API
+    /// shape.
+    dynamic_targets: HashSet<NodeId>,
     edges: Vec<EdgeSpec>,
     schema: BattlefieldSchema,
     entry: Vec<NodeId>,
@@ -128,6 +134,7 @@ impl WarGraph {
             nodes: HashMap::new(),
             node_order: Vec::new(),
             defer_flags: HashSet::new(),
+            dynamic_targets: HashSet::new(),
             edges: Vec::new(),
             schema,
             entry: Vec::new(),
@@ -159,6 +166,18 @@ impl WarGraph {
     /// Whether `id` was registered via [`WarGraph::add_deferred_node`].
     pub fn is_deferred(&self, id: &NodeId) -> bool {
         self.defer_flags.contains(id)
+    }
+
+    /// Mark `id` as a dynamic target (ENG-FR-02a). TODO(22-15 Task 2): full
+    /// rustdoc lands with the `validate` implementation.
+    pub fn mark_dynamic_target(&mut self, id: NodeId) -> &mut Self {
+        self.dynamic_targets.insert(id);
+        self
+    }
+
+    /// Whether `id` was marked via [`WarGraph::mark_dynamic_target`].
+    pub fn is_dynamic_target(&self, id: &NodeId) -> bool {
+        self.dynamic_targets.contains(id)
     }
 
     /// This graph's node ids in registration order (ENG-FR-04).
@@ -293,8 +312,10 @@ impl WarGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paladin_core::platform::container::battlefield::FieldSpec;
+    use paladin_core::platform::container::battlefield::{Battlefield, FieldSpec};
     use std::sync::Arc as StdArc;
+
+    use crate::engine::RunOutcome;
 
     fn one_field_schema() -> BattlefieldSchema {
         BattlefieldSchema::new(vec![FieldSpec::new(
@@ -522,5 +543,354 @@ mod tests {
         let limits = EngineLimits::default();
         assert_eq!(limits.max_supersteps, 50);
         assert_eq!(limits.max_node_visits, 25);
+    }
+
+    // --- BUG-02 / ENG-FR-02a: eligible-set reachability regression tests
+    // (Phase 22 Plan 15, gap G-22-3). These fail before the fix lands in
+    // Task 2 -- see 22-15-SUMMARY.md for the pre-fix evidence capture that
+    // proves the defect (validate() accepts a stranded self-loop-only node,
+    // and a run over it reports `Completed` with that node's run_count() at
+    // 0).
+
+    use crate::engine::hooks::TraceDispatcher;
+    use crate::engine::test_support::{
+        CountingFunctionNode, RecordingPaladinPort, RecordingWaypointStore,
+    };
+    use crate::engine::{WaypointDurability};
+    use paladin_core::platform::container::battlefield::StateDelta;
+    use paladin_core::platform::container::waypoint::ThreadId;
+
+    /// Run `graph` to completion through the real superstep loop (Function
+    /// nodes only -- no `PaladinPort` calls are configured), the same way
+    /// `engine::superstep::tests::run_default` does, so a "reachable
+    /// variant runs" assertion exercises the real engine rather than only
+    /// `validate`.
+    async fn run_to_completion(graph: &WarGraph) -> RunOutcome {
+        let store = RecordingWaypointStore::new();
+        let paladin_port: StdArc<dyn paladin_ports::output::paladin_port::PaladinPort> =
+            StdArc::new(RecordingPaladinPort::new());
+        let trace = StdArc::new(TraceDispatcher::new(None));
+        let interceptors: Vec<StdArc<dyn crate::engine::hooks::NodeInterceptor>> = Vec::new();
+
+        crate::engine::superstep::run(
+            &store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            graph,
+            ThreadId::new("reachability-regression").unwrap(),
+            Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap(),
+            graph.entry().to_vec(),
+            std::collections::BTreeMap::new(),
+            None,
+            1,
+            &paladin_port,
+            &trace,
+            &interceptors,
+            &None,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[test]
+    fn validate_rejects_self_loop_only_stranded_node_naming_it() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("stranded"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("stranded"),
+            to: NodeId::new("stranded"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("entry"));
+
+        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        match err {
+            EngineError::UnreachableNode { nodes, reason } => {
+                assert_eq!(nodes, vec![NodeId::new("stranded")]);
+                assert!(
+                    reason.contains("stranded"),
+                    "reason should name the offending node: {reason}"
+                );
+            }
+            other => panic!("expected UnreachableNode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_multiple_stranded_nodes_in_one_error_registration_order() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("c"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("d"), NodeSpec::Function(StdArc::new(NoopNode)));
+        for id in ["b", "c", "d"] {
+            graph.add_edge(EdgeSpec {
+                from: NodeId::new(id),
+                to: NodeId::new(id),
+                condition: None,
+            });
+        }
+        graph.add_entry(NodeId::new("entry"));
+
+        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        match err {
+            EngineError::UnreachableNode { nodes, reason } => {
+                assert_eq!(
+                    nodes,
+                    vec![NodeId::new("b"), NodeId::new("c"), NodeId::new("d")],
+                    "all three offenders must be reported together, in registration order"
+                );
+                for id in ["b", "c", "d"] {
+                    assert!(reason.contains(id), "reason should name {id}: {reason}");
+                }
+            }
+            other => panic!("expected UnreachableNode, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_accepts_and_runs_stranded_node_once_made_reachable_from_entry() {
+        // Deliberately no self-loop on "stranded" here (unlike the
+        // rejection test's fixture): a node whose incoming edges are BOTH
+        // a self-loop and an external edge can never resolve its own
+        // self-loop edge's Pending state before it first runs (ENG-FR-06's
+        // join semantics require every incoming edge to resolve, and a
+        // self-loop's source is the node itself) -- an unrelated engine
+        // property, not what this check is pinning. This fixture isolates
+        // "made reachable from entry" cleanly: an otherwise-edgeless node,
+        // exactly the kind the isolated-node rejection test above also
+        // uses, now wired to entry.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let entry = CountingFunctionNode::fixed(
+            FieldName::new("result").unwrap(),
+            serde_json::json!("entry-ran"),
+        );
+        let formerly_stranded = CountingFunctionNode::fixed(
+            FieldName::new("result").unwrap(),
+            serde_json::json!("stranded-ran"),
+        );
+        graph.add_node(NodeId::new("entry"), NodeSpec::Function(entry));
+        graph.add_node(
+            NodeId::new("stranded"),
+            NodeSpec::Function(formerly_stranded.clone()),
+        );
+        // The fix: an edge from entry making "stranded" reachable.
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("entry"),
+            to: NodeId::new("stranded"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("entry"));
+
+        assert!(graph.validate(&CustomDispatchResolver::new()).is_ok());
+
+        let outcome = run_to_completion(&graph).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(
+            formerly_stranded.run_count(),
+            1,
+            "the formerly-stranded node must actually execute once reachable"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_accepts_and_runs_stranded_node_once_marked_dynamic_target() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let entry = CountingFunctionNode::fixed(
+            FieldName::new("result").unwrap(),
+            serde_json::json!("entry-ran"),
+        );
+        graph.add_node(NodeId::new("entry"), NodeSpec::Function(entry));
+        graph.add_node(
+            NodeId::new("jump-target"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_entry(NodeId::new("entry"));
+        graph.mark_dynamic_target(NodeId::new("jump-target"));
+
+        // No edge at all into "jump-target" -- the marker alone is enough.
+        assert!(graph.validate(&CustomDispatchResolver::new()).is_ok());
+
+        let outcome = run_to_completion(&graph).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn self_loop_on_entry_node_still_validates_and_runs() {
+        let field_name = FieldName::new("status").unwrap();
+        let node = CountingFunctionNode::new(move |run_index, _state| {
+            let status = if run_index == 1 { "approved" } else { "looping" };
+            let mut delta = StateDelta::new();
+            delta.set(field_name.clone(), status).unwrap();
+            delta
+        });
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("status").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("a"),
+            to: NodeId::new("a"),
+            condition: Some(EdgeCondition::Contains("looping".to_string())),
+        });
+        graph.add_entry(NodeId::new("a"));
+
+        assert!(
+            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            "self-loops remain legal on entry nodes -- the check rejects strandedness, not loops"
+        );
+
+        let outcome = run_to_completion(&graph).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(node.run_count(), 2);
+    }
+
+    #[test]
+    fn validate_accepts_self_loop_on_node_reachable_from_entry_by_normal_edge() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("a"),
+            to: NodeId::new("b"),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("b"),
+            to: NodeId::new("b"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("a"));
+
+        assert!(graph.validate(&CustomDispatchResolver::new()).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_graph_with_no_entry_point_naming_absent_entry() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        // No add_entry call at all.
+
+        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        match err {
+            EngineError::UnreachableNode { nodes, reason } => {
+                assert_eq!(nodes, vec![NodeId::new("a")]);
+                assert!(
+                    reason.contains("entry"),
+                    "reason should name the absent entry point as the cause, distinguishing \
+                     this from the ordinary stranded case: {reason}"
+                );
+            }
+            other => panic!("expected UnreachableNode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_isolated_node_with_no_edges_when_graph_has_entry() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("isolated"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_entry(NodeId::new("entry"));
+
+        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        match err {
+            EngineError::UnreachableNode { nodes, .. } => {
+                assert_eq!(nodes, vec![NodeId::new("isolated")]);
+            }
+            other => panic!("expected UnreachableNode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_prefers_limit_error_over_unreachable_node() {
+        let mut graph = WarGraph::new(
+            one_field_schema(),
+            EngineLimits {
+                max_supersteps: 0,
+                ..EngineLimits::default()
+            },
+        );
+        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("stranded"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("stranded"),
+            to: NodeId::new("stranded"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("entry"));
+
+        assert!(matches!(
+            graph.validate(&CustomDispatchResolver::new()),
+            Err(EngineError::InvalidLimits { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_prefers_unknown_node_error_over_unreachable_node() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("stranded"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("stranded"),
+            to: NodeId::new("stranded"),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("entry"),
+            to: NodeId::new("ghost"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("entry"));
+
+        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        assert!(matches!(err, EngineError::UnknownNode(id) if id == NodeId::new("ghost")));
+    }
+
+    #[test]
+    fn validate_prefers_custom_dispatch_error_over_unreachable_node() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("special").unwrap(),
+            DispatchRule::Custom("merge_scores".to_string()),
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("stranded"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("stranded"),
+            to: NodeId::new("stranded"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("entry"));
+
+        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        match err {
+            EngineError::Battlefield(BattlefieldError::CustomDispatchNotRegistered { name }) => {
+                assert_eq!(name, "merge_scores");
+            }
+            other => panic!("expected CustomDispatchNotRegistered, got {other:?}"),
+        }
     }
 }

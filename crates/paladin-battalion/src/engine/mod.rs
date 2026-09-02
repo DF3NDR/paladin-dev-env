@@ -167,6 +167,32 @@ pub enum EngineError {
     #[error("unknown node referenced in graph: {0}")]
     UnknownNode(NodeId),
 
+    /// `WarGraph::validate` found one or more declared nodes outside the
+    /// **eligible set** (ENG-FR-02a / BUG-02): the fixed point of nodes
+    /// reachable from `entry` over static edges, unioned with nodes marked
+    /// [`graph::WarGraph::mark_dynamic_target`]. Carries EVERY offending
+    /// node in one error, in the graph's registration order, rather than
+    /// one variant per node, so a caller sees the whole problem at once
+    /// rather than fixing one stranded node per validate/retry cycle.
+    ///
+    /// Checked last among `validate`'s clauses, so any earlier, more
+    /// specific structural error (limits, an unknown node, an unregistered
+    /// custom dispatch name) is still what a caller sees first.
+    #[error("unreachable node(s) in graph: {reason}")]
+    UnreachableNode {
+        /// Every declared node outside the eligible set, in the graph's
+        /// registration order (deterministic, never `HashMap` order).
+        nodes: Vec<NodeId>,
+        /// Explains the eligible-set rule and names the two ways to fix an
+        /// ordinary stranded node: make it reachable from entry via a
+        /// static edge, or mark it `dynamic_target`. For a graph that
+        /// declares nodes but never calls `add_entry` at all, names the
+        /// absent entry point as the cause instead, since every node is
+        /// then trivially unreachable and listing them individually would
+        /// bury the actual mistake.
+        reason: String,
+    },
+
     /// An `EdgeCondition::Regex` pattern failed to compile.
     #[error("invalid edge condition: {reason}")]
     InvalidEdgeCondition {

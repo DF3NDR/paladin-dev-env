@@ -1,0 +1,279 @@
+# PRD 01 — Battlefield State & Superstep Execution Engine (Epic `ENG`)
+
+**Depends on:** nothing (keystone epic).
+**Unlocks:** Docs 02, 03, 04, 06, 07.
+**Primary crates:** `paladin-core` (domain types), `paladin-ports` (ports), `paladin-battalion` (engine), `paladin-storage`/`paladin-memory` (Waypoint backends), facade (wiring).
+
+---
+
+## 1. Problem Statement
+
+Today, data flows between Paladins as bare strings: `PaladinPort::execute(&Paladin, &str) -> PaladinResult { output: String, .. }`. Campaign fan-in concatenates parent outputs with a `"\n\n---\n\n"` separator. Consequences:
+
+- Structured data must be smuggled as JSON-in-strings with no schema, no validation, and no merge semantics.
+- Parallel branches cannot merge results deterministically; last-writer or concatenation is all we have.
+- There is no shared object to snapshot, so persistence (Citadel) can only save coarse whole-entity states, and only when explicitly invoked.
+- Campaign rejects any cycle (`toposort` error), so iterative workflows (retry-and-refine, evaluate-optimize loops, negotiation-until-consensus) cannot be expressed at the orchestration level at all — only inside a single Paladin's internal reasoning loop.
+
+This epic introduces: (a) a typed shared state — the **Battlefield** — with per-field **dispatch rules** (reducers), (b) a **superstep execution engine** that supports cycles with bounded iteration, and (c) **automatic Waypoint checkpointing** after every superstep, addressed by `(thread_id, waypoint_id)`.
+
+## 2. Goals / Non-Goals
+
+**Goals**
+- G1. Typed state passed to and returned (as deltas) from every node.
+- G2. Deterministic merging of concurrent deltas via per-field dispatch rules.
+- G3. Cyclic graph execution with mandatory loop bounds and a recursion limit.
+- G4. A Waypoint written after every superstep, automatically, with pluggable backends.
+- G5. Resume any thread from its latest Waypoint with zero re-execution of completed work.
+- G6. Full backward compatibility for string-based execution (X-03).
+
+**Non-Goals**
+- Dynamic routing/fan-out (Doc 02), pause/resume semantics (Doc 03), per-node retry/timeout (Doc 04). This epic must expose the seams they need (see §8) but not implement them.
+
+## 3. Domain Design
+
+### 3.1 Battlefield (in `paladin-core`, new module `platform::container::battlefield`)
+
+```rust
+/// Typed shared state for one workflow run.
+/// Internally a map of named fields; each field has a declared dispatch rule.
+pub struct Battlefield {
+    schema: BattlefieldSchema,
+    values: HashMap<FieldName, serde_json::Value>,
+}
+
+pub struct BattlefieldSchema {
+    pub fields: Vec<FieldSpec>,
+    pub schema_version: String,
+}
+
+pub struct FieldSpec {
+    pub name: FieldName,               // newtype over String, validated non-empty
+    pub dispatch: DispatchRule,
+    pub default: Option<serde_json::Value>,
+    pub required: bool,                // engine errors at start if required & no default & not in initial state
+}
+
+pub enum DispatchRule {
+    /// Last write wins. Concurrent writes in the same superstep to a LastWrite
+    /// field are a conflict → typed error (see ENG-FR-07).
+    LastWrite,
+    /// Value must be a JSON array; deltas append. Concurrent appends merge in
+    /// deterministic order (see ENG-FR-08).
+    Append,
+    /// Value must be a JSON object; deltas shallow-merge keys. Same-key concurrent
+    /// writes are a conflict.
+    MergeObject,
+    /// Numeric accumulation (value += delta). Value and delta must be numbers.
+    Sum,
+    /// Named custom rule, resolved at engine level (see ENG-FR-09).
+    Custom(String),
+}
+
+/// A node's partial update: field name → new value / append item / merge fragment.
+pub struct StateDelta(pub HashMap<FieldName, serde_json::Value>);
+```
+
+Design constraints:
+- `Battlefield`, `BattlefieldSchema`, `StateDelta` all derive `Serialize`/`Deserialize`, `Clone`, `Debug` (X-04). `Battlefield` serialization embeds its schema so a Waypoint is self-describing.
+- Typed accessors: `battlefield.get::<T: DeserializeOwned>(&FieldName) -> Result<Option<T>, BattlefieldError>` and `StateDelta::set<T: Serialize>(...)`. Raw-JSON accessors also public.
+- `paladin-core` stays dependency-pure: `serde_json` is already a core dependency; nothing else is added.
+
+### 3.2 Errors (new `BattlefieldError` in core, thiserror)
+
+Variants (all with structured fields, per X-06): `UnknownField { field }`, `TypeMismatch { field, expected, got }`, `DispatchConflict { field, superstep, writers: Vec<NodeId> }`, `MissingRequiredField { field }`, `SchemaVersionUnsupported { found, supported }`, `CustomDispatchNotRegistered { name }`.
+
+### 3.3 Waypoint & Thread addressing (in `paladin-core`, module `platform::container::waypoint`)
+
+```rust
+pub struct ThreadId(pub String);      // caller-supplied, non-empty, ≤ 256 chars, no whitespace
+pub struct WaypointId(pub Uuid);      // engine-generated, v7 (time-ordered) preferred
+
+pub struct Waypoint {
+    pub thread_id: ThreadId,
+    pub waypoint_id: WaypointId,
+    pub parent_waypoint_id: Option<WaypointId>, // None only for the first waypoint of a thread or a fork root
+    pub superstep: u64,
+    pub battlefield: Battlefield,               // full snapshot (delta-encoding is a backend optimization, not a contract)
+    pub vanguard: Vec<NodeId>,                  // nodes ready for the NEXT superstep
+    pub completed: Vec<NodeExecutionRecord>,    // what ran in the superstep that produced this waypoint
+    pub status: WaypointStatus,
+    pub created_at: DateTime<Utc>,
+    pub schema_version: String,
+}
+
+pub enum WaypointStatus {
+    Running,          // more supersteps pending (vanguard non-empty)
+    Completed,        // run finished normally
+    Failed { error: String, failed_node: NodeId },
+    AwaitingInput { parley: ParleyRequest },    // defined fully in Doc 03; type stub lands here
+    Halted,           // graceful shutdown (Doc 03)
+}
+
+pub struct NodeExecutionRecord {
+    pub node_id: NodeId,
+    pub paladin_id: Option<Uuid>,
+    pub started_at: DateTime<Utc>,
+    pub duration_ms: u64,
+    pub token_count: u64,
+    pub outcome: NodeOutcomeKind, // Succeeded | Failed | Skipped(reason)
+    pub attempt: u32,             // populated meaningfully by Doc 04; 1 until then
+}
+```
+
+`NodeId` is a newtype over `String`, unique within a graph, human-readable (e.g. `"researcher"`), replacing raw `Uuid` node identity in new APIs (existing Campaign keeps Uuid; the engine maps).
+
+### 3.4 WaypointPort (in `paladin-ports`, new `output::waypoint_port`)
+
+```rust
+#[async_trait]
+pub trait WaypointPort: Send + Sync {
+    async fn save(&self, wp: &Waypoint) -> Result<(), WaypointError>;
+    async fn latest(&self, thread: &ThreadId) -> Result<Option<Waypoint>, WaypointError>;
+    async fn get(&self, thread: &ThreadId, id: &WaypointId) -> Result<Option<Waypoint>, WaypointError>;
+    async fn history(&self, thread: &ThreadId, limit: Option<u32>, before: Option<WaypointId>)
+        -> Result<Vec<WaypointSummary>, WaypointError>;   // newest-first, paginated
+    async fn list_threads(&self, limit: Option<u32>, before: Option<DateTime<Utc>>)
+        -> Result<Vec<ThreadSummary>, WaypointError>;
+    async fn delete_thread(&self, thread: &ThreadId) -> Result<u64, WaypointError>; // returns waypoints deleted
+}
+```
+
+`WaypointError` is a thiserror enum: `Backend { source }`, `Serialization { .. }`, `SchemaVersionUnsupported { .. }`, `NotFound { .. }`.
+
+This port is **separate from `CitadelPort`**. Citadel remains for whole-entity persistence (backward compat). Rationale documented in rustdoc: Waypoints are high-frequency, append-mostly, thread-addressed; Citadel is coarse entity snapshots.
+
+### 3.5 Engine (in `paladin-battalion`, new module `engine`)
+
+```rust
+pub struct WarGraph {                              // the executable graph
+    nodes: HashMap<NodeId, NodeSpec>,
+    edges: Vec<EdgeSpec>,                          // static edges; Doc 02 adds dynamic routing
+    schema: BattlefieldSchema,
+    entry: Vec<NodeId>,
+    limits: EngineLimits,
+}
+
+pub struct EngineLimits {
+    pub max_supersteps: u64,        // REQUIRED, default 50; run fails with typed RecursionLimitExceeded when hit
+    pub max_node_visits: u32,       // per-node visit cap within one run, default 25
+    pub run_timeout: Option<Duration>,
+}
+
+pub enum NodeSpec {
+    Paladin { paladin: Paladin, input_template: InputMapping, output_field: FieldName },
+    Function(Arc<dyn StateNode>),   // pure state→delta node, for deterministic steps
+    Battalion(/* Doc 02: subgraph */),
+}
+
+#[async_trait]
+pub trait StateNode: Send + Sync {
+    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<StateDelta, NodeError>;
+}
+
+pub struct WarEngine<W: WaypointPort> { /* paladin_port, waypoint_port, dispatch registry, hooks */ }
+
+impl<W: WaypointPort> WarEngine<W> {
+    pub async fn start(&self, graph: &WarGraph, thread: ThreadId, initial: StateDelta)
+        -> Result<RunOutcome, EngineError>;
+    pub async fn resume(&self, graph: &WarGraph, thread: ThreadId)
+        -> Result<RunOutcome, EngineError>;      // from latest waypoint
+}
+
+pub enum RunOutcome {
+    Completed { final_state: Battlefield, waypoint: WaypointId },
+    AwaitingInput { parley: ParleyRequest, waypoint: WaypointId }, // fully wired in Doc 03
+    Halted { waypoint: WaypointId },
+    Failed { error: EngineError, waypoint: Option<WaypointId> },
+}
+```
+
+`InputMapping` renders a Paladin's string input from the Battlefield: a template string with `{field}` placeholders resolved from state (values JSON-stringified unless the field is a JSON string, which is inserted raw). This is the bridge that lets today's string-in/string-out Paladins participate in typed workflows unchanged (X-03). `output_field` is where the Paladin's `PaladinResult.output` is written as a delta (dispatch rule of that field applies).
+
+## 4. Functional Requirements
+
+Execution semantics:
+
+- **ENG-FR-01 (Superstep loop).** The engine MUST execute in supersteps: (1) take the current Vanguard; (2) execute all its nodes concurrently (bounded by a configurable parallelism limit, default = number of vanguard nodes); (3) collect each node's `StateDelta`; (4) merge deltas into the Battlefield via dispatch rules; (5) compute the next Vanguard from edges whose conditions pass and whose target's dependencies are satisfied; (6) persist a Waypoint; (7) repeat until Vanguard is empty (Completed) or a limit/failure/parley intervenes.
+- **ENG-FR-02 (Cycles allowed).** The engine MUST accept graphs containing cycles, including self-loops. `WarGraph::validate()` MUST NOT reject cycles; instead it MUST require `EngineLimits.max_supersteps ≥ 1` and MUST reject a graph where `max_supersteps` or `max_node_visits` is zero.
+- **ENG-FR-03 (Bounded iteration).** When the superstep count reaches `max_supersteps`, the engine MUST stop with `EngineError::RecursionLimitExceeded { limit, thread_id }` and persist a `Failed` Waypoint. Same for `max_node_visits` per node (`NodeVisitLimitExceeded { node, limit }`).
+- **ENG-FR-04 (Deterministic frontier).** Given identical node outputs, the sequence of Vanguards MUST be deterministic. Node execution order within a superstep is concurrent, but merge order is deterministic (ENG-FR-08), and next-Vanguard computation MUST iterate nodes/edges in stable (insertion) order.
+- **ENG-FR-05 (Isolation within a superstep).** All nodes in one superstep read the SAME pre-superstep Battlefield snapshot. A node MUST NOT observe deltas produced by peers in the same superstep.
+- **ENG-FR-06 (Join semantics).** A node with multiple incoming edges MUST NOT execute until every incoming edge from a node that is *reachable in this run* has resolved (fired or provably not-firing). "Provably not-firing" = the source node completed and the edge condition evaluated false, or the source is unreachable given conditions already resolved. This makes the current Campaign behavior (dependencies-satisfied check) precise and adds the not-firing case, so a false branch does not deadlock a downstream join. A `defer: bool` flag on `NodeSpec` MUST additionally delay the node until the Vanguard contains no other executable nodes (aggregate-after-all-branches semantics).
+
+Dispatch / merge:
+
+- **ENG-FR-07 (LastWrite conflict).** Two deltas in the same superstep writing the same `LastWrite` field MUST fail the run with `DispatchConflict` naming the field, superstep, and writer NodeIds. This is a hard error, not a warning.
+- **ENG-FR-08 (Deterministic Append/merge order).** Concurrent `Append` deltas MUST merge ordered by (source NodeId lexicographic, then delta emission index). Two runs with identical node outputs MUST produce byte-identical serialized Battlefields. A property/repeat test MUST assert this over ≥ 20 randomized-scheduling iterations.
+- **ENG-FR-09 (Custom dispatch).** Custom dispatch rules are registered on the engine as `Arc<dyn Fn(&Value, &Value) -> Result<Value, BattlefieldError> + Send + Sync>` under a string name. Graph validation MUST fail (`CustomDispatchNotRegistered`) if the schema references an unregistered name. Registration lives in the engine (application layer), never in `paladin-core`.
+- **ENG-FR-10 (Schema enforcement).** A delta touching an undeclared field → `UnknownField` hard error. A run starting without all `required` fields resolvable (initial delta ∪ defaults) → `MissingRequiredField` before any node executes.
+
+Checkpointing:
+
+- **ENG-FR-11 (Automatic Waypoint per superstep).** The engine MUST persist exactly one Waypoint after every superstep merge, before computing whether the run continues. Waypoint write failure fails the run with `EngineError::WaypointWrite { source }` — durable-by-default; a documented `WaypointDurability::BestEffort` engine option may downgrade write failure to a logged warning, default is `Strict`.
+- **ENG-FR-12 (Resume).** `resume(graph, thread)` MUST load the latest Waypoint, verify graph compatibility (see ENG-FR-14), restore Battlefield + Vanguard + per-node visit counts, and continue. Completed nodes MUST NOT re-execute (E2E-1). Resuming a thread whose latest Waypoint is `Completed` returns `RunOutcome::Completed` immediately without executing anything. Resuming an unknown thread → `EngineError::ThreadNotFound`.
+- **ENG-FR-13 (Thread lineage).** Every Waypoint records `parent_waypoint_id`, forming a chain (a tree once Doc 03 forking lands). `WaypointPort::history` returns newest-first with pagination.
+- **ENG-FR-14 (Graph fingerprint).** `WarGraph` exposes a stable content fingerprint (hash over node ids, edge specs, schema — NOT over prompts/models, which may be hot-swapped). The fingerprint is stored in each Waypoint; `resume` with a mismatched fingerprint → `EngineError::GraphMismatch { expected, got }` unless the caller passes an explicit `allow_graph_change: true` option (in which case unknown vanguard NodeIds fail with `UnknownField`-style precision: `EngineError::VanguardNodeMissing { node }`).
+
+Waypoint backends (in `paladin-memory` or `paladin-storage`, feature-gated per X-07):
+
+- **ENG-FR-15 (InMemory backend).** `InMemoryWaypointStore` for tests/dev: HashMap behind `tokio::sync::RwLock`, full port contract.
+- **ENG-FR-16 (SQLite backend).** `SqliteWaypointStore` using the existing `sqlx`/SQLite stack: schema `waypoints(thread_id TEXT, waypoint_id TEXT PRIMARY KEY, parent_id TEXT NULL, superstep INTEGER, status TEXT, payload BLOB/JSON, created_at TEXT)` + index on `(thread_id, created_at DESC)`. Migrations added under `migrations/`.
+- **ENG-FR-17 (Postgres backend).** `PostgresWaypointStore` (new `postgres` feature; add `sqlx` postgres feature to `paladin-storage`). Same logical schema; JSONB payload; must pass the identical contract test suite as ENG-FR-15/16 (a shared `waypoint_port_contract_tests!` macro or generic test fn MUST exist so all backends run the same suite).
+- **ENG-FR-18 (Retention).** A `WaypointRetentionConfig { max_age_days: Option<u32>, max_waypoints_per_thread: Option<u32> }` plus a cleanup routine callable from the existing job-scheduling system. Pruning MUST never delete a thread's single latest Waypoint or any Waypoint with status `AwaitingInput`.
+
+Backward compatibility:
+
+- **ENG-FR-19 (String bridge).** A convenience constructor `WarGraph::from_formation(paladins: Vec<Paladin>)` (and `from_phalanx`, `from_campaign`) MUST build an equivalent typed graph using a default schema (`input: LastWrite`, `output: LastWrite`, `history: Append`) and `InputMapping` templates reproducing today's data flow, including Campaign's fan-in concatenation with `"\n\n---\n\n"`. Golden tests MUST assert output-equivalence with the legacy services for a 3-node Formation, a 3-node Phalanx, and the existing branching Campaign fixtures.
+- **ENG-FR-20 (Legacy services untouched).** `FormationExecutionService`, `PhalanxExecutionService`, `CampaignExecutionService`, `Commander`, and their public signatures continue to work with zero behavioral change (except BUG-01, fixed in Doc 02). New engine is additive.
+
+Engine hooks (seams for later docs — implement the hook, not the consumers):
+
+- **ENG-FR-21 (Trace hook).** The engine accepts an optional `Arc<dyn TraceSink>` (port in `paladin-ports`) receiving typed events: `RunStarted`, `SuperstepStarted`, `NodeStarted`, `NodeFinished`, `DeltaMerged { field_changes }`, `WaypointSaved`, `RunFinished`. Fire-and-forget; a slow/failing sink MUST NOT stall or fail the run (bounded channel + drop-oldest, drops counted).
+- **ENG-FR-22 (Node middleware hook).** Node execution passes through an ordered chain `Vec<Arc<dyn NodeInterceptor>>` with `before(&NodeContext, &Battlefield) -> InterceptDecision` and `after(&NodeContext, &mut StateDelta)`. `InterceptDecision::{Proceed, Skip(reason), Fail(NodeError)}`. Default chain empty. (Doc 05 populates it; Doc 04's Aegis wraps outside this chain.)
+- **ENG-FR-23 (Cancellation token).** Engine accepts a `CancellationToken`; on cancellation it finishes the in-flight superstep, persists a `Halted` Waypoint, and returns `RunOutcome::Halted`. (Doc 03 exposes this as graceful shutdown; the mechanism lands here.)
+
+## 5. Non-Functional Requirements
+
+- **ENG-NFR-01.** Waypoint save for a Battlefield ≤ 1 MiB must add < 10 ms p50 overhead per superstep on the SQLite backend (benchmark in `benches/`).
+- **ENG-NFR-02.** Engine memory: one Battlefield clone per superstep maximum, plus one per concurrently executing node view (Arc-shared read snapshot preferred; measure, don't guess — add a bench).
+- **ENG-NFR-03.** All engine state is `Send`; the engine future is spawnable on a multi-threaded runtime.
+
+## 6. Acceptance Criteria
+
+1. E2E-1 (crash-resume, overview §6) passes.
+2. A self-loop node ("refine until output field contains APPROVED, max 5 visits") executes 1–5 times based on mock output and terminates with the correct typed error when the cap is hit without approval.
+3. Dispatch determinism repeat test (ENG-FR-08) green over 20 iterations.
+4. All three Waypoint backends pass the shared contract suite; SQLite + Postgres via the existing docker-compose integration target.
+5. Golden equivalence tests (ENG-FR-19) green.
+6. `DispatchConflict` surfaced with correct field/superstep/writers in a two-writer Phalanx-style graph.
+7. Coverage on new modules ≥ 85%; workspace ≥ 82%.
+8. **Versioning gate (X-10/X-11):** any pre-existing public type touched by this epic is recorded in `MIGRATION.md` §9.2 with its mitigation; `cargo semver-checks` and the MSRV job pass; new dependencies listed in §9.3; new migrations in §9.4; new config/env in §9.5.
+
+## 7. Test Plan (TDD ordering)
+
+1. `Battlefield`/`StateDelta` unit tests (typed get/set, schema enforcement, each DispatchRule incl. conflicts) — pure `paladin-core`, no async.
+2. `WaypointPort` contract suite against `InMemoryWaypointStore`.
+3. Engine unit tests with `Function` nodes only (no LLM): linear, branch, join, defer, cycle, limits, determinism.
+4. Engine + MockPaladinPort integration: `InputMapping`, `output_field` write, token accounting into `NodeExecutionRecord`.
+5. Resume tests (drop engine mid-run at every superstep index of a 5-superstep run — parameterized).
+6. SQLite/Postgres backend contract + migration tests.
+7. Golden legacy-equivalence tests.
+8. Multi-thread stress test: 8-node all-parallel superstep, 100 iterations, exact-count call assertions + timeout guard (X-05).
+9. Benchmarks (ENG-NFR-01/02).
+
+## 8. Explicit Seams Handed to Later Docs
+
+| Seam | Consumer |
+|---|---|
+| `NodeOutcome`/Directive extension point on node return type | Doc 02 (routing, Muster) |
+| `WaypointStatus::AwaitingInput` + `ParleyRequest` stub | Doc 03 |
+| `WaypointPort::get/history` | Doc 03 (time travel), Doc 06 (threads API) |
+| `CancellationToken` → `Halted` | Doc 03 (graceful shutdown), Doc 06 |
+| Aegis wrapper around node execution | Doc 04 |
+| `NodeInterceptor` chain | Doc 05 |
+| `TraceSink` | Doc 07 |
+
+## 9. Out of Scope
+
+Dynamic `Goto`, Muster fan-out, subgraph nodes (Doc 02); parley/resume-with-payload, forking (Doc 03); retry/timeout/error-handler (Doc 04); HTTP exposure (Doc 06).

@@ -864,7 +864,12 @@ jobs:
       - name: Fail if the suite selected fewer tests than it declares
         run: |
           set -o pipefail
-          EXPECTED=$(grep -c '#\[tokio::test\]' crates/paladin-storage/src/waypoint/postgres.rs)
+          # Anchored to attribute position (leading whitespace then the attr):
+          # an unanchored count also matches the literal inside comments — the
+          # module's own "One #[tokio::test] per shared contract function"
+          # comment inflated the declared count to 27 vs 26 real tests and
+          # failed a run in which every selected test passed.
+          EXPECTED=$(grep -cE '^\s*#\[tokio::test\]' crates/paladin-storage/src/waypoint/postgres.rs)
           ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/postgres-waypoint-test.log | tail -1)
           echo "Declared tests: $EXPECTED, passed: ${ACTUAL:-0}"
           if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then

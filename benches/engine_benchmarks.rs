@@ -2,13 +2,20 @@
 //
 // Engine Benchmarks — ENG-NFR-01 / ENG-NFR-02 (Phase 22 Plan 10)
 //
-// `waypoint_save`: the marginal cost of `SqliteWaypointStore::save` for a
-// Battlefield at three sizes (1 KiB, 512 KiB, just under 1 MiB), measuring
-// ENG-NFR-01 ("< 10 ms p50 overhead per superstep on the SQLite backend for
-// a Battlefield <= 1 MiB"). Database construction, migration, and Waypoint
-// payload construction all happen in `iter_batched`'s setup closure (or
-// before the benchmark group is defined at all, for the DB/migration) — the
-// timed region is `SqliteWaypointStore::save` alone.
+// Two criterion groups:
+//
+// - `waypoint_save`: the marginal cost of `SqliteWaypointStore::save` for a
+//   Battlefield at three sizes (1 KiB, 512 KiB, just under 1 MiB), measuring
+//   ENG-NFR-01 ("< 10 ms p50 overhead per superstep on the SQLite backend for
+//   a Battlefield <= 1 MiB"). Database construction, migration, and Waypoint
+//   payload construction all happen in `iter_batched`'s setup closure (or
+//   before the benchmark group is defined at all, for the DB/migration) — the
+//   timed region is `SqliteWaypointStore::save` alone.
+// - `superstep_cost`: wall-clock cost of one `WarEngine::start` superstep for
+//   a fixed graph at two Vanguard widths (1 node, 8 nodes), against an
+//   `InMemoryWaypointStore` (no disk I/O), so the per-node execution cost is
+//   separable from the fixed per-superstep engine overhead this bench alone
+//   measures — the persistence cost is `waypoint_save`'s job, not this one's.
 //
 // This project reports p50, not criterion's default mean/CI, by reading
 // criterion's own per-iteration `sample.json` after a real (non `--test`) run
@@ -22,17 +29,27 @@
 // cargo bench --bench engine_benchmarks
 // ```
 
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
+use paladin_battalion::engine::WarEngine;
+use paladin_battalion::engine::graph::{EngineLimits, NodeSpec, WarGraph};
+use paladin_battalion::engine::node::{NodeContext, NodeError, StateNode};
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
 };
+use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::waypoint::{
-    GraphFingerprint, ThreadId, Waypoint, WaypointStatus,
+    GraphFingerprint, NodeId, ThreadId, Waypoint, WaypointStatus,
 };
+use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
 use paladin_ports::output::waypoint_port::WaypointPort;
+use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_storage::waypoint::sqlite::SqliteWaypointStore;
 
 /// 1 KiB — the "small" case, cheap enough that the per-row fixed cost (not
@@ -139,5 +156,115 @@ fn bench_waypoint_save(c: &mut Criterion) {
     }
 }
 
-criterion_group!(engine_benches, bench_waypoint_save);
+// ── ENG-NFR-02 superstep wall-clock cost ─────────────────────────────────
+
+/// A `StateNode` that writes a fixed value into its own declared field —
+/// nothing else. Used to build fixed-width, single-superstep graphs whose
+/// wall-clock cost isolates the engine's own per-superstep overhead from any
+/// per-node work (there is none here).
+struct FixedValueNode {
+    field: FieldName,
+    value: serde_json::Value,
+}
+
+#[async_trait]
+impl StateNode for FixedValueNode {
+    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<StateDelta, NodeError> {
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), self.value.clone());
+        Ok(delta)
+    }
+}
+
+/// `WarEngine::new` requires a `PaladinPort`; this benchmark's graphs are
+/// `Function`-node only, so this is never actually invoked.
+struct UnusedPaladinPort;
+
+#[async_trait]
+impl PaladinPort for UnusedPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        unimplemented!("this benchmark's graphs run Function nodes only")
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("this benchmark's graphs run Function nodes only")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// Build a single-superstep, `width`-wide graph: `width` independent entry
+/// nodes, each writing a distinct field, no edges (so the run completes
+/// after exactly one superstep).
+fn build_width_graph(width: usize) -> WarGraph {
+    let fields: Vec<FieldSpec> = (0..width)
+        .map(|i| {
+            FieldSpec::new(
+                FieldName::new(format!("f{i}")).unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            )
+        })
+        .collect();
+    let schema = BattlefieldSchema::new(fields);
+    let mut graph = WarGraph::new(schema, EngineLimits::default());
+    for i in 0..width {
+        let id = NodeId::new(format!("n{i}"));
+        let field = FieldName::new(format!("f{i}")).unwrap();
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(Arc::new(FixedValueNode {
+                field,
+                value: serde_json::json!(i),
+            })),
+        );
+        graph.add_entry(id);
+    }
+    graph
+}
+
+fn bench_superstep_cost(c: &mut Criterion) {
+    let rt = Runtime::new().expect("tokio runtime for async criterion benches");
+
+    for width in [1usize, 8usize] {
+        let engine = WarEngine::new(
+            Arc::new(UnusedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let graph = build_width_graph(width);
+
+        c.bench_function(&format!("engine/superstep_cost_width_{width}"), |b| {
+            b.to_async(&rt).iter_batched(
+                || {
+                    ThreadId::new(format!("engine-bench-superstep-{}", Uuid::new_v4()))
+                        .expect("uuid-suffixed thread id is valid")
+                },
+                |thread| {
+                    let engine = &engine;
+                    let graph = &graph;
+                    async move {
+                        engine
+                            .start(graph, thread, StateDelta::new())
+                            .await
+                            .expect("single-superstep graph completes");
+                    }
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+}
+
+criterion_group!(engine_benches, bench_waypoint_save, bench_superstep_cost);
 criterion_main!(engine_benches);

@@ -115,6 +115,8 @@ The program is complete when:
 
 **BUG-01:** `CampaignExecutionService::evaluate_edge_condition` currently treats `EdgeCondition::Custom(_)` as always-true with only a log warning. This silently corrupts conditional routing. Doc 02, requirement CF-FR-01 replaces this with a registered-evaluator mechanism and makes an unregistered custom condition a hard `BattalionError::InvalidGraph` at validation time (before any node executes), never a silent pass at runtime.
 
+**BUG-02 (found during phase-one implementation review):** *Silent stranded node.* Because ENG-FR-02 removed toposort (to allow cycles) without adding a replacement connectivity check, a non-entry WarGraph node whose only incoming edges trace back to itself can never become ready; `WarGraph::validate()` accepts the graph and the run reports `RunOutcome::Completed` as if everything executed. Fixed by ENG-FR-02a (reachability-from-entry validation with declared dynamic-reachability exemptions), test-first. Since `WarGraph` is new in v0.10, this is a pre-release engine fix, **not** a v0.9 behavioral change — no `MIGRATION.md` entry or X-10 register row is required; it is in scope for the compatibility audit only as confirmation of that classification.
+
 ## 8. Out of Scope for This Program
 
 - Porting the engine to other languages (thin HTTP client SDKs are in Doc 06 as optional).

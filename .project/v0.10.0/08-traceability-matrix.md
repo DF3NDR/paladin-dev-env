@@ -35,12 +35,13 @@
 | G-28 | Trace/observability + eval | OBS-FR-01…07 (trace/OTel), OBS-FR-11…15 (eval) | |
 | G-29 | Multi-language client access | PLAT-FR-17 | Generated-client CI gate (hand-written SDKs out of scope) |
 | BUG-01 | Custom edge condition silently true | CF-FR-01…04; overview §7 | Fail-closed at validation; test-first mandate |
+| BUG-02 | Silent stranded node (unreachable node, run reports Completed) | ENG-FR-02a; doc 01 acceptance 2a; overview §7 | Reachability-from-entry validation; worker_template / Route targets / `dynamic_target` exemptions; test-first; pre-release fix, no migration entry |
 
 **Verification protocol (for the post-implementation audit):**
 1. For each row, locate the implementing code + the tests named in the PRD's Test Plan; confirm the acceptance criteria of the owning PRD pass in CI.
 2. Confirm cross-cutting X-01…X-09 per epic (spot-check dependency directions with `cargo tree` / import review; coverage report ≥ 82%; clippy clean).
 3. Run the three program E2E scenarios (overview §6) and the eval-scenario dogfood copies (OBS-FR-15).
-4. Confirm BUG-01's old code path is absent (grep for the warn-and-default-true branch) and the fix landed test-first.
+4. Confirm BUG-01's old code path is absent (grep for the warn-and-default-true branch) and the fix landed test-first. Confirm BUG-02's fix: `WarGraph::validate()` rejects a stranded self-loop-only node (run the regression test), the fix landed test-first, and no test fixture still works around strandedness by artificially wiring stranded nodes to entry.
 5. File any FR without a passing test, any test without an FR ("orphan behavior"), and any deviation from the ubiquitous-language names in §4 of the overview as findings.
 6. **Compatibility audit (X-03/X-10):** diff the public API of every publishable crate against v0.9.0 (`cargo semver-checks` output plus a manual `cargo public-api`-style diff). Every enum-variant, struct-field, or trait-method change to a pre-existing type must have a matching row in `MIGRATION.md` §9.2 with a stated mitigation; every semver-checks allowlist entry must correspond to a "deliberate-breaking: Y" row; any unregistered change is a finding. Confirm no pre-existing public trait gained a required method.
 7. **Behavioral-change audit:** confirm `MIGRATION.md` §9.1 contains M-B-01 (BUG-01), M-B-02 (shutdown grace), M-B-03 (tool-error default, with the chosen default stated) and nothing else — or that any additional entry was raised as a stop-and-flag item with a recorded decision.

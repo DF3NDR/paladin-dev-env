@@ -36,12 +36,12 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   iterations), same-superstep snapshot isolation, and precise join/defer semantics that never
   deadlock on a not-firing branch (ENG-FR-01…06)
 
-- [ ] **ENG-03**: Exactly one Waypoint is persisted automatically after every superstep, addressed
+- [x] **ENG-03**: Exactly one Waypoint is persisted automatically after every superstep, addressed
   by `(thread_id, waypoint_id)` with parent lineage and a stable graph fingerprint; write failure
   fails the run under the default `Strict` durability (documented `BestEffort` downgrade
   available) (ENG-FR-11, ENG-FR-13, ENG-FR-14; §3.3-3.4)
 
-- [ ] **ENG-04**: `resume(graph, thread)` restores Battlefield, Vanguard and per-node visit counts
+- [x] **ENG-04**: `resume(graph, thread)` restores Battlefield, Vanguard and per-node visit counts
   from the latest Waypoint and continues with zero re-execution of completed nodes — proven by
   program scenario E2E-1 (crash after superstep 3, fresh engine, final state equals uninterrupted
   control run, one Waypoint per superstep) (ENG-FR-12; overview §6 E2E-1)
@@ -350,8 +350,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 |-------------|-------|--------|
 | ENG-01 | Phase 22 | Complete |
 | ENG-02 | Phase 22 | Complete |
-| ENG-03 | Phase 22 | Pending |
-| ENG-04 | Phase 22 | Pending |
+| ENG-03 | Phase 22 | Complete |
+| ENG-04 | Phase 22 | Complete |
 | ENG-05 | Phase 22 | Complete |
 | ENG-06 | Phase 22 | Pending |
 | ENG-07 | Phase 22 | Pending |

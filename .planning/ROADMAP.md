@@ -275,8 +275,8 @@ Runtime" — are detailed in full below.*
 
 **Wave 9** *(gap-closure wave 2)*
 
-- [ ] 22-14-PLAN.md — G-22-2: prune rebuilt on the keep-set primitive, protected set defined once in the application layer, fault-injection and resume acceptance test (wave 9)
-- [ ] 22-16-PLAN.md — G-22-3: fixture audit per acceptance 2a, plus the readiness defect it surfaces recorded with a runnable reproduction (wave 9)
+- [x] 22-14-PLAN.md — G-22-2: prune rebuilt on the keep-set primitive, protected set defined once in the application layer, fault-injection and resume acceptance test (wave 9)
+- [x] 22-16-PLAN.md — G-22-3: fixture audit per acceptance 2a, plus the readiness defect it surfaces recorded with a runnable reproduction (wave 9)
 
 **Wave 10** *(gap-closure wave 3)*
 

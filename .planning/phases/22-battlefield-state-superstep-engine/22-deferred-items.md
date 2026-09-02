@@ -91,3 +91,56 @@ misattribute or leave unexplained *why* that arrangement exists.
 
 **The residual finding below is a different defect class — do not read it as an unmet acceptance
 2a criterion.** It was surfaced by this audit but is not what acceptance 2a asked to close.
+
+### Finding: a self-looping node fed by an upstream edge can never take its first turn
+
+**What was found.** A node that is BOTH self-looping AND fed by a separate upstream edge can never
+execute, and the engine still reports `RunOutcome::Completed`. This is the same truthful-outcome
+violation as BUG-02 — a `RunOutcome::Completed` reported over a node whose `run_count()` is `0` —
+but reached by a different mechanism, and it is **not** fixed by Plan 22-15's eligible-set
+reachability check.
+
+**Where.** `crates/paladin-battalion/src/engine/superstep.rs`, `Frontier::is_ready` (the join-
+readiness rule, ENG-FR-06).
+
+**Mechanism.** `is_ready` requires every one of a node's incoming edges to be resolved (`Fired` or
+`NotFiring`, never `Pending`) before that node is placed in the next Vanguard. A node's own
+self-edge is `Pending` until the node has executed at least once. So a node with two incoming
+edges — one from an upstream node, one a self-loop — can never satisfy `is_ready`: the upstream
+edge can fire, but the self-edge stays `Pending` forever, because nothing except the node's own
+first run could resolve it, and that first run is exactly what `is_ready` is blocking.
+
+**Why Plan 22-15's fix does not cover it.** BUG-02's eligible-set check (`WarGraph::validate`) is a
+*static* reachability check: it asks whether a node is reachable from `entry` over declared edges,
+ignoring edge conditions and runtime state. A node with a self-loop plus an upstream edge IS
+statically reachable (the upstream edge alone proves it), so `validate` accepts the graph cleanly.
+The defect is a property of `Frontier::is_ready`'s *runtime* readiness computation, which
+`validate` has no visibility into and was never designed to check.
+
+**Reproduction.** `crates/paladin-battalion/src/engine/superstep.rs`,
+`engine::superstep::tests::self_looping_node_fed_by_upstream_edge_can_never_take_first_turn` —
+`#[ignore]`d so the default workspace run stays green. Run on demand with:
+
+```
+cargo test -p paladin-battalion --lib engine::superstep -- --ignored --nocapture
+```
+
+The test asserts the CORRECT behaviour (the node executes at least once; the run does not report
+`Completed` while its visit count is zero) and fails today, confirmed by the command above:
+`test result: FAILED. 0 passed; 1 failed`, with the panic message naming `run_count() == 0`. It is
+not inverted to match today's wrong behaviour, per the plan's explicit prohibition on pinning a
+defect as expected.
+
+**Recommended disposition.** Register this as a new defect in the program overview's defect
+register (`.project/v0.10.0/00-program-overview.md`), alongside BUG-01 and BUG-02, and assign it to
+whichever phase owns routing/frontier work next (Phase 23 Muster fan-out and Phase 25 Aegis both
+touch this same readiness computation). The fix is a change to `Frontier::is_ready`'s semantics — a
+node's own self-edge should not gate its first execution (e.g., treat a self-edge as trivially
+resolved, or exempt it from the "all incoming edges resolved" requirement, until the node has run
+at least once) — which is a frontier semantics change, not a validation change, and is out of scope
+for this plan. **This plan does not edit any file under `.project/`**: registering the defect is a
+developer decision, confirmed at the Plan 22-17 checkpoint, not made here.
+
+**Scope note.** Acceptance 2a is satisfied for strandedness — see the audit table above. This
+residual is a different defect class this audit happened to surface, not an unmet acceptance 2a
+criterion.

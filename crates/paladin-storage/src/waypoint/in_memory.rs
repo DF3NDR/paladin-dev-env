@@ -166,6 +166,40 @@ impl WaypointPort for InMemoryWaypointStore {
             .map(|wps| wps.len() as u64)
             .unwrap_or(0))
     }
+
+    async fn delete_waypoint(
+        &self,
+        thread: &ThreadId,
+        id: &WaypointId,
+    ) -> Result<bool, WaypointError> {
+        let mut threads = self.threads.write().await;
+        let Some(wps) = threads.get_mut(thread) else {
+            return Ok(false);
+        };
+        let before_len = wps.len();
+        wps.retain(|wp| &wp.waypoint_id != id);
+        Ok(wps.len() < before_len)
+    }
+
+    async fn prune_thread(
+        &self,
+        thread: &ThreadId,
+        keep: &[WaypointId],
+    ) -> Result<u64, WaypointError> {
+        // The whole operation happens under a single write-lock acquisition
+        // -- no intermediate state is ever observable to a concurrent
+        // reader, so this is stronger than the trait's default provided
+        // implementation needs to be, at no extra cost for an in-process
+        // store.
+        let keep_set: std::collections::HashSet<WaypointId> = keep.iter().copied().collect();
+        let mut threads = self.threads.write().await;
+        let Some(wps) = threads.get_mut(thread) else {
+            return Ok(0);
+        };
+        let before_len = wps.len();
+        wps.retain(|wp| keep_set.contains(&wp.waypoint_id));
+        Ok((before_len - wps.len()) as u64)
+    }
 }
 
 #[cfg(test)]
@@ -268,5 +302,77 @@ mod tests {
     #[tokio::test]
     async fn run_all_contract_functions_smoke_aggregate() {
         contract_tests::run_all(&InMemoryWaypointStore::new()).await;
+    }
+
+    // ── delete_waypoint / prune_thread (Plan 22-13, G-22-2) ──────────────
+
+    #[tokio::test]
+    async fn delete_waypoint_removes_named_id_and_leaves_others() {
+        contract_tests::delete_waypoint_removes_named_id_and_leaves_others(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn delete_waypoint_unknown_id_is_false_and_leaves_thread_unchanged() {
+        contract_tests::delete_waypoint_unknown_id_is_false_and_leaves_thread_unchanged(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn delete_waypoint_unknown_thread_is_false() {
+        contract_tests::delete_waypoint_unknown_thread_is_false(&InMemoryWaypointStore::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_keeps_named_ids_byte_identical_and_ordered() {
+        contract_tests::prune_thread_keeps_named_ids_byte_identical_and_ordered(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_empty_keep_removes_everything() {
+        contract_tests::prune_thread_empty_keep_removes_everything(&InMemoryWaypointStore::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_unknown_thread_returns_zero() {
+        contract_tests::prune_thread_unknown_thread_returns_zero(&InMemoryWaypointStore::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_ignores_keep_ids_not_in_thread() {
+        contract_tests::prune_thread_ignores_keep_ids_not_in_thread(&InMemoryWaypointStore::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_idempotent_second_run_removes_nothing() {
+        contract_tests::prune_thread_idempotent_second_run_removes_nothing(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_converges_from_superset_to_target() {
+        contract_tests::prune_thread_converges_from_superset_to_target(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_large_keep_set_1200_to_1100() {
+        contract_tests::prune_thread_large_keep_set_1200_to_1100(&InMemoryWaypointStore::new())
+            .await;
     }
 }

@@ -116,6 +116,22 @@ impl WaypointPort for RecordingWaypointStore {
     async fn delete_thread(&self, thread: &ThreadId) -> Result<u64, WaypointError> {
         self.inner.delete_thread(thread).await
     }
+
+    async fn delete_waypoint(
+        &self,
+        thread: &ThreadId,
+        id: &WaypointId,
+    ) -> Result<bool, WaypointError> {
+        self.inner.delete_waypoint(thread, id).await
+    }
+
+    async fn prune_thread(
+        &self,
+        thread: &ThreadId,
+        keep: &[WaypointId],
+    ) -> Result<u64, WaypointError> {
+        self.inner.prune_thread(thread, keep).await
+    }
 }
 
 /// A closure computing a [`CountingFunctionNode`]'s delta from its

@@ -287,11 +287,15 @@ Runtime" — are detailed in full below.*
 **Goal:** Close the three items Phase 22's gap-closure checkpoint (22-17) could not settle in-repo: (1) fix the frontier readiness defect found by the 22-16 audit — a node that is both self-looping and fed by an upstream edge can never take its first turn yet the run reports Completed (repro: `#[ignore]`d test `self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`, `cargo test -p paladin-battalion --lib engine::superstep -- --ignored`); (2) decide and enact the MSRV position — the workspace declares rust-version 1.85 but the =2.1.0-pinned rmcp's `transport-child-process` feature requires process-wrap >=9.x (rustc 1.86/1.87 minimum), so either the MSRV raises (MIGRATION.md §9.3 / X-11.1 D-07 register) or the rmcp pin moves; (3) confirm a fully green `postgres-integration` CI run after the 22-17 fixes and record it as G-22-1's closing evidence; (4) close 22-REVIEW.md CR-01 — `WarGraph::fingerprint()` omits `defer_flags`/`dynamic_targets` from its hashed bytes, so resume's fingerprint-mismatch check cannot detect a defer-flag change (fix the hash + regression test, or narrow the 'structurally impossible' doc claim in engine/mod.rs).
 **Requirements**: ENG-02, ENG-05
 **Depends on:** Phase 22
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 22.1 to break down)
+- [ ] 22.1-01-PLAN.md — BUG-03 cycle-bootstrap starvation fix (tracer, test-first) + BUG-03/ENG-FR-06a registration
+- [ ] 22.1-02-PLAN.md — Truthful-outcome guards: validate-time unschedulable-shape check, run-end starvation check, determinism coverage
+- [ ] 22.1-03-PLAN.md — CR-01 fingerprint coverage + golden/difference tests + resume-doc reword + fixture comment sweep
+- [ ] 22.1-04-PLAN.md — MSRV floor to measured 1.88, lockfile restore, resolver 3, MSRV figure reconciliation
+- [ ] 22.1-05-PLAN.md — G-22-1 closing CI evidence (whole-run success) + UAT pointer
 
 ### Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 

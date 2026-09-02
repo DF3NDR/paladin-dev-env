@@ -194,7 +194,7 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 
 **Durable Agent Execution Runtime (Phases 22-29)** — not started (added 2026-09-01)
 
-- [ ] **Phase 22: Battlefield State & Superstep Engine** - Typed shared state, cyclic superstep execution, and automatic per-superstep checkpointing that resumes with zero re-execution after a crash
+- [x] **Phase 22: Battlefield State & Superstep Engine** - Typed shared state, cyclic superstep execution, and automatic per-superstep checkpointing that resumes with zero re-execution after a crash (completed 2026-09-02)
 - [ ] **Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs** - Directive-based routing, Muster dynamic fan-out, nested Battalion subgraphs, LLM-evaluated routing, and the BUG-01 fail-closed fix
 - [ ] **Phase 24: Pause/Resume, History & Graceful Shutdown** - Indefinite Parley pauses, typed resume validation, an inspectable/forkable Chronicle, graceful shutdown, and Thread endpoints over HTTP
 - [ ] **Phase 25: Node-Level Fault Tolerance** - Typed error transience, per-node Aegis retry, wall/idle timeouts, typed compensation handlers, provider fallback, and node result caching
@@ -284,7 +284,7 @@ Runtime" — are detailed in full below.*
 
 ### Phase 22.1: Engine readiness defect and MSRV follow-up (INSERTED)
 
-**Goal:** Close the three items Phase 22's gap-closure checkpoint (22-17) could not settle in-repo: (1) fix the frontier readiness defect found by the 22-16 audit — a node that is both self-looping and fed by an upstream edge can never take its first turn yet the run reports Completed (repro: `#[ignore]`d test `self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`, `cargo test -p paladin-battalion --lib engine::superstep -- --ignored`); (2) decide and enact the MSRV position — the workspace declares rust-version 1.85 but the =2.1.0-pinned rmcp's `transport-child-process` feature requires process-wrap >=9.x (rustc 1.86/1.87 minimum), so either the MSRV raises (MIGRATION.md §9.3 / X-11.1 D-07 register) or the rmcp pin moves; (3) confirm a fully green `postgres-integration` CI run after the 22-17 fixes and record it as G-22-1's closing evidence.
+**Goal:** Close the three items Phase 22's gap-closure checkpoint (22-17) could not settle in-repo: (1) fix the frontier readiness defect found by the 22-16 audit — a node that is both self-looping and fed by an upstream edge can never take its first turn yet the run reports Completed (repro: `#[ignore]`d test `self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`, `cargo test -p paladin-battalion --lib engine::superstep -- --ignored`); (2) decide and enact the MSRV position — the workspace declares rust-version 1.85 but the =2.1.0-pinned rmcp's `transport-child-process` feature requires process-wrap >=9.x (rustc 1.86/1.87 minimum), so either the MSRV raises (MIGRATION.md §9.3 / X-11.1 D-07 register) or the rmcp pin moves; (3) confirm a fully green `postgres-integration` CI run after the 22-17 fixes and record it as G-22-1's closing evidence; (4) close 22-REVIEW.md CR-01 — `WarGraph::fingerprint()` omits `defer_flags`/`dynamic_targets` from its hashed bytes, so resume's fingerprint-mismatch check cannot detect a defer-flag change (fix the hash + regression test, or narrow the 'structurally impossible' doc claim in engine/mod.rs).
 **Requirements**: ENG-02, ENG-05
 **Depends on:** Phase 22
 **Plans:** 0 plans
@@ -417,7 +417,7 @@ Plans:
 | 16. Documentation Currency & the Architecture Gap | v0.8.0 | 14/14 | ✅ Complete | 2026-08-24 |
 | 17. Additional LLM Provider Adapters | v0.8.0 | 22/22 | ✅ Complete | 2026-08-23 |
 | 18-21 | v0.9.0 | 25/25 | ✅ Shipped | 2026-09-01 |
-| 22. Battlefield State & Superstep Engine | v0.10.0 | 0/0 | Not started | - |
+| 22. Battlefield State & Superstep Engine | v0.10.0 | 17/17 | Complete    | 2026-09-02 |
 | 23. Control Flow — Dynamic Routing, Fan-Out & Subgraphs | v0.10.0 | 0/0 | Not started | - |
 | 24. Pause/Resume, History & Graceful Shutdown | v0.10.0 | 0/0 | Not started | - |
 | 25. Node-Level Fault Tolerance | v0.10.0 | 0/0 | Not started | - |

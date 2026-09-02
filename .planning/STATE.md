@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 22
-current_phase_name: Battlefield State & Superstep Engine
-status: executing
+current_phase: 22.1
+current_phase_name: Engine readiness defect and MSRV follow-up
+status: planning
 stopped_at: Phase 22 executed — verification human_needed (4 UAT items)
-last_updated: "2026-09-02T21:04:16.455Z"
+last_updated: "2026-09-02T22:31:57.061Z"
 last_activity: 2026-09-02
-last_activity_desc: Phase 22 execution resumed (wave continue)
+last_activity_desc: Phase 22 complete, transitioned to Phase 22.1
 progress:
   total_phases: 2
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 17
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -51,16 +51,16 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 22 (Battlefield State & Superstep Engine) — EXECUTING
-Plan: 1 of 11
-Status: Executing Phase 22
-Last activity: 2026-09-02 — Phase 22 execution resumed (wave continue)
+Phase: 22.1 — Engine readiness defect and MSRV follow-up
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-02 — Phase 22 complete, transitioned to Phase 22.1
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 187
+- Total plans completed: 204
 - Average duration: —
 - Total execution time: —
 
@@ -87,6 +87,7 @@ Last activity: 2026-09-02 — Phase 22 execution resumed (wave continue)
 | 19 | 5 | - | - |
 | 20 | 7 | - | - |
 | 21 | 6 | - | - |
+| 22 | 17 | - | - |
 
 *Updated after each plan completion*
 

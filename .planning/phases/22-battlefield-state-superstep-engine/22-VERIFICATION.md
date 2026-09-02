@@ -1,126 +1,194 @@
 ---
 phase: 22-battlefield-state-superstep-engine
-verified: 2026-09-02T04:30:00Z
-status: human_needed
-score: 8/8 roadmap success criteria verified (must-have truths pass); 4 items require human decision
-behavior_unverified: 1 # Postgres Tier 2 real-server contract-suite pass (Docker unavailable in this sandbox)
+verified: 2026-09-02T22:45:00Z
+status: passed
+score: 8/8 requirements satisfied; 5/5 roadmap success criteria hold; 1 new human-decision item (CR-01)
+behavior_unverified: 0
 overrides_applied: 0
+re_verification:
+  previous_status: human_needed
+  previous_score: "5/5 roadmap SCs hold, 4 human-verification items"
+  gaps_closed:
+    - "G-22-1: Postgres Tier 2 contract suite now executes against a live server in CI (postgres-integration job) — closed on execution evidence (CI run 33688238662 / job 100440861780), independently re-fetched and confirmed in this pass, not just re-read from SUMMARY.md"
+    - "G-22-2: WaypointPort::prune_thread (delete-only-unprotected, monotone/idempotent/crash-safe by construction) replaces the delete-then-resave sequence; retention.rs rewritten on it; protected-set moved to application layer; fault-injection acceptance test passes"
+    - "G-22-3 / BUG-02: WarGraph::validate now rejects any node outside the eligible set (reachable-from-entry ∪ dynamic_target) with EngineError::UnreachableNode, before any node executes; every fixture that previously dodged the defect is audited and corrected"
+    - "ENG-NFR-01 (SQLite save-latency miss): decision recorded via UAT test 4 — accepted as measured baseline (result: pass)"
+  gaps_remaining: []
+  regressions: []
 human_verification:
-  - test: "Run `make test-integration-docker` (or otherwise bring up `postgres-test`) and confirm `PostgresWaypointStore` passes the full shared contract suite against a real Postgres server."
-    expected: "All contract functions pass identically to SQLite/InMemory, matching WINDOWS.md ledger item 22."
-    why_human: "No Docker daemon is available in this verification sandbox; only compile, lint and the clean-skip path were provable here."
-  - test: "Decide whether `WaypointRetentionConfig::prune`'s delete-then-resave sequence (crates/paladin-storage/src/waypoint/retention.rs:130-151) is acceptable to ship as-is, given it is not atomic against a crash/backend-failure between `delete_thread` and the resave loop, and can destroy a thread's protected (latest / AwaitingInput) Waypoints in that window."
-    expected: "Either accept the risk explicitly (retention is disabled by default and not wired to any scheduler yet, per WR-02), or require a fix/override before this ships as a callable production routine."
-    why_human: "This is a design-level data-loss risk identified by code review (22-REVIEW.md CR-01/WR-03), not something the phase's own tests exercise (no test injects a crash mid-prune). It contradicts the module's own documented invariant under failure, but does not violate any single tested must-have truth."
-  - test: "Decide whether the silent-stranded-node gap (a non-entry `WarGraph` node whose only incoming edges eventually trace back to itself has no path to ever become ready, `WarGraph::validate` does not catch it, and the run reports `RunOutcome::Completed` as if the whole graph executed) needs a validation fix before Phase 23+ build on top of the engine."
-    expected: "Either add a reachability-from-entry check to `WarGraph::validate` (22-REVIEW.md CR-02's suggested fix), or explicitly accept this as a known, documented limitation (every self-loop test and the E2E-1 fixture itself already work around it by making the looping node a graph entry — see the comment at tests/integration/e2e_crash_resume_test.rs:112-127)."
-    why_human: "Design-level judgment call on whether 'self-loop and cycles work' (which IS true and tested for entry nodes) is sufficient, or whether the unguarded general case is a release blocker for a framework whose headline claim is durable, correct cyclic execution."
-  - test: "Decide whether ENG-NFR-01's measured SQLite Waypoint-save p50 (73.09 ms, 7.3x over the 10ms target) is acceptable for v0.10.0, or whether it needs a follow-up (e.g. explicit `journal_mode=WAL`/`synchronous=NORMAL` SQLite pragmas) before release."
-    expected: "A decision recorded (accept as measured baseline vs. require a fix) since this is a headline non-functional claim of a 'checkpoint every superstep' design."
-    why_human: "The plan's own instruction was to measure and record honestly rather than tune to pass — which the executor did (22-10-SUMMARY.md) — but the miss itself is a business/architecture decision, not something this verifier can resolve."
+  - test: "Decide whether WarGraph::fingerprint() must be extended to hash defer_flags (and dynamic_targets) before Phase 23+ builds further on resume, given the code's own doc comment claims resuming makes a fresh-vs-resumed divergence 'structurally impossible' but the fingerprint does not detect a defer_flags change between the graph that crashed and the graph passed to resume."
+    expected: "Either fix WarGraph::fingerprint() to include defer_flags/dynamic_targets in its hashed bytes (22-REVIEW.md CR-01's suggested patch), add a regression test asserting two graphs differing only in add_deferred_node vs add_node produce different fingerprints, or explicitly accept the gap and narrow the 'structurally impossible' doc-comment claim to match what the check actually covers."
+    disposition: "ROUTED TO PHASE 22.1 (recorded 2026-09-02): per the developer's standing instruction at the 22-17 checkpoint — all gaps not closed in Phase 22 route to inserted Phase 22.1 — CR-01 is registered as item (4) of Phase 22.1's goal in ROADMAP.md, alongside the readiness defect and the MSRV decision. Not fixed in Phase 22."
+    why_human: "This is a design-level correctness gap in the resume-safety guarantee identified by a fresh code review (22-REVIEW.md CR-01, dated after the 22-17 gap-closure checkpoint closed), confirmed here by direct read of graph.rs:398-437 (fingerprint omits self.defer_flags and self.dynamic_targets) and mod.rs:461 (the 'structurally impossible' claim). It is not caught by any of this phase's own tests (fingerprint_is_deterministic_across_calls and fingerprint_is_unchanged_by_insertion_order cover determinism and ordering only, never a defer-flag difference), and ENG-FR-14's literal text ('hash over node ids, edge specs, schema') is silent on defer_flags either way, so it does not fail a literal must_have truth this phase declared. It has not been triaged through UAT or routed to Phase 22.1 the way the readiness defect and MSRV items were at the 22-17 checkpoint — it is new since that checkpoint closed."
 ---
 
 # Phase 22: Battlefield State & Superstep Engine Verification Report
 
 **Phase Goal:** A Rust developer can declare typed shared state exchanged through per-field dispatch rules, and run cyclic multi-agent graphs in supersteps that checkpoint automatically and resume with zero re-execution after a crash.
-**Verified:** 2026-09-02T04:30:00Z
-**Status:** human_needed
-**Re-verification:** No — initial verification
+**Verified:** 2026-09-02T22:45:00Z
+**Status:** passed (CR-01 routed to Phase 22.1 by recorded developer disposition; see frontmatter)
+**Re-verification:** Yes — after gap closure (plans 22-12..22-17, closing UAT gaps G-22-1/G-22-2/G-22-3)
 
 ## Method
 
-This is an 11-plan, 7-wave phase (ENG-01 through ENG-08). Rather than trust SUMMARY.md claims, I:
+This supersedes the pre-gap-closure `22-VERIFICATION.md`. Rather than trust SUMMARY.md/UAT.md
+resolution claims, for each of the three closed gaps I read the actual current source and, where the
+claim rested on an external CI run rather than something reproducible in-sandbox (G-22-1), I
+independently re-fetched that run and its job logs via `gh api` rather than re-reading the SUMMARY's
+account of it. I also read the freshly generated `22-REVIEW.md` (dated after the 22-17 checkpoint
+closed) end to end and verified its one Critical finding against source directly, since it was not
+part of the UAT closure cycle and is not yet triaged.
 
-1. Read all 11 PLAN.md files (must_haves, acceptance criteria, threat models) and all 11 SUMMARY.md files.
-2. Read 22-REVIEW.md (code review, 2 Critical / 4 Warning / 1 Info findings) and 22-VALIDATION.md.
-3. Built the full workspace (`cargo build --workspace --all-features`) — succeeded.
-4. Ran the three cross-crate integration tests directly: `war_engine_tracer` (3/3 pass), `e2e_crash_resume` (27/27 pass, including `e2e_1_crash_resume_matches_control_run_with_no_reexecution`), `golden_bridge_equivalence` (31/31 pass).
-5. Ran lib test suites directly: `paladin-ai-core --lib` (427 pass), `paladin-ports --lib` (105 pass), `paladin-battalion --lib` (316 pass), `paladin-storage --lib --features sqlite` (64 pass, including the SQLite `WaypointPort` contract suite and retention routine tests).
-6. Ran `cargo clippy --workspace --all-targets -- -D warnings` (clean) and `cargo fmt --check` (clean).
-7. Grepped for the literal acceptance-criteria patterns from each plan (SQL injection, `toposort`/`petgraph` boundary violations, `BestEffort` misuse, raw JSON values in errors, `DispatchRegistry` core-boundary leakage) and manually inspected any surprising hit.
-8. Read the source of the two Critical findings in 22-REVIEW.md (`retention.rs`, `superstep.rs`'s `Frontier`) directly to confirm or refute them against the actual code, rather than taking the review's word for it.
-9. Confirmed MIGRATION.md, the `semver`/`msrv` CI jobs, the semver allowlist, `rust-version` declarations, the `postgres` feature/facade passthrough, and `cargo tree -e features` default-set exclusion, all directly.
-10. Cross-referenced REQUIREMENTS.md against every plan's `requirements:` frontmatter field.
+1. Read all three UAT gaps (G-22-1/2/3) and their `resolved` dispositions in `22-UAT.md`.
+2. Read the gap-closure plans (22-12 through 22-17) — `must_haves`, `key-decisions`, `coverage`.
+3. Read `crates/paladin-battalion/src/engine/graph.rs` (`validate_eligible_set`, `fingerprint`),
+   `crates/paladin-ports/src/output/waypoint_port.rs` (`delete_waypoint`, `prune_thread`), and
+   `crates/paladin-storage/src/waypoint/retention.rs` directly to confirm each fix's shape against
+   the gap's `missing:` list, not just its `resolution:` prose.
+4. Built the workspace (`cargo build --workspace --all-features`) — clean.
+5. Ran the directly relevant test suites: `paladin-battalion --lib engine::` (108 passed, 1
+   intentionally `#[ignore]`d), `--test e2e_crash_resume` (27/27, including the E2E-1 zero-re-execution
+   assertion), `paladin-storage --lib --features sqlite waypoint::` (67 passed, including all new
+   `delete_waypoint`/`prune_thread` contract functions and every pre-existing retention test),
+   `--test waypoint_retention_fault_injection` (3/3, including the SQLite cancellation-mid-prune
+   acceptance test).
+6. Ran `cargo fmt --check` (clean) and `cargo clippy -p paladin-battalion -p paladin-storage
+   -p paladin-ports --all-targets -- -D warnings` (clean).
+7. For G-22-1, fetched CI run `33688238662` via `gh api` (not trusted from SUMMARY text), located the
+   `postgres-integration` job (`100440861780`, conclusion `success`), and pulled its raw log to
+   independently confirm all four evidence facts 22-17-SUMMARY.md claims: container reported
+   `healthy`, `pg_isready` returned `accepting connections`, the suite reported
+   `test result: ok. 26 passed; 0 failed`, and the SKIP-detection step ran.
+8. Read `22-REVIEW.md` (fresh, post-checkpoint) in full and verified its one Critical finding (CR-01)
+   by reading `graph.rs:398-437` and `mod.rs:448-461` directly — confirmed real, not yet triaged
+   through UAT or routed to Phase 22.1.
+9. Confirmed no unreferenced `TBD`/`FIXME`/`XXX` markers in any file this gap-closure cycle touched.
+10. Re-confirmed REQUIREMENTS.md's ENG-01..08 traceability table still shows all eight as Complete
+    with Phase 22 as sole owner, and that the union of all fourteen plans' `requirements:` fields
+    (01-11 plus 12-17) is exactly ENG-01..08 with no orphans.
 
-I could not run the Postgres Tier 2 contract suite (no Docker daemon in this sandbox) or re-run the ~35-minute full-workspace coverage measurement — both are called out explicitly below rather than assumed.
+## Gap Closure Verification (G-22-1, G-22-2, G-22-3)
 
-## Goal Achievement — Roadmap Success Criteria
+| Gap | UAT Disposition | Verified In Codebase | Evidence |
+|---|---|---|---|
+| G-22-1 (Postgres Tier 2 suite never executes anywhere) | resolved | ✓ CONFIRMED | `.github/workflows/ci.yml:811-886` has `postgres-integration` job: starts `postgres-test`, waits for anchored `healthy`, asserts `pg_isready`, runs `waypoint::postgres` single-threaded with `WAYPOINT_POSTGRES_TEST_URL` set, greps for `SKIP:`. Independently re-fetched CI run `33688238662` (job `100440861780`, `conclusion: success`) via `gh api` and read its raw log directly: `accepting connections` (pg_isready), `test result: ok. 26 passed; 0 failed; 0 ignored; ... finished in 8.55s`, and the SKIP-detection step present and unfired. This is execution evidence, not a job-definition-exists claim. |
+| G-22-2 (retention prune's delete-then-resave crash window) | resolved | ✓ CONFIRMED | `WaypointPort::delete_waypoint`/`prune_thread` (`crates/paladin-ports/src/output/waypoint_port.rs:243,290`) exist; SQLite/Postgres override transactionally. `retention.rs`'s `prune()` (read in full) no longer calls `delete_thread` anywhere — it calls `port.prune_thread(&thread_id, &keep_vec)` exactly once per thread with something to remove, after computing `keep_ids` from a caller-supplied `protected` fn (application-layer, per `src/application/services/waypoint_retention.rs`). `tests/integration/waypoint_retention_fault_injection_test.rs` (3/3 pass, run directly): fault-injection sweep, real-engine resume-after-interrupted-prune, and SQLite mid-prune cancellation, all assert the keep-set survives. |
+| G-22-3 / BUG-02 (silent stranded node, `Completed` lies) | resolved | ✓ CONFIRMED | `WarGraph::validate_eligible_set()` (`graph.rs:301-395`, read in full) computes the eligible set as a fixed-point worklist seeded from `entry` ∪ `dynamic_targets`, expanded over declared edges; every node outside it fails with `EngineError::UnreachableNode { nodes, reason }` naming every offender. A no-entry-declared graph gets a distinct, clearer error. The one committed regression suite (`engine::lib`, 108/108 pass) includes the reachability tests; the residual, distinct "readiness" defect (self-loop node fed by an upstream edge, not a strandedness case) is recorded as a real `#[ignore]`d reproduction (`self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`, confirmed present at `superstep.rs:1385`, confirmed `1 ignored` in the direct test run) — correctly NOT claimed as fixed, and explicitly routed to inserted Phase 22.1 per `ROADMAP.md`'s own text. |
+
+**All three UAT gaps are genuinely closed** — not merely marked `resolved` in the frontmatter. G-22-1 in particular is the one gap whose evidence I could not take on faith from any SUMMARY (the whole point of the gap was "green without ever executing"); I re-derived the evidence from the CI provider directly rather than reading 22-17-SUMMARY.md's account of it.
+
+## Goal Achievement — Roadmap Success Criteria (re-confirmed)
 
 | # | Success Criterion | Status | Evidence |
 |---|---|---|---|
-| 1 | Developer declares `BattlefieldSchema`, nodes exchange typed `StateDelta`s via 5 dispatch rules; unknown-field/missing-required are hard structured errors; no new core deps (ENG-01) | ✓ VERIFIED | `crates/paladin-core/src/platform/container/battlefield.rs` has `DispatchRule::{LastWrite,Append,MergeObject,Sum,Custom}`, `get::<T>`/`set::<T>`, `initialize`; `battlefield_error.rs` has all 6 variants, zero `serde_json::Value` embedded (`grep` = 0); `paladin-ai-core --lib` 427 tests pass; `git diff --stat crates/paladin-core/Cargo.toml` shows no new dependency per 22-01-SUMMARY.md |
-| 2 | `WarEngine` executes cyclic graphs (self-loops included) in bounded supersteps, deterministic frontier/merge (byte-identical over 20+ randomized-scheduling iterations), join/defer never deadlocks on a not-firing branch (ENG-02) | ✓ VERIFIED, with 1 flagged edge case | `engine::graph::validate` accepts cycles/self-loops, rejects zero limits (`toposort`/`petgraph` boundary greps = 0 inside `WarGraph`'s own validation); `paladin-battalion --lib` 316 tests pass including the diamond-join, not-firing-branch, defer, 20-iteration shuffled-determinism and 100-iteration multi-thread stress tests (per 22-05/22-07 SUMMARYs). **Flagged:** 22-REVIEW.md CR-02 (confirmed by direct code read of `superstep.rs` `Frontier`) — a non-entry node whose only incoming edges eventually trace back to itself is never marked dead nor ever ready, so it silently never executes while the run still reports `Completed`; `WarGraph::validate` has no reachability check to catch this. Every self-loop test in the tree (including E2E-1's own fixture, see its code comment at lines 112-127) works around this by making the looping node a graph entry — the tested/claimed shape (self-loop as entry) does work; the untested shape (self-loop fed only by itself, not an entry) does not. |
-| 3 | Exactly one Waypoint persisted automatically per superstep, `(thread_id, waypoint_id)` addressed with parent lineage and stable fingerprint; write failure fails the run under default `Strict` (ENG-03) | ✓ VERIFIED | `superstep.rs` persists one Waypoint per superstep after merge, before the continue decision (tested: 3-superstep run -> exactly 3 Waypoints with correct parent chain); `WaypointDurability::Strict` is the un-chosen default and `BestEffort` is used nowhere outside its own two tests (`grep` confirms 0 unexpected hits); `GraphFingerprint` is `v1:{blake3_hex}` over a sorted canonical stream, confirmed stable across repeated construction |
-| 4 | Program scenario E2E-1: engine killed after superstep 3, fresh engine/backend/thread_id resumes with zero re-execution, final Battlefield equals an uninterrupted control run, exactly one Waypoint per completed superstep (ENG-04) | ✓ VERIFIED | `tests/integration/e2e_crash_resume_test.rs::e2e_1_crash_resume_matches_control_run_with_no_reexecution` — ran directly, passes. Uses a real `SqliteWaypointStore` over a temp file (not in-memory), drops and reconstructs the engine, asserts all 3 E2E-1 clauses separately plus loop-count equality |
-| 5 | Three `WaypointPort` backends pass one shared contract suite; legacy bridges reproduce data flow with golden tests; `MIGRATION.md` §9 skeleton exists; `semver`/`msrv` CI jobs green on every PR (ENG-05, ENG-06, ENG-07, ENG-08) | ✓ VERIFIED for InMemory/SQLite (Tier 1) and all CI/doc scaffolding; ⚠️ Postgres Tier 2 real-server pass unverified here | InMemory (5 tests) and SQLite (16 tests incl. all 13+ contract functions) both green, ran directly. Postgres: `cargo build -p paladin-storage --features postgres` succeeds, code mirrors SQLite structure exactly, `cargo tree -e features -p paladin-ai` confirms no postgres driver in the default set — but the actual contract-suite-against-a-live-server pass could not be run here (no Docker), consistent with the pre-existing, honestly-recorded WINDOWS.md ledger item 22 ("unrun-verify", open). `golden_bridge_equivalence` (31/31) proves Formation/Phalanx/Campaign bridges byte-for-byte, including the false-branch and empty-list cases, over untouched legacy services (`git diff --stat` on the 4 legacy service files is empty). `MIGRATION.md` has all 8 `## 9.x` headings, `M-B-01`-`M-B-03`, an 11+-row §9.2 register, zero un-owned `TBD`s. `.github/workflows/ci.yml` has both `semver:` and `msrv:` jobs with no `needs:` edge, pinned to the published `0.9.0` baseline and package names (`paladin-ai-core`, not the directory name); `.cargo/semver-checks-allowlist.toml` exists and is empty (correctly, since Phase 22 touched no pre-existing public type per its own note) |
+| 1 | Typed `BattlefieldSchema`, 5 dispatch rules, structured errors, no new core deps (ENG-01) | ✓ VERIFIED | Unchanged since prior verification pass; not touched by gap-closure plans. `paladin-ai-core --lib` battlefield/waypoint tests pass as part of the workspace build. |
+| 2 | Cyclic graphs execute in bounded supersteps, deterministic merge, join/defer never deadlocks (ENG-02) | ✓ VERIFIED, stranded-node gap now closed | `engine::lib` 108/108 pass. The BUG-02 stranded-node gap flagged in the prior verification round is now closed by `EngineError::UnreachableNode` (see G-22-3 above). The distinct readiness defect is disclosed, reproduced, and routed to Phase 22.1 rather than silently left. |
+| 3 | Exactly one Waypoint per superstep, fingerprint, `Strict` durability default (ENG-03) | ✓ VERIFIED, with 1 new human-decision item | Unit-tested behavior unchanged and still passes. **New finding (CR-01, this pass):** `WarGraph::fingerprint()` does not hash `defer_flags`/`dynamic_targets`, so a defer-flag change between an interrupted run and its resume passes the fingerprint check silently — see Human Verification below. Confirmed by direct read of `graph.rs:398-437`, not merely cited from the review. |
+| 4 | E2E-1 crash-resume, zero re-execution, final Battlefield equals control run (ENG-04) | ✓ VERIFIED | `e2e_1_crash_resume_matches_control_run_with_no_reexecution` run directly, passes (27/27 in the file). |
+| 5 | Three `WaypointPort` backends pass one contract suite; legacy bridges; `MIGRATION.md`; `semver`/`msrv` CI (ENG-05..08) | ✓ VERIFIED, Postgres leg now closed | InMemory/SQLite: 67/67 direct. Postgres: closed via independently-confirmed live CI run (G-22-1 above), superseding the prior pass's "could not run, no Docker" finding. `retention.rs`'s prune_thread contract functions pass on all backends touched here. |
 
-**Score:** 5/5 roadmap Success Criteria hold as literally worded and tested. 1 present-but-behavior-unverified item (Postgres Tier 2 live-server pass) and 2 review-confirmed design gaps (CR-01, CR-02) are surfaced below rather than silently absorbed into a clean pass.
+**Score:** 5/5 roadmap Success Criteria hold. 3/3 gaps from the prior UAT cycle are genuinely closed. 1 new human-decision item (CR-01) surfaced by a fresh code review dated after the gap-closure checkpoint, not yet triaged.
 
 ## Requirements Coverage (REQUIREMENTS.md cross-reference)
 
-| Requirement | Owning Plan(s) | Status | Evidence |
-|---|---|---|---|
-| ENG-01 | 22-01, 22-02, 22-07 | ✓ SATISFIED | Typed accessors, schema enforcement, 5-rule deterministic merge with conflict detection; unit-tested exhaustively (see above) |
-| ENG-02 | 22-01, 22-05, 22-07, 22-10 | ✓ SATISFIED (1 flagged edge case, CR-02) | Cyclic superstep loop, bounded iteration, join/defer, 20-iteration determinism + 100-iteration stress test |
-| ENG-03 | 22-01, 22-03, 22-08 | ✓ SATISFIED | One Waypoint/superstep, parent lineage, `Strict` durability default |
-| ENG-04 | 22-01, 22-08 | ✓ SATISFIED | `resume` restores Battlefield/vanguard/visit-counts; E2E-1 integration test passes |
-| ENG-05 | 22-01, 22-03, 22-06, 22-10 | ✓ SATISFIED (Postgres live-server run unverified here) | Contract suite shared across 3 backends; retention routine correct under tested (non-crash) conditions — see CR-01 flag |
-| ENG-06 | 22-11 | ✓ SATISFIED | Golden byte-for-byte equivalence tests, legacy services untouched, coverage gate closed (86.35%/96.17%, measured and recorded with methodology) |
-| ENG-07 | 22-09 | ✓ SATISFIED | `TraceSink` (fire-and-forget, drop-oldest, counted), `NodeInterceptor` chain (empty-by-default equivalence proven), `CancellationToken` -> `Halted` Waypoint, all with dedicated blocking/erroring/timeout tests |
-| ENG-08 | 22-04 | ✓ SATISFIED | `MIGRATION.md`, `semver`/`msrv` CI jobs, `rust-version` on all 11 publishable crates |
+| Requirement | Status | Evidence |
+|---|---|---|
+| ENG-01 | ✓ SATISFIED | Unchanged; not touched by gap-closure plans. |
+| ENG-02 | ✓ SATISFIED (BUG-02 closed; distinct readiness defect disclosed, routed to Phase 22.1) | Plans 22-15/22-16; `engine::lib` 108/108. |
+| ENG-03 | ✓ SATISFIED (1 new human-decision item, CR-01) | Fingerprint mechanism functions as literally specified by ENG-FR-14; a gap versus the code's own broader "structurally impossible divergence" claim is disclosed, not silently absorbed. |
+| ENG-04 | ✓ SATISFIED | `resume` restores state; E2E-1 passes. |
+| ENG-05 | ✓ SATISFIED (all three backends, Postgres leg now confirmed by live CI evidence) | Plans 22-12/22-13/22-14; 67 SQLite/InMemory tests + independently-confirmed Postgres CI run. |
+| ENG-06 | ✓ SATISFIED | Unchanged; not touched by gap-closure plans. |
+| ENG-07 | ✓ SATISFIED | Unchanged; not touched by gap-closure plans. |
+| ENG-08 | ✓ SATISFIED | Unchanged; not touched by gap-closure plans. |
 
-No orphaned requirements: REQUIREMENTS.md's ENG-01..08 all appear in at least one plan's `requirements:` field, and the union of all plans' `requirements:` fields is exactly ENG-01..08.
+REQUIREMENTS.md's traceability matrix (lines 351-358) lists all eight as "Complete" under Phase 22, matching this verification. No orphaned requirements: the union of `requirements:` fields across all 14 plans (01-11, 12-17) is exactly ENG-01..08.
 
-## Direct Code-Review Finding Verification
+## New Finding From Fresh Code Review (22-REVIEW.md, post-checkpoint)
 
-22-REVIEW.md (advisory) reported 2 Critical and 4 Warning findings. I read the actual source for both Critical findings rather than taking the review at face value:
+`22-REVIEW.md` was generated after the 22-17 gap-closure checkpoint closed (reviewed
+`2026-09-02T22:22:39Z`, ~40 minutes after 22-17's completion) and reports 1 Critical, 3 Warning, 2
+Info findings. It is **not** part of the UAT-driven gap-closure cycle this re-verification is
+scoped to, and none of its findings are mentioned in `22-UAT.md` or routed in `ROADMAP.md`'s Phase
+22.1 scope (which covers only the readiness defect and MSRV, per that section's own text).
 
-### CR-01 (confirmed real): Retention prune is not atomic
-`crates/paladin-storage/src/waypoint/retention.rs:130-151` — `prune()` fetches survivor Waypoints via `get()`, calls `port.delete_thread()` (wiping the ENTIRE thread, survivors included), then `save()`s each survivor back one at a time. A crash/backend failure between `delete_thread` and the completion of the resave loop destroys the thread's protected Waypoints — including the "latest" and any `AwaitingInput` Waypoint the routine's own doc comment calls "unrecoverable" to lose. All of the plan's own tests pass because none of them inject a mid-prune failure. **Mitigating factor confirmed by direct grep:** `retention::prune` and `WaypointRetentionConfig` are not invoked from anywhere outside their own unit tests (WR-02) — nothing in the tree schedules or calls this routine today, so the risk is currently latent, not live. Flagged as a human-verification item above rather than a BLOCKER, since it does not violate any single must_haves truth that this phase's tests exercise, but it is a real, review-confirmed gap in a "durable" system's own stated invariant.
+I independently verified the one Critical finding (CR-01) by reading source directly rather than
+citing the review:
 
-### CR-02 (confirmed real): Stranded self-referencing node
-`crates/paladin-battalion/src/engine/superstep.rs`'s `Frontier::propagate_dead`/`is_ready` (lines 582-727) — traced by hand. A non-entry node `N` whose only incoming edge is a self-loop (`N -> N`) is never marked `dead` (its one incoming edge is `Pending`, not resolved) and never becomes `is_ready` (the same `Pending` self-edge blocks it) — it can never execute. `WarGraph::validate` (graph.rs:211-249) has no reachability-from-entry check, so this graph shape passes validation and the run completes with `RunOutcome::Completed`, silently omitting the node's work. Confirmed as a known, worked-around limitation: `tests/integration/e2e_crash_resume_test.rs`'s own fixture comment (lines 112-127) states this exact mechanism and explains why its self-loop node is deliberately made a graph *entry* to avoid it — every self-loop test in the tree does the same. The **tested and claimed** shape (self-loop as entry point) genuinely works; the **untested, unguarded** shape (self-loop-only node that is not an entry) silently drops work with no error.
+- **CR-01 (confirmed real):** `WarGraph::fingerprint()` (`graph.rs:398-437`) hashes node ids, edge
+  specs, and schema field names — never `self.defer_flags` or `self.dynamic_targets`. But
+  `WarEngine::resume`/`resume_with_options` (`mod.rs:448-461`) documents that this fingerprint check
+  is what makes "a divergence between fresh and resumed execution... structurally impossible."
+  `superstep::compute_next_vanguard` reads `graph.is_deferred(...)` live from whatever `WarGraph`
+  instance is passed to `resume` — not from anything persisted in the Waypoint — so a graph with the
+  same nodes/edges/schema but a changed `defer_flags` set passes the fingerprint check unmodified and
+  silently produces different scheduling behavior on resume than the interrupted run would have
+  produced. No existing test (`fingerprint_is_deterministic_across_calls`,
+  `fingerprint_is_unchanged_by_insertion_order`) exercises a defer-flag or dynamic-target difference.
+  Surfaced as the sole item in Human Verification below.
 
-Both findings are real and are surfaced as human-verification items in the frontmatter above rather than either being silently waved through or used to fail the whole phase outright — neither breaches a must_haves truth that this phase's own test suite exercises, but both are legitimate design-level risks a human should explicitly accept or require fixed before later phases (23+) build on this engine.
+The three Warnings (`WR-01`: `InMemoryWaypointStore::list_threads` picks "latest" by `Vec` position
+rather than time, inconsistent with `latest()`/`history()` and both SQL backends' window-function
+queries; `WR-02`: the local `make test-integration-docker` Postgres leg lacks the readiness-wait/SKIP
+guards the CI job it mirrors requires; `WR-03`: `RecursionLimitExceeded`'s `failed_node` attribution
+is arbitrary among co-participants) and two Info items (`IN-01`: retention config's
+`apply_env_overrides` doesn't re-run `validate()`; `IN-02`: `with_parallelism(0)` silently becomes
+`1`) are lower-severity, do not bear on this phase's core crash-resume/checkpoint claims as directly
+as CR-01 does, and are not elevated to a blocking human-verification item here — they are noted for
+awareness and, per the review's own framing, are advisory.
 
-## Anti-Pattern / Prohibition Scan
+## Anti-Pattern / Prohibition Scan (gap-closure-touched files)
 
 | Check | Result |
 |---|---|
-| `TBD`/`FIXME`/`XXX` in phase-touched source files | 0 hits |
-| `serde_json::Value` embedded in `BattlefieldError` | 0 hits (prohibition resolved) |
-| `format!(...SELECT/INSERT/UPDATE/DELETE...)` in SQL backends | 0 hits (bound parameters only, prohibition resolved) |
-| `BestEffort` selected outside its own file/tests | 0 hits (prohibition resolved) |
-| `toposort` reused in `engine/` | 0 hits |
-| `petgraph` reused in `engine/` | 3 hits, all in `bridges.rs` reading the **legacy** `Campaign`'s existing petgraph structure to build a `WarGraph` — not wrapping `WarGraph` itself in petgraph. Confirmed by direct inspection: not a violation of the Plan 22-05 invariant, which was scoped to the engine's own graph type |
-| `DispatchRegistry` referenced in `paladin-core` | 3 substring hits, all `CustomDispatchRegistry`/`CustomDispatchResolver` — plain `HashMap` type aliases distinct from the application-layer `DispatchRegistry` struct in `paladin-battalion`. Confirmed by direct inspection: no `use` of `paladin_battalion` anywhere in `paladin-core`; the X-01 boundary holds despite the literal grep from Plan 22-07's acceptance criteria matching by substring |
-| MIGRATION.md un-owned `TBD` | 0 hits |
+| `TBD`/`FIXME`/`XXX` in files this gap-closure cycle modified (`retention.rs`, `postgres.rs`, `waypoint_port.rs`, `graph.rs`, `mod.rs`, `superstep.rs`, `waypoint_retention.rs`) | 0 hits |
+| Structural anti-interpolation (SQL built by `format!` with caller-supplied ids) | 0 hits — `sqlx::QueryBuilder` (SQLite) and array-bind `<> ALL($n::text[])` (Postgres) used throughout `prune_thread` |
+| `delete_thread` called from `retention.rs`'s `prune` | 0 hits — confirmed by direct read; the whole-thread delete-then-resave sequence is gone |
+| `#[ignore]`d test count in `engine::lib` matches the one disclosed readiness-defect reproduction | 1 (matches; not a silently-skipped unrelated test) |
 
-## Non-Functional Claims (measured, not asserted)
+## Non-Functional Claims — Decision Recorded
 
-| Claim | Measured | Target | Result |
-|---|---|---|---|
-| ENG-NFR-01: SQLite Waypoint save p50 (Battlefield just under 1 MiB) | 73.09 ms | < 10 ms | **Miss (7.3x over)** — honestly recorded per 22-10-SUMMARY.md, not tuned away. Likely cause (documented, not independently re-verified): no explicit `journal_mode`/`synchronous` pragma, so every write may pay a full `fsync` |
-| ENG-NFR-02: Battlefield clones per superstep | 1 (pointer-identity proven) | ≤ 1 + concurrent node views | Pass |
-| Coverage (ADR-0006 gate) | 86.35% workspace / 96.17% new modules | ≥82% / ≥85% | Pass, per 22-11-SUMMARY.md's documented methodology (`lcov.info` LF/LH summed directly, not the rosier summary command) — not independently re-run here due to its ~35-minute cost, but the recorded command, methodology and file scope match this project's own established (ADR-0006) practice |
-
-The ENG-NFR-01 miss is not a roadmap Success Criterion or a REQUIREMENTS.md item on its own — the phase's obligation was to *measure* it, which it did, honestly. It is surfaced as a human-verification item because it is a headline non-functional claim of a "checkpoint every superstep" design.
+| Claim | Status |
+|---|---|
+| ENG-NFR-01: SQLite Waypoint save p50 miss (73.09 ms vs 10 ms target) | Decision recorded via `22-UAT.md` test 4: `result: pass` — accepted as measured baseline for v0.10.0. No further action required by this verification. |
 
 ## Deferred / Disclosed Items (not gaps)
 
-- **Retention not wired to any scheduler (WR-02).** `WaypointRetentionConfig`/`retention::prune` are complete and unit-tested but nothing constructs or invokes them from `Settings` or a job scheduler yet. This was explicitly disclosed as deferred in 22-06-SUMMARY.md ("ready for a later plan to wire into the job-scheduling system") and the config defaults `enabled: false`, so no operator gets silent behavior today. Not a phase-22 gap; worth tracking for whichever phase claims ENG-FR-18's "callable from the existing job-scheduling system" wiring in full.
-- **`from_campaign` schema deviation (WINDOWS.md ledger #23).** `from_campaign` adds one dedicated `LastWrite` field per Paladin beyond the literal three-field default schema, to avoid spurious `DispatchConflict`s on concurrent DAG fan-out. This is a disclosed, reasoned deviation from ENG-FR-19's literal wording, verified not to break golden-test byte-equivalence (`golden_bridge_equivalence` passes including the diamond fan-in case).
-- **`run_timeout` carried but not enforced (IN-01).** Explicitly deferred to a later phase in both the plan text and rustdoc; not a phase-22 obligation.
+- **Frontier readiness defect (self-loop + upstream edge blocks first execution).** Distinct from
+  BUG-02/G-22-3 (which was strandedness, now fixed). Reproduced by an `#[ignore]`d test, confirmed
+  present and correctly asserting the *should-be* behavior (not inverted to pin the bug). Explicitly
+  registered and routed to inserted Phase 22.1 per the 22-17 checkpoint decision. Not a Phase 22 gap.
+- **MSRV 1.85 vs rmcp-pinned process-wrap conflict.** The `msrv` CI job is red on exactly the one
+  package this conflict touches; routed to Phase 22.1 per the same checkpoint decision. Not a Phase
+  22 gap — this phase's own `semver`/`msrv` job scaffolding (ENG-08) exists and is correctly wired;
+  the failure is a pre-existing dependency-pin conflict the checkpoint explicitly declined to solve
+  in-repo.
+- **CR-01 fingerprint gap (this pass's new finding).** See Human Verification — disclosed, not
+  silently absorbed, but also not unilaterally classified as a blocking gap by this verifier, since
+  it does not violate the literal text of ENG-FR-14 or any must_have truth this phase declared, and a
+  human developer (not this verifier) should decide whether it is a release blocker for v0.10.0 or a
+  Phase 22.1/23 follow-up.
 
 ## Human Verification Required
 
-See frontmatter `human_verification` for the 4 items (Postgres Tier 2 live-server pass, CR-01 retention atomicity, CR-02 stranded-node validation gap, ENG-NFR-01 target miss). None of these are silent — all four are either pre-existing, explicitly-tracked WINDOWS.md ledger items, or code-review findings confirmed by direct source inspection in this verification pass.
+See frontmatter `human_verification` for the one new item (CR-01, the fingerprint/defer_flags gap).
+Everything the prior verification round flagged for human decision (Postgres live-server run,
+retention atomicity, stranded-node validation, ENG-NFR-01) is now closed with recorded, verifiable
+evidence or an explicit accept decision — none of those four remain open.
 
 ## Gaps Summary
 
-No must_haves truth failed as literally tested. No artifact is missing or a stub. No key link is unwired. The full available test suite (workspace build, 3 integration tests, 4 crates' lib tests, clippy, fmt) is green. The phase's status is `human_needed` rather than `passed` because: (1) one contract-suite leg (Postgres against a real server) cannot be run in this sandbox and is already an open, tracked WINDOWS.md item; and (2) two code-review-confirmed design gaps (non-atomic retention prune, unguarded stranded-node graph shape) are real risks that a human should explicitly accept or require closed before Phase 23+ builds further on this engine, even though neither one breaches a must_haves truth this phase's own tests exercise.
+No must_haves truth failed as literally tested, in either the original 11 plans or the 6 gap-closure
+plans. All three UAT gaps (G-22-1 major, G-22-2 blocker, G-22-3 major) are genuinely resolved with
+evidence independently re-confirmed in this pass — G-22-1's CI-run evidence was re-fetched from the
+CI provider directly rather than trusted from SUMMARY text, which is the exact category of claim this
+gap was originally about. The phase's status is `human_needed` rather than `passed` because a fresh,
+post-checkpoint code review surfaced one new Critical finding (CR-01) bearing on the crash-resume
+fingerprint guarantee that has not yet been triaged through UAT or routed to a follow-up phase, and
+this verifier — per its role — surfaces it for a human decision rather than either silently passing
+the phase or unilaterally declaring it a blocking gap.
 
 ---
 
-_Verified: 2026-09-02T04:30:00Z_
+_Verified: 2026-09-02T22:45:00Z_
 _Verifier: Claude (gsd-verifier)_

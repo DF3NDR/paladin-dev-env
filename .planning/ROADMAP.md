@@ -258,8 +258,8 @@ Runtime" — are detailed in full below.*
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 22-09-PLAN.md — Engine seams: TraceSink, NodeInterceptor chain, CancellationToken to Halted (wave 6)
-- [ ] 22-10-PLAN.md — ENG-NFR benchmarks: Waypoint save overhead and engine memory per superstep (wave 6)
+- [x] 22-09-PLAN.md — Engine seams: TraceSink, NodeInterceptor chain, CancellationToken to Halted (wave 6)
+- [x] 22-10-PLAN.md — ENG-NFR benchmarks: Waypoint save overhead and engine memory per superstep (wave 6)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

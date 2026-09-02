@@ -20,11 +20,14 @@
 //! - [`graph`] — `WarGraph`, `NodeSpec`, `EdgeSpec`, `EngineLimits`,
 //!   `InputMapping`, and `WarGraph::validate`/`fingerprint`.
 //! - [`node`] — `StateNode`, `NodeContext`, `NodeError`.
+//! - [`dispatch_registry`] — `DispatchRegistry`, the engine-owned
+//!   `DispatchRule::Custom` name -> closure registration (ENG-FR-09).
 //! - `superstep` (private) — the superstep loop `start`/`resume` reduce to.
 //! - `test_support` (`#[cfg(test)]`) — `RecordingWaypointStore` and
 //!   `CountingFunctionNode`, the doubles this and later engine plans assert
 //!   against.
 
+pub mod dispatch_registry;
 pub mod graph;
 pub mod node;
 mod superstep;
@@ -36,9 +39,9 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use paladin_core::platform::container::battlefield::{
-    Battlefield, CustomDispatchResolver, StateDelta,
-};
+#[cfg(test)]
+use paladin_core::platform::container::battlefield::CustomDispatchResolver;
+use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
 use paladin_core::platform::container::battlefield_error::BattlefieldError;
 #[cfg(test)]
 use paladin_core::platform::container::paladin::Paladin;
@@ -48,6 +51,7 @@ use paladin_core::platform::container::waypoint::{
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 
+pub use dispatch_registry::DispatchRegistry;
 pub use graph::{EdgeSpec, EngineLimits, InputMapping, NodeSpec, WarGraph};
 pub use node::{NodeContext, NodeError, StateNode};
 
@@ -181,6 +185,17 @@ pub enum EngineError {
     /// A node's execution returned an error.
     #[error("node execution error: {0}")]
     Node(#[from] NodeError),
+
+    /// `DispatchRegistry::register` was asked to register a custom
+    /// dispatch rule under a name that collides with a built-in
+    /// `DispatchRule` variant name (ENG-FR-09). Rejected at registration so
+    /// a schema author cannot believe they have overridden e.g.
+    /// `LastWrite` when they have not.
+    #[error("cannot register custom dispatch rule '{name}': reserved built-in rule name")]
+    ReservedDispatchName {
+        /// The rejected registration name.
+        name: String,
+    },
 }
 
 /// Executes [`WarGraph`]s: runs nodes, merges their deltas into the shared
@@ -195,18 +210,24 @@ pub struct WarEngine<W: WaypointPort> {
     /// Vanguard's own size (D-12) — i.e. effectively unbounded unless
     /// explicitly lowered.
     parallelism: Option<usize>,
+    /// Engine-owned custom dispatch rule registrations (ENG-FR-09). Never
+    /// referenced from `paladin-core` (X-01) -- handed to
+    /// `WarGraph::validate` and `Battlefield::merge` as a
+    /// `CustomDispatchResolver` at `start`.
+    dispatch_registry: DispatchRegistry,
 }
 
 impl<W: WaypointPort> WarEngine<W> {
     /// Construct a `WarEngine` over the given Paladin execution port and
-    /// Waypoint persistence port, with `WaypointDurability::Strict` and no
-    /// explicit parallelism cap.
+    /// Waypoint persistence port, with `WaypointDurability::Strict`, no
+    /// explicit parallelism cap and no custom dispatch rules registered.
     pub fn new(paladin_port: Arc<dyn PaladinPort>, waypoint_port: Arc<W>) -> Self {
         Self {
             paladin_port,
             waypoint_port,
             durability: WaypointDurability::Strict,
             parallelism: None,
+            dispatch_registry: DispatchRegistry::new(),
         }
     }
 
@@ -223,6 +244,21 @@ impl<W: WaypointPort> WarEngine<W> {
         self
     }
 
+    /// Register a `(current, delta) -> merged` closure under `name`
+    /// (ENG-FR-09), applied when a Battlefield field declares
+    /// `DispatchRule::Custom(name)`. Rejects a `name` colliding with a
+    /// built-in `DispatchRule` variant name with
+    /// `EngineError::ReservedDispatchName` -- registration is where that
+    /// collision is caught, not silently ignored later.
+    pub fn with_dispatch_rule(
+        mut self,
+        name: impl Into<String>,
+        rule: Arc<paladin_core::platform::container::battlefield::CustomDispatchFn>,
+    ) -> Result<Self, EngineError> {
+        self.dispatch_registry.register(name, rule)?;
+        Ok(self)
+    }
+
     /// Start a new run of `graph` under `thread`, seeded with `initial`.
     ///
     /// Runs the full superstep loop (ENG-FR-01): validates the graph,
@@ -237,8 +273,8 @@ impl<W: WaypointPort> WarEngine<W> {
         thread: ThreadId,
         initial: StateDelta,
     ) -> Result<RunOutcome, EngineError> {
-        let registry = CustomDispatchResolver::new();
-        graph.validate(&registry)?;
+        let registry = self.dispatch_registry.resolver();
+        graph.validate(registry)?;
 
         let battlefield = Battlefield::initialize(graph.schema().clone(), &initial)?;
         battlefield.validate_required()?;
@@ -247,7 +283,7 @@ impl<W: WaypointPort> WarEngine<W> {
             self.waypoint_port.as_ref(),
             self.durability,
             self.parallelism,
-            &registry,
+            registry,
             graph,
             thread,
             battlefield,
@@ -414,6 +450,186 @@ mod tests {
         let thread = ThreadId::new("never-started").unwrap();
         let err = engine.resume(&graph, thread).await.unwrap_err();
         assert!(matches!(err, EngineError::ThreadNotFound(_)));
+    }
+
+    // --- Task 2: engine-level custom dispatch registry -------------------
+
+    #[tokio::test]
+    async fn engine_with_dispatch_rule_applies_custom_merge_end_to_end() {
+        let field_name = FieldName::new("score").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field_name.clone(),
+            DispatchRule::Custom("max".to_string()),
+            Some(serde_json::json!(0)),
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("scorer");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(Arc::new(FixedDeltaNode {
+                field: field_name.clone(),
+                value: serde_json::json!(7),
+            })),
+        );
+        graph.add_entry(node_id);
+
+        let engine = engine()
+            .with_dispatch_rule(
+                "max",
+                Arc::new(|current: &serde_json::Value, delta: &serde_json::Value| {
+                    let c = current.as_i64().unwrap_or(i64::MIN);
+                    let d = delta.as_i64().unwrap_or(i64::MIN);
+                    Ok(serde_json::json!(c.max(d)))
+                }),
+            )
+            .unwrap();
+        let thread = ThreadId::new("custom-dispatch").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(final_state.get::<i64>(&field_name).unwrap(), Some(7));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn engine_start_fails_before_execution_for_unregistered_custom_dispatch() {
+        let field_name = FieldName::new("score").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field_name.clone(),
+            DispatchRule::Custom("missing".to_string()),
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node = crate::engine::test_support::CountingFunctionNode::fixed(
+            field_name,
+            serde_json::json!(1),
+        );
+        let node_id = NodeId::new("n");
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id);
+
+        let engine = engine();
+        let thread = ThreadId::new("unregistered-custom").unwrap();
+        let err = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap_err();
+        match err {
+            EngineError::Battlefield(BattlefieldError::CustomDispatchNotRegistered { name }) => {
+                assert_eq!(name, "missing");
+            }
+            other => panic!("expected CustomDispatchNotRegistered, got {other:?}"),
+        }
+        assert_eq!(
+            node.run_count(),
+            0,
+            "no node executes before graph validation passes"
+        );
+    }
+
+    #[tokio::test]
+    async fn engine_two_writer_last_write_conflict_surfaces_field_superstep_and_writers() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let n1 = NodeId::new("n1");
+        let n2 = NodeId::new("n2");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::Function(Arc::new(FixedDeltaNode {
+                field: FieldName::new("result").unwrap(),
+                value: serde_json::json!("a"),
+            })),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::Function(Arc::new(FixedDeltaNode {
+                field: FieldName::new("result").unwrap(),
+                value: serde_json::json!("b"),
+            })),
+        );
+        graph.add_entry(n1.clone());
+        graph.add_entry(n2.clone());
+
+        let engine = engine();
+        let thread = ThreadId::new("dispatch-conflict").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Failed { error, .. } => match error {
+                EngineError::Battlefield(BattlefieldError::DispatchConflict {
+                    field,
+                    superstep,
+                    writers,
+                }) => {
+                    assert_eq!(field, FieldName::new("result").unwrap());
+                    assert_eq!(superstep, 1);
+                    let mut sorted = writers.clone();
+                    sorted.sort();
+                    assert_eq!(sorted, vec![n1.clone(), n2.clone()]);
+                }
+                other => panic!("expected DispatchConflict, got {other:?}"),
+            },
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn engine_custom_dispatch_closure_error_fails_the_run_not_swallowed() {
+        let field_name = FieldName::new("score").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field_name.clone(),
+            DispatchRule::Custom("boom".to_string()),
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("n");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(Arc::new(FixedDeltaNode {
+                field: field_name.clone(),
+                value: serde_json::json!(1),
+            })),
+        );
+        graph.add_entry(node_id);
+
+        let engine = engine()
+            .with_dispatch_rule(
+                "boom",
+                Arc::new(|_c: &serde_json::Value, _d: &serde_json::Value| {
+                    Err(BattlefieldError::TypeMismatch {
+                        field: FieldName::new("score").unwrap(),
+                        expected: "never".to_string(),
+                        got: "boom".to_string(),
+                    })
+                }),
+            )
+            .unwrap();
+        let thread = ThreadId::new("custom-dispatch-error").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Failed { error, .. } => {
+                assert!(matches!(
+                    error,
+                    EngineError::Battlefield(BattlefieldError::TypeMismatch { .. })
+                ));
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
     }
 
     #[test]

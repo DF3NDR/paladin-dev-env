@@ -100,12 +100,16 @@ impl Default for EngineLimits {
 /// The executable graph a [`crate::engine::WarEngine`] runs.
 ///
 /// Deliberately does **not** reject cycles (ENG-FR-02): unlike Campaign's
-/// cycle-rejecting graph-order validation, `WarGraph::validate` only
-/// enforces that both `EngineLimits` are non-zero, that every edge and entry
-/// endpoint names a declared node, and that every `DispatchRule::Custom`
-/// name in the schema has a registered resolver — so iterative workflows
-/// (retry-and-refine, evaluate-optimize loops) can be expressed here even
-/// though Campaign cannot express them.
+/// cycle-rejecting graph-order validation, `WarGraph::validate` enforces
+/// that both `EngineLimits` are non-zero, that every edge and entry
+/// endpoint names a declared node, that every `DispatchRule::Custom` name
+/// in the schema has a registered resolver, and — ENG-FR-02a / BUG-02, the
+/// last clause checked — that every declared node is in the **eligible
+/// set**: reachable from `entry` over static edges, or marked
+/// [`WarGraph::mark_dynamic_target`]. Iterative workflows (retry-and-refine,
+/// evaluate-optimize loops) can still be expressed here even though
+/// Campaign cannot express them; what is rejected is a node that could
+/// NEVER become ready, not a cycle.
 pub struct WarGraph {
     nodes: HashMap<NodeId, NodeSpec>,
     /// Node ids in registration order (ENG-FR-04): a `HashMap`'s own
@@ -115,11 +119,10 @@ pub struct WarGraph {
     node_order: Vec<NodeId>,
     /// Node ids registered via [`WarGraph::add_deferred_node`] (ENG-FR-06).
     defer_flags: HashSet<NodeId>,
-    /// Node ids marked via [`WarGraph::mark_dynamic_target`] (ENG-FR-02a).
-    /// TODO(22-15 Task 2): full rustdoc and eligible-set wiring land with
-    /// the `validate` implementation; the field and its accessors exist
-    /// here only so Task 1's regression tests compile against the real API
-    /// shape.
+    /// Node ids marked via [`WarGraph::mark_dynamic_target`] (ENG-FR-02a):
+    /// the declared escape hatch for a node reachable only as a runtime
+    /// jump target, seeded into `validate`'s eligible-set worklist
+    /// alongside `entry` so such a node is not rejected as stranded.
     dynamic_targets: HashSet<NodeId>,
     edges: Vec<EdgeSpec>,
     schema: BattlefieldSchema,
@@ -168,8 +171,33 @@ impl WarGraph {
         self.defer_flags.contains(id)
     }
 
-    /// Mark `id` as a dynamic target (ENG-FR-02a). TODO(22-15 Task 2): full
-    /// rustdoc lands with the `validate` implementation.
+    /// Mark `id` — an already-registered node — as a **dynamic target**
+    /// (ENG-FR-02a / BUG-02): the declared escape hatch for a node
+    /// reachable only as the target of a runtime jump (a Goto-style
+    /// dynamic route CF-FR-07 will own in a later phase), never by any
+    /// statically-declared [`EdgeSpec`]. `WarGraph::validate` seeds its
+    /// eligible-set worklist from `entry` UNION every `dynamic_target`, so
+    /// a marked node validates and can be scheduled without any edge
+    /// pointing to it.
+    ///
+    /// Marking is a separate method rather than a second `add_*_node`
+    /// constructor — the same shape [`WarGraph::add_deferred_node`]'s
+    /// `defer` flag already established — so a node can be BOTH deferred
+    /// AND a dynamic target; composing two `add_*_node` constructors could
+    /// not express that.
+    ///
+    /// This marker shifts responsibility for checking that a runtime jump
+    /// actually lands on a node marked here to CF-FR-07, the later phase
+    /// that owns runtime jump validation — `WarGraph::validate` trusts the
+    /// declaration and does not itself verify any jump ever targets it.
+    ///
+    /// Jump targets are deliberately **not** inferred from any directive
+    /// parser's output: they are runtime values — computed from
+    /// Battlefield state or an LLM's own routing decision — and a parser
+    /// cannot know at graph-construction time which branch a live run will
+    /// take, so inferring a static edge set from them would be unsound.
+    /// This omission is a decision recorded here, not a gap:
+    /// `mark_dynamic_target` is the intentional, explicit substitute.
     pub fn mark_dynamic_target(&mut self, id: NodeId) -> &mut Self {
         self.dynamic_targets.insert(id);
         self
@@ -224,9 +252,29 @@ impl WarGraph {
 
     /// Validate structural invariants. Does NOT reject cycles (ENG-FR-02):
     /// rejects a graph whose limits could never terminate, an edge or entry
-    /// point naming an undeclared node, or a schema `Custom` dispatch name
-    /// with no resolver registered in `custom_dispatch` (ENG-FR-09) — the
-    /// last check runs before any node executes.
+    /// point naming an undeclared node, a schema `Custom` dispatch name
+    /// with no resolver registered in `custom_dispatch` (ENG-FR-09), or —
+    /// checked LAST, once every clause above has passed — a declared node
+    /// outside the **eligible set** (ENG-FR-02a / BUG-02): the fixed point
+    /// of nodes reachable from `entry` over static edges, unioned with
+    /// nodes marked [`WarGraph::mark_dynamic_target`]. All of this runs
+    /// before any node executes.
+    ///
+    /// The eligible-set check is last for two reasons: the more specific
+    /// structural errors above stay the ones a caller sees first, and a
+    /// graph that already failed one of them has not been shown to have
+    /// meaningful reachability at all — reporting "node X is unreachable"
+    /// on top of "edge Y names an undeclared node" would bury the actual
+    /// mistake under a symptom of it.
+    ///
+    /// `RunOutcome::Completed` means "the Vanguard emptied"; before
+    /// ENG-FR-02a that could be reported over a graph containing a node
+    /// that could never have become ready (BUG-02, the silent stranded
+    /// node). This check is what makes that claim truthful: every declared
+    /// node was at least eligible to run. A self-loop remains legal on an
+    /// entry node, or on any node reachable from entry by a normal edge —
+    /// this check rejects strandedness, a node that could NEVER become
+    /// ready, not cycles.
     pub fn validate(&self, custom_dispatch: &CustomDispatchResolver) -> Result<(), EngineError> {
         if self.limits.max_supersteps == 0 {
             return Err(EngineError::InvalidLimits {
@@ -264,7 +312,87 @@ impl WarGraph {
             }
         }
 
-        Ok(())
+        self.validate_eligible_set()
+    }
+
+    /// ENG-FR-02a / BUG-02's eligible-set reachability check, factored out
+    /// of [`WarGraph::validate`] only for readability -- always called last
+    /// from there, never on its own.
+    fn validate_eligible_set(&self) -> Result<(), EngineError> {
+        // A graph that declares nodes but never calls `add_entry` at all:
+        // every node is trivially unreachable regardless of edges or
+        // dynamic-target markers, since nothing seeds the worklist below
+        // and a dynamic target only ever fires from a LIVE run that has to
+        // start somewhere. Naming the absent entry point as the cause
+        // avoids listing every node in the graph with a generic
+        // reachability message that would bury the actual mistake.
+        if self.entry.is_empty() && !self.nodes.is_empty() {
+            return Err(EngineError::UnreachableNode {
+                nodes: self.node_order.clone(),
+                reason: format!(
+                    "no entry point declared: {} node(s) registered but WarGraph::add_entry \
+                     was never called, so every node is unreachable regardless of edges or \
+                     dynamic_target markers -- declare at least one entry node",
+                    self.node_order.len()
+                ),
+            });
+        }
+
+        // The eligible set: entry nodes and dynamic-target-marked nodes,
+        // expanded by following declared edges to a fixed point (edge
+        // CONDITIONS are ignored here -- they are runtime values, and a
+        // statically-declared edge is what proves intent for this static
+        // check). Two future sources of eligibility plug into this SAME
+        // worklist and nowhere else: nodes marked as worker templates,
+        // reachable via dynamic fan-out (Phase 23 / Muster), and nodes
+        // named as Route { to } targets in an eligible node's Aegis
+        // `on_error` policy (Phase 25 / CF-FR handler routing) -- which is
+        // why this is a fixed point rather than a single pass: a route
+        // target discovered late can itself carry outgoing edges that need
+        // re-expanding. Neither concept exists in this tree yet; nothing
+        // is fabricated here to stand in for either -- these are insertion
+        // points, not stubs.
+        let mut eligible: HashSet<NodeId> = HashSet::new();
+        let mut worklist: Vec<NodeId> = Vec::new();
+        for id in self.entry.iter().chain(self.dynamic_targets.iter()) {
+            if eligible.insert(id.clone()) {
+                worklist.push(id.clone());
+            }
+        }
+        while let Some(current) = worklist.pop() {
+            for edge in &self.edges {
+                if edge.from == current && eligible.insert(edge.to.clone()) {
+                    worklist.push(edge.to.clone());
+                }
+            }
+        }
+
+        // Every declared node outside the eligible set is an offender,
+        // collected in `node_order` (registration order, ENG-FR-04) so the
+        // message is deterministic across runs, never `HashMap` order.
+        let offenders: Vec<NodeId> = self
+            .node_order
+            .iter()
+            .filter(|id| !eligible.contains(*id))
+            .cloned()
+            .collect();
+        if offenders.is_empty() {
+            return Ok(());
+        }
+
+        let names = offenders
+            .iter()
+            .map(NodeId::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(EngineError::UnreachableNode {
+            nodes: offenders,
+            reason: format!(
+                "unreachable from entry and not marked dynamic_target: {names} -- make \
+                 reachable via a static edge from an entry node, or mark with \
+                 WarGraph::mark_dynamic_target if it is a runtime jump target"
+            ),
+        })
     }
 
     /// Compute this graph's stable content fingerprint (ENG-FR-14): a hash

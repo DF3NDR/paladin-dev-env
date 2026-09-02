@@ -56,7 +56,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   golden output-equivalence tests, and the legacy execution services keep byte-identical public
   behavior (sole sanctioned exception: BUG-01, owned by CF-01) (ENG-FR-19, ENG-FR-20; X-03)
 
-- [ ] **ENG-07**: The engine ships the seams later epics consume — a non-interfering `TraceSink`
+- [x] **ENG-07**: The engine ships the seams later epics consume — a non-interfering `TraceSink`
   hook (bounded channel, drop-oldest, counted drops), an ordered `NodeInterceptor` chain, and a
   `CancellationToken` that finishes the in-flight superstep and persists a `Halted` Waypoint
   (ENG-FR-21…23; PRD 01 §8)
@@ -354,7 +354,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ENG-04 | Phase 22 | Complete |
 | ENG-05 | Phase 22 | Complete |
 | ENG-06 | Phase 22 | Pending |
-| ENG-07 | Phase 22 | Pending |
+| ENG-07 | Phase 22 | Complete |
 | ENG-08 | Phase 22 | Complete |
 | CF-01 | Phase 23 | Pending |
 | CF-02 | Phase 23 | Pending |

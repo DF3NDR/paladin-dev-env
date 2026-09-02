@@ -250,7 +250,7 @@ Runtime" — are detailed in full below.*
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 22-07-PLAN.md — Engine frontier: join/defer, custom dispatch registry, determinism + stress test (wave 4)
+- [x] 22-07-PLAN.md — Engine frontier: join/defer, custom dispatch registry, determinism + stress test (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

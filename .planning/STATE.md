@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 22.1
 current_phase_name: Engine readiness defect and MSRV follow-up
-status: planning
+status: executing
 stopped_at: Phase 22.1 context gathered
-last_updated: "2026-09-02T23:05:47.123Z"
+last_updated: "2026-09-02T23:58:27.882Z"
 last_activity: 2026-09-02
 last_activity_desc: Phase 22 complete, transitioned to Phase 22.1
 progress:
   total_phases: 2
   completed_phases: 1
-  total_plans: 17
+  total_plans: 22
   completed_plans: 17
 ---
 
@@ -53,7 +53,7 @@ names. See MILESTONES.md.
 
 Phase: 22.1 — Engine readiness defect and MSRV follow-up
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-02 — Phase 22 complete, transitioned to Phase 22.1
 
 ## Performance Metrics

@@ -290,11 +290,21 @@ Runtime" — are detailed in full below.*
 **Plans:** 5 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 22.1-01-PLAN.md — BUG-03 cycle-bootstrap starvation fix (tracer, test-first) + BUG-03/ENG-FR-06a registration
-- [ ] 22.1-02-PLAN.md — Truthful-outcome guards: validate-time unschedulable-shape check, run-end starvation check, determinism coverage
-- [ ] 22.1-03-PLAN.md — CR-01 fingerprint coverage + golden/difference tests + resume-doc reword + fixture comment sweep
 - [ ] 22.1-04-PLAN.md — MSRV floor to measured 1.88, lockfile restore, resolver 3, MSRV figure reconciliation
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 22.1-02-PLAN.md — Truthful-outcome guards: validate-time unschedulable-shape check, run-end starvation check, determinism coverage
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 22.1-03-PLAN.md — CR-01 fingerprint coverage + golden/difference tests + resume-doc reword + fixture comment sweep
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 22.1-05-PLAN.md — G-22-1 closing CI evidence (whole-run success) + UAT pointer
 
 ### Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs

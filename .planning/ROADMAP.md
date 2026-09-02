@@ -280,7 +280,7 @@ Runtime" — are detailed in full below.*
 
 **Wave 10** *(gap-closure wave 3)*
 
-- [ ] 22-17-PLAN.md — Blocking checkpoint: confirm the CI run actually exercised the Postgres suite, and settle the readiness defect's disposition (wave 10)
+- [x] 22-17-PLAN.md — Blocking checkpoint: confirm the CI run actually exercised the Postgres suite, and settle the readiness defect's disposition (wave 10)
 
 ### Phase 22.1: Engine readiness defect and MSRV follow-up (INSERTED)
 

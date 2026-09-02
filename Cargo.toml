@@ -291,6 +291,10 @@ required-features = ["web-server"]
 name = "config_benchmarks"
 harness = false
 
+[[bench]]
+name = "engine_benchmarks"
+harness = false
+
 [features]
 # D-11 (amended 2026-08-17, option-b): the compiled default provider set is
 # unchanged from the pre-ADR-0046 shape (openai + anthropic + deepseek) even

@@ -238,6 +238,15 @@ None — no external service configuration required. All test doubles are in-pro
 - Doc 04's Aegis fault-tolerance policy is documented at the `NodeInterceptor` trait definition as wrapping OUTSIDE this chain — flagged here so a later epic does not nest retry/timeout logic inside interceptor decisions the wrong way round.
 - No blockers for 22-10/22-11.
 
+## Self-Check: PASSED
+
+- FOUND: `crates/paladin-ports/src/output/trace_sink_port.rs`
+- FOUND: `crates/paladin-battalion/src/engine/hooks.rs`
+- FOUND: `.planning/phases/22-battlefield-state-superstep-engine/22-09-SUMMARY.md`
+- FOUND commit: `68b06a28` (TraceSink port)
+- FOUND commit: `d50971c6` (engine seams)
+- FOUND commit: `1fdf33ec` (this summary)
+
 ---
 *Phase: 22-battlefield-state-superstep-engine*
 *Completed: 2026-09-02*

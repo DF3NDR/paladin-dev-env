@@ -128,12 +128,17 @@ test-integration: ## Run integration tests (local mode)
 	@./scripts/run_integration_tests.sh -m local
 
 .PHONY: test-integration-docker
-test-integration-docker: ## Run integration tests with docker-compose (includes the Ollama Tier 2 suite, 17-07/D-15)
+test-integration-docker: ## Run integration tests with docker-compose (includes the Ollama and Postgres Tier 2 suites, 17-07/D-15, 22-06/D-10)
 	@echo "$(CYAN)Running integration tests with docker-compose...$(NC)"
 	@./scripts/run_integration_tests.sh -m docker -v
 	@echo "$(CYAN)Starting ollama-test for the Ollama Docker-gated Tier 2 suite (17-07)...$(NC)"
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_TEST_FILE) up -d ollama-test ollama-test-init
 	@OLLAMA_TEST_URL=http://localhost:11435/v1 $(CARGO) test --test ollama_docker --features integration-tests,llm-ollama -- --nocapture
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_TEST_FILE) down -v --remove-orphans || true
+	@echo "$(CYAN)Starting postgres-test for the PostgresWaypointStore Docker-gated Tier 2 suite (22-06)...$(NC)"
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_TEST_FILE) up -d postgres-test
+	@WAYPOINT_POSTGRES_TEST_URL=postgres://paladin:paladin@localhost:5433/paladin_waypoint_test \
+		$(CARGO) test -p paladin-storage --features postgres --lib waypoint::postgres -- --nocapture
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_TEST_FILE) down -v --remove-orphans || true
 
 .PHONY: test-integration-redis

@@ -46,7 +46,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   program scenario E2E-1 (crash after superstep 3, fresh engine, final state equals uninterrupted
   control run, one Waypoint per superstep) (ENG-FR-12; overview §6 E2E-1)
 
-- [ ] **ENG-05**: Three `WaypointPort` backends — InMemory, SQLite (with migrations), Postgres
+- [x] **ENG-05**: Three `WaypointPort` backends — InMemory, SQLite (with migrations), Postgres
   (new `postgres` feature) — all pass one shared contract test suite; a
   `WaypointRetentionConfig` cleanup routine never deletes a thread's latest Waypoint or any
   `AwaitingInput` Waypoint (ENG-FR-15…18)
@@ -352,7 +352,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ENG-02 | Phase 22 | Pending |
 | ENG-03 | Phase 22 | Pending |
 | ENG-04 | Phase 22 | Pending |
-| ENG-05 | Phase 22 | Pending |
+| ENG-05 | Phase 22 | Complete |
 | ENG-06 | Phase 22 | Pending |
 | ENG-07 | Phase 22 | Pending |
 | ENG-08 | Phase 22 | Complete |

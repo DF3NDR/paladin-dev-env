@@ -20,6 +20,9 @@ doctest = false
 sqlite = ["dep:sqlx", "sqlx/sqlite"]
 ## Enable the MySQL repository adapters.
 mysql = ["dep:sqlx", "sqlx/mysql"]
+## Enable the PostgreSQL `WaypointPort` adapter (ENG-05, D-01). `sqlx/postgres`
+## on the already-pinned `sqlx 0.8` -- no new crate name.
+postgres = ["dep:sqlx", "sqlx/postgres"]
 ## Enable the MinIO / S3 file-storage adapter.
 s3 = ["dep:rust-s3"]
 ## Enable the Redis queue adapter.

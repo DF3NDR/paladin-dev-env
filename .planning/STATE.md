@@ -5,8 +5,8 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 22.1
 current_phase_name: Engine readiness defect and MSRV follow-up
 status: planning
-stopped_at: Phase 22 executed — verification human_needed (4 UAT items)
-last_updated: "2026-09-02T22:31:57.061Z"
+stopped_at: Phase 22.1 context gathered
+last_updated: "2026-09-02T23:05:47.123Z"
 last_activity: 2026-09-02
 last_activity_desc: Phase 22 complete, transitioned to Phase 22.1
 progress:
@@ -786,16 +786,16 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 22 executed — verification human_needed (4 UAT items)
+**Stopped at:** Phase 22.1 context gathered
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-02T03:54:30.430Z
+Last session: 2026-09-02T23:05:47.024Z
 Resume file:
 
-.planning/phases/22-battlefield-state-superstep-engine/22-UAT.md
+.planning/phases/22.1-engine-readiness-defect-and-msrv-follow-up/22.1-CONTEXT.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

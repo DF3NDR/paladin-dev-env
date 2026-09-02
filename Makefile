@@ -138,8 +138,11 @@ test-integration-docker: ## Run integration tests with docker-compose (includes 
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_TEST_FILE) down -v --remove-orphans || true
 	@echo "$(CYAN)Starting postgres-test for the PostgresWaypointStore Docker-gated Tier 2 suite (22-06)...$(NC)"
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_TEST_FILE) up -d postgres-test
+	@# --test-threads=1 kept identical to the postgres-integration CI job
+	@# (.github/workflows/ci.yml, G-22-1/22-12): this module's tests share one
+	@# database, so a green CI run and a green local docker run mean the same thing.
 	@WAYPOINT_POSTGRES_TEST_URL=postgres://paladin:paladin@localhost:5433/paladin_waypoint_test \
-		$(CARGO) test -p paladin-storage --features postgres --lib waypoint::postgres -- --nocapture
+		$(CARGO) test -p paladin-storage --features postgres --lib waypoint::postgres -- --test-threads=1 --nocapture
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_TEST_FILE) down -v --remove-orphans || true
 
 .PHONY: test-integration-redis

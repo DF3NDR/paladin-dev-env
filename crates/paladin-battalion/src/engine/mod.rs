@@ -24,6 +24,12 @@
 //! - [`node`] — `StateNode`, `NodeContext`, `NodeError`.
 //! - [`dispatch_registry`] — `DispatchRegistry`, the engine-owned
 //!   `DispatchRule::Custom` name -> closure registration (ENG-FR-09).
+//! - [`hooks`] — `TraceDispatcher` (ENG-FR-21's bounded, drop-oldest
+//!   `TraceSink` forwarder), `NodeInterceptor`/`InterceptDecision`
+//!   (ENG-FR-22's ordered, empty-by-default chain). Both are seams with no
+//!   consumer yet (Docs 05, 07); ENG-FR-23's cancellation-to-`Halted` path
+//!   lives inline in `superstep`/`WarEngine` since it needs no dedicated
+//!   type beyond `tokio_util::sync::CancellationToken`.
 //! - `superstep` (private) — the superstep loop `start`/`resume` reduce to.
 //! - `test_support` (`#[cfg(test)]`) — `RecordingWaypointStore`,
 //!   `RecordingPaladinPort` and `CountingFunctionNode`, the doubles this and
@@ -31,6 +37,7 @@
 
 pub mod dispatch_registry;
 pub mod graph;
+pub mod hooks;
 pub mod input_mapping;
 pub mod node;
 mod superstep;
@@ -41,6 +48,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
 #[cfg(test)]
 use paladin_core::platform::container::battlefield::CustomDispatchResolver;
@@ -52,10 +60,12 @@ use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, ParleyRequest, ThreadId, WaypointId, WaypointStatus,
 };
 use paladin_ports::output::paladin_port::PaladinPort;
+use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink};
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 
 pub use dispatch_registry::DispatchRegistry;
 pub use graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
+pub use hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 pub use input_mapping::{InputMapping, InputMappingError};
 pub use node::{NodeContext, NodeError, StateNode};
 
@@ -92,7 +102,13 @@ pub enum RunOutcome {
         /// The waypoint recording the pause.
         waypoint: WaypointId,
     },
-    /// The run was gracefully halted (Doc 03 cancellation).
+    /// The run was gracefully halted: a `CancellationToken` was observed
+    /// cancelled at a superstep boundary (ENG-FR-23). The in-flight
+    /// superstep, if any, was allowed to finish and merge before the
+    /// `Halted` `Waypoint` was persisted, so it is always a consistent
+    /// restart point — `WarEngine::resume`/`resume_with_options` can
+    /// continue from it exactly as from a `Running` waypoint (Doc 03 lands
+    /// the dedicated pause/resume API this shares its plumbing with).
     Halted {
         /// The waypoint recording the halt.
         waypoint: WaypointId,
@@ -250,12 +266,26 @@ pub struct WarEngine<W: WaypointPort> {
     /// `WarGraph::validate` and `Battlefield::merge` as a
     /// `CustomDispatchResolver` at `start`.
     dispatch_registry: DispatchRegistry,
+    /// The bounded, drop-oldest `TraceSink` forwarder (ENG-FR-21). Always
+    /// present -- constructed with no sink (`TraceDispatcher::new(None)`) by
+    /// default, in which case `emit` is a no-op and no channel is
+    /// allocated.
+    trace_dispatcher: Arc<TraceDispatcher>,
+    /// The ordered `NodeInterceptor` chain (ENG-FR-22). Empty by default: an
+    /// empty chain is proven (in `engine::hooks`'s own tests) to change
+    /// nothing about a run's node executions or final state.
+    interceptors: Vec<Arc<dyn NodeInterceptor>>,
+    /// The optional cancellation signal observed at superstep boundaries
+    /// (ENG-FR-23). `None` behaves identically to a token that is never
+    /// cancelled.
+    cancellation_token: Option<CancellationToken>,
 }
 
 impl<W: WaypointPort> WarEngine<W> {
     /// Construct a `WarEngine` over the given Paladin execution port and
     /// Waypoint persistence port, with `WaypointDurability::Strict`, no
-    /// explicit parallelism cap and no custom dispatch rules registered.
+    /// explicit parallelism cap, no custom dispatch rules registered, no
+    /// trace sink, an empty interceptor chain and no cancellation token.
     pub fn new(paladin_port: Arc<dyn PaladinPort>, waypoint_port: Arc<W>) -> Self {
         Self {
             paladin_port,
@@ -263,6 +293,9 @@ impl<W: WaypointPort> WarEngine<W> {
             durability: WaypointDurability::Strict,
             parallelism: None,
             dispatch_registry: DispatchRegistry::new(),
+            trace_dispatcher: Arc::new(TraceDispatcher::new(None)),
+            interceptors: Vec::new(),
+            cancellation_token: None,
         }
     }
 
@@ -294,6 +327,30 @@ impl<W: WaypointPort> WarEngine<W> {
         Ok(self)
     }
 
+    /// Attach `sink` as this engine's `TraceSink` (ENG-FR-21). Replaces any
+    /// previously configured sink; events are forwarded fire-and-forget over
+    /// a bounded, drop-oldest queue -- see `engine::hooks::TraceDispatcher`.
+    pub fn with_trace_sink(mut self, sink: Arc<dyn TraceSink>) -> Self {
+        self.trace_dispatcher = Arc::new(TraceDispatcher::new(Some(sink)));
+        self
+    }
+
+    /// Set the ordered `NodeInterceptor` chain (ENG-FR-22), replacing any
+    /// previously configured chain. An empty `Vec` (the default) is
+    /// equivalent to never calling this method at all.
+    pub fn with_interceptors(mut self, interceptors: Vec<Arc<dyn NodeInterceptor>>) -> Self {
+        self.interceptors = interceptors;
+        self
+    }
+
+    /// Attach a `CancellationToken` this engine observes at superstep
+    /// boundaries (ENG-FR-23). A token that is never cancelled produces
+    /// behavior identical to no token configured at all.
+    pub fn with_cancellation_token(mut self, token: CancellationToken) -> Self {
+        self.cancellation_token = Some(token);
+        self
+    }
+
     /// Start a new run of `graph` under `thread`, seeded with `initial`.
     ///
     /// Runs the full superstep loop (ENG-FR-01): validates the graph,
@@ -316,21 +373,30 @@ impl<W: WaypointPort> WarEngine<W> {
         let battlefield = Battlefield::initialize(graph.schema().clone(), &initial)?;
         battlefield.validate_required()?;
 
-        superstep::run(
+        self.trace_dispatcher.emit(TraceEvent::RunStarted {
+            thread_id: thread.clone(),
+        });
+        let outcome = superstep::run(
             self.waypoint_port.as_ref(),
             self.durability,
             self.parallelism,
             registry,
             graph,
-            thread,
+            thread.clone(),
             battlefield,
             graph.entry().to_vec(),
             BTreeMap::new(),
             None,
             1,
             &self.paladin_port,
+            &self.trace_dispatcher,
+            &self.interceptors,
+            &self.cancellation_token,
         )
-        .await
+        .await;
+        self.trace_dispatcher
+            .emit(TraceEvent::RunFinished { thread_id: thread });
+        outcome
     }
 
     /// Resume `thread` from its latest Waypoint, with the default
@@ -382,6 +448,11 @@ impl<W: WaypointPort> WarEngine<W> {
         }
 
         if matches!(latest.status, WaypointStatus::Completed) {
+            self.trace_dispatcher.emit(TraceEvent::RunStarted {
+                thread_id: thread.clone(),
+            });
+            self.trace_dispatcher
+                .emit(TraceEvent::RunFinished { thread_id: thread });
             return Ok(RunOutcome::Completed {
                 final_state: latest.battlefield,
                 waypoint: latest.waypoint_id,
@@ -397,21 +468,30 @@ impl<W: WaypointPort> WarEngine<W> {
         let registry = self.dispatch_registry.resolver();
         graph.validate(registry)?;
 
-        superstep::run(
+        self.trace_dispatcher.emit(TraceEvent::RunStarted {
+            thread_id: thread.clone(),
+        });
+        let outcome = superstep::run(
             self.waypoint_port.as_ref(),
             self.durability,
             self.parallelism,
             registry,
             graph,
-            thread,
+            thread.clone(),
             latest.battlefield,
             latest.vanguard,
             latest.visit_counts,
             Some(latest.waypoint_id),
             latest.superstep + 1,
             &self.paladin_port,
+            &self.trace_dispatcher,
+            &self.interceptors,
+            &self.cancellation_token,
         )
-        .await
+        .await;
+        self.trace_dispatcher
+            .emit(TraceEvent::RunFinished { thread_id: thread });
+        outcome
     }
 }
 
@@ -1363,6 +1443,689 @@ mod tests {
                     "k={k}: node {name} completed before the drop but appears again post-resume"
                 );
             }
+        }
+    }
+
+    // --- Task 1: TraceSink, end to end through a real WarEngine run ------
+
+    use crate::engine::test_support::{
+        AlwaysErroringTraceSink, BlockingTraceSink, RecordingTraceSink,
+    };
+    use paladin_ports::output::trace_sink_port::TraceEvent;
+    use std::sync::atomic::AtomicBool;
+
+    fn trace_event_name(event: &TraceEvent) -> &'static str {
+        match event {
+            TraceEvent::RunStarted { .. } => "RunStarted",
+            TraceEvent::SuperstepStarted { .. } => "SuperstepStarted",
+            TraceEvent::NodeStarted { .. } => "NodeStarted",
+            TraceEvent::NodeFinished { .. } => "NodeFinished",
+            TraceEvent::DeltaMerged { .. } => "DeltaMerged",
+            TraceEvent::WaypointSaved { .. } => "WaypointSaved",
+            TraceEvent::RunFinished { .. } => "RunFinished",
+            _ => "unknown",
+        }
+    }
+
+    #[tokio::test]
+    async fn trace_sink_receives_exact_ordered_event_sequence_for_two_superstep_run() {
+        let (graph, _a, _b) = two_node_chain_graph();
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone());
+        let thread = ThreadId::new("trace-two-superstep").unwrap();
+
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        // Give the background trace consumer a chance to drain.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let names: Vec<&str> = sink.events().await.iter().map(trace_event_name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "RunStarted",
+                "SuperstepStarted",
+                "NodeStarted",
+                "NodeFinished",
+                "DeltaMerged",
+                "WaypointSaved",
+                "SuperstepStarted",
+                "NodeStarted",
+                "NodeFinished",
+                "DeltaMerged",
+                "WaypointSaved",
+                "RunFinished",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn permanently_blocking_trace_sink_does_not_stall_a_real_run() {
+        let (graph, _a, _b) = two_node_chain_graph();
+        let entered = Arc::new(AtomicBool::new(false));
+        let sink = BlockingTraceSink::new(entered.clone());
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_trace_sink(sink);
+        let thread = ThreadId::new("trace-blocking-sink").unwrap();
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            engine.start(&graph, thread, StateDelta::new()),
+        )
+        .await
+        .expect("the run must complete inside the timeout despite a permanently blocking sink")
+        .unwrap();
+
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        // Give the background consumer a moment to have actually been
+        // invoked (it then hangs forever on the first event -- that hang is
+        // exactly the point, and must not have been on the run's path).
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            entered.load(std::sync::atomic::Ordering::SeqCst),
+            "the blocking sink must actually have been invoked"
+        );
+    }
+
+    #[tokio::test]
+    async fn always_erroring_trace_sink_leaves_run_outcome_and_battlefield_unchanged() {
+        let (plain_graph, _a, _b) = two_node_chain_graph();
+        let plain_engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let plain_thread = ThreadId::new("trace-none").unwrap();
+        let plain_outcome = plain_engine
+            .start(&plain_graph, plain_thread, StateDelta::new())
+            .await
+            .unwrap();
+        let plain_final = match plain_outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected Completed, got {other:?}"),
+        };
+
+        let (traced_graph, _a2, _b2) = two_node_chain_graph();
+        let sink = AlwaysErroringTraceSink::new();
+        let traced_engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone());
+        let traced_thread = ThreadId::new("trace-erroring").unwrap();
+        let traced_outcome = traced_engine
+            .start(&traced_graph, traced_thread, StateDelta::new())
+            .await
+            .unwrap();
+        let traced_final = match traced_outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected Completed, got {other:?}"),
+        };
+
+        assert_eq!(
+            plain_final, traced_final,
+            "an always-erroring sink must not change the run's final Battlefield"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            sink.call_count() > 0,
+            "the erroring sink must actually have been invoked"
+        );
+    }
+
+    // --- Task 2: NodeInterceptor chain, end to end through a real run ----
+
+    use crate::engine::hooks::{InterceptDecision, NodeInterceptor};
+
+    #[tokio::test]
+    async fn empty_interceptor_chain_is_identical_to_no_chain_configured() {
+        let (graph_a, _a, _b) = two_node_chain_graph();
+        let engine_no_chain = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(RecordingWaypointStore::new()),
+        );
+        let thread_a = ThreadId::new("no-chain").unwrap();
+        let outcome_a = engine_no_chain
+            .start(&graph_a, thread_a, StateDelta::new())
+            .await
+            .unwrap();
+
+        let (graph_b, _a2, _b2) = two_node_chain_graph();
+        let store_b = Arc::new(RecordingWaypointStore::new());
+        let engine_empty_chain =
+            WarEngine::new(Arc::new(UnimplementedPaladinPort), store_b.clone())
+                .with_interceptors(Vec::new());
+        let thread_b = ThreadId::new("empty-chain").unwrap();
+        let outcome_b = engine_empty_chain
+            .start(&graph_b, thread_b.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        match (outcome_a, outcome_b) {
+            (
+                RunOutcome::Completed {
+                    final_state: state_a,
+                    ..
+                },
+                RunOutcome::Completed {
+                    final_state: state_b,
+                    ..
+                },
+            ) => assert_eq!(state_a, state_b),
+            other => panic!("expected both runs to complete, got {other:?}"),
+        }
+        let waypoints_b = store_b.saved_waypoints(&thread_b).await;
+        assert_eq!(
+            waypoints_b.len(),
+            2,
+            "an empty chain must not change the number of supersteps/waypoints"
+        );
+        for wp in &waypoints_b {
+            for record in &wp.completed {
+                assert!(matches!(
+                    record.outcome,
+                    paladin_core::platform::container::waypoint::NodeOutcomeKind::Succeeded
+                ));
+            }
+        }
+    }
+
+    struct SkipEverything;
+
+    #[async_trait]
+    impl NodeInterceptor for SkipEverything {
+        async fn before(
+            &self,
+            _ctx: &crate::engine::node::NodeContext,
+            _state: &Battlefield,
+        ) -> InterceptDecision {
+            InterceptDecision::Skip("skipped by test interceptor".to_string())
+        }
+        async fn after(&self, _ctx: &crate::engine::node::NodeContext, _delta: &mut StateDelta) {}
+    }
+
+    #[tokio::test]
+    async fn skip_decision_produces_skipped_execution_record_and_no_delta() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("skip-me");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("should-never-appear"),
+            )),
+        );
+        graph.add_entry(node_id.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+            .with_interceptors(vec![Arc::new(SkipEverything)]);
+        let thread = ThreadId::new("skip-everything").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state
+                        .get::<String>(&FieldName::new("result").unwrap())
+                        .unwrap(),
+                    None,
+                    "a Skipped node contributes no delta"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(waypoints.len(), 1);
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.node_id, node_id);
+        match &record.outcome {
+            paladin_core::platform::container::waypoint::NodeOutcomeKind::Skipped { reason } => {
+                assert_eq!(reason, "skipped by test interceptor");
+            }
+            other => panic!("expected Skipped, got {other:?}"),
+        }
+    }
+
+    struct FailEverything;
+
+    #[async_trait]
+    impl NodeInterceptor for FailEverything {
+        async fn before(
+            &self,
+            _ctx: &crate::engine::node::NodeContext,
+            _state: &Battlefield,
+        ) -> InterceptDecision {
+            InterceptDecision::Fail(NodeError("interceptor-forced failure".to_string()))
+        }
+        async fn after(&self, _ctx: &crate::engine::node::NodeContext, _delta: &mut StateDelta) {}
+    }
+
+    #[tokio::test]
+    async fn fail_decision_fails_the_node_and_the_run() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("fail-me");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("x"),
+            )),
+        );
+        graph.add_entry(node_id);
+
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_interceptors(vec![Arc::new(FailEverything)]);
+        let thread = ThreadId::new("fail-everything").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Failed { error, waypoint } => {
+                assert!(matches!(error, EngineError::Node(_)));
+                assert!(waypoint.is_some());
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    struct OrderRecordingInterceptor {
+        label: &'static str,
+        order: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl NodeInterceptor for OrderRecordingInterceptor {
+        async fn before(
+            &self,
+            _ctx: &crate::engine::node::NodeContext,
+            _state: &Battlefield,
+        ) -> InterceptDecision {
+            self.order
+                .lock()
+                .unwrap()
+                .push(format!("before:{}", self.label));
+            InterceptDecision::Proceed
+        }
+
+        async fn after(&self, _ctx: &crate::engine::node::NodeContext, delta: &mut StateDelta) {
+            self.order
+                .lock()
+                .unwrap()
+                .push(format!("after:{}", self.label));
+            let marker_field = FieldName::new("marker").unwrap();
+            let existing = delta
+                .values
+                .get(&marker_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            delta.set_raw(
+                marker_field,
+                serde_json::json!(format!("{existing}{}", self.label)),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn two_interceptors_run_before_first_to_last_and_after_observes_prior_mutation() {
+        let field_name = FieldName::new("marker").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                FieldName::new("result").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+            FieldSpec::new(field_name.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("ordered");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("x"),
+            )),
+        );
+        graph.add_entry(node_id);
+
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let first = Arc::new(OrderRecordingInterceptor {
+            label: "A",
+            order: order.clone(),
+        });
+        let second = Arc::new(OrderRecordingInterceptor {
+            label: "B",
+            order: order.clone(),
+        });
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_interceptors(vec![first, second]);
+        let thread = ThreadId::new("ordered-interceptors").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&field_name).unwrap(),
+                    Some("AB".to_string()),
+                    "each after() must observe the previous after()'s mutation"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            order.lock().unwrap().clone(),
+            vec!["before:A", "before:B", "after:A", "after:B"]
+        );
+    }
+
+    #[tokio::test]
+    async fn skip_from_first_interceptor_short_circuits_second_interceptors_before() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("short-circuit");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("x"),
+            )),
+        );
+        graph.add_entry(node_id);
+
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let never_called = Arc::new(OrderRecordingInterceptor {
+            label: "never",
+            order: order.clone(),
+        });
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_interceptors(vec![Arc::new(SkipEverything), never_called]);
+        let thread = ThreadId::new("skip-short-circuits").unwrap();
+        let _ = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        assert!(
+            order.lock().unwrap().is_empty(),
+            "the second interceptor's before() must never be called after the first Skips"
+        );
+    }
+
+    // --- Task 3: CancellationToken -> Halted, resumable -------------------
+
+    fn four_node_chain_graph() -> (WarGraph, Vec<NodeId>) {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("trace").unwrap(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let ids: Vec<NodeId> = (1..=4).map(|i| NodeId::new(format!("n{i}"))).collect();
+        for id in &ids {
+            graph.add_node(
+                id.clone(),
+                NodeSpec::Function(CountingFunctionNode::fixed(
+                    FieldName::new("trace").unwrap(),
+                    serde_json::json!(id.as_str()),
+                )),
+            );
+        }
+        for pair in ids.windows(2) {
+            graph.add_edge(EdgeSpec {
+                from: pair[0].clone(),
+                to: pair[1].clone(),
+                condition: None,
+            });
+        }
+        graph.add_entry(ids[0].clone());
+        (graph, ids)
+    }
+
+    /// As [`four_node_chain_graph`], except the node at `cancel_at_index`
+    /// calls `token.cancel()` (a synchronous method) from directly inside
+    /// its own execution -- deterministically placing the cancellation
+    /// mid-superstep rather than racing a background poller against an
+    /// in-memory chain that runs to completion in well under a millisecond.
+    fn four_node_chain_graph_with_cancel_at(
+        token: CancellationToken,
+        cancel_at_index: usize,
+    ) -> (WarGraph, Vec<NodeId>) {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("trace").unwrap(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let ids: Vec<NodeId> = (1..=4).map(|i| NodeId::new(format!("n{i}"))).collect();
+        for (i, id) in ids.iter().enumerate() {
+            let value = serde_json::json!(id.as_str());
+            if i == cancel_at_index {
+                let token = token.clone();
+                graph.add_node(
+                    id.clone(),
+                    NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                        token.cancel();
+                        let mut d = StateDelta::new();
+                        d.set_raw(FieldName::new("trace").unwrap(), value.clone());
+                        d
+                    })),
+                );
+            } else {
+                graph.add_node(
+                    id.clone(),
+                    NodeSpec::Function(CountingFunctionNode::fixed(
+                        FieldName::new("trace").unwrap(),
+                        value,
+                    )),
+                );
+            }
+        }
+        for pair in ids.windows(2) {
+            graph.add_edge(EdgeSpec {
+                from: pair[0].clone(),
+                to: pair[1].clone(),
+                condition: None,
+            });
+        }
+        graph.add_entry(ids[0].clone());
+        (graph, ids)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancellation_during_superstep_finishes_it_then_halts_before_the_next() {
+        let token = CancellationToken::new();
+        // n2 (index 1) cancels the token from within its own execution, so
+        // superstep 2 (which n2 belongs to) is always allowed to finish and
+        // merge before the top-of-loop check for superstep 3 observes the
+        // cancellation.
+        let (graph, ids) = four_node_chain_graph_with_cancel_at(token.clone(), 1);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+            .with_cancellation_token(token);
+        let thread = ThreadId::new("cancel-mid-run").unwrap();
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            engine.start(&graph, thread.clone(), StateDelta::new()),
+        )
+        .await
+        .expect("cancellation must not hang the run")
+        .unwrap();
+
+        let waypoint_id = match outcome {
+            RunOutcome::Halted { waypoint } => waypoint,
+            other => panic!("expected Halted, got {other:?}"),
+        };
+
+        let waypoints = ascending_history(&store, &thread).await;
+        let halted = waypoints
+            .iter()
+            .find(|w| w.waypoint_id == waypoint_id)
+            .expect("the returned waypoint id must exist in the thread's history");
+        assert_eq!(halted.status, WaypointStatus::Halted);
+        assert_eq!(
+            halted.vanguard,
+            vec![ids[2].clone()],
+            "the Halted waypoint's vanguard must be exactly the node that would run next (n3)"
+        );
+
+        // n4 (superstep 3's downstream node) must never have run.
+        let all_node_ids: std::collections::HashSet<String> = waypoints
+            .iter()
+            .flat_map(|w| w.completed.iter().map(|r| r.node_id.as_str().to_string()))
+            .collect();
+        assert!(!all_node_ids.contains(ids[3].as_str()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cancellation_before_first_superstep_still_yields_a_halted_waypoint() {
+        let (graph, ids) = four_node_chain_graph();
+        let token = CancellationToken::new();
+        token.cancel();
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+            .with_cancellation_token(token);
+        let thread = ThreadId::new("cancel-before-start").unwrap();
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            engine.start(&graph, thread.clone(), StateDelta::new()),
+        )
+        .await
+        .expect("cancellation must not hang the run")
+        .unwrap();
+
+        match outcome {
+            RunOutcome::Halted { .. } => {}
+            other => panic!("expected Halted, got {other:?}"),
+        }
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(waypoints.len(), 1);
+        assert_eq!(waypoints[0].status, WaypointStatus::Halted);
+        assert_eq!(waypoints[0].vanguard, vec![ids[0].clone()]);
+        assert!(
+            waypoints[0].completed.is_empty(),
+            "no node ever ran before the pre-first-superstep cancellation"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_continues_a_halted_thread_to_normal_completion() {
+        let token = CancellationToken::new();
+        // n1 (index 0) cancels the token from within its own execution, so
+        // exactly one waypoint (superstep 1) is written before the halt.
+        let (graph, ids) = four_node_chain_graph_with_cancel_at(token.clone(), 0);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+            .with_cancellation_token(token);
+        let thread = ThreadId::new("resume-halted").unwrap();
+
+        let halted = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            engine.start(&graph, thread.clone(), StateDelta::new()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(matches!(halted, RunOutcome::Halted { .. }));
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(
+            waypoints
+                .iter()
+                .filter(|w| w.status == WaypointStatus::Halted)
+                .count(),
+            1
+        );
+
+        // A fresh engine, no cancellation token, resumes to completion.
+        let resume_engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let resumed = resume_engine.resume(&graph, thread).await.unwrap();
+        match resumed {
+            RunOutcome::Completed { final_state, .. } => {
+                let trace: Vec<String> = final_state
+                    .get(&FieldName::new("trace").unwrap())
+                    .unwrap()
+                    .unwrap_or_default();
+                for id in &ids {
+                    assert!(trace.contains(&id.as_str().to_string()));
+                }
+            }
+            other => panic!("expected resumed run to complete, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn uncancelled_token_behaves_identically_to_no_token() {
+        let (graph_a, _ids_a) = four_node_chain_graph();
+        let engine_no_token = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let outcome_a = engine_no_token
+            .start(
+                &graph_a,
+                ThreadId::new("no-token").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+
+        let (graph_b, _ids_b) = four_node_chain_graph();
+        let engine_uncancelled = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_cancellation_token(CancellationToken::new());
+        let outcome_b = engine_uncancelled
+            .start(
+                &graph_b,
+                ThreadId::new("uncancelled-token").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+
+        match (outcome_a, outcome_b) {
+            (
+                RunOutcome::Completed {
+                    final_state: state_a,
+                    ..
+                },
+                RunOutcome::Completed {
+                    final_state: state_b,
+                    ..
+                },
+            ) => assert_eq!(state_a, state_b),
+            other => panic!("expected both runs to complete, got {other:?}"),
         }
     }
 }

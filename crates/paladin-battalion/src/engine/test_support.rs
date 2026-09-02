@@ -16,6 +16,7 @@ use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
+use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink, TraceSinkError};
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
@@ -389,6 +390,131 @@ impl PaladinPort for RecordingPaladinPort {
     }
 
     fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+// --- Phase 22 Plan 09: TraceSink test doubles -----------------------------
+
+/// A [`TraceSink`] test double recording every event it receives, in the
+/// exact order it received them.
+#[derive(Default)]
+pub struct RecordingTraceSink {
+    events: tokio::sync::Mutex<Vec<TraceEvent>>,
+}
+
+impl RecordingTraceSink {
+    /// Construct an empty recorder.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// The events recorded so far, in receipt order.
+    pub async fn events(&self) -> Vec<TraceEvent> {
+        self.events.lock().await.clone()
+    }
+}
+
+#[async_trait]
+impl TraceSink for RecordingTraceSink {
+    async fn on_event(&self, event: TraceEvent) -> Result<(), TraceSinkError> {
+        self.events.lock().await.push(event);
+        Ok(())
+    }
+}
+
+/// A [`TraceSink`] test double whose handler never returns, for proving a
+/// permanently blocking sink cannot stall the engine or the
+/// `TraceDispatcher`'s own `emit` (T-22-30).
+#[derive(Default)]
+pub struct BlockingTraceSink {
+    /// Set the first time `on_event` is called, so a test can confirm the
+    /// sink was actually invoked before it hung.
+    pub entered: Arc<AtomicBool>,
+}
+
+impl BlockingTraceSink {
+    /// Construct a sink sharing `entered` with the caller so an assertion
+    /// can confirm the handler actually started before hanging forever.
+    pub fn new(entered: Arc<AtomicBool>) -> Arc<Self> {
+        Arc::new(Self { entered })
+    }
+}
+
+#[async_trait]
+impl TraceSink for BlockingTraceSink {
+    async fn on_event(&self, _event: TraceEvent) -> Result<(), TraceSinkError> {
+        self.entered.store(true, Ordering::SeqCst);
+        std::future::pending::<()>().await;
+        unreachable!("std::future::pending() never resolves")
+    }
+}
+
+/// A [`TraceSink`] test double that returns `Err` on every call, for proving
+/// a failing sink never affects a run's outcome (T-22-30).
+#[derive(Default)]
+pub struct AlwaysErroringTraceSink {
+    calls: AtomicUsize,
+}
+
+impl AlwaysErroringTraceSink {
+    /// Construct a sink with no calls recorded yet.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// How many times `on_event` has been called so far.
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl TraceSink for AlwaysErroringTraceSink {
+    async fn on_event(&self, _event: TraceEvent) -> Result<(), TraceSinkError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(TraceSinkError::Failed("simulated failure".to_string()))
+    }
+}
+
+/// A [`TraceSink`] test double whose very FIRST call blocks on a
+/// caller-controlled `tokio::sync::Notify` before recording it; every
+/// subsequent call records immediately. Lets a test force the dispatcher's
+/// background consumer to sit idle on one event while more events accumulate
+/// in the queue, then release it and inspect exactly which events survived
+/// -- proving drop-OLDEST (not drop-newest) precisely (T-22-31), rather than
+/// only proving the drop counter incremented.
+pub struct GatedTraceSink {
+    events: tokio::sync::Mutex<Vec<TraceEvent>>,
+    gate: Arc<tokio::sync::Notify>,
+    gated_once: AtomicBool,
+}
+
+impl GatedTraceSink {
+    /// Construct a sink whose first `on_event` call blocks until `gate` is
+    /// notified.
+    pub fn new(gate: Arc<tokio::sync::Notify>) -> Arc<Self> {
+        Arc::new(Self {
+            events: tokio::sync::Mutex::new(Vec::new()),
+            gate,
+            gated_once: AtomicBool::new(false),
+        })
+    }
+
+    /// The events recorded so far (including the gated first one, once
+    /// released), in receipt order.
+    pub async fn events(&self) -> Vec<TraceEvent> {
+        self.events.lock().await.clone()
+    }
+}
+
+#[async_trait]
+impl TraceSink for GatedTraceSink {
+    async fn on_event(&self, event: TraceEvent) -> Result<(), TraceSinkError> {
+        if !self.gated_once.swap(true, Ordering::SeqCst) {
+            self.gate.notified().await;
+        }
+        self.events.lock().await.push(event);
         Ok(())
     }
 }

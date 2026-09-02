@@ -28,6 +28,7 @@ use chrono::Utc;
 use log::warn;
 use regex::Regex;
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 use uuid::Uuid;
 
@@ -40,9 +41,11 @@ use paladin_core::platform::container::waypoint::{
     NodeExecutionRecord, NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus,
 };
 use paladin_ports::output::paladin_port::PaladinPort;
+use paladin_ports::output::trace_sink_port::TraceEvent;
 use paladin_ports::output::waypoint_port::WaypointPort;
 
 use crate::engine::graph::{NodeSpec, WarGraph};
+use crate::engine::hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::NodeError;
 use crate::engine::{EngineError, RunOutcome, WaypointDurability};
@@ -115,6 +118,26 @@ async fn execute_vanguard_node(
     }
 }
 
+/// What one vanguard node's per-superstep processing (its `NodeInterceptor`
+/// `before` chain, its dispatch if `Proceed`d, and its `after` chain)
+/// resolved to (ENG-FR-22), replacing the plain `Result<StateDelta,
+/// NodeError>` `execute_vanguard_node` alone would produce: a `Skip`
+/// decision is neither a success nor a failure, so it needs its own
+/// variant rather than being folded into one of the other two.
+enum NodeRunOutcome {
+    /// The node executed (or an interceptor's `before` chain unanimously
+    /// `Proceed`ed and the node itself succeeded) and produced this delta,
+    /// already passed through every `after` hook in order.
+    Succeeded(StateDelta),
+    /// A `NodeInterceptor::before` returned `Skip(reason)`: the node never
+    /// executed. Contributes no delta to this superstep's merge.
+    Skipped(String),
+    /// The node failed -- either its own execution returned an error, or a
+    /// `NodeInterceptor::before` returned `Fail(error)` before the node
+    /// could run.
+    Failed(NodeError),
+}
+
 /// Run the superstep loop starting from `vanguard` at `superstep_number`,
 /// over `battlefield`, persisting through `waypoint_port` under
 /// `durability`, bounding per-superstep concurrency at `parallelism` (or the
@@ -123,6 +146,20 @@ async fn execute_vanguard_node(
 /// `parent_waypoint_id` chains the first Waypoint this call writes to the
 /// caller-supplied lineage (`None` for a fresh `start`, `Some(id)` when a
 /// later plan re-enters this loop from `resume`).
+///
+/// `trace` receives every `TraceEvent` this loop's own steps produce
+/// (`SuperstepStarted`, `NodeStarted`/`NodeFinished`, `DeltaMerged`,
+/// `WaypointSaved`) -- `RunStarted`/`RunFinished` bracket the call from
+/// `WarEngine::start`/`resume_with_options` instead, since a "run" is a
+/// caller-level concept this loop itself has no opinion about (ENG-FR-21).
+/// `interceptors` wraps each vanguard node's dispatch in an ordered
+/// `NodeInterceptor` chain, empty by default (ENG-FR-22). `cancellation`,
+/// checked at the top of the loop (i.e. at every superstep BOUNDARY,
+/// including before the very first superstep), turns a cancelled token into
+/// a `RunOutcome::Halted` carrying a `Waypoint` whose vanguard is exactly the
+/// nodes that would have run next (ENG-FR-23) -- the in-flight superstep
+/// that was already executing when cancellation fired always finishes and
+/// merges first, since the check only ever happens between iterations.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run<W: WaypointPort>(
     waypoint_port: &W,
@@ -137,6 +174,9 @@ pub(crate) async fn run<W: WaypointPort>(
     mut parent_waypoint_id: Option<WaypointId>,
     mut superstep_number: u64,
     paladin_port: &Arc<dyn PaladinPort>,
+    trace: &Arc<TraceDispatcher>,
+    interceptors: &[Arc<dyn NodeInterceptor>],
+    cancellation: &Option<CancellationToken>,
 ) -> Result<RunOutcome, EngineError> {
     // The entry-vanguard-empty case: nothing to run, ever. Persist exactly
     // one Completed Waypoint and return immediately (ENG-FR-01 step 7's
@@ -154,7 +194,7 @@ pub(crate) async fn run<W: WaypointPort>(
             WaypointStatus::Completed,
             visit_counts,
         );
-        persist_waypoint(waypoint_port, durability, &waypoint).await?;
+        persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
         return Ok(RunOutcome::Completed {
             final_state: battlefield,
             waypoint: waypoint.waypoint_id,
@@ -164,6 +204,35 @@ pub(crate) async fn run<W: WaypointPort>(
     let mut frontier = Frontier::new(graph);
 
     loop {
+        // --- ENG-FR-23: cancellation is observed only at a superstep
+        // BOUNDARY -- here, at the top of the loop -- never mid-superstep.
+        // `vanguard` at this point is exactly the set of nodes that would
+        // run next (the graph's entry set on the very first iteration, or
+        // the previous iteration's freshly computed next-Vanguard
+        // otherwise), so persisting it verbatim on a `Halted` Waypoint is
+        // what makes `resume` able to continue from exactly where this run
+        // was asked to stop.
+        if cancellation
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            let waypoint = build_waypoint(
+                &thread,
+                parent_waypoint_id,
+                superstep_number,
+                graph,
+                &battlefield,
+                vanguard.clone(),
+                Vec::new(),
+                WaypointStatus::Halted,
+                visit_counts,
+            );
+            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+            return Ok(RunOutcome::Halted {
+                waypoint: waypoint.waypoint_id,
+            });
+        }
+
         // --- ENG-FR-03: bounded iteration, checked at the top of the loop
         // so a run stops at exactly `max_supersteps` rather than one over.
         if superstep_number >= graph.limits().max_supersteps {
@@ -185,7 +254,7 @@ pub(crate) async fn run<W: WaypointPort>(
                 },
                 visit_counts,
             );
-            persist_waypoint(waypoint_port, durability, &waypoint).await?;
+            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
                 error,
                 waypoint: Some(waypoint.waypoint_id),
@@ -223,13 +292,18 @@ pub(crate) async fn run<W: WaypointPort>(
                 },
                 visit_counts,
             );
-            persist_waypoint(waypoint_port, durability, &waypoint).await?;
+            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
                 error,
                 waypoint: Some(waypoint.waypoint_id),
             });
         }
         visit_counts = candidate_counts;
+
+        trace.emit(TraceEvent::SuperstepStarted {
+            thread_id: thread.clone(),
+            superstep: superstep_number,
+        });
 
         // --- ENG-FR-05/ENG-NFR-02: exactly one Arc-shared read snapshot
         // for the whole superstep, cloned once.
@@ -259,6 +333,8 @@ pub(crate) async fn run<W: WaypointPort>(
             let snap = Arc::clone(&snapshot);
             let sem = Arc::clone(&semaphore);
             let port = Arc::clone(paladin_port);
+            let node_trace = Arc::clone(trace);
+            let node_interceptors = interceptors.to_vec();
             let ctx = crate::engine::node::NodeContext {
                 node_id: node_id.clone(),
                 thread_id: thread.clone(),
@@ -266,21 +342,61 @@ pub(crate) async fn run<W: WaypointPort>(
             };
             let nid = node_id.clone();
             handles.push(tokio::spawn(async move {
-                let _permit = sem
-                    .acquire_owned()
-                    .await
-                    .expect("semaphore is never closed");
+                node_trace.emit(TraceEvent::NodeStarted {
+                    thread_id: ctx.thread_id.clone(),
+                    superstep: ctx.superstep,
+                    node_id: nid.clone(),
+                });
                 let started_at = Utc::now();
-                let (paladin_id, token_count, result) =
-                    execute_vanguard_node(dispatch, &snap, &ctx, &port).await;
+
+                // --- ENG-FR-22: run every `before` in order, short-
+                // circuiting on the first non-`Proceed` decision.
+                let mut decision = InterceptDecision::Proceed;
+                for interceptor in &node_interceptors {
+                    decision = interceptor.before(&ctx, &snap).await;
+                    if !matches!(decision, InterceptDecision::Proceed) {
+                        break;
+                    }
+                }
+
+                let (paladin_id, token_count, outcome) = match decision {
+                    InterceptDecision::Skip(reason) => {
+                        (None, 0u64, NodeRunOutcome::Skipped(reason))
+                    }
+                    InterceptDecision::Fail(err) => (None, 0u64, NodeRunOutcome::Failed(err)),
+                    InterceptDecision::Proceed => {
+                        let _permit = sem
+                            .acquire_owned()
+                            .await
+                            .expect("semaphore is never closed");
+                        let (paladin_id, token_count, result) =
+                            execute_vanguard_node(dispatch, &snap, &ctx, &port).await;
+                        match result {
+                            Ok(mut delta) => {
+                                // --- ENG-FR-22: run every `after` in order,
+                                // each observing the previous one's mutation.
+                                for interceptor in &node_interceptors {
+                                    interceptor.after(&ctx, &mut delta).await;
+                                }
+                                (paladin_id, token_count, NodeRunOutcome::Succeeded(delta))
+                            }
+                            Err(e) => (paladin_id, token_count, NodeRunOutcome::Failed(e)),
+                        }
+                    }
+                };
                 let duration_ms = (Utc::now() - started_at).num_milliseconds().max(0) as u64;
+                node_trace.emit(TraceEvent::NodeFinished {
+                    thread_id: ctx.thread_id.clone(),
+                    superstep: ctx.superstep,
+                    node_id: nid.clone(),
+                });
                 (
                     nid,
                     started_at,
                     duration_ms,
                     paladin_id,
                     token_count,
-                    result,
+                    outcome,
                 )
             }));
         }
@@ -289,11 +405,11 @@ pub(crate) async fn run<W: WaypointPort>(
         let mut completed_records = Vec::with_capacity(handles.len());
         let mut node_failure: Option<(NodeId, NodeError)> = None;
         for handle in handles {
-            let (node_id, started_at, duration_ms, paladin_id, token_count, result) = handle
+            let (node_id, started_at, duration_ms, paladin_id, token_count, outcome) = handle
                 .await
                 .map_err(|e| EngineError::Node(NodeError(format!("task join error: {e}"))))?;
-            match result {
-                Ok(delta) => {
+            match outcome {
+                NodeRunOutcome::Succeeded(delta) => {
                     completed_records.push(NodeExecutionRecord {
                         node_id: node_id.clone(),
                         paladin_id,
@@ -305,7 +421,18 @@ pub(crate) async fn run<W: WaypointPort>(
                     });
                     deltas.push((node_id, delta));
                 }
-                Err(e) => {
+                NodeRunOutcome::Skipped(reason) => {
+                    completed_records.push(NodeExecutionRecord {
+                        node_id: node_id.clone(),
+                        paladin_id,
+                        started_at,
+                        duration_ms,
+                        token_count,
+                        outcome: NodeOutcomeKind::Skipped { reason },
+                        attempt: 1,
+                    });
+                }
+                NodeRunOutcome::Failed(e) => {
                     completed_records.push(NodeExecutionRecord {
                         node_id: node_id.clone(),
                         paladin_id,
@@ -339,7 +466,7 @@ pub(crate) async fn run<W: WaypointPort>(
                 },
                 visit_counts,
             );
-            persist_waypoint(waypoint_port, durability, &waypoint).await?;
+            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
                 error,
                 waypoint: Some(waypoint.waypoint_id),
@@ -350,28 +477,36 @@ pub(crate) async fn run<W: WaypointPort>(
         // (ENG-FR-05: no node observes a peer's delta this superstep).
         deltas.sort_by(|a, b| a.0.cmp(&b.0));
         let ran: Vec<NodeId> = deltas.iter().map(|(id, _)| id.clone()).collect();
-        if let Err(e) = battlefield.merge(deltas, superstep_number, registry) {
-            let error = EngineError::Battlefield(e);
-            let waypoint = build_waypoint(
-                &thread,
-                parent_waypoint_id,
-                superstep_number,
-                graph,
-                &battlefield,
-                vanguard.clone(),
-                completed_records,
-                WaypointStatus::Failed {
-                    error: error.to_string(),
-                    failed_node: ran.first().cloned().unwrap_or_else(|| vanguard[0].clone()),
-                },
-                visit_counts,
-            );
-            persist_waypoint(waypoint_port, durability, &waypoint).await?;
-            return Ok(RunOutcome::Failed {
-                error,
-                waypoint: Some(waypoint.waypoint_id),
-            });
-        }
+        let merge_report = match battlefield.merge(deltas, superstep_number, registry) {
+            Ok(report) => report,
+            Err(e) => {
+                let error = EngineError::Battlefield(e);
+                let waypoint = build_waypoint(
+                    &thread,
+                    parent_waypoint_id,
+                    superstep_number,
+                    graph,
+                    &battlefield,
+                    vanguard.clone(),
+                    completed_records,
+                    WaypointStatus::Failed {
+                        error: error.to_string(),
+                        failed_node: ran.first().cloned().unwrap_or_else(|| vanguard[0].clone()),
+                    },
+                    visit_counts,
+                );
+                persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+                return Ok(RunOutcome::Failed {
+                    error,
+                    waypoint: Some(waypoint.waypoint_id),
+                });
+            }
+        };
+        trace.emit(TraceEvent::DeltaMerged {
+            thread_id: thread.clone(),
+            superstep: superstep_number,
+            field_changes: merge_report.changed_fields,
+        });
 
         for node_id in &ran {
             frontier.record_execution(graph, node_id, superstep_number, &battlefield)?;
@@ -395,7 +530,7 @@ pub(crate) async fn run<W: WaypointPort>(
             status,
             visit_counts.clone(),
         );
-        persist_waypoint(waypoint_port, durability, &waypoint).await?;
+        persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
 
         if next_vanguard.is_empty() {
             return Ok(RunOutcome::Completed {
@@ -692,14 +827,23 @@ fn build_waypoint(
 /// Persist `waypoint`, honouring `durability`: under `Strict` (the
 /// default), a save failure fails the run immediately with
 /// `EngineError::WaypointWrite`; under `BestEffort`, it is logged as a
-/// warning and the caller proceeds as if the save had succeeded.
+/// warning and the caller proceeds as if the save had succeeded. Emits
+/// `TraceEvent::WaypointSaved` (ENG-FR-21) exactly when the save actually
+/// succeeded -- a `BestEffort`-swallowed failure is not reported as saved.
 async fn persist_waypoint<W: WaypointPort>(
     waypoint_port: &W,
     durability: WaypointDurability,
     waypoint: &Waypoint,
+    trace: &Arc<TraceDispatcher>,
 ) -> Result<(), EngineError> {
-    if let Err(source) = waypoint_port.save(waypoint).await {
-        match durability {
+    match waypoint_port.save(waypoint).await {
+        Ok(()) => {
+            trace.emit(TraceEvent::WaypointSaved {
+                thread_id: waypoint.thread_id.clone(),
+                waypoint_id: waypoint.waypoint_id,
+            });
+        }
+        Err(source) => match durability {
             WaypointDurability::Strict => return Err(EngineError::WaypointWrite { source }),
             WaypointDurability::BestEffort => {
                 warn!(
@@ -707,7 +851,7 @@ async fn persist_waypoint<W: WaypointPort>(
                     waypoint.thread_id
                 );
             }
-        }
+        },
     }
     Ok(())
 }
@@ -739,6 +883,14 @@ mod tests {
         Arc::new(RecordingPaladinPort::new())
     }
 
+    fn no_trace() -> Arc<TraceDispatcher> {
+        Arc::new(TraceDispatcher::new(None))
+    }
+
+    fn no_interceptors() -> Vec<Arc<dyn NodeInterceptor>> {
+        Vec::new()
+    }
+
     async fn run_default(
         graph: &WarGraph,
         thread: ThreadId,
@@ -761,6 +913,9 @@ mod tests {
             None,
             1,
             &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            &None,
         )
         .await
         .unwrap()
@@ -962,6 +1117,9 @@ mod tests {
             None,
             1,
             &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            &None,
         )
         .await;
 
@@ -988,6 +1146,9 @@ mod tests {
             None,
             1,
             &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            &None,
         )
         .await
         .unwrap();
@@ -1040,6 +1201,9 @@ mod tests {
             None,
             1,
             &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            &None,
         )
         .await
         .unwrap();

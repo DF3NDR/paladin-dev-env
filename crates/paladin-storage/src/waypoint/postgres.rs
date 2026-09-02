@@ -505,7 +505,24 @@ mod tests {
         }
 
         match PostgresWaypointStore::new(&url).await {
-            Ok(store) => Some(store),
+            Ok(store) => {
+                // The shared contract functions assume a logically fresh store:
+                // the SQLite and in-memory suites construct one per test, but
+                // every test in this module shares the one `paladin_waypoint_test`
+                // database, so residue from earlier tests breaks any contract
+                // clause that asserts on the whole store (e.g. `list_threads`
+                // on an empty store). Start each test from an empty table.
+                // Safe: this suite runs single-threaded (`--test-threads=1`)
+                // everywhere it is invoked (CI job and Makefile runner).
+                if let Err(e) = sqlx::query("TRUNCATE TABLE waypoints")
+                    .execute(&store.pool)
+                    .await
+                {
+                    println!("SKIP: could not reset paladin_waypoint_test ({e})");
+                    return None;
+                }
+                Some(store)
+            }
             Err(e) => {
                 println!("SKIP: postgres-test connection failed at {url} ({e})");
                 None

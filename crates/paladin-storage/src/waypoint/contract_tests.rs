@@ -290,6 +290,242 @@ pub async fn child_lineage_survives_round_trip(port: &dyn WaypointPort) {
     assert_eq!(loaded_child.parent_waypoint_id, Some(root.waypoint_id));
 }
 
+/// `delete_waypoint` removes exactly the named Waypoint: a thread holding
+/// three, after deleting the middle one, holds the other two and reports
+/// that a row was removed.
+pub async fn delete_waypoint_removes_named_id_and_leaves_others(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-delete-one-removes-named").unwrap();
+    let base = Utc::now();
+    let mut ids = Vec::new();
+    for superstep in 0..3u64 {
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
+        ids.push(wp.waypoint_id);
+        port.save(&wp).await.unwrap();
+    }
+
+    let middle = ids[1];
+    let removed = port.delete_waypoint(&thread, &middle).await.unwrap();
+    assert!(removed);
+
+    assert_eq!(port.get(&thread, &middle).await.unwrap(), None);
+    assert!(port.get(&thread, &ids[0]).await.unwrap().is_some());
+    assert!(port.get(&thread, &ids[2]).await.unwrap().is_some());
+
+    let history = port.history(&thread, None, None).await.unwrap();
+    assert_eq!(history.len(), 2);
+}
+
+/// `delete_waypoint` on an id the thread does not hold reports that no row
+/// was removed, is not an error, and leaves the thread's contents unchanged.
+pub async fn delete_waypoint_unknown_id_is_false_and_leaves_thread_unchanged(
+    port: &dyn WaypointPort,
+) {
+    let thread = ThreadId::new("contract-delete-one-unknown-id").unwrap();
+    let wp = sample_waypoint(&thread, 0);
+    port.save(&wp).await.unwrap();
+
+    let unknown_id = WaypointId::generate();
+    let removed = port.delete_waypoint(&thread, &unknown_id).await.unwrap();
+    assert!(!removed);
+
+    let history = port.history(&thread, None, None).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].waypoint_id, wp.waypoint_id);
+}
+
+/// `delete_waypoint` on a thread the backend does not hold reports no row
+/// removed, not an error.
+pub async fn delete_waypoint_unknown_thread_is_false(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-delete-one-unknown-thread").unwrap();
+    let id = WaypointId::generate();
+    let removed = port.delete_waypoint(&thread, &id).await.unwrap();
+    assert!(!removed);
+}
+
+/// `prune_thread` with a keep-set naming two of five ids leaves exactly
+/// those two, in the same history order, with their payloads
+/// byte-identical to what was saved. Also proves the returned count is the
+/// number of Waypoints removed.
+pub async fn prune_thread_keeps_named_ids_byte_identical_and_ordered(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-prune-keeps-named").unwrap();
+    let base = Utc::now();
+    let mut saved = Vec::new();
+    for superstep in 0..5u64 {
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
+        port.save(&wp).await.unwrap();
+        saved.push(wp);
+    }
+
+    // Keep the two newest (supersteps 3 and 4).
+    let keep_ids = vec![saved[3].waypoint_id, saved[4].waypoint_id];
+    let removed = port.prune_thread(&thread, &keep_ids).await.unwrap();
+    assert_eq!(removed, 3);
+
+    let history = port.history(&thread, None, None).await.unwrap();
+    let ids: Vec<WaypointId> = history.iter().map(|s| s.waypoint_id).collect();
+    assert_eq!(ids, vec![saved[4].waypoint_id, saved[3].waypoint_id]);
+
+    for kept in &saved[3..5] {
+        let loaded = port.get(&thread, &kept.waypoint_id).await.unwrap().unwrap();
+        let expected_json = serde_json::to_string(kept).unwrap();
+        let loaded_json = serde_json::to_string(&loaded).unwrap();
+        assert_eq!(loaded_json, expected_json);
+    }
+}
+
+/// `prune_thread` with an empty keep-set removes every Waypoint of the
+/// thread.
+pub async fn prune_thread_empty_keep_removes_everything(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-prune-empty-keep").unwrap();
+    for superstep in 0..4u64 {
+        port.save(&sample_waypoint(&thread, superstep))
+            .await
+            .unwrap();
+    }
+
+    let removed = port.prune_thread(&thread, &[]).await.unwrap();
+    assert_eq!(removed, 4);
+    assert_eq!(port.latest(&thread).await.unwrap(), None);
+}
+
+/// `prune_thread` on a thread the backend does not hold returns zero, not
+/// an error.
+pub async fn prune_thread_unknown_thread_returns_zero(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-prune-unknown-thread").unwrap();
+    let removed = port
+        .prune_thread(&thread, &[WaypointId::generate()])
+        .await
+        .unwrap();
+    assert_eq!(removed, 0);
+}
+
+/// `prune_thread` given ids that are not in the thread ignores them: they
+/// are not an error and cause no deletion of anything else.
+pub async fn prune_thread_ignores_keep_ids_not_in_thread(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-prune-ignores-foreign-ids").unwrap();
+    let base = Utc::now();
+    let mut saved = Vec::new();
+    for superstep in 0..3u64 {
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
+        port.save(&wp).await.unwrap();
+        saved.push(wp);
+    }
+
+    let mut keep_ids: Vec<WaypointId> = saved.iter().map(|wp| wp.waypoint_id).collect();
+    keep_ids.push(WaypointId::generate()); // not in the thread at all
+
+    let removed = port.prune_thread(&thread, &keep_ids).await.unwrap();
+    assert_eq!(removed, 0);
+    assert_eq!(port.history(&thread, None, None).await.unwrap().len(), 3);
+}
+
+/// `prune_thread` run twice with the same keep-set removes nothing the
+/// second time and leaves the keep-set intact -- idempotence.
+pub async fn prune_thread_idempotent_second_run_removes_nothing(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-prune-idempotent").unwrap();
+    let base = Utc::now();
+    let mut saved = Vec::new();
+    for superstep in 0..5u64 {
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
+        port.save(&wp).await.unwrap();
+        saved.push(wp);
+    }
+
+    let keep_ids = vec![saved[3].waypoint_id, saved[4].waypoint_id];
+    let first = port.prune_thread(&thread, &keep_ids).await.unwrap();
+    assert_eq!(first, 3);
+
+    let second = port.prune_thread(&thread, &keep_ids).await.unwrap();
+    assert_eq!(second, 0);
+
+    let history = port.history(&thread, None, None).await.unwrap();
+    let ids: Vec<WaypointId> = history.iter().map(|s| s.waypoint_id).collect();
+    assert_eq!(ids, vec![saved[4].waypoint_id, saved[3].waypoint_id]);
+}
+
+/// Convergence: after a `prune_thread` that leaves a superset of the
+/// keep-set (simulate by first pruning to a larger keep-set, then pruning
+/// again to the target), a second run with the target keep-set reaches
+/// exactly the target.
+pub async fn prune_thread_converges_from_superset_to_target(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-prune-converges").unwrap();
+    let base = Utc::now();
+    let mut saved = Vec::new();
+    for superstep in 0..6u64 {
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
+        port.save(&wp).await.unwrap();
+        saved.push(wp);
+    }
+
+    // First prune to a superset of the eventual target.
+    let superset_keep: Vec<WaypointId> = saved[2..6].iter().map(|wp| wp.waypoint_id).collect();
+    port.prune_thread(&thread, &superset_keep).await.unwrap();
+
+    // Now prune to the actual target, a subset of what survived.
+    let target_keep: Vec<WaypointId> = saved[4..6].iter().map(|wp| wp.waypoint_id).collect();
+    let removed = port.prune_thread(&thread, &target_keep).await.unwrap();
+    assert_eq!(removed, 2);
+
+    let history = port.history(&thread, None, None).await.unwrap();
+    let ids: Vec<WaypointId> = history.iter().map(|s| s.waypoint_id).collect();
+    assert_eq!(ids, vec![saved[5].waypoint_id, saved[4].waypoint_id]);
+}
+
+/// Large keep-set: a thread holding 1,200 Waypoints pruned to a keep-set of
+/// 1,100 ids leaves exactly those 1,100. This is the parameter-limit guard
+/// -- it lives in the shared suite so every backend proves it, not in a
+/// backend-specific test.
+pub async fn prune_thread_large_keep_set_1200_to_1100(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-prune-large-keep-set").unwrap();
+    let base = Utc::now();
+    let mut saved = Vec::with_capacity(1200);
+    for superstep in 0..1200u64 {
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
+        port.save(&wp).await.unwrap();
+        saved.push(wp);
+    }
+
+    // Keep the 1,100 newest (supersteps 100..1200).
+    let keep_ids: Vec<WaypointId> = saved[100..1200].iter().map(|wp| wp.waypoint_id).collect();
+    let removed = port.prune_thread(&thread, &keep_ids).await.unwrap();
+    assert_eq!(removed, 100);
+
+    let history = port.history(&thread, None, None).await.unwrap();
+    assert_eq!(history.len(), 1100);
+    for kept in &saved[100..1200] {
+        assert!(
+            port.get(&thread, &kept.waypoint_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+}
+
 /// Runs every contract function above against `port`.
 ///
 /// **Requires a freshly constructed, still-empty `port`** — call this once,
@@ -315,4 +551,14 @@ pub async fn run_all(port: &dyn WaypointPort) {
     delete_thread_removes_count_and_unknown_returns_zero(port).await;
     resave_existing_waypoint_id_upserts(port).await;
     child_lineage_survives_round_trip(port).await;
+    delete_waypoint_removes_named_id_and_leaves_others(port).await;
+    delete_waypoint_unknown_id_is_false_and_leaves_thread_unchanged(port).await;
+    delete_waypoint_unknown_thread_is_false(port).await;
+    prune_thread_keeps_named_ids_byte_identical_and_ordered(port).await;
+    prune_thread_empty_keep_removes_everything(port).await;
+    prune_thread_unknown_thread_returns_zero(port).await;
+    prune_thread_ignores_keep_ids_not_in_thread(port).await;
+    prune_thread_idempotent_second_run_removes_nothing(port).await;
+    prune_thread_converges_from_superset_to_target(port).await;
+    prune_thread_large_keep_set_1200_to_1100(port).await;
 }

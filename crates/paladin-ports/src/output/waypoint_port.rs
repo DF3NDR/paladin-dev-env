@@ -226,6 +226,97 @@ pub trait WaypointPort: Send + Sync {
     /// An unknown `thread` returns `Ok(0)`, not an error — deleting a thread
     /// that never existed is a no-op, not a failure.
     async fn delete_thread(&self, thread: &ThreadId) -> Result<u64, WaypointError>;
+
+    /// Delete one Waypoint by id within `thread`.
+    ///
+    /// Returns `true` if a row was removed, `false` if `thread` is unknown,
+    /// or `thread` is known but `id` does not identify one of its
+    /// waypoints — both are the normal "nothing to delete" case, never an
+    /// error, per this module's "Missing is `None`, not an error" contract.
+    ///
+    /// Callers that want to prune a thread down to a keep-set should reach
+    /// for [`prune_thread`](Self::prune_thread) instead of looping over this
+    /// method by hand — `prune_thread`'s monotone/crash-safe/idempotent
+    /// contract only holds for the composition it implements, and rebuilding
+    /// the unsafe delete-then-resave sequence by hand reintroduces exactly
+    /// the crash window this primitive exists to remove.
+    async fn delete_waypoint(
+        &self,
+        thread: &ThreadId,
+        id: &WaypointId,
+    ) -> Result<bool, WaypointError>;
+
+    /// Remove every Waypoint of `thread` whose id is absent from `keep`.
+    /// Returns the number of Waypoints removed.
+    ///
+    /// # Contract
+    ///
+    /// - **Monotone.** Only ever removes ids absent from `keep`. There is no
+    ///   point during the call at which an id present in `keep` is missing
+    ///   from the backend. This is why it replaces the previous
+    ///   delete-then-resave approach: that one had an interval during which
+    ///   protected Waypoints did not exist, and an interruption inside that
+    ///   interval destroyed them.
+    /// - **Crash-safe by construction.** An interruption part-way through
+    ///   leaves a superset of `keep` — some intended removals not yet done,
+    ///   and nothing else. A superset is always a safe state.
+    /// - **Idempotent and convergent.** Re-running with the same `keep`
+    ///   after any partial run reaches exactly `keep` and removes nothing
+    ///   thereafter.
+    /// - **Best-effort reclamation.** Leaving extra Waypoints behind is
+    ///   acceptable; removing one named in `keep` never is. Callers must
+    ///   treat the returned count as informational, not as a completion
+    ///   guarantee.
+    /// - **Policy-free.** This port does not know what "protected" means.
+    ///   Deciding which ids belong in `keep` is the application layer's job
+    ///   (X-01) — the port is handed the answer, not the rule that produced
+    ///   it.
+    /// - **Overridable.** A backend that can express the whole operation
+    ///   atomically should override this method; the provided body exists
+    ///   so that a backend which cannot is still correct.
+    ///
+    /// Ids in `keep` that `thread` does not hold are ignored, not an error.
+    /// An unknown `thread` returns `Ok(0)`.
+    ///
+    /// The provided implementation composes only [`history`](Self::history)
+    /// and [`delete_waypoint`](Self::delete_waypoint): it first pages
+    /// through the thread's full id set with an explicit `limit` and the
+    /// `before` cursor (so a very long thread is never requested unbounded
+    /// in one call), then deletes every enumerated id absent from `keep`.
+    /// Enumeration completes in full before any deletion starts, so the
+    /// `history` pagination cursor — which is resolved by looking the
+    /// referenced id back up — never points at an id this call has already
+    /// removed.
+    async fn prune_thread(
+        &self,
+        thread: &ThreadId,
+        keep: &[WaypointId],
+    ) -> Result<u64, WaypointError> {
+        let keep_set: std::collections::HashSet<WaypointId> = keep.iter().copied().collect();
+
+        // Bounded page size for enumeration — see the method doc above for
+        // why enumeration must finish before any deletion begins.
+        const PAGE_SIZE: u32 = 500;
+        let mut ids = Vec::new();
+        let mut before: Option<WaypointId> = None;
+        loop {
+            let page = self.history(thread, Some(PAGE_SIZE), before).await?;
+            let page_len = page.len();
+            before = page.last().map(|s| s.waypoint_id);
+            ids.extend(page.into_iter().map(|s| s.waypoint_id));
+            if page_len < PAGE_SIZE as usize {
+                break;
+            }
+        }
+
+        let mut removed: u64 = 0;
+        for id in ids {
+            if !keep_set.contains(&id) && self.delete_waypoint(thread, &id).await? {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
 }
 
 #[cfg(test)]
@@ -274,6 +365,16 @@ mod tests {
         async fn delete_thread(&self, _thread: &ThreadId) -> Result<u64, WaypointError> {
             Ok(0)
         }
+
+        async fn delete_waypoint(
+            &self,
+            _thread: &ThreadId,
+            _id: &WaypointId,
+        ) -> Result<bool, WaypointError> {
+            // A store that holds nothing has nothing to delete: `false` is
+            // the honest answer, not a panic.
+            Ok(false)
+        }
     }
 
     #[tokio::test]
@@ -283,6 +384,13 @@ mod tests {
         assert!(store.latest(&thread).await.unwrap().is_none());
         assert!(store.list_threads(None, None).await.unwrap().is_empty());
         assert_eq!(store.delete_thread(&thread).await.unwrap(), 0);
+        assert!(
+            !store
+                .delete_waypoint(&thread, &WaypointId::generate())
+                .await
+                .unwrap()
+        );
+        assert_eq!(store.prune_thread(&thread, &[]).await.unwrap(), 0);
     }
 
     #[test]

@@ -384,6 +384,49 @@ impl WaypointPort for PostgresWaypointStore {
             .map_err(|e| self.wrap_error(e))?;
         Ok(result.rows_affected())
     }
+
+    async fn delete_waypoint(
+        &self,
+        thread: &ThreadId,
+        id: &WaypointId,
+    ) -> Result<bool, WaypointError> {
+        let result = sqlx::query("DELETE FROM waypoints WHERE thread_id = $1 AND waypoint_id = $2")
+            .bind(thread.as_str())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn prune_thread(
+        &self,
+        thread: &ThreadId,
+        keep: &[WaypointId],
+    ) -> Result<u64, WaypointError> {
+        // One statement inside the driver's implicit single-statement
+        // transaction: `keep` is bound as a text array, so the keep-set
+        // size carries no per-element parameter cost -- unlike a per-id
+        // `IN` list built with one bound parameter per id, an array bind is
+        // a single bound parameter regardless of how many elements it
+        // holds. `waypoint_id <> ALL($2)` is "not equal to every element of
+        // $2", i.e. "not present in $2"; an empty array makes that
+        // vacuously true for every row, so the whole thread is removed --
+        // exactly the specified empty-keep-set behaviour, confirmed by the
+        // shared contract function rather than reasoned about here.
+        let keep_ids: Vec<String> = keep.iter().map(|id| id.to_string()).collect();
+
+        let result = sqlx::query(
+            "DELETE FROM waypoints WHERE thread_id = $1 AND waypoint_id <> ALL($2::text[])",
+        )
+        .bind(thread.as_str())
+        .bind(&keep_ids)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| self.wrap_error(e))?;
+
+        Ok(result.rows_affected())
+    }
 }
 
 #[cfg(test)]
@@ -579,6 +622,116 @@ mod tests {
             return;
         };
         contract_tests::list_threads_empty_then_three_threads_newest_activity_first(&store).await;
+    }
+
+    // ── delete_waypoint / prune_thread (Plan 22-13, G-22-2) ──────────────
+
+    #[tokio::test]
+    async fn delete_waypoint_removes_named_id_and_leaves_others() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::delete_waypoint_removes_named_id_and_leaves_others(&store).await;
+    }
+
+    #[tokio::test]
+    async fn delete_waypoint_unknown_id_is_false_and_leaves_thread_unchanged() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::delete_waypoint_unknown_id_is_false_and_leaves_thread_unchanged(&store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn delete_waypoint_unknown_thread_is_false() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::delete_waypoint_unknown_thread_is_false(&store).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_keeps_named_ids_byte_identical_and_ordered() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::prune_thread_keeps_named_ids_byte_identical_and_ordered(&store).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_empty_keep_removes_everything() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::prune_thread_empty_keep_removes_everything(&store).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_unknown_thread_returns_zero() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::prune_thread_unknown_thread_returns_zero(&store).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_ignores_keep_ids_not_in_thread() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::prune_thread_ignores_keep_ids_not_in_thread(&store).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_idempotent_second_run_removes_nothing() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::prune_thread_idempotent_second_run_removes_nothing(&store).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_converges_from_superset_to_target() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::prune_thread_converges_from_superset_to_target(&store).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_large_keep_set_1200_to_1100() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::prune_thread_large_keep_set_1200_to_1100(&store).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_thread_id_and_waypoint_id_with_sql_metacharacters_round_trip_as_data() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        let thread = ThreadId::new("thread-o'brien;DROP-TABLE--comment").unwrap();
+        let base = Utc::now();
+        let mut saved = Vec::new();
+        for superstep in 0..3u64 {
+            let wp = contract_tests::sample_waypoint_at(
+                &thread,
+                superstep,
+                base + chrono::Duration::seconds(superstep as i64),
+            );
+            store.save(&wp).await.unwrap();
+            saved.push(wp);
+        }
+
+        let keep = vec![saved[2].waypoint_id];
+        let removed = store.prune_thread(&thread, &keep).await.unwrap();
+        assert_eq!(removed, 2);
+
+        let history = store.history(&thread, None, None).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].waypoint_id, saved[2].waypoint_id);
     }
 
     #[tokio::test]

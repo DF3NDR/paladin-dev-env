@@ -409,6 +409,86 @@ impl WaypointPort for SqliteWaypointStore {
             .map_err(|e| self.wrap_error(e))?;
         Ok(result.rows_affected())
     }
+
+    async fn delete_waypoint(
+        &self,
+        thread: &ThreadId,
+        id: &WaypointId,
+    ) -> Result<bool, WaypointError> {
+        let result = sqlx::query("DELETE FROM waypoints WHERE thread_id = ? AND waypoint_id = ?")
+            .bind(thread.as_str())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn prune_thread(
+        &self,
+        thread: &ThreadId,
+        keep: &[WaypointId],
+    ) -> Result<u64, WaypointError> {
+        // sqlx's SQLite driver has no array binding, and a per-id `IN` list
+        // built with one bound parameter per id would run into the
+        // per-statement bound-parameter limit for a large keep-set (the
+        // reason the 1,200-Waypoint contract test exists). Atomicity here
+        // comes from wrapping every deletion for this call in one explicit
+        // transaction, not from issuing a single statement -- so chunking
+        // the deletions costs nothing.
+        let keep_set: std::collections::HashSet<String> =
+            keep.iter().map(|id| id.to_string()).collect();
+
+        let mut tx = self.pool.begin().await.map_err(|e| self.wrap_error(e))?;
+
+        let existing_rows = sqlx::query("SELECT waypoint_id FROM waypoints WHERE thread_id = ?")
+            .bind(thread.as_str())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        let delete_ids: Vec<String> = existing_rows
+            .iter()
+            .filter_map(|row| {
+                let id: String = row.try_get("waypoint_id").ok()?;
+                (!keep_set.contains(&id)).then_some(id)
+            })
+            .collect();
+
+        // Chunk size comfortably under SQLite's historical default
+        // per-statement bound-parameter limit of 999
+        // (`SQLITE_MAX_VARIABLE_NUMBER`, pre-3.32.0 -- this store does not
+        // assume a newer bundled SQLite raising that ceiling to 32,766).
+        // One statement binds `thread_id` plus up to this many ids, so 500
+        // keeps every chunked DELETE comfortably inside 999 even on the
+        // conservative bound -- exactly why the 1,200-to-1,100 contract
+        // test exists: 1,100 bound ids in a single `IN` list would exceed
+        // it.
+        const PRUNE_DELETE_CHUNK_SIZE: usize = 500;
+
+        let mut removed: u64 = 0;
+        for chunk in delete_ids.chunks(PRUNE_DELETE_CHUNK_SIZE) {
+            let mut builder: sqlx::QueryBuilder<sqlx::Sqlite> =
+                sqlx::QueryBuilder::new("DELETE FROM waypoints WHERE thread_id = ");
+            builder.push_bind(thread.as_str().to_string());
+            builder.push(" AND waypoint_id IN (");
+            let mut separated = builder.separated(", ");
+            for id in chunk {
+                separated.push_bind(id.clone());
+            }
+            separated.push_unseparated(")");
+
+            let result = builder
+                .build()
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| self.wrap_error(e))?;
+            removed += result.rows_affected();
+        }
+
+        tx.commit().await.map_err(|e| self.wrap_error(e))?;
+        Ok(removed)
+    }
 }
 
 #[cfg(test)]
@@ -508,6 +588,66 @@ mod tests {
         contract_tests::run_all(&fresh_store().await).await;
     }
 
+    // ── delete_waypoint / prune_thread (Plan 22-13, G-22-2) ──────────────
+
+    #[tokio::test]
+    async fn delete_waypoint_removes_named_id_and_leaves_others() {
+        contract_tests::delete_waypoint_removes_named_id_and_leaves_others(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn delete_waypoint_unknown_id_is_false_and_leaves_thread_unchanged() {
+        contract_tests::delete_waypoint_unknown_id_is_false_and_leaves_thread_unchanged(
+            &fresh_store().await,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn delete_waypoint_unknown_thread_is_false() {
+        contract_tests::delete_waypoint_unknown_thread_is_false(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_keeps_named_ids_byte_identical_and_ordered() {
+        contract_tests::prune_thread_keeps_named_ids_byte_identical_and_ordered(
+            &fresh_store().await,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_empty_keep_removes_everything() {
+        contract_tests::prune_thread_empty_keep_removes_everything(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_unknown_thread_returns_zero() {
+        contract_tests::prune_thread_unknown_thread_returns_zero(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_ignores_keep_ids_not_in_thread() {
+        contract_tests::prune_thread_ignores_keep_ids_not_in_thread(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_idempotent_second_run_removes_nothing() {
+        contract_tests::prune_thread_idempotent_second_run_removes_nothing(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_converges_from_superset_to_target() {
+        contract_tests::prune_thread_converges_from_superset_to_target(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn prune_thread_large_keep_set_1200_to_1100() {
+        contract_tests::prune_thread_large_keep_set_1200_to_1100(&fresh_store().await).await;
+    }
+
     // ── Backend-specific tests (T-22-17, T-22-18) ───────────────────────
 
     #[tokio::test]
@@ -524,6 +664,36 @@ mod tests {
         // via string formatting would have executed the embedded DROP TABLE.
         let history = store.history(&thread, None, None).await.unwrap();
         assert_eq!(history.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn prune_thread_thread_id_and_waypoint_id_with_sql_metacharacters_round_trip_as_data() {
+        let store = fresh_store().await;
+        let thread = ThreadId::new("thread-o'brien;DROP-TABLE--comment").unwrap();
+        let base = chrono::Utc::now();
+        let mut saved = Vec::new();
+        for superstep in 0..3u64 {
+            let wp = contract_tests::sample_waypoint_at(
+                &thread,
+                superstep,
+                base + chrono::Duration::seconds(superstep as i64),
+            );
+            store.save(&wp).await.unwrap();
+            saved.push(wp);
+        }
+
+        // Keep only the newest; prune the other two, exercising both the
+        // enumeration SELECT and the chunked DELETE with a metacharacter-
+        // laden thread_id as bound data, never interpolated text.
+        let keep = vec![saved[2].waypoint_id];
+        let removed = store.prune_thread(&thread, &keep).await.unwrap();
+        assert_eq!(removed, 2);
+
+        // The table must still exist and be queryable -- a real injection
+        // via string formatting would have executed the embedded DROP TABLE.
+        let history = store.history(&thread, None, None).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].waypoint_id, saved[2].waypoint_id);
     }
 
     #[tokio::test]

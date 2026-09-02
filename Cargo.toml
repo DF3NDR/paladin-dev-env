@@ -252,6 +252,10 @@ path = "tests/integration/war_engine_tracer_test.rs"
 name = "e2e_crash_resume"
 path = "tests/integration/e2e_crash_resume_test.rs"
 
+[[test]]
+name = "golden_bridge_equivalence"
+path = "tests/integration/golden_bridge_equivalence_test.rs"
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"

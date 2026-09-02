@@ -17,6 +17,11 @@
 //! expansion does not require changing these signatures.
 //!
 //! Submodules:
+//! - [`bridges`] — `WarGraph::from_formation`/`from_phalanx`/`from_campaign`
+//!   (ENG-FR-19, X-03): additive legacy bridges reproducing
+//!   `FormationExecutionService`/`PhalanxExecutionService`/
+//!   `CampaignExecutionService`'s data flow byte for byte, without touching
+//!   any of those legacy services.
 //! - [`graph`] — `WarGraph`, `NodeSpec`, `EdgeSpec`, `EngineLimits`, and
 //!   `WarGraph::validate`/`fingerprint`.
 //! - [`input_mapping`] — `InputMapping`, `InputMappingError`: the X-03
@@ -35,6 +40,7 @@
 //!   `RecordingPaladinPort` and `CountingFunctionNode`, the doubles this and
 //!   later engine plans assert against.
 
+pub mod bridges;
 pub mod dispatch_registry;
 pub mod graph;
 pub mod hooks;
@@ -63,6 +69,7 @@ use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink};
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 
+pub use bridges::{CAMPAIGN_FAN_IN_SEPARATOR, campaign_node_ids, dedicated_output_field};
 pub use dispatch_registry::DispatchRegistry;
 pub use graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
 pub use hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};

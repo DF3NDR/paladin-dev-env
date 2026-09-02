@@ -51,7 +51,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   `WaypointRetentionConfig` cleanup routine never deletes a thread's latest Waypoint or any
   `AwaitingInput` Waypoint (ENG-FR-15…18)
 
-- [ ] **ENG-06**: Legacy string-based execution is bridged, not broken:
+- [x] **ENG-06**: Legacy string-based execution is bridged, not broken:
   `from_formation`/`from_phalanx`/`from_campaign` constructors reproduce today's data flow with
   golden output-equivalence tests, and the legacy execution services keep byte-identical public
   behavior (sole sanctioned exception: BUG-01, owned by CF-01) (ENG-FR-19, ENG-FR-20; X-03)
@@ -353,7 +353,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ENG-03 | Phase 22 | Complete |
 | ENG-04 | Phase 22 | Complete |
 | ENG-05 | Phase 22 | Complete |
-| ENG-06 | Phase 22 | Pending |
+| ENG-06 | Phase 22 | Complete |
 | ENG-07 | Phase 22 | Complete |
 | ENG-08 | Phase 22 | Complete |
 | CF-01 | Phase 23 | Pending |

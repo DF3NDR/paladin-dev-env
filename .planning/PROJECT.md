@@ -109,6 +109,14 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 22 complete (2026-09-02)** — battlefield-state-superstep-engine, the v0.10.0 milestone's
+first phase: typed Battlefield state, the superstep WarEngine with checkpoint/resume over three
+WaypointPort backends (the Postgres Tier 2 contract suite now provably executes in CI — run
+33688238662), eligible-set reachability validation (BUG-02 closed), and crash-safe retention on
+the prune_thread primitive. 17/17 plans, all three UAT gaps closed. Residuals routed to inserted
+Phase 22.1: the frontier readiness defect, the MSRV-1.85 vs rmcp-pinned process-wrap decision,
+and CR-01 (fingerprint omits defer_flags).
+
 **Shipped: v0.9.0 "Security Tooling" (2026-09-01)** — Phases 18-21, 25 plans, 20/20 requirements
 (SAST-01…04, PUB-01…05, PUBOPS-01…05, ARTIFACT-01…06). Audit status `tech_debt`, no blockers:
 `.planning/milestones/v0.9.0-MILESTONE-AUDIT.md`.
@@ -1508,5 +1516,5 @@ requirements, 86 forward requirements across 16 phases, 60 variant entries acros
 69 warnings, 0 locked decisions, 0 blockers, 11 ADR candidates**)*
 
 ---
-*Last updated: 2026-08-24 after the v0.8.0 milestone close (14 phases, 149 plans,
-65/65 requirements). v0.9.0 Security Tooling is open with Phase 18.*
+*Last updated: 2026-09-02 after Phase 22 completion (v0.10.0 milestone; next: Phase 22.1
+engine-readiness-defect-and-msrv-follow-up).*

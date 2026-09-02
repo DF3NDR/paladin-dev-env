@@ -245,8 +245,8 @@ Runtime" — are detailed in full below.*
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 22-05-PLAN.md — Engine core: WarGraph validation permitting cycles, superstep loop, bounded iteration (wave 3)
-- [ ] 22-06-PLAN.md — SQL Waypoint backends: SQLite, Postgres, migrations, retention config (wave 3)
+- [x] 22-05-PLAN.md — Engine core: WarGraph validation permitting cycles, superstep loop, bounded iteration (wave 3)
+- [x] 22-06-PLAN.md — SQL Waypoint backends: SQLite, Postgres, migrations, retention config (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

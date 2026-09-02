@@ -1,9 +1,9 @@
 ---
-status: diagnosed
+status: resolved
 phase: 22-battlefield-state-superstep-engine
 source: [22-VERIFICATION.md]
 started: 2026-09-02T04:35:00Z
-updated: 2026-09-02T17:05:00Z
+updated: 2026-09-02T22:20:00Z
 ---
 
 ## Current Test
@@ -47,7 +47,8 @@ blocked: 0
 
 - gap_id: G-22-1
   truth: "PostgresWaypointStore passes the full shared Tier 2 contract suite against a real Postgres server, identically to SQLite/InMemory (WINDOWS.md ledger item 22)"
-  status: failed
+  status: resolved
+  resolution: "Plan 22-12 added the postgres-integration CI job; checkpoint 22-17 closed on execution evidence: run 33688238662 (commit 2b2bc1d5, job 100440861780) is green with all four required log facts — container healthy, pg_isready accepting connections, test result: ok. 26 passed / 0 failed matching the module's declared count, and the skip-detection step confirming the live server was exercised. The first-ever run (33672088907) caught a real harness defect (shared-DB residue), fixed in 69bed986 by truncating per test in store_or_skip. Evidence recorded in 22-17-SUMMARY.md (2026-09-02).
   reason: "User reported: can't run in the DevContainer (no docker-in-docker) and fails on the host (target/ owned by root; never run there). Investigation found the suite executes NOWHERE: WAYPOINT_POSTGRES_TEST_URL appears in no CI workflow, so the env-gated suite skips clean in every environment while reporting green."
   severity: major
   test: 1
@@ -63,7 +64,8 @@ blocked: 0
 
 - gap_id: G-22-2
   truth: "Retention prune never destroys protected (latest / AwaitingInput / Parley-referenced / fork-lineage-pinned) Waypoints under any crash or backend failure — prune is monotone and idempotent: the keep-set is always intact and a re-run converges"
-  status: failed
+  status: resolved
+  resolution: "Plans 22-13 + 22-14: WaypointPort gained delete_waypoint and prune_thread(thread, keep) with a safe provided implementation (monotone, idempotent, convergent), overridden transactionally in SQLite (chunked NOT-IN, QueryBuilder) and Postgres (single-statement <> ALL($2::text[])); retention.rs rewritten on the primitive — delete-then-resave is gone; protected-set defined once in application-layer WaypointRetentionService and passed in; fault-injection acceptance test fails the backend at every delete position and asserts keep-set intact + resume + convergence. Retention design shape approved at the 22-17 checkpoint (2026-09-02).
   reason: "User reported: require the fix, don't accept even disabled-by-default. The crash window between delete_thread and the resave loop is a data-loss path that inverts the runtime's core crash-resume invariant, violates the E2E-1/E2E-2 assumptions in .project/v0.10.0, and goes live the moment an operator wires prune to a schedule (Doc 06 adds schedules). X-03 stop-and-flag; resolution is fix, not waiver."
   severity: blocker
   test: 2
@@ -84,7 +86,8 @@ blocked: 0
 
 - gap_id: G-22-3
   truth: "WarGraph::validate() rejects, before any node executes, every declared node outside the eligible set — (statically reachable from entry) ∪ (worker_template: true nodes) ∪ (Route { to } targets in any eligible node's Aegis, to a fixed point) ∪ (nodes explicitly marked dynamic_target: true) — listing ALL offenders, so RunOutcome::Completed can never again be reported for a graph containing a node that could never become ready (BUG-02 / ENG-FR-02a)"
-  status: failed
+  status: resolved
+  resolution: "Plans 22-15 + 22-16: WarGraph::validate computes the eligible set (reachable-from-entry ∪ mark_dynamic_target, to a fixed point) and rejects all stranded nodes in one EngineError::UnreachableNode listing every offender; test-first with 15 regression tests; every strandedness-adjacent fixture audited and classified, the E2E-1 workaround corrected. A distinct readiness defect surfaced by the audit (self-looping node fed by an upstream edge never fires) is registered to inserted Phase 22.1 per the 22-17 checkpoint decision (2026-09-02)."
   reason: "User reported: fix required, not a documented limitation. The fixture workarounds are the strongest evidence the tests are shaped by the defect; 'Completed' lying about a never-runnable node breaks the truthful-outcome contract Chronicle, trace export, and the eval harness depend on. Spec already patched: ENG-FR-02a in .project/v0.10.0/01-battlefield-state-and-execution-engine.md is the binding requirement; BUG-02 registered in overview §7 and the traceability matrix (verification step 4 greps for both bugs)."
   severity: major
   test: 3

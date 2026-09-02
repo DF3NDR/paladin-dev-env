@@ -9,15 +9,19 @@
 //! through `Battlefield::merge`; compute the next Vanguard; persist exactly
 //! one Waypoint; then decide whether to continue.
 //!
-//! Next-Vanguard computation here is the simple "dependencies satisfied"
-//! heuristic (an edge whose source ran this superstep and whose condition
-//! evaluated true adds its target) — sufficient for linear chains,
-//! branching fan-out and self-loops/cycles, which is everything this plan's
-//! own tests exercise. Precise join/defer/not-firing semantics for
-//! multi-incoming-edge nodes are Plan 22-07's expansion (ENG-FR-06); that
-//! plan replaces `compute_next_vanguard` without changing this loop's shape.
+//! Next-Vanguard computation (`Frontier`, ENG-FR-06) resolves every incoming
+//! edge of every node to `Fired`, `NotFiring`, or `Pending`, persisting that
+//! resolution across supersteps: a node becomes executable once no incoming
+//! edge from a run-reachable source is still pending and at least one has
+//! fired (freshly, for a node re-entering the Vanguard after an earlier
+//! execution — the cycle/self-loop case). A node whose every incoming edge
+//! resolves not-firing, including transitively via a source itself proven
+//! dead, is propagated to a fixpoint as dead, so a false branch can never
+//! strand a downstream join waiting on it. `defer`-marked nodes that are
+//! otherwise executable are held back until the computed Vanguard would
+//! otherwise contain no non-deferred executable node.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -80,6 +84,8 @@ pub(crate) async fn run<W: WaypointPort>(
             waypoint: waypoint.waypoint_id,
         });
     }
+
+    let mut frontier = Frontier::new(graph);
 
     loop {
         // --- ENG-FR-03: bounded iteration, checked at the top of the loop
@@ -280,7 +286,11 @@ pub(crate) async fn run<W: WaypointPort>(
             });
         }
 
-        let next_vanguard = compute_next_vanguard(graph, &ran, &battlefield)?;
+        for node_id in &ran {
+            frontier.record_execution(graph, node_id, superstep_number, &battlefield)?;
+        }
+        frontier.propagate_dead(graph);
+        let next_vanguard = compute_next_vanguard(graph, &frontier);
         let status = if next_vanguard.is_empty() {
             WaypointStatus::Completed
         } else {
@@ -313,32 +323,219 @@ pub(crate) async fn run<W: WaypointPort>(
     }
 }
 
-/// Compute the Vanguard for the superstep after the one that just ran
-/// `ran` (the `NodeId`s that executed successfully this superstep),
-/// evaluating each outgoing edge's condition against the POST-merge
-/// `battlefield`. An edge with no condition always fires. Iterates
-/// `graph.edges()` in the graph's stable insertion order (ENG-FR-04) and
-/// de-duplicates targets reached by more than one firing edge.
-fn compute_next_vanguard(
-    graph: &WarGraph,
-    ran: &[NodeId],
-    battlefield: &Battlefield,
-) -> Result<Vec<NodeId>, EngineError> {
-    let mut next = Vec::new();
-    let mut seen = HashSet::new();
-    for edge in graph.edges() {
-        if !ran.contains(&edge.from) {
-            continue;
+/// An incoming edge's resolution state, persisted across supersteps
+/// (ENG-FR-06). `Pending` until the edge's source completes; `Fired`/
+/// `NotFiring` from then on, stamped with the superstep the source
+/// completed at so a re-entrant target (cycle/self-loop) can tell a fresh
+/// firing from a stale one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EdgeState {
+    Pending,
+    Fired(u64),
+    NotFiring(u64),
+}
+
+/// Tracks, for the whole run, which incoming edges of which nodes have
+/// resolved (ENG-FR-06): the precise join/defer/not-firing frontier that
+/// replaces the "an edge whose source ran this superstep" heuristic. A
+/// diamond join waits for every incoming edge to resolve rather than firing
+/// once per satisfied edge; a false branch is proven `NotFiring` rather than
+/// leaving its downstream join pending forever; a `defer`-marked node is
+/// held back until no non-deferred node is executable.
+struct Frontier {
+    /// Per-edge state, indexed identically to `graph.edges()`.
+    edge_state: Vec<EdgeState>,
+    /// Nodes proven to never execute in this run: a non-entry node with no
+    /// incoming edges, or a node all of whose incoming edges resolve
+    /// not-firing (directly, or transitively via a dead source) with none
+    /// firing.
+    dead: HashSet<NodeId>,
+    /// The superstep at which a node last executed, if ever.
+    last_executed: HashMap<NodeId, u64>,
+    /// Incoming edge indices per target node, in `graph.edges()`'s
+    /// insertion order.
+    incoming: HashMap<NodeId, Vec<usize>>,
+}
+
+impl Frontier {
+    /// Build the initial frontier for `graph`: every edge `Pending`, then
+    /// propagate structural deadness (non-entry nodes with no incoming
+    /// edges, and anything only reachable through them) to a fixpoint.
+    fn new(graph: &WarGraph) -> Self {
+        let mut incoming: HashMap<NodeId, Vec<usize>> = HashMap::new();
+        for (idx, edge) in graph.edges().iter().enumerate() {
+            incoming.entry(edge.to.clone()).or_default().push(idx);
         }
-        let fires = match &edge.condition {
-            None => true,
-            Some(condition) => evaluate_edge_condition(condition, battlefield)?,
+        let edge_state = vec![EdgeState::Pending; graph.edges().len()];
+        let mut frontier = Self {
+            edge_state,
+            dead: HashSet::new(),
+            last_executed: HashMap::new(),
+            incoming,
         };
-        if fires && seen.insert(edge.to.clone()) {
-            next.push(edge.to.clone());
+        frontier.propagate_dead(graph);
+        frontier
+    }
+
+    /// Record that `node` completed `superstep`, evaluating every one of
+    /// its outgoing edges against the POST-merge `battlefield` and storing
+    /// each as `Fired`/`NotFiring` at this superstep (ENG-FR-06). Re-running
+    /// a node (a cycle or self-loop) overwrites its edges' previous state
+    /// with the fresh evaluation.
+    fn record_execution(
+        &mut self,
+        graph: &WarGraph,
+        node: &NodeId,
+        superstep: u64,
+        battlefield: &Battlefield,
+    ) -> Result<(), EngineError> {
+        self.last_executed.insert(node.clone(), superstep);
+        for (idx, edge) in graph.edges().iter().enumerate() {
+            if &edge.from != node {
+                continue;
+            }
+            let fires = match &edge.condition {
+                None => true,
+                Some(condition) => evaluate_edge_condition(condition, battlefield)?,
+            };
+            self.edge_state[idx] = if fires {
+                EdgeState::Fired(superstep)
+            } else {
+                EdgeState::NotFiring(superstep)
+            };
+        }
+        Ok(())
+    }
+
+    /// This edge's resolution as `(fired, resolved_at)`, or `None` while
+    /// still pending from a source that is not (yet) proven dead. A
+    /// `Pending` edge whose source is dead is treated as resolved
+    /// not-firing at superstep 0 -- the source will never run, so the edge
+    /// will never fire (the "provably not-firing" half of ENG-FR-06).
+    fn edge_resolution(&self, graph: &WarGraph, idx: usize) -> Option<(bool, u64)> {
+        match self.edge_state[idx] {
+            EdgeState::Fired(s) => Some((true, s)),
+            EdgeState::NotFiring(s) => Some((false, s)),
+            EdgeState::Pending => {
+                let source = &graph.edges()[idx].from;
+                if self.dead.contains(source) {
+                    Some((false, 0))
+                } else {
+                    None
+                }
+            }
         }
     }
-    Ok(next)
+
+    /// Propagate dead-node status to a fixpoint (ENG-FR-06): a non-entry
+    /// node with no incoming edges never executes; a node all of whose
+    /// incoming edges are resolved not-firing (directly or via a dead
+    /// source) with none firing is itself dead. Runs until no further node
+    /// changes state, so a chain of unreachable nodes resolves in one call.
+    /// Iterates `graph.node_order()`, never raw `HashMap` iteration
+    /// (ENG-FR-04).
+    fn propagate_dead(&mut self, graph: &WarGraph) {
+        loop {
+            let mut changed = false;
+            for node in graph.node_order() {
+                if self.dead.contains(node) || self.last_executed.contains_key(node) {
+                    continue;
+                }
+                if graph.entry().contains(node) {
+                    // Entry nodes are scheduled directly regardless of
+                    // incoming-edge state; never mark one dead before it
+                    // has had its guaranteed first execution.
+                    continue;
+                }
+                let incoming = self.incoming.get(node).cloned().unwrap_or_default();
+                if incoming.is_empty() {
+                    self.dead.insert(node.clone());
+                    changed = true;
+                    continue;
+                }
+                let mut any_pending = false;
+                let mut any_fired = false;
+                for idx in &incoming {
+                    match self.edge_resolution(graph, *idx) {
+                        Some((true, _)) => any_fired = true,
+                        Some((false, _)) => {}
+                        None => any_pending = true,
+                    }
+                }
+                if !any_pending && !any_fired {
+                    self.dead.insert(node.clone());
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// Whether `node` is executable for the NEXT Vanguard (ENG-FR-06): it
+    /// has at least one incoming edge, none of them is still pending from a
+    /// run-reachable source (a `Pending` edge from a proven-dead source
+    /// counts as resolved not-firing, via [`Frontier::edge_resolution`]),
+    /// and at least one has fired at or after the superstep `node` last
+    /// executed (any fired edge at all, for a node that has never
+    /// executed).
+    fn is_ready(&self, graph: &WarGraph, node: &NodeId) -> bool {
+        let Some(incoming) = self.incoming.get(node) else {
+            return false;
+        };
+        if incoming.is_empty() {
+            return false;
+        }
+        let threshold: i64 = self.last_executed.get(node).map_or(-1, |&s| s as i64);
+        let mut any_pending = false;
+        let mut any_fresh_fire = false;
+        for idx in incoming {
+            match self.edge_resolution(graph, *idx) {
+                Some((true, resolved_at)) => {
+                    if resolved_at as i64 >= threshold {
+                        any_fresh_fire = true;
+                    }
+                }
+                Some((false, _)) => {}
+                None => any_pending = true,
+            }
+        }
+        !any_pending && any_fresh_fire
+    }
+}
+
+/// Compute the Vanguard for the superstep after the one `frontier` was just
+/// updated for (ENG-FR-06): every non-deferred node the `Frontier` reports
+/// executable, in `graph.edges()`'s stable insertion order (ENG-FR-04),
+/// de-duplicated. If no non-deferred node is executable, releases every
+/// `defer`-marked node the `Frontier` reports executable instead, ordered by
+/// this graph's node registration order (`node_order`) rather than
+/// `HashMap` order -- the aggregate-after-all-branches case.
+fn compute_next_vanguard(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
+    let mut ready = Vec::new();
+    let mut seen = HashSet::new();
+    for edge in graph.edges() {
+        let target = &edge.to;
+        if graph.is_deferred(target) || seen.contains(target) {
+            continue;
+        }
+        if frontier.is_ready(graph, target) {
+            seen.insert(target.clone());
+            ready.push(target.clone());
+        }
+    }
+    if !ready.is_empty() {
+        return ready;
+    }
+
+    let mut deferred_ready = Vec::new();
+    for node in graph.node_order() {
+        if graph.is_deferred(node) && frontier.is_ready(graph, node) {
+            deferred_ready.push(node.clone());
+        }
+    }
+    deferred_ready
 }
 
 /// Evaluate an [`EdgeCondition`] against the whole post-merge Battlefield,
@@ -981,5 +1178,486 @@ mod tests {
         assert_eq!(store.save_call_count(), 1);
         let saved = store.saved_waypoints(&thread).await;
         assert!(matches!(saved[0].status, WaypointStatus::Failed { .. }));
+    }
+
+    // --- Task 1: join, defer and not-firing frontier semantics ----------
+
+    fn diamond_graph(
+        a: Arc<CountingFunctionNode>,
+        b: Arc<CountingFunctionNode>,
+        c: Arc<CountingFunctionNode>,
+        d: Arc<CountingFunctionNode>,
+        a_to_c_condition: Option<EdgeCondition>,
+    ) -> (WarGraph, NodeId, NodeId, NodeId, NodeId) {
+        let s = schema(vec![FieldSpec::new(
+            field("log"),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let na = NodeId::new("a");
+        let nb = NodeId::new("b");
+        let nc = NodeId::new("c");
+        let nd = NodeId::new("d");
+        graph.add_node(na.clone(), NodeSpec::Function(a));
+        graph.add_node(nb.clone(), NodeSpec::Function(b));
+        graph.add_node(nc.clone(), NodeSpec::Function(c));
+        graph.add_node(nd.clone(), NodeSpec::Function(d));
+        graph.add_edge(EdgeSpec {
+            from: na.clone(),
+            to: nb.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: na.clone(),
+            to: nc.clone(),
+            condition: a_to_c_condition,
+        });
+        graph.add_edge(EdgeSpec {
+            from: nb.clone(),
+            to: nd.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: nc.clone(),
+            to: nd.clone(),
+            condition: None,
+        });
+        graph.add_entry(na.clone());
+        (graph, na, nb, nc, nd)
+    }
+
+    #[tokio::test]
+    async fn diamond_join_executes_target_exactly_once() {
+        let a = CountingFunctionNode::fixed(field("log"), serde_json::json!("a"));
+        let b = CountingFunctionNode::fixed(field("log"), serde_json::json!("b"));
+        let c = CountingFunctionNode::fixed(field("log"), serde_json::json!("c"));
+        let d = CountingFunctionNode::fixed(field("log"), serde_json::json!("d"));
+        let (graph, _, _, c_id, d_id) =
+            diamond_graph(a.clone(), b.clone(), c.clone(), d.clone(), None);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("diamond-join").unwrap();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_default(&graph, thread, &store),
+        )
+        .await
+        .expect("diamond join must not deadlock");
+
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(d.run_count(), 1, "join target must execute exactly once");
+        assert_eq!(c.run_count(), 1);
+        let _ = c_id;
+        let _ = d_id;
+    }
+
+    #[tokio::test]
+    async fn false_branch_is_proven_not_firing_and_join_still_runs_once() {
+        // A-to-C's condition can never match A's own output, so C is
+        // proven not-firing rather than merely never scheduled -- and D
+        // (which also depends on B) must still execute exactly once rather
+        // than waiting forever on C. Explicit timeout: a regression here is
+        // a deadlock, not a wrong value, so a hang must fail loudly.
+        let a = CountingFunctionNode::fixed(field("log"), serde_json::json!("a"));
+        let b = CountingFunctionNode::fixed(field("log"), serde_json::json!("b"));
+        let c = CountingFunctionNode::fixed(field("log"), serde_json::json!("c"));
+        let d = CountingFunctionNode::fixed(field("log"), serde_json::json!("d"));
+        let (graph, _, _, _, _) = diamond_graph(
+            a.clone(),
+            b.clone(),
+            c.clone(),
+            d.clone(),
+            Some(EdgeCondition::Contains(
+                "UNREACHABLE_MARKER_XYZ".to_string(),
+            )),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("diamond-not-firing").unwrap();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_default(&graph, thread, &store),
+        )
+        .await
+        .expect("a not-firing branch must not strand the downstream join");
+
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(c.run_count(), 0, "the false branch never executes");
+        assert_eq!(
+            d.run_count(),
+            1,
+            "the join still executes exactly once despite the not-firing branch"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_fed_only_by_an_unreachable_source_never_runs_and_does_not_stall_its_join() {
+        let s = schema(vec![FieldSpec::new(
+            field("log"),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let a = NodeId::new("a");
+        let ghost = NodeId::new("ghost");
+        let u = NodeId::new("u");
+        let d = NodeId::new("d");
+        let a_node = CountingFunctionNode::fixed(field("log"), serde_json::json!("a"));
+        let ghost_node = CountingFunctionNode::fixed(field("log"), serde_json::json!("ghost"));
+        let u_node = CountingFunctionNode::fixed(field("log"), serde_json::json!("u"));
+        let d_node = CountingFunctionNode::fixed(field("log"), serde_json::json!("d"));
+        graph.add_node(a.clone(), NodeSpec::Function(a_node));
+        // `ghost` is declared but is neither an entry point nor the target
+        // of any edge: it is structurally unreachable from the start.
+        graph.add_node(ghost.clone(), NodeSpec::Function(ghost_node.clone()));
+        graph.add_node(u.clone(), NodeSpec::Function(u_node.clone()));
+        graph.add_node(d.clone(), NodeSpec::Function(d_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: ghost.clone(),
+            to: u.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: d.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: u.clone(),
+            to: d.clone(),
+            condition: None,
+        });
+        graph.add_entry(a.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("unreachable-source").unwrap();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_default(&graph, thread, &store),
+        )
+        .await
+        .expect("a dead upstream node must not stall its own downstream join");
+
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(ghost_node.run_count(), 0);
+        assert_eq!(u_node.run_count(), 0, "u's only source never runs");
+        assert_eq!(d_node.run_count(), 1, "d's join still resolves once");
+    }
+
+    #[tokio::test]
+    async fn deferred_node_aggregates_only_after_no_other_node_is_executable() {
+        let log: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let s = schema(vec![FieldSpec::new(
+            field("log"),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let x = NodeId::new("x");
+        let y = NodeId::new("y");
+        let e = NodeId::new("e");
+        let d = NodeId::new("d");
+
+        let mk = |log: Arc<std::sync::Mutex<Vec<String>>>, id: &'static str| {
+            CountingFunctionNode::new(move |_run, _state| {
+                log.lock().unwrap().push(id.to_string());
+                let mut delta = paladin_core::platform::container::battlefield::StateDelta::new();
+                delta.set_raw(field("log"), serde_json::json!(id));
+                delta
+            })
+        };
+
+        graph.add_node(x.clone(), NodeSpec::Function(mk(log.clone(), "x")));
+        graph.add_node(y.clone(), NodeSpec::Function(mk(log.clone(), "y")));
+        graph.add_node(e.clone(), NodeSpec::Function(mk(log.clone(), "e")));
+        graph.add_deferred_node(d.clone(), NodeSpec::Function(mk(log.clone(), "d")));
+        graph.add_edge(EdgeSpec {
+            from: x.clone(),
+            to: d.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: x.clone(),
+            to: e.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: y.clone(),
+            to: d.clone(),
+            condition: None,
+        });
+        graph.add_entry(x.clone());
+        graph.add_entry(y.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("defer-aggregate").unwrap();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_default(&graph, thread, &store),
+        )
+        .await
+        .expect("defer aggregation must not deadlock");
+
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        let order = log.lock().unwrap().clone();
+        assert_eq!(
+            order.last(),
+            Some(&"d".to_string()),
+            "the deferred node must run last, after its non-deferred sibling"
+        );
+        assert!(
+            order.iter().filter(|id| id.as_str() == "d").count() == 1,
+            "the deferred node executes exactly once"
+        );
+        assert!(order.contains(&"e".to_string()));
+    }
+
+    #[tokio::test]
+    async fn two_deferred_nodes_resolve_in_node_registration_order() {
+        let s = schema(vec![FieldSpec::new(
+            field("log"),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let x = NodeId::new("x");
+        let d2 = NodeId::new("d2");
+        let d1 = NodeId::new("d1");
+
+        graph.add_node(
+            x.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("x"),
+            )),
+        );
+        // Registered in the order d2, then d1 -- deliberately the reverse
+        // of the edge-insertion order below, so a pass that (incorrectly)
+        // orders deferred releases by edge order rather than node
+        // registration order would produce [d1, d2] instead.
+        graph.add_deferred_node(
+            d2.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("d2"),
+            )),
+        );
+        graph.add_deferred_node(
+            d1.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("d1"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: x.clone(),
+            to: d1.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: x.clone(),
+            to: d2.clone(),
+            condition: None,
+        });
+        graph.add_entry(x.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("defer-order").unwrap();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_default(&graph, thread.clone(), &store),
+        )
+        .await
+        .expect("defer release must not deadlock");
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let saved = store.saved_waypoints(&thread).await;
+        let mut by_superstep = saved.clone();
+        by_superstep.sort_by_key(|w| w.superstep);
+        // The first waypoint's `vanguard` is the Vanguard computed for
+        // superstep 2, i.e. the released deferred nodes.
+        assert_eq!(by_superstep[0].vanguard, vec![d2.clone(), d1.clone()]);
+    }
+
+    #[tokio::test]
+    async fn insertion_order_does_not_change_the_vanguard_sequence() {
+        async fn run_diamond_and_collect_vanguards(
+            build: impl FnOnce(&mut WarGraph, NodeId, NodeId, NodeId, NodeId),
+            thread_name: &str,
+        ) -> Vec<Vec<NodeId>> {
+            let s = schema(vec![FieldSpec::new(
+                field("log"),
+                DispatchRule::Append,
+                None,
+                false,
+            )]);
+            let mut graph = WarGraph::new(s, EngineLimits::default());
+            let a = NodeId::new("a");
+            let b = NodeId::new("b");
+            let c = NodeId::new("c");
+            let d = NodeId::new("d");
+            build(&mut graph, a.clone(), b.clone(), c.clone(), d.clone());
+            graph.add_edge(EdgeSpec {
+                from: a.clone(),
+                to: b.clone(),
+                condition: None,
+            });
+            graph.add_edge(EdgeSpec {
+                from: a.clone(),
+                to: c.clone(),
+                condition: None,
+            });
+            graph.add_edge(EdgeSpec {
+                from: b.clone(),
+                to: d.clone(),
+                condition: None,
+            });
+            graph.add_edge(EdgeSpec {
+                from: c.clone(),
+                to: d.clone(),
+                condition: None,
+            });
+            graph.add_entry(a);
+
+            let store = RecordingWaypointStore::new();
+            let thread = ThreadId::new(thread_name).unwrap();
+            let outcome = run_default(&graph, thread.clone(), &store).await;
+            assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+            let saved = store.saved_waypoints(&thread).await;
+            let mut by_superstep = saved;
+            by_superstep.sort_by_key(|w| w.superstep);
+            by_superstep.into_iter().map(|w| w.vanguard).collect()
+        }
+
+        let forward = run_diamond_and_collect_vanguards(
+            |graph, a, b, c, d| {
+                graph.add_node(
+                    a,
+                    NodeSpec::Function(CountingFunctionNode::fixed(
+                        field("log"),
+                        serde_json::json!("a"),
+                    )),
+                );
+                graph.add_node(
+                    b,
+                    NodeSpec::Function(CountingFunctionNode::fixed(
+                        field("log"),
+                        serde_json::json!("b"),
+                    )),
+                );
+                graph.add_node(
+                    c,
+                    NodeSpec::Function(CountingFunctionNode::fixed(
+                        field("log"),
+                        serde_json::json!("c"),
+                    )),
+                );
+                graph.add_node(
+                    d,
+                    NodeSpec::Function(CountingFunctionNode::fixed(
+                        field("log"),
+                        serde_json::json!("d"),
+                    )),
+                );
+            },
+            "insertion-order-forward",
+        )
+        .await;
+
+        let reversed = run_diamond_and_collect_vanguards(
+            |graph, a, b, c, d| {
+                graph.add_node(
+                    d,
+                    NodeSpec::Function(CountingFunctionNode::fixed(
+                        field("log"),
+                        serde_json::json!("d"),
+                    )),
+                );
+                graph.add_node(
+                    c,
+                    NodeSpec::Function(CountingFunctionNode::fixed(
+                        field("log"),
+                        serde_json::json!("c"),
+                    )),
+                );
+                graph.add_node(
+                    b,
+                    NodeSpec::Function(CountingFunctionNode::fixed(
+                        field("log"),
+                        serde_json::json!("b"),
+                    )),
+                );
+                graph.add_node(
+                    a,
+                    NodeSpec::Function(CountingFunctionNode::fixed(
+                        field("log"),
+                        serde_json::json!("a"),
+                    )),
+                );
+            },
+            "insertion-order-reversed",
+        )
+        .await;
+
+        assert_eq!(forward, reversed);
+    }
+
+    #[tokio::test]
+    async fn two_node_cycle_terminates_on_edge_condition_not_a_limit() {
+        let s = schema(vec![FieldSpec::new(
+            field("status"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let a = NodeId::new("a");
+        let b = NodeId::new("b");
+        // `a` continues for its first two executions, then stops; `b` only
+        // ever relays back to `a`, so the cycle's length is driven entirely
+        // by `a`'s own condition, never by a visit/superstep limit.
+        let a_node = CountingFunctionNode::new(|run_index, _state| {
+            let mut d = paladin_core::platform::container::battlefield::StateDelta::new();
+            d.set(
+                field("status"),
+                if run_index < 2 { "continue" } else { "stop" },
+            )
+            .unwrap();
+            d
+        });
+        let b_node = CountingFunctionNode::fixed(field("status"), serde_json::json!("relayed"));
+        graph.add_node(a.clone(), NodeSpec::Function(a_node.clone()));
+        graph.add_node(b.clone(), NodeSpec::Function(b_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: b.clone(),
+            condition: Some(EdgeCondition::Contains("continue".to_string())),
+        });
+        graph.add_edge(EdgeSpec {
+            from: b.clone(),
+            to: a.clone(),
+            condition: None,
+        });
+        graph.add_entry(a);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("two-node-cycle").unwrap();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_default(&graph, thread, &store),
+        )
+        .await
+        .expect("the cycle must terminate on its own condition, not hang");
+
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(a_node.run_count(), 3);
+        assert_eq!(b_node.run_count(), 2);
+        assert!(3 < EngineLimits::default().max_supersteps);
     }
 }

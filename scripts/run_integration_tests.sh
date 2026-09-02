@@ -190,15 +190,19 @@ setup_docker_environment() {
     log_step "Starting test services..."
     docker compose -f "$DOCKER_COMPOSE_TEST_FILE" up -d redis-test minio-test minio-test-init
 
-    # Wait for services
-    wait_for_services
-
+    # Export the service coordinates before waiting: wait_for_services reads
+    # USE_EXTERNAL_TEST_SERVICES and the TEST_* host/port vars, and the script
+    # runs under `set -u`, so exporting after the wait aborts on an unbound
+    # variable. setup_ci_environment already orders these correctly.
     export USE_EXTERNAL_TEST_SERVICES="true"
     export TEST_REDIS_HOST="localhost"
     export TEST_REDIS_PORT="6380"
     export TEST_MINIO_ENDPOINT="localhost:9010"
     export TEST_MINIO_ACCESS_KEY="testuser"
     export TEST_MINIO_SECRET_KEY="testpass123"
+
+    # Wait for services
+    wait_for_services
 }
 
 setup_ci_environment() {

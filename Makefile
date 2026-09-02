@@ -3,7 +3,8 @@
 # Variables
 CARGO := cargo
 DOCKER := docker
-DOCKER_COMPOSE := docker-compose
+# Prefer Compose v2 (docker CLI plugin); fall back to the EOL v1 standalone binary.
+DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 PROJECT_NAME := paladin
 
 # Docker compose files

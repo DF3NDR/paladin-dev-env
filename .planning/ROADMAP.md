@@ -263,7 +263,7 @@ Runtime" — are detailed in full below.*
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 22-11-PLAN.md — Legacy bridges, golden output-equivalence tests, coverage close-out (wave 7)
+- [x] 22-11-PLAN.md — Legacy bridges, golden output-equivalence tests, coverage close-out (wave 7)
 
 ### Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 

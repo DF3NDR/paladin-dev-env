@@ -21,67 +21,8 @@ use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::waypoint::{GraphFingerprint, NodeId};
 
 use crate::engine::EngineError;
+use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::StateNode;
-
-/// Renders a Paladin's string input from the Battlefield: a template string
-/// with `{field}` placeholders resolved from state (values JSON-stringified
-/// unless the field is a JSON string, in which case it is inserted raw).
-///
-/// This is the bridge that lets today's string-in/string-out Paladins
-/// participate in typed workflows unchanged (X-03). Wiring this into node
-/// execution for `NodeSpec::Paladin` is later-plan scope (Plan 22-08); this
-/// type lands now so `NodeSpec`'s shape is final.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct InputMapping {
-    template: String,
-}
-
-impl InputMapping {
-    /// Construct an `InputMapping` from a template string containing
-    /// `{field}` placeholders.
-    pub fn new(template: impl Into<String>) -> Self {
-        Self {
-            template: template.into(),
-        }
-    }
-
-    /// Render this template against `state`, substituting each `{field}`
-    /// placeholder with the field's Battlefield value (raw for JSON
-    /// strings, JSON-stringified otherwise). An unresolvable or malformed
-    /// placeholder renders as an empty string rather than panicking.
-    pub fn render(
-        &self,
-        state: &paladin_core::platform::container::battlefield::Battlefield,
-    ) -> String {
-        let mut rendered = self.template.clone();
-        let mut idx = 0;
-        while idx < rendered.len() {
-            let Some(rel_start) = rendered[idx..].find('{') else {
-                break;
-            };
-            let start = idx + rel_start;
-            let Some(rel_end) = rendered[start..].find('}') else {
-                break;
-            };
-            let end = start + rel_end;
-            let field_name = &rendered[start + 1..end];
-            let replacement = match FieldName::new(field_name) {
-                Ok(field) => match state.get_raw(&field) {
-                    Some(serde_json::Value::String(s)) => s.clone(),
-                    Some(value) => value.to_string(),
-                    None => String::new(),
-                },
-                Err(_) => {
-                    idx = end + 1;
-                    continue;
-                }
-            };
-            rendered.replace_range(start..=end, &replacement);
-            idx = start + replacement.len();
-        }
-        rendered
-    }
-}
 
 /// One node in a [`WarGraph`].
 ///
@@ -581,14 +522,5 @@ mod tests {
         let limits = EngineLimits::default();
         assert_eq!(limits.max_supersteps, 50);
         assert_eq!(limits.max_node_visits, 25);
-    }
-
-    #[test]
-    fn input_mapping_renders_missing_field_as_empty() {
-        let battlefield = paladin_core::platform::container::battlefield::Battlefield::new(
-            BattlefieldSchema::new(vec![]),
-        );
-        let mapping = InputMapping::new("value=[{missing}]");
-        assert_eq!(mapping.render(&battlefield), "value=[]");
     }
 }

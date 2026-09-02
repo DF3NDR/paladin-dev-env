@@ -248,6 +248,10 @@ required-features = ["integration-tests", "llm-ollama"]
 name = "war_engine_tracer"
 path = "tests/integration/war_engine_tracer_test.rs"
 
+[[test]]
+name = "e2e_crash_resume"
+path = "tests/integration/e2e_crash_resume_test.rs"
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"

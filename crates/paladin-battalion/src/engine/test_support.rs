@@ -3,6 +3,7 @@
 //! `#[cfg(test)]`-only: [`RecordingWaypointStore`] and [`CountingFunctionNode`]
 //! are the two doubles every later engine plan's unit tests assert against.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -11,7 +12,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
+use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
+use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
@@ -290,4 +294,101 @@ pub fn shuffle_seeded<T>(items: &mut [T], seed: u64) {
     use rand::seq::SliceRandom;
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
     items.shuffle(&mut rng);
+}
+
+/// A [`PaladinPort`] test double that returns a configured output (and
+/// token count) per Paladin name, and records every `execute` call, IN
+/// ORDER, with the exact `(paladin_name, input)` it received (Phase 22 Plan
+/// 08). This ordering-exact log is what the `resume` and E2E-1 tests use to
+/// prove non-re-execution: a repeat of an already-completed node's name in
+/// the log after a resume is a re-execution bug, not a coincidence.
+///
+/// The "Paladin name" key is `paladin.node.name` (`PaladinData::name`),
+/// matching the convention `tests/helpers/mock_paladin_port.rs`'s
+/// `FaultyPaladinPort` already established.
+#[derive(Default)]
+pub struct RecordingPaladinPort {
+    outputs: Mutex<HashMap<String, (String, u32)>>,
+    calls: Mutex<Vec<(String, String)>>,
+}
+
+impl RecordingPaladinPort {
+    /// Construct a port with no configured outputs: every unconfigured
+    /// Paladin name returns an empty output string and zero tokens.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Configure the output string a Paladin named `name` returns, with a
+    /// token count of `0`.
+    pub fn set_output(&self, name: impl Into<String>, output: impl Into<String>) {
+        self.set_output_with_tokens(name, output, 0);
+    }
+
+    /// Configure the output string AND reported token count a Paladin named
+    /// `name` returns.
+    pub fn set_output_with_tokens(
+        &self,
+        name: impl Into<String>,
+        output: impl Into<String>,
+        token_count: u32,
+    ) {
+        self.outputs
+            .lock()
+            .unwrap()
+            .insert(name.into(), (output.into(), token_count));
+    }
+
+    /// The ordered call log: one `(paladin_name, input)` entry per `execute`
+    /// call so far, in invocation order.
+    pub fn call_log(&self) -> Vec<(String, String)> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    /// The total number of `execute` calls made so far, across every
+    /// Paladin.
+    pub fn call_count(&self) -> usize {
+        self.calls.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl PaladinPort for RecordingPaladinPort {
+    async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
+        let name = paladin.node.name.clone();
+        self.calls
+            .lock()
+            .unwrap()
+            .push((name.clone(), input.to_string()));
+
+        let (output, token_count) = self
+            .outputs
+            .lock()
+            .unwrap()
+            .get(&name)
+            .cloned()
+            .unwrap_or_default();
+
+        Ok(PaladinResult {
+            output,
+            token_count,
+            execution_time_ms: 0,
+            loop_count: 1,
+            stop_reason: StopReason::Completed,
+            plan: None,
+            handoff_history: Vec::new(),
+        })
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("RecordingPaladinPort only supports execute() (Phase 22 Plan 08)")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
 }

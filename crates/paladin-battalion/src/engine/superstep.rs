@@ -29,16 +29,91 @@ use log::warn;
 use regex::Regex;
 use tokio::sync::Semaphore;
 
+use uuid::Uuid;
+
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
-use paladin_core::platform::container::battlefield::{Battlefield, CustomDispatchResolver};
+use paladin_core::platform::container::battlefield::{
+    Battlefield, CustomDispatchResolver, FieldName, StateDelta,
+};
+use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::waypoint::{
     NodeExecutionRecord, NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus,
 };
+use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::waypoint_port::WaypointPort;
 
 use crate::engine::graph::{NodeSpec, WarGraph};
+use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::NodeError;
 use crate::engine::{EngineError, RunOutcome, WaypointDurability};
+
+/// What one vanguard node resolves to for this superstep's execution: either
+/// a `Function` node's trait object, or the pieces of a `NodeSpec::Paladin`
+/// node needed to render its input and call the port, cloned out of the
+/// graph so the spawned task owns everything it touches (`Paladin` is `Box`ed
+/// in `NodeSpec`; cloning one `Paladin` per executing node per superstep is
+/// the accepted cost of keeping `WarGraph` itself immutable and shareable
+/// across concurrently-executing peers).
+enum NodeDispatch {
+    /// A pure `Function` node.
+    Function(Arc<dyn crate::engine::node::StateNode>),
+    /// A `NodeSpec::Paladin` node's execution inputs.
+    Paladin {
+        /// The Paladin to execute.
+        paladin: Box<Paladin>,
+        /// Renders the Paladin's string input from the superstep snapshot.
+        input_template: InputMapping,
+        /// The field `PaladinResult.output` is written into as a delta.
+        output_field: FieldName,
+    },
+}
+
+/// Execute one vanguard node's dispatch against `snapshot`.
+///
+/// Returns `(paladin_id, token_count, result)`: `paladin_id`/`token_count`
+/// are `None`/`0` for a `Function` node (it never carries either), and are
+/// populated from the executed `Paladin` and its `PaladinResult` for a
+/// `NodeSpec::Paladin` node. An `InputMapping::render` failure (an
+/// undeclared field, or a declared field with no value and no default) and a
+/// `PaladinPort::execute` error both become a `NodeError` here, so a Paladin
+/// node's failure reaches the exact same node-failure path (and the same
+/// `WaypointStatus::Failed { failed_node, .. }` reporting) a `Function`
+/// node's own error already does — no special-cased Paladin failure path.
+async fn execute_vanguard_node(
+    dispatch: NodeDispatch,
+    snapshot: &Battlefield,
+    ctx: &crate::engine::node::NodeContext,
+    paladin_port: &Arc<dyn PaladinPort>,
+) -> (Option<Uuid>, u64, Result<StateDelta, NodeError>) {
+    match dispatch {
+        NodeDispatch::Function(node) => {
+            let result = node.run(snapshot, ctx).await;
+            (None, 0, result)
+        }
+        NodeDispatch::Paladin {
+            paladin,
+            input_template,
+            output_field,
+        } => {
+            let paladin_id = Some(paladin.uuid);
+            let rendered = match input_template.render(snapshot) {
+                Ok(rendered) => rendered,
+                Err(e) => return (paladin_id, 0, Err(NodeError(e.to_string()))),
+            };
+            match paladin_port.execute(&paladin, &rendered).await {
+                Ok(result) => {
+                    let token_count = u64::from(result.token_count);
+                    let mut delta = StateDelta::new();
+                    match delta.set(output_field, result.output.clone()) {
+                        Ok(()) => (paladin_id, token_count, Ok(delta)),
+                        Err(e) => (paladin_id, token_count, Err(NodeError(e.to_string()))),
+                    }
+                }
+                Err(e) => (paladin_id, 0, Err(NodeError(e.to_string()))),
+            }
+        }
+    }
+}
 
 /// Run the superstep loop starting from `vanguard` at `superstep_number`,
 /// over `battlefield`, persisting through `waypoint_port` under
@@ -61,6 +136,7 @@ pub(crate) async fn run<W: WaypointPort>(
     mut visit_counts: BTreeMap<NodeId, u32>,
     mut parent_waypoint_id: Option<WaypointId>,
     mut superstep_number: u64,
+    paladin_port: &Arc<dyn PaladinPort>,
 ) -> Result<RunOutcome, EngineError> {
     // The entry-vanguard-empty case: nothing to run, ever. Persist exactly
     // one Completed Waypoint and return immediately (ENG-FR-01 step 7's
@@ -168,18 +244,21 @@ pub(crate) async fn run<W: WaypointPort>(
                     "vanguard node {node_id} not found in graph"
                 )))
             })?;
-            let node = match spec {
-                NodeSpec::Function(node) => Arc::clone(node),
-                NodeSpec::Paladin { .. } => {
-                    return Err(EngineError::Node(NodeError(
-                        "the superstep loop (Phase 22 Plan 05) only supports Function nodes; \
-                         NodeSpec::Paladin execution is Plan 22-08's expansion"
-                            .to_string(),
-                    )));
-                }
+            let dispatch = match spec {
+                NodeSpec::Function(node) => NodeDispatch::Function(Arc::clone(node)),
+                NodeSpec::Paladin {
+                    paladin,
+                    input_template,
+                    output_field,
+                } => NodeDispatch::Paladin {
+                    paladin: paladin.clone(),
+                    input_template: input_template.clone(),
+                    output_field: output_field.clone(),
+                },
             };
             let snap = Arc::clone(&snapshot);
             let sem = Arc::clone(&semaphore);
+            let port = Arc::clone(paladin_port);
             let ctx = crate::engine::node::NodeContext {
                 node_id: node_id.clone(),
                 thread_id: thread.clone(),
@@ -192,9 +271,17 @@ pub(crate) async fn run<W: WaypointPort>(
                     .await
                     .expect("semaphore is never closed");
                 let started_at = Utc::now();
-                let result = node.run(&snap, &ctx).await;
+                let (paladin_id, token_count, result) =
+                    execute_vanguard_node(dispatch, &snap, &ctx, &port).await;
                 let duration_ms = (Utc::now() - started_at).num_milliseconds().max(0) as u64;
-                (nid, started_at, duration_ms, result)
+                (
+                    nid,
+                    started_at,
+                    duration_ms,
+                    paladin_id,
+                    token_count,
+                    result,
+                )
             }));
         }
 
@@ -202,17 +289,17 @@ pub(crate) async fn run<W: WaypointPort>(
         let mut completed_records = Vec::with_capacity(handles.len());
         let mut node_failure: Option<(NodeId, NodeError)> = None;
         for handle in handles {
-            let (node_id, started_at, duration_ms, result) = handle
+            let (node_id, started_at, duration_ms, paladin_id, token_count, result) = handle
                 .await
                 .map_err(|e| EngineError::Node(NodeError(format!("task join error: {e}"))))?;
             match result {
                 Ok(delta) => {
                     completed_records.push(NodeExecutionRecord {
                         node_id: node_id.clone(),
-                        paladin_id: None,
+                        paladin_id,
                         started_at,
                         duration_ms,
-                        token_count: 0,
+                        token_count,
                         outcome: NodeOutcomeKind::Succeeded,
                         attempt: 1,
                     });
@@ -221,10 +308,10 @@ pub(crate) async fn run<W: WaypointPort>(
                 Err(e) => {
                     completed_records.push(NodeExecutionRecord {
                         node_id: node_id.clone(),
-                        paladin_id: None,
+                        paladin_id,
                         started_at,
                         duration_ms,
-                        token_count: 0,
+                        token_count,
                         outcome: NodeOutcomeKind::Failed,
                         attempt: 1,
                     });
@@ -636,8 +723,8 @@ mod tests {
     use crate::engine::graph::EdgeSpec;
     use crate::engine::graph::EngineLimits;
     use crate::engine::test_support::{
-        ConcurrencyTrackingNode, CountingFunctionNode, FailingFunctionNode, RecordingWaypointStore,
-        YieldingNode, shuffle_seeded,
+        ConcurrencyTrackingNode, CountingFunctionNode, FailingFunctionNode, RecordingPaladinPort,
+        RecordingWaypointStore, YieldingNode, shuffle_seeded,
     };
 
     fn field(name: &str) -> FieldName {
@@ -646,6 +733,10 @@ mod tests {
 
     fn schema(fields: Vec<FieldSpec>) -> BattlefieldSchema {
         BattlefieldSchema::new(fields)
+    }
+
+    fn no_paladin_port() -> Arc<dyn PaladinPort> {
+        Arc::new(RecordingPaladinPort::new())
     }
 
     async fn run_default(
@@ -669,6 +760,7 @@ mod tests {
             BTreeMap::new(),
             None,
             1,
+            &no_paladin_port(),
         )
         .await
         .unwrap()
@@ -869,6 +961,7 @@ mod tests {
             BTreeMap::new(),
             None,
             1,
+            &no_paladin_port(),
         )
         .await;
 
@@ -894,6 +987,7 @@ mod tests {
             BTreeMap::new(),
             None,
             1,
+            &no_paladin_port(),
         )
         .await
         .unwrap();
@@ -945,6 +1039,7 @@ mod tests {
             BTreeMap::new(),
             None,
             1,
+            &no_paladin_port(),
         )
         .await
         .unwrap();

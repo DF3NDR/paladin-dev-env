@@ -17,18 +17,21 @@
 //! expansion does not require changing these signatures.
 //!
 //! Submodules:
-//! - [`graph`] — `WarGraph`, `NodeSpec`, `EdgeSpec`, `EngineLimits`,
-//!   `InputMapping`, and `WarGraph::validate`/`fingerprint`.
+//! - [`graph`] — `WarGraph`, `NodeSpec`, `EdgeSpec`, `EngineLimits`, and
+//!   `WarGraph::validate`/`fingerprint`.
+//! - [`input_mapping`] — `InputMapping`, `InputMappingError`: the X-03
+//!   string bridge a `NodeSpec::Paladin` node renders its input through.
 //! - [`node`] — `StateNode`, `NodeContext`, `NodeError`.
 //! - [`dispatch_registry`] — `DispatchRegistry`, the engine-owned
 //!   `DispatchRule::Custom` name -> closure registration (ENG-FR-09).
 //! - `superstep` (private) — the superstep loop `start`/`resume` reduce to.
-//! - `test_support` (`#[cfg(test)]`) — `RecordingWaypointStore` and
-//!   `CountingFunctionNode`, the doubles this and later engine plans assert
-//!   against.
+//! - `test_support` (`#[cfg(test)]`) — `RecordingWaypointStore`,
+//!   `RecordingPaladinPort` and `CountingFunctionNode`, the doubles this and
+//!   later engine plans assert against.
 
 pub mod dispatch_registry;
 pub mod graph;
+pub mod input_mapping;
 pub mod node;
 mod superstep;
 #[cfg(test)]
@@ -52,7 +55,8 @@ use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 
 pub use dispatch_registry::DispatchRegistry;
-pub use graph::{EdgeSpec, EngineLimits, InputMapping, NodeSpec, WarGraph};
+pub use graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
+pub use input_mapping::{InputMapping, InputMappingError};
 pub use node::{NodeContext, NodeError, StateNode};
 
 /// Whether a `WaypointPort::save` failure fails the run.
@@ -196,13 +200,18 @@ pub enum EngineError {
         /// The rejected registration name.
         name: String,
     },
+
+    /// A `NodeSpec::Paladin` node's `InputMapping::render` call failed: an
+    /// undeclared field, or a declared field with no value and no default
+    /// (X-03).
+    #[error("input mapping error: {0}")]
+    InputMapping(#[from] input_mapping::InputMappingError),
 }
 
 /// Executes [`WarGraph`]s: runs nodes, merges their deltas into the shared
 /// [`Battlefield`], and automatically checkpoints a [`Waypoint`] after every
 /// superstep through `W: WaypointPort` (ENG-FR-11).
 pub struct WarEngine<W: WaypointPort> {
-    #[allow(dead_code)] // wired for NodeSpec::Paladin execution in Plan 22-08
     paladin_port: Arc<dyn PaladinPort>,
     waypoint_port: Arc<W>,
     durability: WaypointDurability,
@@ -264,9 +273,11 @@ impl<W: WaypointPort> WarEngine<W> {
     /// Runs the full superstep loop (ENG-FR-01): validates the graph,
     /// resolves the initial Battlefield state, then executes supersteps
     /// until the Vanguard is empty (`RunOutcome::Completed`) or a limit or
-    /// node/merge failure intervenes (`RunOutcome::Failed`). `NodeSpec::
-    /// Paladin` execution is Plan 22-08's expansion; a graph containing one
-    /// fails with a typed `EngineError::Node` before any Paladin runs.
+    /// node/merge failure intervenes (`RunOutcome::Failed`). A
+    /// `NodeSpec::Paladin` node renders its input through its
+    /// `InputMapping` and calls `PaladinPort::execute` (ENG-FR-13, X-03); an
+    /// `InputMapping::render` failure or a `PaladinPort::execute` error both
+    /// fail that node exactly as a `Function` node's own error would.
     pub async fn start(
         &self,
         graph: &WarGraph,
@@ -291,6 +302,7 @@ impl<W: WaypointPort> WarEngine<W> {
             BTreeMap::new(),
             None,
             1,
+            &self.paladin_port,
         )
         .await
     }
@@ -304,7 +316,7 @@ impl<W: WaypointPort> WarEngine<W> {
     /// `RunOutcome::Completed` immediately without executing anything
     /// (ENG-FR-12). Resuming a `Running`/`Failed`/`AwaitingInput`/`Halted`
     /// waypoint through the same superstep loop `start` uses is Plan
-    /// 22-08's expansion.
+    /// 22-08 Task 2's expansion.
     pub async fn resume(
         &self,
         graph: &WarGraph,
@@ -331,7 +343,8 @@ impl<W: WaypointPort> WarEngine<W> {
                 waypoint: latest.waypoint_id,
             }),
             _ => Err(EngineError::Node(NodeError(
-                "WarEngine::resume only supports resuming a Completed waypoint until Plan 22-08"
+                "WarEngine::resume only supports resuming a Completed waypoint until Plan 22-08 \
+                 Task 2"
                     .to_string(),
             ))),
         }
@@ -346,6 +359,7 @@ mod tests {
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
     };
     use paladin_core::platform::container::paladin_error::PaladinError;
+    use paladin_core::platform::container::waypoint::NodeOutcomeKind;
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream};
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
@@ -652,6 +666,236 @@ mod tests {
             .unwrap();
 
         let mapping = InputMapping::new("hello {name}!");
-        assert_eq!(mapping.render(&battlefield), "hello world!");
+        assert_eq!(mapping.render(&battlefield).unwrap(), "hello world!");
+    }
+
+    // --- Task 1: NodeSpec::Paladin execution ------------------------------
+
+    fn make_paladin(name: &str) -> Paladin {
+        let data = paladin_core::platform::container::paladin::PaladinData {
+            name: name.to_string(),
+            ..Default::default()
+        };
+        paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
+    }
+
+    fn engine_with_port(
+        port: Arc<crate::engine::test_support::RecordingPaladinPort>,
+    ) -> WarEngine<InMemoryWaypointStore> {
+        WarEngine::new(port, Arc::new(InMemoryWaypointStore::new()))
+    }
+
+    #[tokio::test]
+    async fn paladin_node_writes_output_into_declared_field() {
+        let field_name = FieldName::new("summary").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                FieldName::new("topic").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+            FieldSpec::new(field_name.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("summarizer");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Paladin {
+                paladin: Box::new(make_paladin("summarizer")),
+                input_template: InputMapping::new("summarize {topic}"),
+                output_field: field_name.clone(),
+            },
+        );
+        graph.add_entry(node_id);
+
+        let port = Arc::new(crate::engine::test_support::RecordingPaladinPort::new());
+        port.set_output("summarizer", "a short summary");
+        let engine = engine_with_port(port.clone());
+
+        let mut initial = StateDelta::new();
+        initial
+            .set(FieldName::new("topic").unwrap(), "rust")
+            .unwrap();
+        let thread = ThreadId::new("paladin-write").unwrap();
+        let outcome = engine.start(&graph, thread, initial).await.unwrap();
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&field_name).unwrap(),
+                    Some("a short summary".to_string())
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        assert_eq!(
+            port.call_log(),
+            vec![("summarizer".to_string(), "summarize rust".to_string())]
+        );
+        assert_eq!(port.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn paladin_node_append_output_field_accumulates() {
+        let field_name = FieldName::new("notes").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field_name.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::Paladin {
+                paladin: Box::new(make_paladin("first")),
+                input_template: InputMapping::new("note one"),
+                output_field: field_name.clone(),
+            },
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::Paladin {
+                paladin: Box::new(make_paladin("second")),
+                input_template: InputMapping::new("note two"),
+                output_field: field_name.clone(),
+            },
+        );
+        graph.add_entry(n1);
+        graph.add_entry(n2);
+
+        let port = Arc::new(crate::engine::test_support::RecordingPaladinPort::new());
+        port.set_output("first", "alpha");
+        port.set_output("second", "beta");
+        let engine = engine_with_port(port);
+
+        let thread = ThreadId::new("paladin-append").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                let values: Vec<String> = final_state.get(&field_name).unwrap().unwrap();
+                let mut sorted = values.clone();
+                sorted.sort();
+                assert_eq!(sorted, vec!["alpha".to_string(), "beta".to_string()]);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn paladin_node_execution_record_carries_reported_token_count() {
+        let field_name = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field_name.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("counter");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Paladin {
+                paladin: Box::new(make_paladin("counter")),
+                input_template: InputMapping::new("go"),
+                output_field: field_name,
+            },
+        );
+        graph.add_entry(node_id.clone());
+
+        let port = Arc::new(crate::engine::test_support::RecordingPaladinPort::new());
+        port.set_output_with_tokens("counter", "done", 42);
+        let store = Arc::new(crate::engine::test_support::RecordingWaypointStore::new());
+        let engine = WarEngine::new(port, store.clone());
+
+        let thread = ThreadId::new("paladin-tokens").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let saved = store.saved_waypoints(&thread).await;
+        assert_eq!(saved.len(), 1);
+        let record = saved[0]
+            .completed
+            .iter()
+            .find(|r| r.node_id == node_id)
+            .expect("counter node record present");
+        assert_eq!(record.token_count, 42);
+        assert_eq!(record.attempt, 1);
+        assert!(matches!(record.outcome, NodeOutcomeKind::Succeeded));
+    }
+
+    #[tokio::test]
+    async fn paladin_port_execute_error_fails_the_node_and_the_run() {
+        struct FailingPaladinPort;
+
+        #[async_trait]
+        impl PaladinPort for FailingPaladinPort {
+            async fn execute(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                Err(PaladinError::ExecutionError("boom".to_string()))
+            }
+
+            async fn execute_stream(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                unimplemented!("not exercised by this test")
+            }
+
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+        }
+
+        let field_name = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field_name.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("failer");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Paladin {
+                paladin: Box::new(make_paladin("failer")),
+                input_template: InputMapping::new("go"),
+                output_field: field_name,
+            },
+        );
+        graph.add_entry(node_id.clone());
+
+        let engine = WarEngine::new(
+            Arc::new(FailingPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let thread = ThreadId::new("paladin-failure").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Failed { error, waypoint } => {
+                assert!(matches!(error, EngineError::Node(_)));
+                assert!(waypoint.is_some());
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
     }
 }

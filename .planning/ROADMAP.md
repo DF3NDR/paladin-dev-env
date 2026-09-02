@@ -282,6 +282,17 @@ Runtime" — are detailed in full below.*
 
 - [ ] 22-17-PLAN.md — Blocking checkpoint: confirm the CI run actually exercised the Postgres suite, and settle the readiness defect's disposition (wave 10)
 
+### Phase 22.1: Engine readiness defect and MSRV follow-up (INSERTED)
+
+**Goal:** Close the three items Phase 22's gap-closure checkpoint (22-17) could not settle in-repo: (1) fix the frontier readiness defect found by the 22-16 audit — a node that is both self-looping and fed by an upstream edge can never take its first turn yet the run reports Completed (repro: `#[ignore]`d test `self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`, `cargo test -p paladin-battalion --lib engine::superstep -- --ignored`); (2) decide and enact the MSRV position — the workspace declares rust-version 1.85 but the =2.1.0-pinned rmcp's `transport-child-process` feature requires process-wrap >=9.x (rustc 1.86/1.87 minimum), so either the MSRV raises (MIGRATION.md §9.3 / X-11.1 D-07 register) or the rmcp pin moves; (3) confirm a fully green `postgres-integration` CI run after the 22-17 fixes and record it as G-22-1's closing evidence.
+**Requirements**: ENG-02, ENG-05
+**Depends on:** Phase 22
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 22.1 to break down)
+
 ### Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 
 **Goal**: Nodes steer their own routing at runtime, dynamically fan out into map-reduce workers, nest Battalions as subgraphs, and optionally route by LLM evaluation — with the BUG-01 custom-edge-condition defect fixed fail-closed.

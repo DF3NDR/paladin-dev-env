@@ -6,14 +6,14 @@ current_phase: 22
 current_phase_name: Battlefield State & Superstep Engine
 status: executing
 stopped_at: Phase 22 executed — verification human_needed (4 UAT items)
-last_updated: "2026-09-02T17:21:35.416Z"
+last_updated: "2026-09-02T21:04:16.455Z"
 last_activity: 2026-09-02
 last_activity_desc: Phase 22 execution resumed (wave continue)
 progress:
-  total_phases: 1
+  total_phases: 2
   completed_phases: 0
   total_plans: 17
-  completed_plans: 11
+  completed_plans: 16
 ---
 
 # Project State
@@ -691,6 +691,7 @@ requirement.
 - Phase 19 added: crates.io Trusted Publishing — replace the long-lived CARGO_REGISTRY_TOKEN with OIDC-issued ephemeral tokens; PUB-01..PUB-05 minted at roadmap time
 - Phase 20 added: Release Pipeline Recovery — idempotent re-runs on the same tag, a pre-publish gate over tag/manifest/changelog/CI agreement, and a stuck-halfway runbook with a yank policy; PUBOPS-01..PUBOPS-05 minted at roadmap time
 - Phase 21 added: Release Artifacts — Curated Release Notes and Attached Distributables (v0.9.0; ARTIFACT-01..06 minted, twenty-second prefix)
+- Phase 22.1 inserted after Phase 22: Engine readiness defect and MSRV follow-up (readiness defect from 22-16 audit; MSRV 1.85 vs rmcp-pinned process-wrap decision; green postgres-integration run confirmation) (URGENT)
 
 ## Deferred Items
 

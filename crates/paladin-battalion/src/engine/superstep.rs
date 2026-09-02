@@ -637,6 +637,7 @@ mod tests {
     use crate::engine::graph::EngineLimits;
     use crate::engine::test_support::{
         ConcurrencyTrackingNode, CountingFunctionNode, FailingFunctionNode, RecordingWaypointStore,
+        YieldingNode, shuffle_seeded,
     };
 
     fn field(name: &str) -> FieldName {
@@ -1659,5 +1660,142 @@ mod tests {
         assert_eq!(a_node.run_count(), 3);
         assert_eq!(b_node.run_count(), 2);
         assert!(3 < EngineLimits::default().max_supersteps);
+    }
+
+    // --- Task 3: determinism under randomized scheduling, and the X-05
+    // 100-iteration multi-thread stress test ------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn eng_fr_08_determinism_over_twenty_randomized_scheduling_iterations() {
+        let mut reference: Option<(String, Vec<Vec<NodeId>>)> = None;
+
+        for seed in 0..20u64 {
+            let s = schema(vec![
+                FieldSpec::new(field("log"), DispatchRule::Append, None, false),
+                FieldSpec::new(field("total"), DispatchRule::Sum, None, false),
+            ]);
+            let mut graph = WarGraph::new(s, EngineLimits::default());
+
+            let mut entry_ids = Vec::new();
+            for i in 0..4 {
+                let id = NodeId::new(format!("append{i}"));
+                let base =
+                    CountingFunctionNode::fixed(field("log"), serde_json::json!(format!("v{i}")));
+                let node = YieldingNode::new(base, (seed as usize + i) % 3);
+                graph.add_node(id.clone(), NodeSpec::Function(node));
+                entry_ids.push(id);
+            }
+            let sum_id = NodeId::new("summer");
+            let sum_base = CountingFunctionNode::fixed(field("total"), serde_json::json!(1));
+            let sum_node = YieldingNode::new(sum_base, seed as usize % 2);
+            graph.add_node(sum_id.clone(), NodeSpec::Function(sum_node));
+            entry_ids.push(sum_id);
+
+            shuffle_seeded(&mut entry_ids, seed);
+            for id in &entry_ids {
+                graph.add_entry(id.clone());
+            }
+
+            let store = RecordingWaypointStore::new();
+            let thread = ThreadId::new(format!("determinism-{seed}")).unwrap();
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                run_default(&graph, thread.clone(), &store),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("seed {seed} must not hang"));
+            let final_state = match outcome {
+                RunOutcome::Completed { final_state, .. } => final_state,
+                other => panic!("seed {seed}: expected Completed, got {other:?}"),
+            };
+            let serialized = serde_json::to_string(&final_state).unwrap();
+
+            let saved = store.saved_waypoints(&thread).await;
+            let mut by_superstep = saved;
+            by_superstep.sort_by_key(|w| w.superstep);
+            let vanguard_sequence: Vec<Vec<NodeId>> =
+                by_superstep.into_iter().map(|w| w.vanguard).collect();
+
+            match &reference {
+                None => reference = Some((serialized, vanguard_sequence)),
+                Some((ref_state, ref_sequence)) => {
+                    assert_eq!(
+                        &serialized, ref_state,
+                        "seed {seed} produced a non-byte-identical final Battlefield"
+                    );
+                    assert_eq!(
+                        &vanguard_sequence, ref_sequence,
+                        "seed {seed} produced a different Vanguard sequence"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn x05_eight_node_parallel_stress_100_iterations_exact_counts() {
+        const NODES: usize = 8;
+        const ITERATIONS: usize = 100;
+        let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut total_saves = 0usize;
+
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            for iter in 0..ITERATIONS {
+                let s = schema(vec![FieldSpec::new(
+                    field("log"),
+                    DispatchRule::Append,
+                    None,
+                    false,
+                )]);
+                let mut graph = WarGraph::new(s, EngineLimits::default());
+
+                let mut entry_ids = Vec::new();
+                for i in 0..NODES {
+                    let id = NodeId::new(format!("n{i}"));
+                    let exec = executions.clone();
+                    let base = CountingFunctionNode::new(move |_run, _state| {
+                        exec.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let mut d =
+                            paladin_core::platform::container::battlefield::StateDelta::new();
+                        d.set_raw(field("log"), serde_json::json!(i));
+                        d
+                    });
+                    let node = YieldingNode::new(base, (iter + i) % 3);
+                    graph.add_node(id.clone(), NodeSpec::Function(node));
+                    entry_ids.push(id);
+                }
+                shuffle_seeded(&mut entry_ids, iter as u64);
+                for id in &entry_ids {
+                    graph.add_entry(id.clone());
+                }
+
+                let store = RecordingWaypointStore::new();
+                let thread = ThreadId::new(format!("x05-{iter}")).unwrap();
+                let outcome = run_default(&graph, thread, &store).await;
+                assert!(
+                    matches!(outcome, RunOutcome::Completed { .. }),
+                    "iteration {iter} did not complete"
+                );
+                total_saves += store.save_call_count();
+            }
+        })
+        .await
+        .expect(
+            "the 100-iteration 8-node all-parallel stress run must complete inside the \
+             timeout -- a deadlock or livelock must fail loudly, not hang the suite",
+        );
+
+        // Exact equality, not a lower bound (X-05): a lost or duplicated
+        // node execution or Waypoint save would show as a count below or
+        // above these products, which a `>=`/`<=` assertion would tolerate.
+        assert_eq!(
+            executions.load(std::sync::atomic::Ordering::SeqCst),
+            NODES * ITERATIONS,
+            "exact node-execution count across all iterations"
+        );
+        assert_eq!(
+            total_saves, ITERATIONS,
+            "exactly one Waypoint save per single-superstep iteration"
+        );
     }
 }

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Waypoint retention is a public application-layer service.** `WaypointRetentionService`
+  (`application::services::waypoint_retention`) owns the single definition of a protected
+  Waypoint — a thread's latest plus every `AwaitingInput` entry — and passes the keep-set into
+  the storage routine, which prunes on `WaypointPort::prune_thread` instead of the former
+  delete-then-resave loop. `WaypointRetentionConfig` (`config::waypoint_retention`) configures
+  it, with env overrides and validation. Additive API only (no pre-existing item changed);
+  API-surface baseline regenerated to match.
+
 ## [0.9.0] - 2026-09-01
 
 **First stable release since 0.5.1 (2026-06-04), and the first cut by the rebuilt release

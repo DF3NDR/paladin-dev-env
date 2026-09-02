@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-08-17 14:33:20 UTC
+# Public API Surface - Generated 2026-09-02 19:31:22 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -1700,6 +1700,19 @@ pub use paladin::application::services::sanctum::rag_retrieval_service::RagConfi
 pub use paladin::application::services::sanctum::rag_retrieval_service::RagRetrievalService
 pub use paladin::application::services::sanctum::rag_retrieval_service::RetrievalTrigger
 pub use paladin::application::services::sanctum::rag_retrieval_service::retrieve_context_with_timeout
+pub mod paladin::application::services::waypoint_retention
+pub struct paladin::application::services::waypoint_retention::WaypointRetentionService
+impl paladin::application::services::waypoint_retention::WaypointRetentionService
+pub fn paladin::application::services::waypoint_retention::WaypointRetentionService::new(alloc::sync::Arc<dyn paladin_ports::output::waypoint_port::WaypointPort>, paladin::config::waypoint_retention::WaypointRetentionConfig) -> Self
+pub async fn paladin::application::services::waypoint_retention::WaypointRetentionService::prune(&self) -> core::result::Result<paladin_storage::waypoint::retention::PruneReport, paladin_ports::output::waypoint_port::WaypointError>
+impl core::marker::Freeze for paladin::application::services::waypoint_retention::WaypointRetentionService
+impl core::marker::Send for paladin::application::services::waypoint_retention::WaypointRetentionService
+impl core::marker::Sync for paladin::application::services::waypoint_retention::WaypointRetentionService
+impl core::marker::Unpin for paladin::application::services::waypoint_retention::WaypointRetentionService
+impl core::marker::UnsafeUnpin for paladin::application::services::waypoint_retention::WaypointRetentionService
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::waypoint_retention::WaypointRetentionService
+impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::waypoint_retention::WaypointRetentionService
+pub fn paladin::application::services::waypoint_retention::protected_waypoints(&paladin_core::platform::container::waypoint::ThreadId, &[paladin_ports::output::waypoint_port::WaypointSummary]) -> std::collections::hash::set::HashSet<paladin_core::platform::container::waypoint::WaypointId>
 pub mod paladin::config
 pub use paladin::config::GarrisonSettings
 pub use paladin::config::LlmConfig
@@ -1968,6 +1981,8 @@ impl paladin::config::env_utils::EnvOverridable for paladin::config::herald::Her
 pub fn paladin::config::herald::HeraldConfig::apply_env_overrides(&mut self)
 impl paladin::config::env_utils::EnvOverridable for paladin::config::queue::QueueConfig
 pub fn paladin::config::queue::QueueConfig::apply_env_overrides(&mut self)
+impl paladin::config::env_utils::EnvOverridable for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::apply_env_overrides(&mut self)
 pub fn paladin::config::env_utils::read_env<T: core::str::traits::FromStr>(&str) -> core::option::Option<T>
 pub mod paladin::config::file_storage
 pub struct paladin::config::file_storage::FileStorageConfig
@@ -2271,6 +2286,32 @@ impl core::marker::Unpin for paladin::config::user_config::UserServiceFactory
 impl core::marker::UnsafeUnpin for paladin::config::user_config::UserServiceFactory
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::user_config::UserServiceFactory
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::user_config::UserServiceFactory
+pub mod paladin::config::waypoint_retention
+pub struct paladin::config::waypoint_retention::WaypointRetentionConfig
+pub paladin::config::waypoint_retention::WaypointRetentionConfig::enabled: bool
+pub paladin::config::waypoint_retention::WaypointRetentionConfig::max_age_days: core::option::Option<u32>
+pub paladin::config::waypoint_retention::WaypointRetentionConfig::max_waypoints_per_thread: core::option::Option<u32>
+impl paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::clone(&self) -> paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::default::Default for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin::config::env_utils::EnvOverridable for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::apply_env_overrides(&mut self)
+impl serde_core::ser::Serialize for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::marker::Send for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::marker::Sync for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::marker::Unpin for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::marker::UnsafeUnpin for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::waypoint_retention::WaypointRetentionConfig
 pub mod paladin::config::web_server
 pub struct paladin::config::web_server::MessageServiceSettings
 pub paladin::config::web_server::MessageServiceSettings::default_ttl_seconds: core::option::Option<i64>
@@ -2831,6 +2872,31 @@ impl core::marker::Unpin for paladin::config::herald::TableHeraldConfig
 impl core::marker::UnsafeUnpin for paladin::config::herald::TableHeraldConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::herald::TableHeraldConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::herald::TableHeraldConfig
+pub struct paladin::config::WaypointRetentionConfig
+pub paladin::config::WaypointRetentionConfig::enabled: bool
+pub paladin::config::WaypointRetentionConfig::max_age_days: core::option::Option<u32>
+pub paladin::config::WaypointRetentionConfig::max_waypoints_per_thread: core::option::Option<u32>
+impl paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::clone(&self) -> paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::default::Default for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin::config::env_utils::EnvOverridable for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::apply_env_overrides(&mut self)
+impl serde_core::ser::Serialize for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::marker::Send for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::marker::Sync for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::marker::Unpin for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::marker::UnsafeUnpin for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::waypoint_retention::WaypointRetentionConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::waypoint_retention::WaypointRetentionConfig
 pub struct paladin::config::WebHttpConfig
 pub paladin::config::WebHttpConfig::auth: paladin::config::agents::AuthConfig
 pub paladin::config::WebHttpConfig::body_limit_bytes: usize
@@ -3547,4 +3613,4 @@ impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services
 impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::paladin::paladin_builder::PaladinBuilder
 
 ## Summary
-Total public items: 1971
+Total public items: 2000

@@ -790,6 +790,90 @@ jobs:
         if: always()
         run: docker compose -f docker/docker-compose.test.yml down -v
 
+  # Postgres live-server integration (G-22-1, ENG-05). The PostgresWaypointStore
+  # Tier 2 contract suite is env-gated on WAYPOINT_POSTGRES_TEST_URL and returns
+  # early -- and therefore passes -- when no server is reachable. Nothing in
+  # this repository sets that variable except `make test-integration-docker`,
+  # which needs a local Docker daemon no development environment here has, so
+  # before this job the suite executed in no environment at all while every CI
+  # run reported green -- the same failure shape Phase 17 found and fixed for
+  # the Ollama suite above.
+  #
+  # The reachability assertion (`pg_isready`), the early-return detection step
+  # and the selected-count assertion below are what give this job its meaning
+  # -- do not remove them.
+  postgres-integration:
+    name: Postgres Waypoint Contract Suite (live server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: postgres-integration
+
+      - name: Start postgres-test and wait for healthy
+        run: |
+          docker compose -f docker/docker-compose.test.yml up -d postgres-test
+          echo "Waiting for postgres-test to report healthy..."
+          # Matches the house style used by ollama-integration above: pipe into
+          # grep rather than command-substituting inside single quotes
+          # (shellcheck SC2016). -x is load-bearing: a plain `grep -q healthy`
+          # also matches "unhealthy".
+          timeout 180 sh -c 'until docker inspect paladin-postgres-test --format="{{.State.Health.Status}}" 2>/dev/null | grep -qx healthy; do sleep 3; done'
+
+      - name: Assert the live server accepts connections
+        run: docker exec paladin-postgres-test pg_isready -U paladin -d paladin_waypoint_test
+
+      - name: Run PostgresWaypointStore contract suite
+        run: |
+          set -o pipefail
+          # --nocapture: store_or_skip() announces its early-return path on
+          # stdout, which cargo swallows without it -- the detection step below
+          # would have nothing to read. --test-threads=1: this module's tests
+          # share one database (unlike the SQLite suite's per-test in-memory
+          # database), and
+          # list_threads_empty_then_three_threads_newest_activity_first asserts
+          # a literally empty store; under default parallelism a peer test's
+          # writes land inside that assertion's window and the job goes red for
+          # a reason that is not a real contract violation.
+          WAYPOINT_POSTGRES_TEST_URL=postgres://paladin:paladin@localhost:5433/paladin_waypoint_test \
+            cargo test -p paladin-storage --features postgres --lib waypoint::postgres \
+            -- --test-threads=1 --nocapture 2>&1 | tee /tmp/postgres-waypoint-test.log
+
+      - name: Fail if the suite took the SKIP path
+        run: |
+          if grep -q 'SKIP:' /tmp/postgres-waypoint-test.log; then
+            echo "::error::waypoint::postgres took the SKIP path — the live server was NOT exercised."
+            grep 'SKIP:' /tmp/postgres-waypoint-test.log
+            exit 1
+          fi
+          echo "All waypoint::postgres tests exercised the live server."
+
+      - name: Fail if the suite selected fewer tests than it declares
+        run: |
+          set -o pipefail
+          EXPECTED=$(grep -c '#\[tokio::test\]' crates/paladin-storage/src/waypoint/postgres.rs)
+          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/postgres-waypoint-test.log | tail -1)
+          echo "Declared tests: $EXPECTED, passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then
+            echo "::error::waypoint::postgres selected fewer tests (${ACTUAL:-0}) than the module declares ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
+            exit 1
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.test.yml logs postgres-test
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker/docker-compose.test.yml down -v
+
   # Coverage measurement (PIPE-02) — MEASURE-ONLY as of this commit: no minimum-
   # threshold flag. D-04 requires the figure to be measured before the floor
   # derived from it can be set; plan 15-03 adds the threshold once this job has

@@ -269,9 +269,9 @@ Runtime" — are detailed in full below.*
 
 **Wave 8** *(gap-closure wave 1; blocked on Wave 7 completion)*
 
-- [ ] 22-12-PLAN.md — G-22-1: postgres-integration CI job so the Postgres Tier 2 contract suite executes somewhere, with reachability, skip and empty-selection assertions (wave 8)
-- [ ] 22-13-PLAN.md — G-22-2: WaypointPort delete-one primitive and prune_thread keep-set contract, transactional on both SQL backends (wave 8)
-- [ ] 22-15-PLAN.md — G-22-3 / BUG-02: eligible-set reachability validation on WarGraph::validate with an explicit dynamic-target marker, test-first (wave 8)
+- [x] 22-12-PLAN.md — G-22-1: postgres-integration CI job so the Postgres Tier 2 contract suite executes somewhere, with reachability, skip and empty-selection assertions (wave 8)
+- [x] 22-13-PLAN.md — G-22-2: WaypointPort delete-one primitive and prune_thread keep-set contract, transactional on both SQL backends (wave 8)
+- [x] 22-15-PLAN.md — G-22-3 / BUG-02: eligible-set reachability validation on WarGraph::validate with an explicit dynamic-target marker, test-first (wave 8)
 
 **Wave 9** *(gap-closure wave 2)*
 

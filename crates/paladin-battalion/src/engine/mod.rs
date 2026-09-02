@@ -1261,9 +1261,15 @@ mod tests {
         store2.save(&waypoint_after_a).await.unwrap();
         let engine2 = WarEngine::new(Arc::new(UnimplementedPaladinPort), Arc::new(store2));
 
-        // Altered graph: the same two nodes, PLUS an unconnected extra node
-        // "c" -- fingerprint differs, but the restored vanguard node ("b")
-        // is still present.
+        // Altered graph: the same two nodes, PLUS an extra node "c" --
+        // fingerprint differs (node ids are hashed; entry status is not),
+        // but the restored vanguard node ("b") is still present. "c" is
+        // declared as its own entry point (ENG-FR-02a / BUG-02: a declared
+        // node with no incoming edge and no entry status would be rejected
+        // at validate() as unreachable) -- it is never part of the
+        // RESTORED vanguard this resume actually schedules, so it never
+        // executes here; the entry declaration exists solely to make it a
+        // legitimately eligible node rather than a stranded one.
         let (mut altered, _a2, _b2) = two_node_chain_graph();
         altered.add_node(
             NodeId::new("c"),
@@ -1272,6 +1278,7 @@ mod tests {
                 serde_json::json!("c"),
             )),
         );
+        altered.add_entry(NodeId::new("c"));
         assert_ne!(graph.fingerprint(), altered.fingerprint());
 
         let outcome = engine2

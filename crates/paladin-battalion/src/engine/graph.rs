@@ -680,11 +680,11 @@ mod tests {
     // and a run over it reports `Completed` with that node's run_count() at
     // 0).
 
+    use crate::engine::WaypointDurability;
     use crate::engine::hooks::TraceDispatcher;
     use crate::engine::test_support::{
         CountingFunctionNode, RecordingPaladinPort, RecordingWaypointStore,
     };
-    use crate::engine::{WaypointDurability};
     use paladin_core::platform::container::battlefield::StateDelta;
     use paladin_core::platform::container::waypoint::ThreadId;
 
@@ -724,7 +724,10 @@ mod tests {
     #[test]
     fn validate_rejects_self_loop_only_stranded_node_naming_it() {
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
-        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
         graph.add_node(
             NodeId::new("stranded"),
             NodeSpec::Function(StdArc::new(NoopNode)),
@@ -752,7 +755,10 @@ mod tests {
     #[test]
     fn validate_rejects_multiple_stranded_nodes_in_one_error_registration_order() {
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
-        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
         graph.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
         graph.add_node(NodeId::new("c"), NodeSpec::Function(StdArc::new(NoopNode)));
         graph.add_node(NodeId::new("d"), NodeSpec::Function(StdArc::new(NoopNode)));
@@ -852,7 +858,11 @@ mod tests {
     async fn self_loop_on_entry_node_still_validates_and_runs() {
         let field_name = FieldName::new("status").unwrap();
         let node = CountingFunctionNode::new(move |run_index, _state| {
-            let status = if run_index == 1 { "approved" } else { "looping" };
+            let status = if run_index == 1 {
+                "approved"
+            } else {
+                "looping"
+            };
             let mut delta = StateDelta::new();
             delta.set(field_name.clone(), status).unwrap();
             delta
@@ -925,7 +935,10 @@ mod tests {
     #[test]
     fn validate_rejects_isolated_node_with_no_edges_when_graph_has_entry() {
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
-        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
         graph.add_node(
             NodeId::new("isolated"),
             NodeSpec::Function(StdArc::new(NoopNode)),
@@ -950,7 +963,10 @@ mod tests {
                 ..EngineLimits::default()
             },
         );
-        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
         graph.add_node(
             NodeId::new("stranded"),
             NodeSpec::Function(StdArc::new(NoopNode)),
@@ -971,7 +987,10 @@ mod tests {
     #[test]
     fn validate_prefers_unknown_node_error_over_unreachable_node() {
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
-        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
         graph.add_node(
             NodeId::new("stranded"),
             NodeSpec::Function(StdArc::new(NoopNode)),
@@ -1001,7 +1020,10 @@ mod tests {
             false,
         )]);
         let mut graph = WarGraph::new(schema, EngineLimits::default());
-        graph.add_node(NodeId::new("entry"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
         graph.add_node(
             NodeId::new("stranded"),
             NodeSpec::Function(StdArc::new(NoopNode)),

@@ -144,3 +144,15 @@ developer decision, confirmed at the Plan 22-17 checkpoint, not made here.
 **Scope note.** Acceptance 2a is satisfied for strandedness — see the audit table above. This
 residual is a different defect class this audit happened to surface, not an unmet acceptance 2a
 criterion.
+
+**Pre-release compatibility item — closed by confirmation.** BUG-02's pre-release classification
+(no migration entry, no compatibility-register row required, since the engine module is new in
+this milestone) is confirmed against the repository, not restated: `git tag --list` returns 16
+tags total, and `git for-each-ref --sort=creatordate` shows `v0.9.0` (2026-09-01) is both the most
+recent by creation date and the highest by semver, with no tag created after it; `git show
+v0.9.0:crates/paladin-battalion/src/engine/mod.rs` fails with "exists on disk, but not in
+'v0.9.0'", and `git ls-tree -r v0.9.0 -- crates/paladin-battalion/src/engine` returns nothing — the
+whole `engine/` directory is absent at the only tag that could contain released code. `git log
+--all -- crates/paladin-battalion/src/engine/mod.rs` traces the file's origin to Plan 22-01's
+tracer-slice commit, entirely within this in-progress, unreleased milestone. See the SUMMARY for
+full command output.

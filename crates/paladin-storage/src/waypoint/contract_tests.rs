@@ -298,7 +298,11 @@ pub async fn delete_waypoint_removes_named_id_and_leaves_others(port: &dyn Waypo
     let base = Utc::now();
     let mut ids = Vec::new();
     for superstep in 0..3u64 {
-        let wp = sample_waypoint_at(&thread, superstep, base + chrono::Duration::seconds(superstep as i64));
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
         ids.push(wp.waypoint_id);
         port.save(&wp).await.unwrap();
     }
@@ -351,8 +355,11 @@ pub async fn prune_thread_keeps_named_ids_byte_identical_and_ordered(port: &dyn 
     let base = Utc::now();
     let mut saved = Vec::new();
     for superstep in 0..5u64 {
-        let wp =
-            sample_waypoint_at(&thread, superstep, base + chrono::Duration::seconds(superstep as i64));
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
         port.save(&wp).await.unwrap();
         saved.push(wp);
     }
@@ -379,7 +386,9 @@ pub async fn prune_thread_keeps_named_ids_byte_identical_and_ordered(port: &dyn 
 pub async fn prune_thread_empty_keep_removes_everything(port: &dyn WaypointPort) {
     let thread = ThreadId::new("contract-prune-empty-keep").unwrap();
     for superstep in 0..4u64 {
-        port.save(&sample_waypoint(&thread, superstep)).await.unwrap();
+        port.save(&sample_waypoint(&thread, superstep))
+            .await
+            .unwrap();
     }
 
     let removed = port.prune_thread(&thread, &[]).await.unwrap();
@@ -405,8 +414,11 @@ pub async fn prune_thread_ignores_keep_ids_not_in_thread(port: &dyn WaypointPort
     let base = Utc::now();
     let mut saved = Vec::new();
     for superstep in 0..3u64 {
-        let wp =
-            sample_waypoint_at(&thread, superstep, base + chrono::Duration::seconds(superstep as i64));
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
         port.save(&wp).await.unwrap();
         saved.push(wp);
     }
@@ -426,8 +438,11 @@ pub async fn prune_thread_idempotent_second_run_removes_nothing(port: &dyn Waypo
     let base = Utc::now();
     let mut saved = Vec::new();
     for superstep in 0..5u64 {
-        let wp =
-            sample_waypoint_at(&thread, superstep, base + chrono::Duration::seconds(superstep as i64));
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
         port.save(&wp).await.unwrap();
         saved.push(wp);
     }
@@ -453,8 +468,11 @@ pub async fn prune_thread_converges_from_superset_to_target(port: &dyn WaypointP
     let base = Utc::now();
     let mut saved = Vec::new();
     for superstep in 0..6u64 {
-        let wp =
-            sample_waypoint_at(&thread, superstep, base + chrono::Duration::seconds(superstep as i64));
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
         port.save(&wp).await.unwrap();
         saved.push(wp);
     }
@@ -482,8 +500,11 @@ pub async fn prune_thread_large_keep_set_1200_to_1100(port: &dyn WaypointPort) {
     let base = Utc::now();
     let mut saved = Vec::with_capacity(1200);
     for superstep in 0..1200u64 {
-        let wp =
-            sample_waypoint_at(&thread, superstep, base + chrono::Duration::seconds(superstep as i64));
+        let wp = sample_waypoint_at(
+            &thread,
+            superstep,
+            base + chrono::Duration::seconds(superstep as i64),
+        );
         port.save(&wp).await.unwrap();
         saved.push(wp);
     }
@@ -496,7 +517,12 @@ pub async fn prune_thread_large_keep_set_1200_to_1100(port: &dyn WaypointPort) {
     let history = port.history(&thread, None, None).await.unwrap();
     assert_eq!(history.len(), 1100);
     for kept in &saved[100..1200] {
-        assert!(port.get(&thread, &kept.waypoint_id).await.unwrap().is_some());
+        assert!(
+            port.get(&thread, &kept.waypoint_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 }
 

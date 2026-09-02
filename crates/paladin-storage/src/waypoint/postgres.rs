@@ -390,13 +390,12 @@ impl WaypointPort for PostgresWaypointStore {
         thread: &ThreadId,
         id: &WaypointId,
     ) -> Result<bool, WaypointError> {
-        let result =
-            sqlx::query("DELETE FROM waypoints WHERE thread_id = $1 AND waypoint_id = $2")
-                .bind(thread.as_str())
-                .bind(id.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(|e| self.wrap_error(e))?;
+        let result = sqlx::query("DELETE FROM waypoints WHERE thread_id = $1 AND waypoint_id = $2")
+            .bind(thread.as_str())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
         Ok(result.rows_affected() > 0)
     }
 

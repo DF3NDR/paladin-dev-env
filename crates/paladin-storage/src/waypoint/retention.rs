@@ -1,31 +1,47 @@
 //! Waypoint retention/cleanup routine (ENG-FR-18).
 //!
-//! Bounds `waypoints` table growth by age and/or per-thread count, with two
-//! **hard exclusions enforced as invariants of this routine itself, not left
-//! to the caller**: a thread's latest Waypoint is never a deletion
-//! candidate, and any Waypoint whose status is `AwaitingInput` is never a
-//! deletion candidate (T-22-21) -- a retention routine that eats the
-//! checkpoint a human is waiting on is unrecoverable.
+//! Bounds `waypoints` table growth by age and/or per-thread count. This
+//! routine does not decide what "protected" means -- it is handed the
+//! protected set for each thread by its caller and applies the configured
+//! bounds only to whatever the caller has not already protected. The one
+//! definition of protected -- a thread's latest Waypoint plus every
+//! `AwaitingInput` Waypoint, with two more classes named as not-yet-existing
+//! seams -- lives in the application layer, at
+//! `src/application/services/waypoint_retention.rs` (X-01: policy crosses
+//! into this adapter as an argument, it is never re-derived here).
 //!
 //! # Mechanism
 //!
-//! `WaypointPort` carries no per-waypoint delete primitive by design (only
-//! `delete_thread`, which removes an entire thread's history) -- adding one
-//! would mean re-opening the port Plan 22-03 already fully specified. This
-//! routine instead composes the port's *existing* surface: read a thread's
-//! full `history`, decide which waypoints survive, `get` each survivor's
-//! full `Waypoint`, `delete_thread` (wiping everything), then `save` each
-//! survivor back. This is backend-agnostic by construction -- it needs
-//! nothing from any backend beyond what `WaypointPort` already promises, so
-//! it runs identically over `InMemoryWaypointStore`, `SqliteWaypointStore`,
-//! and `PostgresWaypointStore`.
+//! Every deletion this routine performs goes through
+//! [`WaypointPort::prune_thread`], added in Plan 22-13: for each thread with
+//! something to remove, exactly one keep-set call. There is no longer a
+//! delete-then-resave sequence -- the enumeration of survivors, the
+//! whole-thread delete, and the resave loop that Plan 22-13's context
+//! describes as this module's previous shape are gone, because
+//! `prune_thread` makes them unnecessary. A recording port double in this
+//! module's own tests proves the whole-thread delete is never called during
+//! a prune.
+//!
+//! # Invariant
+//!
+//! `prune` is monotone and idempotent. The keep-set it hands to
+//! `prune_thread` is intact under any crash or backend failure mid-call --
+//! there is no interval during which a protected Waypoint does not exist,
+//! because nothing removes it in the first place -- and a re-run after any
+//! partial run converges to exactly the keep-set and removes nothing
+//! further. Retention is best-effort reclamation: leaving an extra
+//! surviving Waypoint behind is acceptable, and losing one the caller named
+//! in its protected set is not. This is proven by an executable
+//! fault-injection acceptance test
+//! (`tests/integration/waypoint_retention_fault_injection_test.rs`), not
+//! only asserted here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 
-use paladin_core::platform::container::waypoint::{ThreadId, WaypointStatus};
-use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
+use paladin_core::platform::container::waypoint::{ThreadId, WaypointId};
+use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort, WaypointSummary};
 
 /// The outcome of one [`prune`] call: how many Waypoints were removed, per
 /// thread. A thread with nothing removed (including a thread never
@@ -56,32 +72,40 @@ impl PruneReport {
 }
 
 /// Prune old Waypoints across every thread `port` holds, bounded by
-/// `max_age_days` and/or `max_waypoints_per_thread`.
+/// `max_age_days` and/or `max_waypoints_per_thread`, on top of whatever
+/// `protected` names as never-removable for that thread.
 ///
 /// Both bounds `None` is a no-op (returns an empty [`PruneReport`] without
 /// reading `port` at all) -- an operator who has not configured retention
 /// gets exactly today's behavior, per `WaypointRetentionConfig`'s
 /// disabled-by-default contract (X-09).
 ///
+/// `protected` is called once per thread with that thread's full,
+/// newest-first `history` and must return the set of ids this call may
+/// never delete for that thread -- typically the thread's latest Waypoint
+/// and every `AwaitingInput` Waypoint (see
+/// `src/application/services/waypoint_retention.rs` for the one definition
+/// this project uses). This routine has no opinion on what belongs in that
+/// set; it only unions it with whatever survives the configured bounds and
+/// hands the result to [`WaypointPort::prune_thread`] as the keep-set.
+///
 /// For each thread, ordered newest-first (matching
 /// [`WaypointPort::history`]'s documented order):
-/// - index `0` (the latest Waypoint) is **never** a deletion candidate,
-///   regardless of age or count, so `resume` always has something to resume
-///   from;
-/// - any Waypoint whose `status` is [`WaypointStatus::AwaitingInput`] is
-///   **never** a deletion candidate, regardless of age or count, so a
-///   pending human response is never silently discarded;
+/// - any id `protected` returns is kept unconditionally, regardless of age
+///   or position;
 /// - among the remaining candidates, `max_waypoints_per_thread` keeps the
 ///   `N` newest (by position) and marks the rest for deletion;
 /// - `max_age_days` marks any candidate whose `created_at` is older than
 ///   `now - max_age_days` for deletion.
 ///
-/// A thread holding exactly one Waypoint is always left untouched (there is
-/// nothing beyond index `0` to consider), whatever the bounds.
+/// A thread holding exactly one Waypoint is always left untouched -- and
+/// `port` receives no `prune_thread` call for it at all, since there is
+/// nothing beyond that one Waypoint to consider, whatever the bounds.
 pub async fn prune(
     port: &dyn WaypointPort,
     max_age_days: Option<u32>,
     max_waypoints_per_thread: Option<u32>,
+    protected: &dyn Fn(&ThreadId, &[WaypointSummary]) -> HashSet<WaypointId>,
 ) -> Result<PruneReport, WaypointError> {
     let mut report = PruneReport::default();
 
@@ -97,22 +121,18 @@ pub async fn prune(
         // Newest-first, per WaypointPort::history's documented order.
         let history = port.history(&thread_id, None, None).await?;
         if history.len() <= 1 {
-            // Nothing beyond the latest Waypoint to even consider.
+            // Nothing beyond a single Waypoint to even consider -- no call
+            // to the port for this thread at all.
             continue;
         }
 
-        let mut keep_ids = Vec::with_capacity(history.len());
+        let mut keep_ids = protected(&thread_id, &history);
         let mut delete_ids = Vec::new();
 
         for (position, summary) in history.iter().enumerate() {
-            if position == 0 {
-                // The latest Waypoint: never a deletion candidate.
-                keep_ids.push(summary.waypoint_id);
-                continue;
-            }
-            if matches!(summary.status, WaypointStatus::AwaitingInput { .. }) {
-                // Awaiting a human response: never a deletion candidate.
-                keep_ids.push(summary.waypoint_id);
+            if keep_ids.contains(&summary.waypoint_id) {
+                // Protected by the caller: never a deletion candidate,
+                // whatever the configured bounds say.
                 continue;
             }
 
@@ -123,32 +143,20 @@ pub async fn prune(
             if too_old || beyond_kept_count {
                 delete_ids.push(summary.waypoint_id);
             } else {
-                keep_ids.push(summary.waypoint_id);
+                keep_ids.insert(summary.waypoint_id);
             }
         }
 
         if delete_ids.is_empty() {
+            // Nothing to remove for this thread: no port call at all.
             continue;
         }
 
-        // Fetch survivors' full Waypoints BEFORE wiping the thread -- there
-        // is no port primitive for deleting a single waypoint, only a whole
-        // thread (see this module's doc comment).
-        let mut survivors = Vec::with_capacity(keep_ids.len());
-        for id in &keep_ids {
-            if let Some(wp) = port.get(&thread_id, id).await? {
-                survivors.push(wp);
-            }
+        let keep_vec: Vec<WaypointId> = keep_ids.into_iter().collect();
+        let removed = port.prune_thread(&thread_id, &keep_vec).await?;
+        if removed > 0 {
+            report.removed_per_thread.insert(thread_id, removed);
         }
-
-        port.delete_thread(&thread_id).await?;
-        for wp in &survivors {
-            port.save(wp).await?;
-        }
-
-        report
-            .removed_per_thread
-            .insert(thread_id, delete_ids.len() as u64);
     }
 
     Ok(report)
@@ -159,11 +167,130 @@ mod tests {
     use super::*;
     use crate::waypoint::contract_tests::sample_waypoint_at;
     use crate::waypoint::in_memory::InMemoryWaypointStore;
-    use chrono::Duration;
-    use paladin_core::platform::container::waypoint::ParleyRequest;
+    use async_trait::async_trait;
+    use chrono::{DateTime, Duration};
+    use paladin_core::platform::container::waypoint::{ParleyRequest, Waypoint, WaypointStatus};
+    use paladin_ports::output::waypoint_port::ThreadSummary;
+    use std::sync::Mutex;
 
     fn thread(name: &str) -> ThreadId {
         ThreadId::new(name).unwrap()
+    }
+
+    /// The same shape of protected-set definition the real
+    /// `src/application/services/waypoint_retention.rs` service supplies:
+    /// a thread's latest Waypoint plus every `AwaitingInput` Waypoint.
+    /// Duplicated here (rather than imported) because `paladin-storage`
+    /// does not and must not depend on the application layer -- this
+    /// module exercises the mechanical composition, not the policy's
+    /// source.
+    fn latest_and_awaiting_protected(
+        _thread: &ThreadId,
+        history: &[WaypointSummary],
+    ) -> HashSet<WaypointId> {
+        let mut set = HashSet::new();
+        if let Some(latest) = history.first() {
+            set.insert(latest.waypoint_id);
+        }
+        for summary in history {
+            if matches!(summary.status, WaypointStatus::AwaitingInput { .. }) {
+                set.insert(summary.waypoint_id);
+            }
+        }
+        set
+    }
+
+    #[derive(Default)]
+    struct CallLog {
+        prune_thread_calls: Vec<(ThreadId, Vec<WaypointId>)>,
+        delete_thread_calls: Vec<ThreadId>,
+    }
+
+    /// A `WaypointPort` test double that delegates every method to an inner
+    /// `InMemoryWaypointStore` while recording every call to `prune_thread`
+    /// and `delete_thread` -- so a test can assert on the keep-set actually
+    /// handed to the port, and that the whole-thread delete path is never
+    /// reached, rather than only inferring these from after-the-fact state.
+    #[derive(Default)]
+    struct RecordingStore {
+        inner: InMemoryWaypointStore,
+        log: Mutex<CallLog>,
+    }
+
+    impl RecordingStore {
+        fn prune_thread_calls(&self) -> Vec<(ThreadId, Vec<WaypointId>)> {
+            self.log.lock().unwrap().prune_thread_calls.clone()
+        }
+
+        fn delete_thread_calls(&self) -> Vec<ThreadId> {
+            self.log.lock().unwrap().delete_thread_calls.clone()
+        }
+    }
+
+    #[async_trait]
+    impl WaypointPort for RecordingStore {
+        async fn save(&self, wp: &Waypoint) -> Result<(), WaypointError> {
+            self.inner.save(wp).await
+        }
+
+        async fn latest(&self, thread: &ThreadId) -> Result<Option<Waypoint>, WaypointError> {
+            self.inner.latest(thread).await
+        }
+
+        async fn get(
+            &self,
+            thread: &ThreadId,
+            id: &WaypointId,
+        ) -> Result<Option<Waypoint>, WaypointError> {
+            self.inner.get(thread, id).await
+        }
+
+        async fn history(
+            &self,
+            thread: &ThreadId,
+            limit: Option<u32>,
+            before: Option<WaypointId>,
+        ) -> Result<Vec<WaypointSummary>, WaypointError> {
+            self.inner.history(thread, limit, before).await
+        }
+
+        async fn list_threads(
+            &self,
+            limit: Option<u32>,
+            before: Option<DateTime<Utc>>,
+        ) -> Result<Vec<ThreadSummary>, WaypointError> {
+            self.inner.list_threads(limit, before).await
+        }
+
+        async fn delete_thread(&self, thread: &ThreadId) -> Result<u64, WaypointError> {
+            self.log
+                .lock()
+                .unwrap()
+                .delete_thread_calls
+                .push(thread.clone());
+            self.inner.delete_thread(thread).await
+        }
+
+        async fn delete_waypoint(
+            &self,
+            thread: &ThreadId,
+            id: &WaypointId,
+        ) -> Result<bool, WaypointError> {
+            self.inner.delete_waypoint(thread, id).await
+        }
+
+        async fn prune_thread(
+            &self,
+            thread: &ThreadId,
+            keep: &[WaypointId],
+        ) -> Result<u64, WaypointError> {
+            self.log
+                .lock()
+                .unwrap()
+                .prune_thread_calls
+                .push((thread.clone(), keep.to_vec()));
+            self.inner.prune_thread(thread, keep).await
+        }
     }
 
     #[tokio::test]
@@ -177,7 +304,9 @@ mod tests {
                 .unwrap();
         }
 
-        let report = prune(&store, None, None).await.unwrap();
+        let report = prune(&store, None, None, &latest_and_awaiting_protected)
+            .await
+            .unwrap();
 
         assert_eq!(report.total_removed(), 0);
         assert_eq!(store.history(&t, None, None).await.unwrap().len(), 5);
@@ -198,7 +327,9 @@ mod tests {
             (None, Some(1)),
             (Some(1), Some(1)),
         ] {
-            let report = prune(&store, max_age, max_count).await.unwrap();
+            let report = prune(&store, max_age, max_count, &latest_and_awaiting_protected)
+                .await
+                .unwrap();
             assert_eq!(report.total_removed(), 0);
             assert_eq!(store.history(&t, None, None).await.unwrap().len(), 1);
         }
@@ -222,7 +353,9 @@ mod tests {
                 .unwrap();
         }
 
-        let report = prune(&store, None, Some(3)).await.unwrap();
+        let report = prune(&store, None, Some(3), &latest_and_awaiting_protected)
+            .await
+            .unwrap();
 
         assert_eq!(report.total_removed(), 7);
         let remaining = store.history(&t, None, None).await.unwrap();
@@ -249,7 +382,9 @@ mod tests {
             .await
             .unwrap();
 
-        let report = prune(&store, Some(1), None).await.unwrap();
+        let report = prune(&store, Some(1), None, &latest_and_awaiting_protected)
+            .await
+            .unwrap();
 
         assert_eq!(report.total_removed(), 0);
         assert!(store.latest(&t).await.unwrap().is_some());
@@ -269,7 +404,9 @@ mod tests {
             .await
             .unwrap();
 
-        let report = prune(&store, Some(30), None).await.unwrap();
+        let report = prune(&store, Some(30), None, &latest_and_awaiting_protected)
+            .await
+            .unwrap();
 
         assert_eq!(report.total_removed(), 1);
         let remaining = store.history(&t, None, None).await.unwrap();
@@ -302,7 +439,9 @@ mod tests {
                 .unwrap();
         }
 
-        let report = prune(&store, Some(1), Some(3)).await.unwrap();
+        let report = prune(&store, Some(1), Some(3), &latest_and_awaiting_protected)
+            .await
+            .unwrap();
 
         let remaining = store.history(&t, None, None).await.unwrap();
         assert!(
@@ -331,10 +470,14 @@ mod tests {
                 .unwrap();
         }
 
-        let first = prune(&store, None, Some(3)).await.unwrap();
+        let first = prune(&store, None, Some(3), &latest_and_awaiting_protected)
+            .await
+            .unwrap();
         assert_eq!(first.total_removed(), 7);
 
-        let second = prune(&store, None, Some(3)).await.unwrap();
+        let second = prune(&store, None, Some(3), &latest_and_awaiting_protected)
+            .await
+            .unwrap();
         assert_eq!(second.total_removed(), 0);
         assert_eq!(store.history(&t, None, None).await.unwrap().len(), 3);
     }
@@ -359,10 +502,121 @@ mod tests {
         // Thread b has only one waypoint: never touched.
         store.save(&sample_waypoint_at(&b, 0, base)).await.unwrap();
 
-        let report = prune(&store, None, Some(2)).await.unwrap();
+        let report = prune(&store, None, Some(2), &latest_and_awaiting_protected)
+            .await
+            .unwrap();
 
         assert_eq!(report.removed_for(&a), 3);
         assert_eq!(report.removed_for(&b), 0);
         assert_eq!(report.total_removed(), 3);
+    }
+
+    #[tokio::test]
+    async fn keep_set_handed_to_the_port_always_contains_latest_and_awaiting_input() {
+        let store = RecordingStore::default();
+        let t = thread("retention-keep-set-contents");
+        let now = Utc::now();
+
+        let mut awaiting = sample_waypoint_at(&t, 0, now - Duration::days(365));
+        awaiting.status = WaypointStatus::AwaitingInput {
+            parley: ParleyRequest {
+                prompt: "confirm?".to_string(),
+            },
+        };
+        store.save(&awaiting).await.unwrap();
+
+        let mut latest_id = awaiting.waypoint_id;
+        for superstep in 1..10u64 {
+            let wp = sample_waypoint_at(&t, superstep, now);
+            latest_id = wp.waypoint_id;
+            store.save(&wp).await.unwrap();
+        }
+
+        prune(&store, Some(1), Some(3), &latest_and_awaiting_protected)
+            .await
+            .unwrap();
+
+        let calls = store.prune_thread_calls();
+        assert_eq!(
+            calls.len(),
+            1,
+            "exactly one prune_thread call for this thread"
+        );
+        let (_, keep) = &calls[0];
+        assert!(
+            keep.contains(&awaiting.waypoint_id),
+            "keep-set must contain the AwaitingInput waypoint"
+        );
+        assert!(
+            keep.contains(&latest_id),
+            "keep-set must contain the thread's latest waypoint"
+        );
+    }
+
+    #[tokio::test]
+    async fn prune_issues_exactly_one_keep_set_call_per_thread_with_something_to_remove() {
+        let store = RecordingStore::default();
+        let pruned_thread = thread("retention-one-call-pruned");
+        let untouched_thread = thread("retention-one-call-untouched");
+        let base = Utc::now();
+
+        for superstep in 0..10u64 {
+            store
+                .save(&sample_waypoint_at(
+                    &pruned_thread,
+                    superstep,
+                    base + Duration::seconds(superstep as i64),
+                ))
+                .await
+                .unwrap();
+        }
+        // Single-waypoint thread: nothing to remove, no call expected.
+        store
+            .save(&sample_waypoint_at(&untouched_thread, 0, base))
+            .await
+            .unwrap();
+
+        prune(&store, None, Some(3), &latest_and_awaiting_protected)
+            .await
+            .unwrap();
+
+        let calls = store.prune_thread_calls();
+        assert_eq!(
+            calls.len(),
+            1,
+            "only the thread with something to remove is called"
+        );
+        assert_eq!(calls[0].0, pruned_thread);
+    }
+
+    #[tokio::test]
+    async fn prune_never_calls_the_whole_thread_delete() {
+        let store = RecordingStore::default();
+        let t = thread("retention-never-delete-thread");
+        let base = Utc::now();
+        for superstep in 0..10u64 {
+            store
+                .save(&sample_waypoint_at(
+                    &t,
+                    superstep,
+                    base + Duration::seconds(superstep as i64),
+                ))
+                .await
+                .unwrap();
+        }
+
+        prune(&store, None, Some(3), &latest_and_awaiting_protected)
+            .await
+            .unwrap();
+        // Run again to also exercise the idempotent (nothing-to-remove)
+        // path through the same double.
+        prune(&store, None, Some(3), &latest_and_awaiting_protected)
+            .await
+            .unwrap();
+
+        assert!(
+            store.delete_thread_calls().is_empty(),
+            "prune must never call delete_thread"
+        );
     }
 }

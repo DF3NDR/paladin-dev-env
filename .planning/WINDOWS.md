@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 14
+open_count: 16
 waived_count: 4
 fixed_count: 5
-total_count: 23
-last_updated: 2026-09-02T03:29:38.826Z
+total_count: 25
+last_updated: 2026-09-02T18:04:11.984Z
 ---
 
 # Broken Windows Ledger
@@ -38,6 +38,8 @@ last_updated: 2026-09-02T03:29:38.826Z
 | 21 | 17 | unrun-verify | crates/paladin-llm/src/qwen/adapter.rs |  | Plan 17-21 Task 2 is BLOCKED on an Alibaba Cloud Model Studio account entitlement, not on any code defect. After Task 1 moved QWEN_DEFAULT_BASE_URL to the US (Virginia) compatible-mode endpoint, the credential authenticates there correctly -- GET /models returns 92 entries with qwen-plus present, versus invalid_api_key at the previous dashscope-intl (Singapore) default, which is the measurement that proves the reversal right. But every chat-completion invocation returns HTTP 403 {"code":"Model.AccessDenied"}. The plan's executor ruled out a stale-identifier explanation across 78 qwen-prefixed identifiers and their -us regional variants, two unrelated model families hosted on the same workspace (deepseek-v4-flash, glm-5.1), and both the OpenAI-compatible and native DashScope invocation endpoints; the orchestrator independently reproduced the same 403 on qwen-plus. Consequence: the Qwen generate() probe cannot PASS, so plan 17-21's remaining must_haves (QWEN_FALLBACK_MODELS refreshed from a live-measured catalog, the five sampling-parameter verdicts, both temperature_range endpoints) are unmeasurable, and plan 17-22's 'four vendors PASS' clause is unachievable. Note that 17-21-SUMMARY.md exists with frontmatter status: blocked, but phase-plan-index keys off file EXISTENCE, so 17-21 reads as complete to the index and will be skipped by a plain --gaps-only re-run. It is deliberately NOT marked complete in ROADMAP.md. Required human action: in the Model Studio console, for the workspace tied to DASHSCOPE_API_KEY, select US (Virginia) and activate model invocation for at least qwen-plus, clearing whatever billing/quota/terms gate the console surfaces -- the API returns only the generic Model.AccessDenied code. Verify with: cargo run -p paladin-llm --example live_vendor_smoke --features kimi,qwen,grok,gemini (DASHSCOPE_BASE_URL left unset); Qwen's generate line should read PASS. Filed 2026-08-22 by the /gsd-execute-phase 17 --gaps-only orchestrator; the developer chose to continue waves 4 and 5 with Qwen recorded as catalog-verified / invocation-blocked rather than wait. | fixed | Resolved 2026-08-23, externally: the operator's DASHSCOPE_API_KEY was replaced with a Singapore-scoped credential (the entitlement-blocked key was Virginia-scoped and workspace-specific). Against the new key and the corrected shipped default (dashscope-intl, Singapore -- plan 17-21 gap closure), every measured request succeeded: GET /models returned 162 entries, generate() returned real completions for qwen-plus and candidate qwen3.7-plus, and all five optional sampling parameters plus both temperature_range endpoints were probed individually with no rejection below DashScope's documented [0.0, 2.0) temperature ceiling. No code change resolved this row -- it was never a code defect -- but the previously-blocked live_vendor_smoke run now exits 0 with all four vendors (Kimi, Qwen, Grok, Gemini) PASSING both probes and no DASHSCOPE_BASE_URL override, closing plan 17-22's 'four vendors PASS' clause. See 17-21-SUMMARY.md's 2026-08-23 update for the full measurement record. [Ledger normalization 2026-08-23: this row was originally written with kind "blocker" and status "resolved", neither of which is in the WINDOWS.md schema vocabulary (kinds: stub\|todo\|fixme\|skipped-test\|lint-warning\|unmet-truth\|unrun-verify\|deviation; statuses: open\|waived\|fixed). The off-schema values made the whole ledger unreadable to gsd-tools. Reclassified to kind=unrun-verify (a live-vendor verification that could not be executed) and status=fixed; the substance of the record is unchanged.] | 2026-08-22T18:05:00.000Z | 2026-08-23T12:55:15.198Z |
 | 22 | 22 | unrun-verify | crates/paladin-storage/src/waypoint/postgres.rs |  | Postgres Tier 2 contract-suite pass against a real postgres-test service is unverified (no Docker in the execution environment); compile, lint, and the clean-skip path are proven. Run make test-integration-docker to close. | open |  | 2026-09-02T00:00:49.385Z |  |
 | 23 | 22 | deviation | crates/paladin-battalion/src/engine/bridges.rs |  | from_campaign extends the ENG-FR-19 default three-field schema with one dedicated LastWrite field per Paladin (not literally exactly three fields for this constructor) so a general DAG's concurrent fan-out siblings never hit a DispatchConflict; from_formation/from_phalanx remain exactly three fields as specified | open |  | 2026-09-02T03:29:38.826Z |  |
+| 24 | 22 | deviation | tests/integration/e2e_crash_resume_test.rs | 112 | loop_gate self-loop node made a graph entry to sidestep the Frontier::is_ready self-loop join-deadlock property, rather than fixed structurally; flagged for plan 22-16's fixture audit (acceptance 2a) | open |  | 2026-09-02T18:04:03.616Z |  |
+| 25 | 22 | deviation | crates/paladin-battalion/src/engine/superstep.rs | 1220 | self_loop_graph test helper makes its looping node a graph entry to sidestep the Frontier::is_ready self-loop join-deadlock property (same root cause as e2e_crash_resume_test.rs); flagged for plan 22-16's fixture audit (acceptance 2a) | open |  | 2026-09-02T18:04:11.984Z |  |
 
 ````json
 [
@@ -315,6 +317,30 @@ last_updated: 2026-09-02T03:29:38.826Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-02T03:29:38.826Z",
+    "resolved_at": null
+  },
+  {
+    "id": 24,
+    "kind": "deviation",
+    "phase": "22",
+    "file": "tests/integration/e2e_crash_resume_test.rs",
+    "line": 112,
+    "description": "loop_gate self-loop node made a graph entry to sidestep the Frontier::is_ready self-loop join-deadlock property, rather than fixed structurally; flagged for plan 22-16's fixture audit (acceptance 2a)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-02T18:04:03.616Z",
+    "resolved_at": null
+  },
+  {
+    "id": 25,
+    "kind": "deviation",
+    "phase": "22",
+    "file": "crates/paladin-battalion/src/engine/superstep.rs",
+    "line": 1220,
+    "description": "self_loop_graph test helper makes its looping node a graph entry to sidestep the Frontier::is_ready self-loop join-deadlock property (same root cause as e2e_crash_resume_test.rs); flagged for plan 22-16's fixture audit (acceptance 2a)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-02T18:04:11.984Z",
     "resolved_at": null
   }
 ]

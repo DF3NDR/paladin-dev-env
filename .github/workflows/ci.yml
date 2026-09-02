@@ -359,8 +359,14 @@ jobs:
           # section only, so a "Y" elsewhere in the document can't leak in.
           # Trimming happens inside awk (no sed backreferences) to keep this
           # script shellcheck-clean.
+          # Both greps below tolerate exit 1 (no matches: an empty register or
+          # an empty allowlist is a legal state — both empty is the set-equal
+          # baseline this check shipped with) while still failing on exit 2
+          # (a real error). Under `set -euo pipefail` a bare no-match grep
+          # kills the step before it prints anything, which is exactly how
+          # this step failed on its first-ever run.
           awk '/^## 9\.2 /{flag=1; next} /^## 9\.3 /{flag=0} flag' MIGRATION.md \
-            | grep -E '^\|' \
+            | { grep -E '^\|' || test $? -eq 1; } \
             | awk -F'|' '{
                 crate=$2; gsub(/^[ \t`]+|[ \t`]+$/, "", crate);
                 deliberate=$6; gsub(/^[ \t]+|[ \t]+$/, "", deliberate);
@@ -371,7 +377,7 @@ jobs:
           # Allowlist entries: each [[entry]] carries a `crate = "..."` key.
           # Extracted via awk field-splitting on the quote character rather
           # than a sed backreference, for the same shellcheck-cleanliness reason.
-          grep -E '^\s*crate\s*=' .cargo/semver-checks-allowlist.toml \
+          { grep -E '^\s*crate\s*=' .cargo/semver-checks-allowlist.toml || test $? -eq 1; } \
             | awk -F'"' '{print $2}' \
             | sort -u > /tmp/allowlist-crates.txt
 

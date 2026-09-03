@@ -34,7 +34,7 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
-    Battlefield, CustomDispatchResolver, FieldName, StateDelta,
+    Battlefield, CustomDispatchResolver, FieldName,
 };
 use paladin_core::platform::container::directive::{Directive, NextStep};
 use paladin_core::platform::container::paladin::Paladin;
@@ -47,6 +47,7 @@ use paladin_ports::output::trace_sink_port::TraceEvent;
 use paladin_ports::output::waypoint_port::WaypointPort;
 
 use crate::edge_evaluator::EdgeEvaluatorRegistry;
+use crate::engine::directive_parser::{DirectiveParseError, DirectiveParser};
 use crate::engine::graph::{NodeSpec, WarGraph};
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 use crate::engine::input_mapping::InputMapping;
@@ -69,9 +70,31 @@ enum NodeDispatch {
         paladin: Box<Paladin>,
         /// Renders the Paladin's string input from the superstep snapshot.
         input_template: InputMapping,
-        /// The field `PaladinResult.output` is written into as a delta.
+        /// The field `PaladinResult.output` is written into as a delta
+        /// under `DirectiveParser::PlainOutput`, or the fallback target
+        /// under `OnParseError::FallbackPlain` (CF-02, D-11).
         output_field: FieldName,
+        /// How this node's raw output becomes a routing `Directive`.
+        directive_parser: DirectiveParser,
     },
+}
+
+/// A vanguard node's failure, distinguishing a `DirectiveParser` parse
+/// failure (CF-02, D-11) -- which the per-node accumulation loop below
+/// converts to the typed `EngineError::DirectiveParseFailed` naming this
+/// node -- from every other node-execution failure, which converts to the
+/// existing generic `EngineError::Node` exactly as before this phase (X-06:
+/// no bare-`String` variant added for the new failure mode; the existing
+/// generic path is untouched for every other case).
+enum NodeFailure {
+    /// A `Function` node's own error, a `NodeSpec::Paladin` node's
+    /// `InputMapping::render`/`PaladinPort::execute` failure, or an
+    /// internal engine error -- everything that was `NodeError` before this
+    /// phase, unchanged.
+    Node(NodeError),
+    /// A `NodeSpec::Paladin` node's `DirectiveParser::StructuredDirective`
+    /// call under `OnParseError::FailRun` (CF-02, D-11).
+    DirectiveParse(DirectiveParseError),
 }
 
 /// Execute one vanguard node's dispatch against `snapshot`.
@@ -90,36 +113,47 @@ async fn execute_vanguard_node(
     snapshot: &Battlefield,
     ctx: &crate::engine::node::NodeContext,
     paladin_port: &Arc<dyn PaladinPort>,
-) -> (Option<Uuid>, u64, Result<Directive, NodeError>) {
+) -> (Option<Uuid>, u64, Result<Directive, NodeFailure>) {
     match dispatch {
         NodeDispatch::Function(node) => {
             let result = node.run(snapshot, ctx).await;
-            (None, 0, result)
+            (None, 0, result.map_err(NodeFailure::Node))
         }
         NodeDispatch::Paladin {
             paladin,
             input_template,
             output_field,
+            directive_parser,
         } => {
             let paladin_id = Some(paladin.uuid);
             let rendered = match input_template.render(snapshot) {
                 Ok(rendered) => rendered,
-                Err(e) => return (paladin_id, 0, Err(NodeError(e.to_string()))),
+                Err(e) => {
+                    return (
+                        paladin_id,
+                        0,
+                        Err(NodeFailure::Node(NodeError(e.to_string()))),
+                    );
+                }
             };
             match paladin_port.execute(&paladin, &rendered).await {
                 Ok(result) => {
                     let token_count = u64::from(result.token_count);
-                    let mut delta = StateDelta::new();
-                    match delta.set(output_field, result.output.clone()) {
-                        // A `NodeSpec::Paladin` node has no `DirectiveParser`
-                        // wired yet (D-11 lands in a later plan) -- its
-                        // output always routes via the `PlainOutput`-
-                        // equivalent default, `NextStep::Edges`.
-                        Ok(()) => (paladin_id, token_count, Ok(delta.into())),
-                        Err(e) => (paladin_id, token_count, Err(NodeError(e.to_string()))),
+                    // --- CF-02, D-11: the `DirectiveParser` call replacing
+                    // the prior unconditional `delta.set(output_field,
+                    // result.output.clone())` write. `PlainOutput`
+                    // reproduces that write verbatim; `StructuredDirective`
+                    // parses D-11's envelope and applies only its `delta`.
+                    match directive_parser.parse(&result.output, &output_field) {
+                        Ok(directive) => (paladin_id, token_count, Ok(directive)),
+                        Err(e) => (paladin_id, token_count, Err(NodeFailure::DirectiveParse(e))),
                     }
                 }
-                Err(e) => (paladin_id, 0, Err(NodeError(e.to_string()))),
+                Err(e) => (
+                    paladin_id,
+                    0,
+                    Err(NodeFailure::Node(NodeError(e.to_string()))),
+                ),
             }
         }
     }
@@ -141,10 +175,11 @@ enum NodeRunOutcome {
     /// A `NodeInterceptor::before` returned `Skip(reason)`: the node never
     /// executed. Contributes no delta to this superstep's merge.
     Skipped(String),
-    /// The node failed -- either its own execution returned an error, or a
-    /// `NodeInterceptor::before` returned `Fail(error)` before the node
-    /// could run.
-    Failed(NodeError),
+    /// The node failed -- either its own execution returned an error, a
+    /// `NodeSpec::Paladin` node's `DirectiveParser` failed to parse under
+    /// `OnParseError::FailRun` (CF-02, D-11), or a `NodeInterceptor::before`
+    /// returned `Fail(error)` before the node could run.
+    Failed(NodeFailure),
 }
 
 /// Run the superstep loop starting from `vanguard` at `superstep_number`,
@@ -390,10 +425,12 @@ pub(crate) async fn run<W: WaypointPort>(
                     paladin,
                     input_template,
                     output_field,
+                    directive_parser,
                 } => NodeDispatch::Paladin {
                     paladin: paladin.clone(),
                     input_template: input_template.clone(),
                     output_field: output_field.clone(),
+                    directive_parser: directive_parser.clone(),
                 },
             };
             let snap = Arc::clone(&snapshot);
@@ -429,7 +466,9 @@ pub(crate) async fn run<W: WaypointPort>(
                     InterceptDecision::Skip(reason) => {
                         (None, 0u64, NodeRunOutcome::Skipped(reason))
                     }
-                    InterceptDecision::Fail(err) => (None, 0u64, NodeRunOutcome::Failed(err)),
+                    InterceptDecision::Fail(err) => {
+                        (None, 0u64, NodeRunOutcome::Failed(NodeFailure::Node(err)))
+                    }
                     InterceptDecision::Proceed => match sem.acquire_owned().await {
                         Ok(_permit) => {
                             let (paladin_id, token_count, result) =
@@ -466,10 +505,10 @@ pub(crate) async fn run<W: WaypointPort>(
                         Err(_) => (
                             None,
                             0u64,
-                            NodeRunOutcome::Failed(NodeError(
+                            NodeRunOutcome::Failed(NodeFailure::Node(NodeError(
                                 "internal error: superstep semaphore closed unexpectedly"
                                     .to_string(),
-                            )),
+                            ))),
                         ),
                     },
                 };
@@ -492,7 +531,7 @@ pub(crate) async fn run<W: WaypointPort>(
 
         let mut deltas = Vec::with_capacity(handles.len());
         let mut completed_records = Vec::with_capacity(handles.len());
-        let mut node_failure: Option<(NodeId, NodeError)> = None;
+        let mut node_failure: Option<(NodeId, NodeFailure)> = None;
         // --- CF-02: per-superstep runtime values derived from this
         // superstep's `Directive`s, NOT `Frontier` state (RESEARCH.md
         // Pattern 3) -- rebuilt fresh every superstep, never persisted.
@@ -611,7 +650,17 @@ pub(crate) async fn run<W: WaypointPort>(
         completed_records.sort_by(|a, b| a.node_id.cmp(&b.node_id));
 
         if let Some((node_id, err)) = node_failure {
-            let error = EngineError::Node(err);
+            // --- CF-02, D-11: a `DirectiveParser` parse failure gets its
+            // own typed `EngineError` naming the node (X-06), rather than
+            // routing through the generic `EngineError::Node` every other
+            // node-execution failure uses.
+            let error = match err {
+                NodeFailure::Node(e) => EngineError::Node(e),
+                NodeFailure::DirectiveParse(e) => EngineError::DirectiveParseFailed {
+                    node: node_id.clone(),
+                    reason: e.reason,
+                },
+            };
             let waypoint = build_waypoint(
                 &thread,
                 parent_waypoint_id,
@@ -1529,10 +1578,13 @@ async fn persist_waypoint<W: WaypointPort>(
 mod tests {
     use super::*;
     use paladin_core::platform::container::battlefield::{
-        BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
+        BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
     };
+    use paladin_core::platform::container::battlefield_error::BattlefieldError;
+    use paladin_core::platform::container::paladin::Paladin;
     use paladin_core::platform::container::waypoint::{ParleyRequest, ThreadId};
 
+    use crate::engine::directive_parser::{DirectiveParser, OnParseError};
     use crate::engine::graph::EdgeSpec;
     use crate::engine::graph::EngineLimits;
     use crate::engine::test_support::{
@@ -1542,6 +1594,14 @@ mod tests {
 
     fn field(name: &str) -> FieldName {
         FieldName::new(name).unwrap()
+    }
+
+    fn make_paladin(name: &str) -> Paladin {
+        let data = paladin_core::platform::container::paladin::PaladinData {
+            name: name.to_string(),
+            ..Default::default()
+        };
+        paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
     }
 
     fn schema(fields: Vec<FieldSpec>) -> BattlefieldSchema {
@@ -1590,6 +1650,374 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    /// Like `run_default`, but over a caller-supplied `PaladinPort` --
+    /// `run_default`'s own `no_paladin_port()` scripts no output, so a
+    /// `NodeSpec::Paladin` test needs this instead (CF-02, D-11).
+    async fn run_with_port(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        port: &Arc<dyn PaladinPort>,
+    ) -> RunOutcome {
+        run(
+            store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            graph,
+            thread,
+            Battlefield::initialize(
+                graph.schema().clone(),
+                &paladin_core::platform::container::battlefield::StateDelta::new(),
+            )
+            .unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            1,
+            port,
+            &no_trace(),
+            &no_interceptors(),
+            &None,
+        )
+        .await
+        .unwrap()
+    }
+
+    // --- CF-02, D-11: DirectiveParser wired into NodeSpec::Paladin dispatch
+
+    #[tokio::test]
+    async fn structured_directive_parses_a_bare_json_object_output() {
+        let verdict_field = field("verdict");
+        let raw_field = field("raw");
+        let s = schema(vec![
+            FieldSpec::new(verdict_field.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(raw_field.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("judge");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("judge"),
+                InputMapping::new("judge"),
+                raw_field,
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        graph.add_entry(node_id);
+
+        let recording = Arc::new(RecordingPaladinPort::new());
+        recording.set_output(
+            "judge",
+            r#"{"delta": {"verdict": "approved"}, "next": "edges"}"#,
+        );
+        let port: Arc<dyn PaladinPort> = recording;
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("structured-bare-json").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&verdict_field).unwrap(),
+                    Some("approved".to_string())
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn structured_directive_does_not_write_the_output_field() {
+        let verdict_field = field("verdict");
+        let raw_field = field("raw");
+        let s = schema(vec![
+            FieldSpec::new(verdict_field, DispatchRule::LastWrite, None, false),
+            FieldSpec::new(raw_field.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("judge");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("judge"),
+                InputMapping::new("judge"),
+                raw_field.clone(),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        graph.add_entry(node_id);
+
+        let recording = Arc::new(RecordingPaladinPort::new());
+        recording.set_output(
+            "judge",
+            r#"{"delta": {"verdict": "approved"}, "next": "edges"}"#,
+        );
+        let port: Arc<dyn PaladinPort> = recording;
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("structured-no-output-field").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&raw_field).unwrap(),
+                    None,
+                    "StructuredDirective performs no implicit output_field write"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn structured_directive_goto_routes_the_run() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let router = NodeId::new("router");
+        let target = NodeId::new("target");
+        graph.add_node(
+            router.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("router"),
+                InputMapping::new("route"),
+                field("raw"),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        let target_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        graph.add_node(target.clone(), NodeSpec::Function(target_node.clone()));
+        graph.add_entry(router.clone());
+        graph.mark_dynamic_target(target.clone());
+
+        let recording = Arc::new(RecordingPaladinPort::new());
+        recording.set_output("router", r#"{"delta": {}, "next": {"goto": ["target"]}}"#);
+        let port: Arc<dyn PaladinPort> = recording;
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("structured-goto").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(target_node.run_count(), 1, "the Goto target must run");
+    }
+
+    #[tokio::test]
+    async fn envelope_delta_naming_an_unknown_field_fails_the_run() {
+        let verdict_field = field("verdict");
+        let s = schema(vec![FieldSpec::new(
+            verdict_field,
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("judge");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("judge"),
+                InputMapping::new("judge"),
+                field("raw"),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        graph.add_entry(node_id);
+
+        let recording = Arc::new(RecordingPaladinPort::new());
+        recording.set_output(
+            "judge",
+            r#"{"delta": {"not_a_real_field": "x"}, "next": "edges"}"#,
+        );
+        let port: Arc<dyn PaladinPort> = recording;
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("unknown-delta-field").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Failed {
+                error: EngineError::Battlefield(BattlefieldError::UnknownField { field }),
+                ..
+            } => {
+                assert_eq!(field.as_str(), "not_a_real_field");
+            }
+            other => panic!("expected Failed(Battlefield(UnknownField)), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_output_under_fail_run_fails_the_run() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("judge");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("judge"),
+                InputMapping::new("judge"),
+                field("raw"),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        graph.add_entry(node_id.clone());
+
+        let recording = Arc::new(RecordingPaladinPort::new());
+        recording.set_output("judge", "not json at all");
+        let port: Arc<dyn PaladinPort> = recording;
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("malformed-fail-run").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Failed {
+                error: EngineError::DirectiveParseFailed { node, .. },
+                ..
+            } => {
+                assert_eq!(node, node_id);
+            }
+            other => panic!("expected Failed(DirectiveParseFailed), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_output_under_fallback_plain_writes_the_raw_output() {
+        let raw_field = field("raw");
+        let s = schema(vec![FieldSpec::new(
+            raw_field.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("judge");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("judge"),
+                InputMapping::new("judge"),
+                raw_field.clone(),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FallbackPlain,
+                },
+            ),
+        );
+        graph.add_entry(node_id);
+
+        let recording = Arc::new(RecordingPaladinPort::new());
+        recording.set_output("judge", "not json at all");
+        let port: Arc<dyn PaladinPort> = recording;
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("malformed-fallback-plain").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&raw_field).unwrap(),
+                    Some("not json at all".to_string())
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    // --- Task 2 (red/green): the FailRun/FallbackPlain end-to-end proof and
+    // the no-partial-merge guarantee, asserted in full through superstep::run.
+
+    #[tokio::test]
+    async fn structured_directive_parse_failure_does_not_merge_a_partial_delta() {
+        let ok_field = field("ok_field");
+        let s = schema(vec![FieldSpec::new(
+            ok_field.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let succeeding = NodeId::new("succeeding");
+        let failing = NodeId::new("failing");
+        graph.add_node(
+            succeeding.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("succeeding"),
+                InputMapping::new("go"),
+                field("unused_out"),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        graph.add_node(
+            failing.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("failing"),
+                InputMapping::new("go"),
+                field("unused_out2"),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        graph.add_entry(succeeding);
+        graph.add_entry(failing);
+
+        let recording = Arc::new(RecordingPaladinPort::new());
+        recording.set_output(
+            "succeeding",
+            r#"{"delta": {"ok_field": "should-not-appear"}, "next": "edges"}"#,
+        );
+        recording.set_output("failing", "definitely not json");
+        let port: Arc<dyn PaladinPort> = recording;
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("partial-delta-no-merge").unwrap();
+        let outcome = run_with_port(&graph, thread.clone(), &store, &port).await;
+
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Failed {
+                    error: EngineError::DirectiveParseFailed { .. },
+                    ..
+                }
+            ),
+            "expected Failed(DirectiveParseFailed), got {outcome:?}"
+        );
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        let failed_waypoint = waypoints
+            .iter()
+            .find(|w| matches!(w.status, WaypointStatus::Failed { .. }))
+            .expect("a Failed waypoint was persisted");
+        assert_eq!(
+            failed_waypoint
+                .battlefield
+                .get::<String>(&ok_field)
+                .unwrap(),
+            None,
+            "no delta may be merged when a sibling node's directive fails to parse -- the \
+             whole superstep's deltas are discarded together, before merge"
+        );
     }
 
     // --- CF-02: Directive-driven Goto -----------------------------------

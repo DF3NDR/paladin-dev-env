@@ -24,6 +24,10 @@
 //!   any of those legacy services.
 //! - [`graph`] — `WarGraph`, `NodeSpec`, `EdgeSpec`, `EngineLimits`, and
 //!   `WarGraph::validate`/`fingerprint`.
+//! - [`directive_parser`] — `DirectiveParser`, `OnParseError`: how a
+//!   `NodeSpec::Paladin` node's raw string output becomes a routing
+//!   `Directive` (CF-02, D-11). `PlainOutput` is the backward-compatible
+//!   default; `StructuredDirective` parses a documented JSON envelope.
 //! - [`input_mapping`] — `InputMapping`, `InputMappingError`: the X-03
 //!   string bridge a `NodeSpec::Paladin` node renders its input through.
 //! - [`node`] — `StateNode`, `NodeContext`, `NodeError`.
@@ -41,6 +45,7 @@
 //!   later engine plans assert against.
 
 pub mod bridges;
+pub mod directive_parser;
 pub mod dispatch_registry;
 pub mod graph;
 pub mod hooks;
@@ -71,6 +76,7 @@ use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink};
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 
 pub use bridges::{CAMPAIGN_FAN_IN_SEPARATOR, campaign_node_ids, dedicated_output_field};
+pub use directive_parser::{DirectiveParseError, DirectiveParser, OnParseError};
 pub use dispatch_registry::DispatchRegistry;
 pub use graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
 pub use hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
@@ -408,6 +414,20 @@ pub enum EngineError {
     ParleyNotSupported {
         /// The node whose `Directive` returned `Parley`.
         node: NodeId,
+    },
+
+    /// A `NodeSpec::Paladin` node's `DirectiveParser::StructuredDirective`
+    /// (CF-02, D-11) could not extract a valid JSON envelope from the
+    /// node's output under `OnParseError::FailRun`. Never resolved by any
+    /// default branch: `OnParseError::FallbackPlain` is the node author's
+    /// explicit opt-in to a different resolution, not something the engine
+    /// chooses on its own.
+    #[error("node {node} failed to parse a StructuredDirective envelope: {reason}")]
+    DirectiveParseFailed {
+        /// The node whose output failed to parse.
+        node: NodeId,
+        /// Why extraction/deserialization of the envelope failed.
+        reason: String,
     },
 }
 
@@ -1076,11 +1096,11 @@ mod tests {
         let node_id = NodeId::new("summarizer");
         graph.add_node(
             node_id.clone(),
-            NodeSpec::Paladin {
-                paladin: Box::new(make_paladin("summarizer")),
-                input_template: InputMapping::new("summarize {topic}"),
-                output_field: field_name.clone(),
-            },
+            NodeSpec::paladin(
+                make_paladin("summarizer"),
+                InputMapping::new("summarize {topic}"),
+                field_name.clone(),
+            ),
         );
         graph.add_entry(node_id);
 
@@ -1126,19 +1146,19 @@ mod tests {
         let n2 = NodeId::new("second");
         graph.add_node(
             n1.clone(),
-            NodeSpec::Paladin {
-                paladin: Box::new(make_paladin("first")),
-                input_template: InputMapping::new("note one"),
-                output_field: field_name.clone(),
-            },
+            NodeSpec::paladin(
+                make_paladin("first"),
+                InputMapping::new("note one"),
+                field_name.clone(),
+            ),
         );
         graph.add_node(
             n2.clone(),
-            NodeSpec::Paladin {
-                paladin: Box::new(make_paladin("second")),
-                input_template: InputMapping::new("note two"),
-                output_field: field_name.clone(),
-            },
+            NodeSpec::paladin(
+                make_paladin("second"),
+                InputMapping::new("note two"),
+                field_name.clone(),
+            ),
         );
         graph.add_entry(n1);
         graph.add_entry(n2);
@@ -1178,11 +1198,7 @@ mod tests {
         let node_id = NodeId::new("counter");
         graph.add_node(
             node_id.clone(),
-            NodeSpec::Paladin {
-                paladin: Box::new(make_paladin("counter")),
-                input_template: InputMapping::new("go"),
-                output_field: field_name,
-            },
+            NodeSpec::paladin(make_paladin("counter"), InputMapping::new("go"), field_name),
         );
         graph.add_entry(node_id.clone());
 
@@ -1247,11 +1263,7 @@ mod tests {
         let node_id = NodeId::new("failer");
         graph.add_node(
             node_id.clone(),
-            NodeSpec::Paladin {
-                paladin: Box::new(make_paladin("failer")),
-                input_template: InputMapping::new("go"),
-                output_field: field_name,
-            },
+            NodeSpec::paladin(make_paladin("failer"), InputMapping::new("go"), field_name),
         );
         graph.add_entry(node_id.clone());
 
@@ -1606,11 +1618,11 @@ mod tests {
                 };
                 graph.add_node(
                     node_id.clone(),
-                    NodeSpec::Paladin {
-                        paladin: Box::new(make_paladin(&format!("n{}", i + 1))),
-                        input_template: InputMapping::new(format!("{{{input_field}}}")),
-                        output_field: field_names[i].clone(),
-                    },
+                    NodeSpec::paladin(
+                        make_paladin(&format!("n{}", i + 1)),
+                        InputMapping::new(format!("{{{input_field}}}")),
+                        field_names[i].clone(),
+                    ),
                 );
             }
             for pair in node_ids.windows(2) {

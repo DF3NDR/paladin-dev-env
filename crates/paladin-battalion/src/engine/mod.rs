@@ -383,6 +383,18 @@ pub enum EngineError {
         #[source]
         source: crate::edge_evaluator::EdgeEvaluatorError,
     },
+
+    /// A `Directive`'s `NextStep::Goto` named a target not declared in the
+    /// graph (CF-02, D-08a). Validated the moment the Directive is
+    /// received, before any routing state changes -- a `Goto` never
+    /// silently drops or ignores an unknown target.
+    #[error("node {from} returned NextStep::Goto naming undeclared node {to}")]
+    GotoUnknownNode {
+        /// The node whose `Directive` named the unknown target.
+        from: NodeId,
+        /// The undeclared `Goto` target.
+        to: NodeId,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -748,10 +760,10 @@ mod tests {
             &self,
             _state: &Battlefield,
             _ctx: &NodeContext,
-        ) -> Result<StateDelta, NodeError> {
+        ) -> Result<paladin_core::platform::container::directive::Directive, NodeError> {
             let mut delta = StateDelta::new();
             delta.set_raw(self.field.clone(), self.value.clone());
-            Ok(delta)
+            Ok(delta.into())
         }
     }
 

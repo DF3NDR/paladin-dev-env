@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
+use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
@@ -134,32 +135,46 @@ impl WaypointPort for RecordingWaypointStore {
     }
 }
 
-/// A closure computing a [`CountingFunctionNode`]'s delta from its
+/// A closure computing a [`CountingFunctionNode`]'s [`Directive`] from its
 /// zero-indexed run number and the Battlefield snapshot it observed.
-type DeltaFn = dyn Fn(usize, &Battlefield) -> StateDelta + Send + Sync;
+type DirectiveFn = dyn Fn(usize, &Battlefield) -> Directive + Send + Sync;
 
 /// A [`StateNode`] test double: records how many times it ran, the raw
 /// pointer address of the Battlefield snapshot it observed on each run (for
 /// asserting `Arc`-shared-snapshot identity across concurrently-executing
-/// peers), and returns a delta computed by a caller-supplied closure over
-/// the zero-indexed run number and the observed snapshot.
+/// peers), and returns a [`Directive`] computed by a caller-supplied
+/// closure over the zero-indexed run number and the observed snapshot.
 pub struct CountingFunctionNode {
     run_count: Arc<AtomicUsize>,
     observed_ptrs: Arc<Mutex<Vec<usize>>>,
-    delta_fn: Arc<DeltaFn>,
+    directive_fn: Arc<DirectiveFn>,
 }
 
 impl CountingFunctionNode {
     /// Construct a node whose delta is computed by `delta_fn(run_index,
     /// snapshot)`, where `run_index` is 0 on the node's first execution, 1
-    /// on its second, and so on.
+    /// on its second, and so on. Always routes via `NextStep::Edges`
+    /// (`impl From<StateDelta> for Directive`'s default) -- use
+    /// [`CountingFunctionNode::with_directive`] for a node whose routing
+    /// (`Goto`/`End`/`Muster`/`Parley`) is also caller-controlled.
     pub fn new(
         delta_fn: impl Fn(usize, &Battlefield) -> StateDelta + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Self::with_directive(move |run, state| delta_fn(run, state).into())
+    }
+
+    /// Construct a node whose full [`Directive`] -- delta AND routing -- is
+    /// computed by `directive_fn(run_index, snapshot)`, so a test can drive
+    /// a node through `NextStep::Goto`/`End`/`Muster`/`Parley` (CF-02),
+    /// optionally varying it by run index (e.g. a refine-loop reviewer that
+    /// `Goto`es back for its first few runs, then routes via `Edges`).
+    pub fn with_directive(
+        directive_fn: impl Fn(usize, &Battlefield) -> Directive + Send + Sync + 'static,
     ) -> Arc<Self> {
         Arc::new(Self {
             run_count: Arc::new(AtomicUsize::new(0)),
             observed_ptrs: Arc::new(Mutex::new(Vec::new())),
-            delta_fn: Arc::new(delta_fn),
+            directive_fn: Arc::new(directive_fn),
         })
     }
 
@@ -192,13 +207,13 @@ impl CountingFunctionNode {
 
 #[async_trait]
 impl StateNode for CountingFunctionNode {
-    async fn run(&self, state: &Battlefield, _ctx: &NodeContext) -> Result<StateDelta, NodeError> {
+    async fn run(&self, state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
         let run_index = self.run_count.fetch_add(1, Ordering::SeqCst);
         self.observed_ptrs
             .lock()
             .unwrap()
             .push(state as *const Battlefield as usize);
-        Ok((self.delta_fn)(run_index, state))
+        Ok((self.directive_fn)(run_index, state))
     }
 }
 
@@ -236,7 +251,7 @@ impl ConcurrencyTrackingNode {
 
 #[async_trait]
 impl StateNode for ConcurrencyTrackingNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<StateDelta, NodeError> {
+    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
         let now_in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_seen.fetch_max(now_in_flight, Ordering::SeqCst);
         tokio::time::sleep(self.hold).await;
@@ -244,7 +259,7 @@ impl StateNode for ConcurrencyTrackingNode {
 
         let mut delta = StateDelta::new();
         delta.set_raw(self.field.clone(), self.value.clone());
-        Ok(delta)
+        Ok(delta.into())
     }
 }
 
@@ -265,7 +280,7 @@ impl FailingFunctionNode {
 
 #[async_trait]
 impl StateNode for FailingFunctionNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<StateDelta, NodeError> {
+    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
         Err(NodeError(self.message.clone()))
     }
 }
@@ -292,7 +307,7 @@ impl YieldingNode {
 
 #[async_trait]
 impl StateNode for YieldingNode {
-    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<StateDelta, NodeError> {
+    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError> {
         for _ in 0..self.yields {
             tokio::task::yield_now().await;
         }

@@ -36,6 +36,7 @@ use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
     Battlefield, CustomDispatchResolver, FieldName, StateDelta,
 };
+use paladin_core::platform::container::directive::{Directive, NextStep};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, NodeExecutionRecord, NodeId, NodeOutcomeKind, ThreadId,
@@ -89,7 +90,7 @@ async fn execute_vanguard_node(
     snapshot: &Battlefield,
     ctx: &crate::engine::node::NodeContext,
     paladin_port: &Arc<dyn PaladinPort>,
-) -> (Option<Uuid>, u64, Result<StateDelta, NodeError>) {
+) -> (Option<Uuid>, u64, Result<Directive, NodeError>) {
     match dispatch {
         NodeDispatch::Function(node) => {
             let result = node.run(snapshot, ctx).await;
@@ -110,7 +111,11 @@ async fn execute_vanguard_node(
                     let token_count = u64::from(result.token_count);
                     let mut delta = StateDelta::new();
                     match delta.set(output_field, result.output.clone()) {
-                        Ok(()) => (paladin_id, token_count, Ok(delta)),
+                        // A `NodeSpec::Paladin` node has no `DirectiveParser`
+                        // wired yet (D-11 lands in a later plan) -- its
+                        // output always routes via the `PlainOutput`-
+                        // equivalent default, `NextStep::Edges`.
+                        Ok(()) => (paladin_id, token_count, Ok(delta.into())),
                         Err(e) => (paladin_id, token_count, Err(NodeError(e.to_string()))),
                     }
                 }
@@ -128,9 +133,11 @@ async fn execute_vanguard_node(
 /// variant rather than being folded into one of the other two.
 enum NodeRunOutcome {
     /// The node executed (or an interceptor's `before` chain unanimously
-    /// `Proceed`ed and the node itself succeeded) and produced this delta,
-    /// already passed through every `after` hook in order.
-    Succeeded(StateDelta),
+    /// `Proceed`ed and the node itself succeeded) and produced this
+    /// `Directive`, whose `delta` has already passed through every `after`
+    /// hook in order (`next` is untouched by any interceptor, per D-08's
+    /// leave-ENG-07-untouched discretion).
+    Succeeded(Directive),
     /// A `NodeInterceptor::before` returned `Skip(reason)`: the node never
     /// executed. Contributes no delta to this superstep's merge.
     Skipped(String),
@@ -428,14 +435,22 @@ pub(crate) async fn run<W: WaypointPort>(
                             let (paladin_id, token_count, result) =
                                 execute_vanguard_node(dispatch, &snap, &ctx, &port).await;
                             match result {
-                                Ok(mut delta) => {
+                                Ok(mut directive) => {
                                     // --- ENG-FR-22: run every `after` in
                                     // order, each observing the previous
-                                    // one's mutation.
+                                    // one's mutation. `after` still takes
+                                    // `&mut StateDelta` only -- the ENG-07
+                                    // hook signature is unchanged by CF-02;
+                                    // `directive.next` is not visible to any
+                                    // interceptor this phase.
                                     for interceptor in &node_interceptors {
-                                        interceptor.after(&ctx, &mut delta).await;
+                                        interceptor.after(&ctx, &mut directive.delta).await;
                                     }
-                                    (paladin_id, token_count, NodeRunOutcome::Succeeded(delta))
+                                    (
+                                        paladin_id,
+                                        token_count,
+                                        NodeRunOutcome::Succeeded(directive),
+                                    )
                                 }
                                 Err(e) => (paladin_id, token_count, NodeRunOutcome::Failed(e)),
                             }
@@ -478,19 +493,79 @@ pub(crate) async fn run<W: WaypointPort>(
         let mut deltas = Vec::with_capacity(handles.len());
         let mut completed_records = Vec::with_capacity(handles.len());
         let mut node_failure: Option<(NodeId, NodeError)> = None;
+        // --- CF-02: per-superstep runtime values derived from this
+        // superstep's `Directive`s, NOT `Frontier` state (RESEARCH.md
+        // Pattern 3) -- rebuilt fresh every superstep, never persisted.
+        // `goto_targets` is unioned into `next_vanguard` after
+        // `compute_next_vanguard` returns; `notfiring_nodes` marks every
+        // node whose `Directive.next` was not `Edges`, so
+        // `Frontier::record_execution` resolves its static outgoing edges
+        // `NotFiring` directly instead of evaluating them (D-08c, serves
+        // Goto/Muster/End/Parley alike -- End and Parley's own routing
+        // behavior beyond this marking lands in Task 2). A Goto target
+        // validation failure fails the run before any of this bookkeeping
+        // is acted on further (checked together with `node_failure`,
+        // before the merge).
+        let mut goto_targets: Vec<NodeId> = Vec::new();
+        let mut notfiring_nodes: HashSet<NodeId> = HashSet::new();
+        let mut routing_failure: Option<(NodeId, EngineError)> = None;
         for handle in handles {
             let (node_id, started_at, duration_ms, paladin_id, token_count, outcome) = handle
                 .await
                 .map_err(|e| EngineError::Node(NodeError(format!("task join error: {e}"))))?;
             match outcome {
-                NodeRunOutcome::Succeeded(delta) => {
+                NodeRunOutcome::Succeeded(directive) => {
+                    let Directive { delta, next } = directive;
+                    let outcome_kind = match &next {
+                        NextStep::Edges => NodeOutcomeKind::Succeeded,
+                        NextStep::Goto(targets) => {
+                            notfiring_nodes.insert(node_id.clone());
+                            for target in targets {
+                                if graph.node(target).is_none() {
+                                    if routing_failure.is_none() {
+                                        routing_failure = Some((
+                                            node_id.clone(),
+                                            EngineError::GotoUnknownNode {
+                                                from: node_id.clone(),
+                                                to: target.clone(),
+                                            },
+                                        ));
+                                    }
+                                } else {
+                                    goto_targets.push(target.clone());
+                                }
+                            }
+                            NodeOutcomeKind::Succeeded
+                        }
+                        NextStep::Muster(_) => {
+                            // Dispatch mechanism lands in a later plan
+                            // (CF-03); this phase only honours D-08c's
+                            // NotFiring rule so a Muster directive can
+                            // never leave an outgoing edge `Pending`.
+                            notfiring_nodes.insert(node_id.clone());
+                            NodeOutcomeKind::Succeeded
+                        }
+                        NextStep::End => {
+                            // Full run-completion semantics land in Task 2
+                            // (D-09); this task only applies D-08c's
+                            // NotFiring rule.
+                            notfiring_nodes.insert(node_id.clone());
+                            NodeOutcomeKind::Succeeded
+                        }
+                        NextStep::Parley(_) => {
+                            // The typed rejection (D-10) lands in Task 2;
+                            // this task only applies D-08c's NotFiring rule.
+                            notfiring_nodes.insert(node_id.clone());
+                            NodeOutcomeKind::Succeeded
+                        }
+                    };
                     completed_records.push(NodeExecutionRecord {
                         node_id: node_id.clone(),
                         paladin_id,
                         started_at,
                         duration_ms,
                         token_count,
-                        outcome: NodeOutcomeKind::Succeeded,
+                        outcome: outcome_kind,
                         attempt: 1,
                     });
                     deltas.push((node_id, delta));
@@ -548,6 +623,35 @@ pub(crate) async fn run<W: WaypointPort>(
             });
         }
 
+        // --- CF-02: a `Goto` target that names an undeclared node, or a
+        // returned `Parley` (D-10), both fail the run here -- before the
+        // merge, mirroring `node_failure`'s ordering -- so neither
+        // `goto_targets` nor `notfiring_nodes` ever reaches `Frontier`
+        // state (D-08a: validated the moment the Directive is received,
+        // before any routing state changes).
+        if let Some((failed_node, error)) = routing_failure {
+            let waypoint = build_waypoint(
+                &thread,
+                parent_waypoint_id,
+                superstep_number,
+                graph,
+                &battlefield,
+                vanguard.clone(),
+                completed_records,
+                WaypointStatus::Failed {
+                    error: error.to_string(),
+                    failed_node,
+                },
+                visit_counts,
+                frontier.snapshot(graph),
+            );
+            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+            return Ok(RunOutcome::Failed {
+                error,
+                waypoint: Some(waypoint.waypoint_id),
+            });
+        }
+
         // --- Merge, only after every node in this superstep has completed
         // (ENG-FR-05: no node observes a peer's delta this superstep).
         deltas.sort_by(|a, b| a.0.cmp(&b.0));
@@ -593,11 +697,34 @@ pub(crate) async fn run<W: WaypointPort>(
                     &battlefield,
                     evaluators,
                     &thread,
+                    notfiring_nodes.contains(node_id),
                 )
                 .await?;
         }
         frontier.propagate_dead(graph);
-        let next_vanguard = compute_next_vanguard(graph, &frontier);
+        let mut next_vanguard = compute_next_vanguard(graph, &frontier);
+
+        // --- CF-02 / D-08b: union this superstep's validated `Goto`
+        // targets into `next_vanguard`, bypassing `Frontier::is_ready`
+        // entirely -- a Goto target is admitted unconditionally, not
+        // because it satisfied the normal readiness test. De-duplicated
+        // against nodes `compute_next_vanguard` already selected (a node
+        // that is both a Goto target AND ordinarily tier-1-ready this
+        // superstep is scheduled, and therefore executes, exactly once).
+        // `compute_next_vanguard` itself stays pure over `Frontier` state
+        // (RESEARCH.md Open Question 2) -- this union happens here, one
+        // level up, over its result.
+        if !goto_targets.is_empty() {
+            let mut seen: HashSet<NodeId> = next_vanguard.iter().cloned().collect();
+            for target in goto_targets {
+                if seen.insert(target.clone()) {
+                    next_vanguard.push(target);
+                }
+            }
+        }
+
+        // D-09's `End` completion (peers merged, End beats Goto) lands in
+        // Task 2, ahead of the truthful-outcome check below.
 
         // D-04's run-end truthful-outcome check: an independent net over
         // the SAME `frontier` `compute_next_vanguard` just consumed, run
@@ -827,11 +954,19 @@ impl Frontier {
         frontier
     }
 
-    /// Record that `node` completed `superstep`, evaluating every one of
-    /// its outgoing edges against the POST-merge `battlefield` and storing
-    /// each as `Fired`/`NotFiring` at this superstep (ENG-FR-06). Re-running
-    /// a node (a cycle or self-loop) overwrites its edges' previous state
-    /// with the fresh evaluation.
+    /// Record that `node` completed `superstep`. When `force_notfiring` is
+    /// `false` (the ordinary case), evaluates every one of `node`'s
+    /// outgoing edges against the POST-merge `battlefield` and stores each
+    /// as `Fired`/`NotFiring` at this superstep (ENG-FR-06). When `true` --
+    /// `node`'s `Directive.next` was not `NextStep::Edges` (CF-02, D-08c) --
+    /// every outgoing edge is set `NotFiring` directly, skipping
+    /// `evaluate_edge_condition` entirely: a node that authored its own
+    /// routing (`Goto`/`Muster`/`End`/`Parley`) never also fires its static
+    /// outgoing edges for the same execution, so no `NextStep` variant can
+    /// leave one `Pending` and strand a downstream join. Re-running a node
+    /// (a cycle or self-loop) overwrites its edges' previous state with the
+    /// fresh evaluation either way.
+    #[allow(clippy::too_many_arguments)]
     async fn record_execution(
         &mut self,
         graph: &WarGraph,
@@ -840,26 +975,31 @@ impl Frontier {
         battlefield: &Battlefield,
         evaluators: &EdgeEvaluatorRegistry,
         thread: &ThreadId,
+        force_notfiring: bool,
     ) -> Result<(), EngineError> {
         self.last_executed.insert(node.clone(), superstep);
         for (idx, edge) in graph.edges().iter().enumerate() {
             if &edge.from != node {
                 continue;
             }
-            let fires = match &edge.condition {
-                None => true,
-                Some(condition) => {
-                    evaluate_edge_condition(
-                        condition,
-                        battlefield,
-                        graph,
-                        evaluators,
-                        node,
-                        &edge.to,
-                        thread,
-                        superstep,
-                    )
-                    .await?
+            let fires = if force_notfiring {
+                false
+            } else {
+                match &edge.condition {
+                    None => true,
+                    Some(condition) => {
+                        evaluate_edge_condition(
+                            condition,
+                            battlefield,
+                            graph,
+                            evaluators,
+                            node,
+                            &edge.to,
+                            thread,
+                            superstep,
+                        )
+                        .await?
+                    }
                 }
             };
             self.edge_state[idx] = if fires {

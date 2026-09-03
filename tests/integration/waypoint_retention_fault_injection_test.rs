@@ -35,6 +35,7 @@ use paladin_battalion::engine::{
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
 };
+use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::waypoint::{
@@ -364,12 +365,12 @@ struct SetFieldNode {
 
 #[async_trait]
 impl StateNode for SetFieldNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<StateDelta, NodeError> {
+    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
         let mut delta = StateDelta::new();
         delta
             .set(self.field.clone(), self.value.clone())
             .map_err(|e| NodeError(e.to_string()))?;
-        Ok(delta)
+        Ok(delta.into())
     }
 }
 

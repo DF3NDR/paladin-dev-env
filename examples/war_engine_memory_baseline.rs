@@ -50,6 +50,7 @@ use paladin_battalion::engine::node::{NodeContext, NodeError, StateNode};
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
 };
+use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
@@ -134,12 +135,12 @@ struct TrackingNode {
 
 #[async_trait]
 impl StateNode for TrackingNode {
-    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<StateDelta, NodeError> {
+    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError> {
         let ptr = state as *const Battlefield as usize;
         self.tracker.record(ctx.superstep, ptr);
         let mut delta = StateDelta::new();
         delta.set_raw(self.field.clone(), serde_json::json!(ctx.superstep));
-        Ok(delta)
+        Ok(delta.into())
     }
 }
 

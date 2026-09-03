@@ -743,6 +743,24 @@ mod tests {
             .await;
     }
 
+    // ── CF-FR-12 / D-14: MusterProgress (Plan 23-06) ──────────────────────
+
+    #[tokio::test]
+    async fn muster_progress_round_trips() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::muster_progress_round_trips(&store).await;
+    }
+
+    #[tokio::test]
+    async fn muster_progress_none_round_trips_as_none() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::muster_progress_none_round_trips_as_none(&store).await;
+    }
+
     #[tokio::test]
     async fn prune_thread_thread_id_and_waypoint_id_with_sql_metacharacters_round_trip_as_data() {
         let Some(store) = store_or_skip().await else {

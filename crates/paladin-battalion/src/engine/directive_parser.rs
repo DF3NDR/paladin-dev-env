@@ -82,8 +82,11 @@ pub struct DirectiveParseError {
 }
 
 /// D-11's documented JSON envelope shape, deserialized directly by
-/// [`extract_envelope`].
+/// [`extract_envelope`]. Unknown top-level keys are rejected
+/// (`deny_unknown_fields`) rather than silently ignored — a model
+/// hallucinating an extra key is a signal worth surfacing, not discarding.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Envelope {
     /// The state delta this envelope contributes. Field-name validity
     /// against the Battlefield schema is deliberately NOT checked here —

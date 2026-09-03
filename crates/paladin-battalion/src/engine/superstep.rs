@@ -2010,7 +2010,10 @@ mod tests {
             .find(|w| matches!(w.status, WaypointStatus::Failed { .. }))
             .expect("a Failed waypoint was persisted");
         assert_eq!(
-            failed_waypoint.battlefield.get::<String>(&ok_field).unwrap(),
+            failed_waypoint
+                .battlefield
+                .get::<String>(&ok_field)
+                .unwrap(),
             None,
             "no delta may be merged when a sibling node's directive fails to parse -- the \
              whole superstep's deltas are discarded together, before merge"

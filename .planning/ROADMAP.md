@@ -292,8 +292,8 @@ Runtime" — are detailed in full below.*
 Plans:
 **Wave 1**
 
-- [ ] 22.1-01-PLAN.md — BUG-03 cycle-bootstrap starvation fix (tracer, test-first) + BUG-03/ENG-FR-06a registration
-- [ ] 22.1-04-PLAN.md — MSRV floor to measured 1.88, lockfile restore, resolver 3, MSRV figure reconciliation
+- [x] 22.1-01-PLAN.md — BUG-03 cycle-bootstrap starvation fix (tracer, test-first) + BUG-03/ENG-FR-06a registration
+- [x] 22.1-04-PLAN.md — MSRV floor to measured 1.88, lockfile restore, resolver 3, MSRV figure reconciliation
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

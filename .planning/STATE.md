@@ -6,9 +6,9 @@ current_phase: 22.1
 current_phase_name: Engine readiness defect and MSRV follow-up
 status: executing
 stopped_at: Phase 22.1 context gathered
-last_updated: "2026-09-02T23:58:27.882Z"
-last_activity: 2026-09-02
-last_activity_desc: Phase 22 complete, transitioned to Phase 22.1
+last_updated: "2026-09-03T00:00:38.652Z"
+last_activity: 2026-09-03
+last_activity_desc: Phase 22.1 execution started
 progress:
   total_phases: 2
   completed_phases: 1
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-01 after the v0.9.0 milestone close)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 22 — Battlefield State & Superstep Engine
+**Current focus:** Phase 22.1 — Engine readiness defect and MSRV follow-up
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
 **Progress:** [██████████] 100% — v0.9.0 shipped
@@ -51,10 +51,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 22.1 — Engine readiness defect and MSRV follow-up
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-02 — Phase 22 complete, transitioned to Phase 22.1
+Phase: 22.1 (Engine readiness defect and MSRV follow-up) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 22.1
+Last activity: 2026-09-03 — Phase 22.1 execution started
 
 ## Performance Metrics
 

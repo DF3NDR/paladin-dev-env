@@ -502,11 +502,47 @@ impl WarGraph {
         })
     }
 
-    /// Compute this graph's stable content fingerprint (ENG-FR-14): a hash
-    /// over node ids, edge specs and schema field names — deliberately NOT
-    /// over prompts or models. Node ids, edges (by `from`/`to`) and schema
-    /// field names are sorted before hashing so the result never depends on
-    /// `HashMap` iteration order (RESEARCH.md Pitfall 5).
+    /// Compute this graph's stable content fingerprint (ENG-FR-14 / CR-01,
+    /// D-15): a hash over every scheduling- and merge-relevant graph
+    /// property --
+    ///
+    /// - node ids, plus each `NodeSpec::Paladin`'s `output_field` (a
+    ///   `Function` node writes an unambiguous "no output field" marker
+    ///   instead, so a node named `x` with no output field can never
+    ///   produce the same bytes as one with an empty one);
+    /// - edges, by `from`/`to` plus the edge's serde-canonical
+    ///   `EdgeCondition`;
+    /// - schema field names, plus each field's serde-canonical
+    ///   `DispatchRule`;
+    /// - the declared entry set (`self.entry`);
+    /// - `self.defer_flags`;
+    /// - `self.dynamic_targets`.
+    ///
+    /// Deliberately NOT covered (ENG-FR-14): Paladin prompts, model names,
+    /// `InputMapping` templates, or `EngineLimits` -- raising a limit or
+    /// tuning a prompt to let a resumed run continue is a legitimate
+    /// operator action and must not trip `EngineError::GraphMismatch`.
+    ///
+    /// The edge condition and dispatch rule are hashed through their serde
+    /// representation (`serde_json::to_string`), never through `Debug`: a
+    /// `#[derive(Debug)]` change on either type would otherwise silently
+    /// move every stored fingerprint with no compiler warning, while the
+    /// serde representation is a stable, versioned contract (D-16). A
+    /// serialization failure degrades to stable empty bytes rather than a
+    /// panic, matching `evaluate_edge_condition`'s existing
+    /// `unwrap_or_default()` convention.
+    ///
+    /// Every collection above is sorted before hashing (node ids, edges,
+    /// schema fields, entry set, defer flags, dynamic targets), so the
+    /// result never depends on `HashMap`/`HashSet` iteration order
+    /// (RESEARCH.md Pitfall 5).
+    ///
+    /// A golden hex test pins the exact output of a fixture exercising
+    /// every hashed property (`engine::graph::tests::
+    /// fingerprint_golden_hex_pins_canonical_bytes`); changing this
+    /// function's byte layout invalidates every stored Waypoint's
+    /// fingerprint and must not be done without a deliberate format-version
+    /// bump (D-17).
     pub fn fingerprint(&self) -> GraphFingerprint {
         let mut node_ids: Vec<&NodeId> = self.nodes.keys().collect();
         node_ids.sort();
@@ -516,13 +552,31 @@ impl WarGraph {
             (a.from.as_str(), a.to.as_str()).cmp(&(b.from.as_str(), b.to.as_str()))
         });
 
-        let mut field_names: Vec<&FieldName> = self.schema.fields.iter().map(|f| &f.name).collect();
-        field_names.sort();
+        let mut fields: Vec<_> = self.schema.fields.iter().collect();
+        fields.sort_by(|a, b| a.name.as_str().cmp(b.name.as_str()));
+
+        let mut entry_ids: Vec<&NodeId> = self.entry.iter().collect();
+        entry_ids.sort();
+
+        let mut defer_ids: Vec<&NodeId> = self.defer_flags.iter().collect();
+        defer_ids.sort();
+
+        let mut dynamic_target_ids: Vec<&NodeId> = self.dynamic_targets.iter().collect();
+        dynamic_target_ids.sort();
 
         let mut buf = Vec::new();
         buf.extend_from_slice(b"nodes:");
         for id in &node_ids {
             buf.extend_from_slice(id.as_str().as_bytes());
+            match self.nodes.get(*id) {
+                Some(NodeSpec::Paladin { output_field, .. }) => {
+                    buf.extend_from_slice(b"|of:");
+                    buf.extend_from_slice(output_field.as_str().as_bytes());
+                }
+                _ => {
+                    buf.extend_from_slice(b"|nf");
+                }
+            }
             buf.push(b'|');
         }
         buf.extend_from_slice(b";edges:");
@@ -531,12 +585,31 @@ impl WarGraph {
             buf.push(b'-');
             buf.extend_from_slice(edge.to.as_str().as_bytes());
             buf.push(b':');
-            buf.extend_from_slice(format!("{:?}", edge.condition).as_bytes());
+            let condition_json = serde_json::to_string(&edge.condition).unwrap_or_default();
+            buf.extend_from_slice(condition_json.as_bytes());
             buf.push(b'|');
         }
         buf.extend_from_slice(b";schema:");
-        for name in &field_names {
-            buf.extend_from_slice(name.as_str().as_bytes());
+        for field in &fields {
+            buf.extend_from_slice(field.name.as_str().as_bytes());
+            buf.push(b':');
+            let dispatch_json = serde_json::to_string(&field.dispatch).unwrap_or_default();
+            buf.extend_from_slice(dispatch_json.as_bytes());
+            buf.push(b'|');
+        }
+        buf.extend_from_slice(b";entry:");
+        for id in &entry_ids {
+            buf.extend_from_slice(id.as_str().as_bytes());
+            buf.push(b'|');
+        }
+        buf.extend_from_slice(b";defer_flags:");
+        for id in &defer_ids {
+            buf.extend_from_slice(id.as_str().as_bytes());
+            buf.push(b'|');
+        }
+        buf.extend_from_slice(b";dynamic_targets:");
+        for id in &dynamic_target_ids {
+            buf.extend_from_slice(id.as_str().as_bytes());
             buf.push(b'|');
         }
 
@@ -753,9 +826,16 @@ mod tests {
         let a = graph.fingerprint();
         let b = graph.fingerprint();
         assert_eq!(a, b);
+        // Recomputed for CR-01 (D-15): this fixture declares "solo" as
+        // entry, and the entry set is now part of the hashed bytes, so the
+        // pinned literal necessarily changes when CR-01 lands -- the old
+        // value reflected exactly the under-covering fingerprint this task
+        // fixes. `fingerprint_golden_hex_pins_canonical_bytes` (Task 2) is
+        // the dedicated golden test guarding future canonicalization
+        // changes; this assertion only re-confirms same-input determinism.
         assert_eq!(
             a.as_str(),
-            "v1:f5532b613066cb2d1972451bad73120abafbf7cbafd8ecf572a043448c31d2d6"
+            "v1:2f2fbea59adf46ee43b2e85710e49fc4bf6b473006a8d2b8d8d9bc57058b43fc"
         );
     }
 

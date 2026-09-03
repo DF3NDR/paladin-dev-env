@@ -421,25 +421,40 @@ pub(crate) async fn run<W: WaypointPort>(
                         (None, 0u64, NodeRunOutcome::Skipped(reason))
                     }
                     InterceptDecision::Fail(err) => (None, 0u64, NodeRunOutcome::Failed(err)),
-                    InterceptDecision::Proceed => {
-                        let _permit = sem
-                            .acquire_owned()
-                            .await
-                            .expect("semaphore is never closed");
-                        let (paladin_id, token_count, result) =
-                            execute_vanguard_node(dispatch, &snap, &ctx, &port).await;
-                        match result {
-                            Ok(mut delta) => {
-                                // --- ENG-FR-22: run every `after` in order,
-                                // each observing the previous one's mutation.
-                                for interceptor in &node_interceptors {
-                                    interceptor.after(&ctx, &mut delta).await;
+                    InterceptDecision::Proceed => match sem.acquire_owned().await {
+                        Ok(_permit) => {
+                            let (paladin_id, token_count, result) =
+                                execute_vanguard_node(dispatch, &snap, &ctx, &port).await;
+                            match result {
+                                Ok(mut delta) => {
+                                    // --- ENG-FR-22: run every `after` in
+                                    // order, each observing the previous
+                                    // one's mutation.
+                                    for interceptor in &node_interceptors {
+                                        interceptor.after(&ctx, &mut delta).await;
+                                    }
+                                    (paladin_id, token_count, NodeRunOutcome::Succeeded(delta))
                                 }
-                                (paladin_id, token_count, NodeRunOutcome::Succeeded(delta))
+                                Err(e) => (paladin_id, token_count, NodeRunOutcome::Failed(e)),
                             }
-                            Err(e) => (paladin_id, token_count, NodeRunOutcome::Failed(e)),
                         }
-                    }
+                        // Semaphore is never `.close()`d anywhere in this
+                        // engine today, so this arm is unreachable in
+                        // practice -- but library code must not `.expect()`
+                        // an invariant it cannot enforce (WR-01, Phase
+                        // 22.1). Report it the same way a node's own
+                        // execution error is reported, through the existing
+                        // NodeRunOutcome/NodeError plumbing, rather than
+                        // panicking inside a detached `tokio::spawn`ed task.
+                        Err(_) => (
+                            None,
+                            0u64,
+                            NodeRunOutcome::Failed(NodeError(
+                                "internal error: superstep semaphore closed unexpectedly"
+                                    .to_string(),
+                            )),
+                        ),
+                    },
                 };
                 let duration_ms = (Utc::now() - started_at).num_milliseconds().max(0) as u64;
                 node_trace.emit(TraceEvent::NodeFinished {

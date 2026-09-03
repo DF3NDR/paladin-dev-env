@@ -44,7 +44,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
 - [x] **ENG-04**: `resume(graph, thread)` restores Battlefield, Vanguard and per-node visit counts
   from the latest Waypoint and continues with zero re-execution of completed nodes — proven by
   program scenario E2E-1 (crash after superstep 3, fresh engine, final state equals uninterrupted
-  control run, one Waypoint per superstep) (ENG-FR-12; overview §6 E2E-1)
+  control run, one Waypoint per superstep) (ENG-FR-12; overview §6 E2E-1) *(BUG-04, found 2026-09-03 by code reading: resume rebuilt the Frontier from scratch, so a pre-crash fired edge into a not-yet-ready join was lost; re-opened for Phase 22.1, fixed by persisting the frontier on the Waypoint — ENG-FR-12a.)*
 
 - [x] **ENG-05**: Three `WaypointPort` backends — InMemory, SQLite (with migrations), Postgres
   (new `postgres` feature) — all pass one shared contract test suite; a

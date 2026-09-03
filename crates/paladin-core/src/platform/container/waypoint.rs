@@ -790,4 +790,118 @@ mod tests {
             "last_executed keys must serialize in sorted order: {json}"
         );
     }
+
+    // --- CF-FR-12 / D-14: MusterProgress ------------------------------------
+
+    #[test]
+    fn waypoint_payload_without_muster_progress_field_deserializes_as_none() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("result").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let waypoint = Waypoint {
+            thread_id: ThreadId::new("thread-1").unwrap(),
+            waypoint_id: WaypointId::new(),
+            parent_waypoint_id: None,
+            superstep: 2,
+            graph_fingerprint: GraphFingerprint::from_canonical_bytes(b"fixture"),
+            battlefield: Battlefield::new(schema),
+            vanguard: vec![],
+            completed: vec![],
+            status: WaypointStatus::Running,
+            created_at: Utc::now(),
+            schema_version: Waypoint::current_schema_version(),
+            visit_counts: BTreeMap::new(),
+            frontier: FrontierSnapshot::default(),
+            muster_progress: Some(MusterProgress {
+                node: NodeId::new("planner"),
+                tasks: vec![],
+                completed: BTreeMap::new(),
+            }),
+        };
+
+        // Simulate a pre-CF-FR-12 payload: serialize, then strip the
+        // `muster_progress` key entirely before deserializing back, rather
+        // than merely round-tripping the value already present.
+        let mut value = serde_json::to_value(&waypoint).unwrap();
+        value
+            .as_object_mut()
+            .expect("Waypoint serializes to a JSON object")
+            .remove("muster_progress");
+        assert!(
+            !value.to_string().contains("muster_progress"),
+            "the muster_progress key must be genuinely absent from the fixture payload"
+        );
+
+        let restored: Waypoint = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.muster_progress, None);
+        // Every other field is untouched by the missing key.
+        assert_eq!(restored.thread_id, waypoint.thread_id);
+        assert_eq!(restored.superstep, waypoint.superstep);
+    }
+
+    #[test]
+    fn muster_progress_round_trips_through_serde_json() {
+        let mut completed = BTreeMap::new();
+        let mut delta = StateDelta::new();
+        delta.set_raw(FieldName::new("x").unwrap(), serde_json::json!("a-result"));
+        completed.insert("a".to_string(), delta);
+
+        let progress = MusterProgress {
+            node: NodeId::new("planner"),
+            tasks: vec![
+                MusterTask {
+                    worker: NodeId::new("worker"),
+                    payload: serde_json::json!("payload-a"),
+                    task_key: "a".to_string(),
+                },
+                MusterTask {
+                    worker: NodeId::new("worker"),
+                    payload: serde_json::json!("payload-b"),
+                    task_key: "b".to_string(),
+                },
+            ],
+            completed,
+        };
+
+        let json = serde_json::to_string(&progress).unwrap();
+        let restored: MusterProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(progress, restored);
+    }
+
+    #[test]
+    fn muster_progress_unfinished_tasks_excludes_completed_keys() {
+        let mut completed = BTreeMap::new();
+        completed.insert("a".to_string(), StateDelta::new());
+        let progress = MusterProgress {
+            node: NodeId::new("planner"),
+            tasks: vec![
+                MusterTask {
+                    worker: NodeId::new("worker"),
+                    payload: serde_json::json!("a"),
+                    task_key: "a".to_string(),
+                },
+                MusterTask {
+                    worker: NodeId::new("worker"),
+                    payload: serde_json::json!("b"),
+                    task_key: "b".to_string(),
+                },
+                MusterTask {
+                    worker: NodeId::new("worker"),
+                    payload: serde_json::json!("c"),
+                    task_key: "c".to_string(),
+                },
+            ],
+            completed,
+        };
+
+        let unfinished: Vec<String> = progress
+            .unfinished_tasks()
+            .into_iter()
+            .map(|t| t.task_key)
+            .collect();
+        assert_eq!(unfinished, vec!["b".to_string(), "c".to_string()]);
+    }
 }

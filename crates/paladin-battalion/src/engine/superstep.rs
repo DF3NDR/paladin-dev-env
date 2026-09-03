@@ -1761,6 +1761,7 @@ mod tests {
     use paladin_core::platform::container::battlefield_error::BattlefieldError;
     use paladin_core::platform::container::paladin::Paladin;
     use paladin_core::platform::container::waypoint::{ParleyRequest, ThreadId};
+    use std::sync::Mutex;
 
     use crate::engine::directive_parser::{DirectiveParser, OnParseError};
     use crate::engine::graph::EdgeSpec;
@@ -1858,6 +1859,49 @@ mod tests {
             None,
             1,
             port,
+            &no_trace(),
+            &no_interceptors(),
+            &None,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Like `run_default`, but seeding a mid-muster resume: `battlefield`,
+    /// `vanguard`, `visit_counts`, `frontier_snapshot`, `muster_progress`
+    /// and `superstep_number` all come from a caller-loaded Waypoint,
+    /// exactly as `WarEngine::resume_with_options` (`engine::mod`) would
+    /// compute them for a `muster_progress: Some(..)` Waypoint (CF-FR-12,
+    /// D-14): `superstep_number` equal to that Waypoint's own `superstep`
+    /// (never `+ 1`).
+    #[allow(clippy::too_many_arguments)]
+    async fn run_resumed_mid_muster(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        battlefield: Battlefield,
+        vanguard: Vec<NodeId>,
+        visit_counts: BTreeMap<NodeId, u32>,
+        frontier_snapshot: FrontierSnapshot,
+        muster_progress: MusterProgress,
+        superstep_number: u64,
+    ) -> RunOutcome {
+        run(
+            store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            graph,
+            thread,
+            battlefield,
+            vanguard,
+            visit_counts,
+            Some(frontier_snapshot),
+            Some(muster_progress),
+            None,
+            superstep_number,
+            &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
             &None,
@@ -3178,6 +3222,426 @@ mod tests {
         let outcome = run_default(&graph, thread, &store).await;
         assert!(matches!(outcome, RunOutcome::Completed { .. }));
         assert_eq!(worker_node.run_count(), 3);
+    }
+
+    // ── CF-FR-12, D-14: mid-muster crash survival (Plan 23-06) ───────────
+
+    /// A `planner -> Muster(five tasks: a,b,c,d,e) -> worker template`
+    /// fixture over an `Append` field keyed by `ctx.task_key()`: the
+    /// planner runs at superstep 1, the muster dispatches at superstep 2 --
+    /// the shape every test below shares. Each worker execution is also
+    /// recorded, in order, into `executed_keys`, so a resume test can
+    /// assert precisely which task_keys ran on a given `run()` call.
+    fn five_task_muster_graph(
+        results_field: &FieldName,
+        executed_keys: Arc<Mutex<Vec<String>>>,
+    ) -> (WarGraph, NodeId) {
+        struct KeyRecordingWorkerNode {
+            field: FieldName,
+            executed_keys: Arc<Mutex<Vec<String>>>,
+        }
+        #[async_trait::async_trait]
+        impl StateNode for KeyRecordingWorkerNode {
+            async fn run(
+                &self,
+                _state: &Battlefield,
+                ctx: &crate::engine::node::NodeContext,
+            ) -> Result<Directive, NodeError> {
+                let key = ctx.task_key().unwrap_or_default().to_string();
+                self.executed_keys.lock().unwrap().push(key.clone());
+                let mut delta = StateDelta::new();
+                delta.set_raw(self.field.clone(), serde_json::json!(key));
+                Ok(delta.into())
+            }
+        }
+
+        let s = schema(vec![FieldSpec::new(
+            results_field.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(
+                    ["a", "b", "c", "d", "e"]
+                        .iter()
+                        .map(|k| muster_task(&worker, serde_json::json!(*k), k))
+                        .collect(),
+                ),
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(
+            worker.clone(),
+            NodeSpec::Function(std::sync::Arc::new(KeyRecordingWorkerNode {
+                field: results_field.clone(),
+                executed_keys,
+            })),
+        );
+        graph.add_entry(planner);
+        (graph, worker)
+    }
+
+    /// Waypoints saved for `thread`, oldest-first (chronological) --
+    /// [`RecordingWaypointStore::saved_waypoints`] returns newest-first;
+    /// this just reverses that for tests that want to walk a run's history
+    /// forward.
+    async fn ascending_saved_waypoints(
+        store: &RecordingWaypointStore,
+        thread: &ThreadId,
+    ) -> Vec<Waypoint> {
+        let mut waypoints = store.saved_waypoints(thread).await;
+        waypoints.reverse();
+        waypoints
+    }
+
+    #[tokio::test]
+    async fn progress_waypoint_battlefield_equals_the_superstep_start_snapshot() {
+        let results_field = field("results");
+        let (graph, _worker) =
+            five_task_muster_graph(&results_field, Arc::new(Mutex::new(Vec::new())));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("muster-progress-unmerged-battlefield").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let ascending = ascending_saved_waypoints(&store, &thread).await;
+        let progress_waypoints: Vec<&Waypoint> = ascending
+            .iter()
+            .filter(|w| w.superstep == 2 && w.muster_progress.is_some())
+            .collect();
+        assert_eq!(
+            progress_waypoints.len(),
+            5,
+            "one progress Waypoint per task"
+        );
+        for wp in &progress_waypoints {
+            let results = wp.battlefield.get::<Vec<String>>(&results_field).unwrap();
+            assert!(
+                results.is_none(),
+                "a progress Waypoint's battlefield must still be the unmerged \
+                 superstep-start snapshot, got {results:?}"
+            );
+        }
+
+        let complete_waypoint = ascending
+            .iter()
+            .find(|w| w.superstep == 2 && w.muster_progress.is_none())
+            .expect("the superstep-complete waypoint for superstep 2");
+        let merged = complete_waypoint
+            .battlefield
+            .get::<Vec<String>>(&results_field)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            merged,
+            vec!["a", "b", "c", "d", "e"],
+            "the merge happens exactly once, after every task resolves"
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_waypoints_are_written_at_the_same_superstep_index_with_status_running() {
+        let results_field = field("results");
+        let (graph, _worker) =
+            five_task_muster_graph(&results_field, Arc::new(Mutex::new(Vec::new())));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("muster-progress-superstep-status").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let ascending = ascending_saved_waypoints(&store, &thread).await;
+        let progress_waypoints: Vec<&Waypoint> = ascending
+            .iter()
+            .filter(|w| w.muster_progress.is_some())
+            .collect();
+        assert_eq!(progress_waypoints.len(), 5);
+        for wp in &progress_waypoints {
+            assert_eq!(
+                wp.superstep, 2,
+                "every progress Waypoint shares the muster's own superstep"
+            );
+            assert_eq!(wp.status, WaypointStatus::Running);
+        }
+
+        let complete_waypoints: Vec<&Waypoint> = ascending
+            .iter()
+            .filter(|w| w.superstep == 2 && w.muster_progress.is_none())
+            .collect();
+        assert_eq!(
+            complete_waypoints.len(),
+            1,
+            "exactly one superstep-complete Waypoint follows the progress Waypoints"
+        );
+        assert_eq!(complete_waypoints[0].status, WaypointStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn one_progress_waypoint_per_completed_task() {
+        let results_field = field("results");
+        let (graph, worker) =
+            five_task_muster_graph(&results_field, Arc::new(Mutex::new(Vec::new())));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("muster-progress-cadence").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let ascending = ascending_saved_waypoints(&store, &thread).await;
+        let progress_records_for_worker: usize = ascending
+            .iter()
+            .filter_map(|w| w.muster_progress.as_ref())
+            .filter(|p| p.node == NodeId::new("planner"))
+            .count();
+        assert_eq!(progress_records_for_worker, 5);
+        let _ = worker;
+    }
+
+    #[tokio::test]
+    async fn resume_mid_muster_runs_exactly_the_unfinished_tasks() {
+        let results_field = field("results");
+        let control_keys = Arc::new(Mutex::new(Vec::new()));
+        let (control_graph, _worker) = five_task_muster_graph(&results_field, control_keys);
+
+        let control_store = RecordingWaypointStore::new();
+        let control_thread = ThreadId::new("muster-resume-control").unwrap();
+        let control_outcome =
+            run_default(&control_graph, control_thread.clone(), &control_store).await;
+        assert!(matches!(control_outcome, RunOutcome::Completed { .. }));
+
+        // Drop the engine after two of five tasks: copy only the planner's
+        // own waypoint plus the first two progress Waypoints (tasks "a" and
+        // "b") into a fresh store, simulating a crash before task "c"'s
+        // progress Waypoint was ever written.
+        let ascending = ascending_saved_waypoints(&control_store, &control_thread).await;
+        let progress_waypoints: Vec<&Waypoint> = ascending
+            .iter()
+            .filter(|w| w.superstep == 2 && w.muster_progress.is_some())
+            .collect();
+        assert_eq!(progress_waypoints.len(), 5);
+
+        let truncated_store = RecordingWaypointStore::new();
+        // Planner's own superstep-1 waypoint, then the first two progress
+        // Waypoints (2 of 5 tasks done).
+        truncated_store.save(&ascending[0]).await.unwrap();
+        truncated_store.save(progress_waypoints[0]).await.unwrap();
+        truncated_store.save(progress_waypoints[1]).await.unwrap();
+
+        let latest = truncated_store
+            .latest(&control_thread)
+            .await
+            .unwrap()
+            .expect("a waypoint was saved");
+        assert_eq!(
+            latest.waypoint_id, progress_waypoints[1].waypoint_id,
+            "latest() must return the most recently written progress Waypoint"
+        );
+        let progress = latest
+            .muster_progress
+            .clone()
+            .expect("the latest waypoint is a mid-muster progress record");
+        assert_eq!(progress.completed.len(), 2);
+
+        let resumed_keys = Arc::new(Mutex::new(Vec::new()));
+        let (resume_graph, _worker) = five_task_muster_graph(&results_field, resumed_keys.clone());
+        let resume_store = RecordingWaypointStore::new();
+        let resumed_outcome = run_resumed_mid_muster(
+            &resume_graph,
+            control_thread.clone(),
+            &resume_store,
+            latest.battlefield.clone(),
+            latest.vanguard.clone(),
+            latest.visit_counts.clone(),
+            latest.frontier.clone(),
+            progress,
+            latest.superstep,
+        )
+        .await;
+        assert!(matches!(resumed_outcome, RunOutcome::Completed { .. }));
+
+        let executed = resumed_keys.lock().unwrap().clone();
+        assert_eq!(
+            executed,
+            vec!["c".to_string(), "d".to_string(), "e".to_string()],
+            "exactly the three unfinished tasks must run, none of the two already-completed"
+        );
+    }
+
+    #[tokio::test]
+    async fn resumed_muster_final_battlefield_equals_the_uninterrupted_run() {
+        let results_field = field("results");
+        let control_keys = Arc::new(Mutex::new(Vec::new()));
+        let (control_graph, _worker) = five_task_muster_graph(&results_field, control_keys);
+
+        let control_store = RecordingWaypointStore::new();
+        let control_thread = ThreadId::new("muster-resume-equality-control").unwrap();
+        let control_outcome =
+            run_default(&control_graph, control_thread.clone(), &control_store).await;
+        let control_final = match control_outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected control run to complete, got {other:?}"),
+        };
+
+        let ascending = ascending_saved_waypoints(&control_store, &control_thread).await;
+        let progress_waypoints: Vec<&Waypoint> = ascending
+            .iter()
+            .filter(|w| w.superstep == 2 && w.muster_progress.is_some())
+            .collect();
+
+        let truncated_store = RecordingWaypointStore::new();
+        truncated_store.save(&ascending[0]).await.unwrap();
+        truncated_store.save(progress_waypoints[0]).await.unwrap();
+        truncated_store.save(progress_waypoints[1]).await.unwrap();
+        let latest = truncated_store
+            .latest(&control_thread)
+            .await
+            .unwrap()
+            .unwrap();
+        let progress = latest.muster_progress.clone().unwrap();
+
+        let resumed_keys = Arc::new(Mutex::new(Vec::new()));
+        let (resume_graph, _worker) = five_task_muster_graph(&results_field, resumed_keys);
+        let resume_store = RecordingWaypointStore::new();
+        let resumed_outcome = run_resumed_mid_muster(
+            &resume_graph,
+            control_thread.clone(),
+            &resume_store,
+            latest.battlefield.clone(),
+            latest.vanguard.clone(),
+            latest.visit_counts.clone(),
+            latest.frontier.clone(),
+            progress,
+            latest.superstep,
+        )
+        .await;
+        let resumed_final = match resumed_outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected resumed run to complete, got {other:?}"),
+        };
+
+        assert_eq!(
+            serde_json::to_string(&resumed_final).unwrap(),
+            serde_json::to_string(&control_final).unwrap(),
+            "a resumed mid-muster run must reach the uninterrupted run's final Battlefield"
+        );
+    }
+
+    #[tokio::test]
+    async fn strict_durability_failure_on_a_progress_write_fails_the_run() {
+        let results_field = field("results");
+        let (graph, _worker) =
+            five_task_muster_graph(&results_field, Arc::new(Mutex::new(Vec::new())));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("muster-progress-strict-durability").unwrap();
+        // Call #1 is the planner's own superstep-1 waypoint; calls #2..#6
+        // are the five progress Waypoints (task "a" is call #2, "b" is call
+        // #3, ...). Fail call #3: task "a"'s checkpoint saves successfully,
+        // task "b"'s checkpoint write fails.
+        store.fail_nth_save(3);
+
+        let result = run(
+            &store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &graph,
+            thread.clone(),
+            Battlefield::initialize(
+                graph.schema().clone(),
+                &paladin_core::platform::container::battlefield::StateDelta::new(),
+            )
+            .unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            1,
+            &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            &None,
+        )
+        .await;
+
+        assert!(matches!(result, Err(EngineError::WaypointWrite { .. })));
+
+        // The one progress Waypoint that saved successfully before the
+        // failure (task "a"'s) is still durably persisted -- a future
+        // resume can still recover from it.
+        let saved = store.saved_waypoints(&thread).await;
+        let progress_count = saved.iter().filter(|w| w.muster_progress.is_some()).count();
+        assert_eq!(progress_count, 1);
+    }
+
+    #[tokio::test]
+    async fn best_effort_durability_failure_on_a_progress_write_continues() {
+        let results_field = field("results");
+        let (graph, worker) =
+            five_task_muster_graph(&results_field, Arc::new(Mutex::new(Vec::new())));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("muster-progress-best-effort-durability").unwrap();
+        // Same target call as the Strict test above (task "b"'s checkpoint
+        // write, call #3) -- but under BestEffort the run must continue
+        // past it and still complete, with all five tasks having run.
+        store.fail_nth_save(3);
+
+        let result = run(
+            &store,
+            WaypointDurability::BestEffort,
+            None,
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &graph,
+            thread.clone(),
+            Battlefield::initialize(
+                graph.schema().clone(),
+                &paladin_core::platform::container::battlefield::StateDelta::new(),
+            )
+            .unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            1,
+            &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        match result {
+            RunOutcome::Completed { final_state, .. } => {
+                let merged = final_state
+                    .get::<Vec<String>>(&results_field)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(merged, vec!["a", "b", "c", "d", "e"]);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        let _ = worker;
+
+        // Four progress Waypoints saved successfully (the failed one was
+        // swallowed under BestEffort), plus the final superstep-complete
+        // Waypoint.
+        let saved = store.saved_waypoints(&thread).await;
+        let progress_count = saved.iter().filter(|w| w.muster_progress.is_some()).count();
+        assert_eq!(progress_count, 4);
     }
 
     #[tokio::test]

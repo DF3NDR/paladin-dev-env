@@ -134,6 +134,14 @@ pub struct EngineLimits {
     /// Optional wall-clock timeout for the whole run. Carried and validated
     /// but not acted on this phase — Doc 04 owns timeout semantics.
     pub run_timeout: Option<Duration>,
+    /// Maximum number of tasks a single `NextStep::Muster` directive may
+    /// request (CF-FR-13, D-16, T-23-18). Must be `>= 1`. Enforced at
+    /// Directive-receipt time, before any task is dispatched
+    /// (`engine::superstep`) — never inside the worker-dispatch loop.
+    /// Deliberately excluded from [`WarGraph::fingerprint`] like every
+    /// other `EngineLimits` field: raising this limit to let a resumed run
+    /// continue is a legitimate operator action.
+    pub max_muster_tasks: u32,
 }
 
 impl Default for EngineLimits {
@@ -142,6 +150,7 @@ impl Default for EngineLimits {
             max_supersteps: 50,
             max_node_visits: 25,
             run_timeout: None,
+            max_muster_tasks: 100,
         }
     }
 }
@@ -173,6 +182,13 @@ pub struct WarGraph {
     /// jump target, seeded into `validate`'s eligible-set worklist
     /// alongside `entry` so such a node is not rejected as stranded.
     dynamic_targets: HashSet<NodeId>,
+    /// Node ids registered via [`WarGraph::add_worker_template`] (CF-03,
+    /// D-12): a node that runs only as a `NextStep::Muster` worker task,
+    /// never on its own. Seeded into `validate`'s eligible-set worklist
+    /// alongside `entry` and `dynamic_targets` (the unfilled seam
+    /// `validate_eligible_set`'s own rustdoc names) so a worker template is
+    /// not rejected as unreachable despite having no static incoming edge.
+    worker_templates: HashSet<NodeId>,
     edges: Vec<EdgeSpec>,
     schema: BattlefieldSchema,
     entry: Vec<NodeId>,
@@ -187,6 +203,7 @@ impl WarGraph {
             node_order: Vec::new(),
             defer_flags: HashSet::new(),
             dynamic_targets: HashSet::new(),
+            worker_templates: HashSet::new(),
             edges: Vec::new(),
             schema,
             entry: Vec::new(),
@@ -255,6 +272,26 @@ impl WarGraph {
     /// Whether `id` was marked via [`WarGraph::mark_dynamic_target`].
     pub fn is_dynamic_target(&self, id: &NodeId) -> bool {
         self.dynamic_targets.contains(id)
+    }
+
+    /// Register a node under `id`, marked as a **worker template** (CF-03,
+    /// D-12): mirrors [`WarGraph::add_deferred_node`]'s exact shape --
+    /// insert the node, then insert the id into the marker set. A worker
+    /// template runs only as a `NextStep::Muster` task dispatch, never on
+    /// its own: `WarGraph::validate` rejects one declared as an entry point
+    /// or as the `to` of any static edge (Task 2), and
+    /// `validate_eligible_set` exempts it from the "unreachable from
+    /// entry" rejection the same way a [`WarGraph::mark_dynamic_target`]
+    /// node already is.
+    pub fn add_worker_template(&mut self, id: NodeId, spec: NodeSpec) -> &mut Self {
+        self.add_node(id.clone(), spec);
+        self.worker_templates.insert(id);
+        self
+    }
+
+    /// Whether `id` was registered via [`WarGraph::add_worker_template`].
+    pub fn is_worker_template(&self, id: &NodeId) -> bool {
+        self.worker_templates.contains(id)
     }
 
     /// This graph's node ids in registration order (ENG-FR-04).
@@ -349,6 +386,11 @@ impl WarGraph {
                 reason: "max_node_visits must be at least 1".to_string(),
             });
         }
+        if self.limits.max_muster_tasks == 0 {
+            return Err(EngineError::InvalidLimits {
+                reason: "max_muster_tasks must be at least 1".to_string(),
+            });
+        }
 
         for edge in &self.edges {
             if !self.nodes.contains_key(&edge.from) {
@@ -375,10 +417,98 @@ impl WarGraph {
             }
         }
 
+        self.validate_muster_prefix_schema_fields()?;
         self.validate_edge_evaluators(edge_evaluators)?;
+        self.validate_worker_templates()?;
 
         self.validate_eligible_set()?;
         self.validate_schedulable()
+    }
+
+    /// CF-03 / D-15's namespace-reservation clause: a Battlefield schema
+    /// field whose name starts with the `muster.` prefix is rejected, so
+    /// `{muster.payload}`/`{muster.task_key}` in an `InputMapping` template
+    /// are unambiguously `NodeContext.muster` references and can never be
+    /// shadowed by a same-named schema field the Battlefield would
+    /// otherwise resolve them from. Collects every offending field name,
+    /// mirroring [`WarGraph::validate_edge_evaluators`]'s "report the whole
+    /// problem at once" discipline.
+    fn validate_muster_prefix_schema_fields(&self) -> Result<(), EngineError> {
+        let mut fields: Vec<String> = self
+            .schema
+            .fields
+            .iter()
+            .filter(|f| f.name.as_str().starts_with("muster."))
+            .map(|f| f.name.as_str().to_string())
+            .collect();
+        if fields.is_empty() {
+            return Ok(());
+        }
+        fields.sort_unstable();
+        Err(EngineError::MusterPrefixSchemaField {
+            fields,
+            reason: "the muster. prefix is reserved for {muster.payload}/{muster.task_key} \
+                     InputMapping placeholders, resolved from a Muster worker's NodeContext, \
+                     never from the Battlefield -- rename the schema field"
+                .to_string(),
+        })
+    }
+
+    /// CF-03 / D-12's worker-template well-formedness clause: a node marked
+    /// [`WarGraph::add_worker_template`] runs only when mustered (CF-FR-10),
+    /// so it may not double as an entry point, and no static edge may
+    /// target it (only `NextStep::Muster` ever dispatches it). A worker
+    /// template MAY have static outgoing edges (e.g. to a `defer`-marked
+    /// aggregator, D-17) -- only its INCOMING side is restricted. Collects
+    /// every offender of each clause, mirroring
+    /// [`WarGraph::validate_edge_evaluators`]'s discipline.
+    fn validate_worker_templates(&self) -> Result<(), EngineError> {
+        let mut entry_offenders: Vec<NodeId> = self
+            .worker_templates
+            .iter()
+            .filter(|id| self.entry.contains(id))
+            .cloned()
+            .collect();
+        if !entry_offenders.is_empty() {
+            entry_offenders.sort();
+            let names = entry_offenders
+                .iter()
+                .map(NodeId::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(EngineError::WorkerTemplateIsEntry {
+                nodes: entry_offenders,
+                reason: format!(
+                    "worker template(s) declared as entry point(s): {names} -- a worker \
+                     template runs only when mustered, never on its own"
+                ),
+            });
+        }
+
+        let mut incoming_offenders: Vec<NodeId> = self
+            .worker_templates
+            .iter()
+            .filter(|id| self.edges.iter().any(|e| &e.to == *id))
+            .cloned()
+            .collect();
+        if !incoming_offenders.is_empty() {
+            incoming_offenders.sort();
+            let names = incoming_offenders
+                .iter()
+                .map(NodeId::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(EngineError::WorkerTemplateHasStaticIncomingEdge {
+                nodes: incoming_offenders,
+                reason: format!(
+                    "worker template(s) with a static incoming edge: {names} -- a worker \
+                     template runs only as a NextStep::Muster task dispatch, so no static edge \
+                     may target it"
+                ),
+            });
+        }
+
+        Ok(())
     }
 
     /// BUG-01 / CF-FR-02's fail-closed clause: every declared edge carrying
@@ -437,23 +567,31 @@ impl WarGraph {
             });
         }
 
-        // The eligible set: entry nodes and dynamic-target-marked nodes,
-        // expanded by following declared edges to a fixed point (edge
-        // CONDITIONS are ignored here -- they are runtime values, and a
-        // statically-declared edge is what proves intent for this static
-        // check). Two future sources of eligibility plug into this SAME
-        // worklist and nowhere else: nodes marked as worker templates,
-        // reachable via dynamic fan-out (Phase 23 / Muster), and nodes
-        // named as Route { to } targets in an eligible node's Aegis
+        // The eligible set: entry nodes, dynamic-target-marked nodes and
+        // worker-template-marked nodes, expanded by following declared
+        // edges to a fixed point (edge CONDITIONS are ignored here -- they
+        // are runtime values, and a statically-declared edge is what
+        // proves intent for this static check). Worker templates (CF-03,
+        // D-12) are reachable only via dynamic fan-out (`NextStep::Muster`),
+        // never a static edge, so they are seeded exactly like a
+        // `dynamic_target` -- the SAME worklist this function's rustdoc
+        // already named as the unfilled seam for exactly this concept. One
+        // more future source of eligibility plugs into this same worklist:
+        // nodes named as `Route { to }` targets in an eligible node's Aegis
         // `on_error` policy (Phase 25 / CF-FR handler routing) -- which is
         // why this is a fixed point rather than a single pass: a route
         // target discovered late can itself carry outgoing edges that need
-        // re-expanding. Neither concept exists in this tree yet; nothing
-        // is fabricated here to stand in for either -- these are insertion
-        // points, not stubs.
+        // re-expanding. That concept does not exist in this tree yet;
+        // nothing is fabricated here to stand in for it -- it remains an
+        // insertion point, not a stub.
         let mut eligible: HashSet<NodeId> = HashSet::new();
         let mut worklist: Vec<NodeId> = Vec::new();
-        for id in self.entry.iter().chain(self.dynamic_targets.iter()) {
+        for id in self
+            .entry
+            .iter()
+            .chain(self.dynamic_targets.iter())
+            .chain(self.worker_templates.iter())
+        {
             if eligible.insert(id.clone()) {
                 worklist.push(id.clone());
             }
@@ -1292,9 +1430,11 @@ mod tests {
     }
 
     /// ENG-FR-14 exclusions: a Paladin prompt, a model name, an
-    /// `InputMapping` template and `EngineLimits` must NOT move the
+    /// `InputMapping` template and `EngineLimits` (including CF-03's
+    /// `max_muster_tasks`, RESEARCH Pitfall 5) must NOT move the
     /// fingerprint -- raising a limit or tuning a prompt to let a resumed
-    /// run continue is a legitimate operator action.
+    /// run continue is a legitimate operator action. Extended in place
+    /// (not a new sibling test) per Plan 23-05's Task 2.
     #[test]
     fn fingerprint_is_unchanged_by_prompt_model_input_mapping_and_limits() {
         let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
@@ -1306,6 +1446,7 @@ mod tests {
                 max_supersteps: 999,
                 max_node_visits: 999,
                 run_timeout: None,
+                max_muster_tasks: 999,
             },
             ..FingerprintFixtureSpec::default()
         });
@@ -1317,6 +1458,166 @@ mod tests {
         let limits = EngineLimits::default();
         assert_eq!(limits.max_supersteps, 50);
         assert_eq!(limits.max_node_visits, 25);
+    }
+
+    #[test]
+    fn engine_limits_default_max_muster_tasks_is_100() {
+        assert_eq!(EngineLimits::default().max_muster_tasks, 100);
+    }
+
+    #[test]
+    fn validate_rejects_zero_max_muster_tasks() {
+        let graph = WarGraph::new(
+            one_field_schema(),
+            EngineLimits {
+                max_muster_tasks: 0,
+                ..EngineLimits::default()
+            },
+        );
+        assert!(matches!(
+            graph.validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new()
+            ),
+            Err(EngineError::InvalidLimits { .. })
+        ));
+    }
+
+    // --- CF-03, D-12: worker-template well-formedness (Plan 23-05).
+
+    #[test]
+    fn worker_template_is_exempt_from_the_unreachable_rejection() {
+        // A worker template with no static incoming edges -- reachable only
+        // via runtime NextStep::Muster dispatch -- must still validate,
+        // exactly like a WarGraph::mark_dynamic_target node.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("planner"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_worker_template(
+            NodeId::new("worker"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_entry(NodeId::new("planner"));
+
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
+        assert!(graph.is_worker_template(&NodeId::new("worker")));
+    }
+
+    #[test]
+    fn worker_template_may_not_be_an_entry_node() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_worker_template(
+            NodeId::new("worker"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_entry(NodeId::new("worker"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, EngineError::WorkerTemplateIsEntry { .. }));
+    }
+
+    #[test]
+    fn worker_template_may_not_have_static_incoming_edges() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("planner"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_worker_template(
+            NodeId::new("worker"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("planner"),
+            to: NodeId::new("worker"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("planner"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::WorkerTemplateHasStaticIncomingEdge { .. }
+        ));
+    }
+
+    #[test]
+    fn worker_template_may_have_static_outgoing_edges() {
+        // A worker template MAY route to a defer-marked aggregator (D-17) --
+        // only its INCOMING side is restricted.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("planner"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_worker_template(
+            NodeId::new("worker"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_deferred_node(
+            NodeId::new("aggregator"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("worker"),
+            to: NodeId::new("aggregator"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("planner"));
+
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn schema_field_named_with_the_muster_prefix_is_rejected() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("muster.payload").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(NodeId::new("a"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        match err {
+            EngineError::MusterPrefixSchemaField { fields, .. } => {
+                assert_eq!(fields, vec!["muster.payload".to_string()]);
+            }
+            other => panic!("expected MusterPrefixSchemaField, got {other:?}"),
+        }
     }
 
     // --- BUG-02 / ENG-FR-02a: eligible-set reachability regression tests

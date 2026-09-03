@@ -239,6 +239,7 @@ mod tests {
             node_id: NodeId::new("n"),
             thread_id: ThreadId::new("t").unwrap(),
             superstep: 1,
+            muster: None,
         }
     }
 

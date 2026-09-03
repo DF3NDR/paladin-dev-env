@@ -429,6 +429,108 @@ pub enum EngineError {
         /// Why extraction/deserialization of the envelope failed.
         reason: String,
     },
+
+    /// A `Directive`'s `NextStep::Muster` carried an empty task list (CF-03,
+    /// D-13). `NextStep::Edges` and `NextStep::End` are the two ways to
+    /// express "no fan-out"; an empty `Muster` is a planner defect, rejected
+    /// at Directive-receipt time before any task starts, never silently
+    /// treated as a no-op.
+    #[error("node {node} returned an empty NextStep::Muster task list")]
+    EmptyMuster {
+        /// The mustering node.
+        node: NodeId,
+    },
+
+    /// Two tasks in the same `NextStep::Muster` shared a `task_key` (CF-03,
+    /// D-13). Detected before any task is dispatched, so worker deltas can
+    /// merge in a total `task_key` order with no tie to break.
+    #[error("node {node} returned NextStep::Muster with a duplicate task_key: {task_key}")]
+    DuplicateMusterTaskKey {
+        /// The mustering node.
+        node: NodeId,
+        /// The duplicated `task_key`.
+        task_key: String,
+    },
+
+    /// A `NextStep::Muster` requested more tasks than
+    /// `EngineLimits::max_muster_tasks` allows (CF-FR-13, D-16, T-23-18).
+    /// Detected before any task is dispatched; `requested` is widened from
+    /// `usize`, never compared by narrowing `limit` with `as u32`, so a task
+    /// list longer than `u32::MAX` cannot wrap into a passing count.
+    #[error(
+        "node {node} returned NextStep::Muster requesting {requested} task(s), exceeding \
+         max_muster_tasks ({limit})"
+    )]
+    MusterTaskLimitExceeded {
+        /// The mustering node.
+        node: NodeId,
+        /// The number of tasks requested.
+        requested: usize,
+        /// The configured `EngineLimits::max_muster_tasks`.
+        limit: u32,
+    },
+
+    /// A `NextStep::Muster` task's `worker` named a `NodeId` not declared in
+    /// the graph (CF-03, T-23-22). Detected before any task is dispatched.
+    #[error("node {node} returned NextStep::Muster naming undeclared worker {worker}")]
+    MusterUnknownWorker {
+        /// The mustering node.
+        node: NodeId,
+        /// The undeclared worker id.
+        worker: NodeId,
+    },
+
+    /// A `NextStep::Muster` task's `worker` named a node declared in the
+    /// graph but not registered via [`graph::WarGraph::add_worker_template`]
+    /// (CF-03, D-12, T-23-22). Detected before any task is dispatched.
+    #[error(
+        "node {node} returned NextStep::Muster naming {worker}, which is not a worker template"
+    )]
+    MusterWorkerNotATemplate {
+        /// The mustering node.
+        node: NodeId,
+        /// The worker id, declared but not marked as a worker template.
+        worker: NodeId,
+    },
+
+    /// `WarGraph::validate` found one or more nodes marked
+    /// [`graph::WarGraph::add_worker_template`] also declared as an entry
+    /// point (CF-03, D-12): a worker template runs only when mustered,
+    /// never on its own.
+    #[error("worker template(s) declared as entry point(s): {reason}")]
+    WorkerTemplateIsEntry {
+        /// Every offending worker-template node, in the graph's
+        /// registration order.
+        nodes: Vec<NodeId>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found one or more nodes marked
+    /// [`graph::WarGraph::add_worker_template`] with a static incoming edge
+    /// (CF-03, D-12): a worker template runs only as a `NextStep::Muster`
+    /// task dispatch, so no static edge may target it.
+    #[error("worker template(s) with a static incoming edge: {reason}")]
+    WorkerTemplateHasStaticIncomingEdge {
+        /// Every offending worker-template node, in the graph's
+        /// registration order.
+        nodes: Vec<NodeId>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found a Battlefield schema field named with the
+    /// `muster.` prefix (CF-03, D-15): that namespace is reserved for
+    /// `InputMapping`'s `{muster.payload}`/`{muster.task_key}` placeholders,
+    /// resolved from a Muster worker's `NodeContext`, never from the
+    /// Battlefield.
+    #[error("schema field(s) reserved for the muster. namespace: {reason}")]
+    MusterPrefixSchemaField {
+        /// Every offending schema field name, sorted.
+        fields: Vec<String>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -1061,7 +1163,7 @@ mod tests {
             .unwrap();
 
         let mapping = InputMapping::new("hello {name}!");
-        assert_eq!(mapping.render(&battlefield).unwrap(), "hello world!");
+        assert_eq!(mapping.render(&battlefield, None).unwrap(), "hello world!");
     }
 
     // --- Task 1: NodeSpec::Paladin execution ------------------------------
@@ -1523,6 +1625,7 @@ mod tests {
             max_supersteps: 20,
             max_node_visits: 5,
             run_timeout: None,
+            ..EngineLimits::default()
         };
         let mut graph = WarGraph::new(schema, limits);
         let a = NodeId::new("a");

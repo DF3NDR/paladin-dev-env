@@ -301,7 +301,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 22.1-03-PLAN.md — CR-01 fingerprint coverage + golden/difference tests + resume-doc reword + fixture comment sweep
+- [x] 22.1-03-PLAN.md — CR-01 fingerprint coverage + golden/difference tests + resume-doc reword + fixture comment sweep
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

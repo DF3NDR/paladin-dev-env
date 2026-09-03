@@ -109,6 +109,20 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 22.1 complete (2026-09-03)** — engine-readiness-defect-and-msrv-follow-up, the inserted
+follow-up that closed Phase 22's residuals plus one defect found while discussing it: BUG-03
+(cycle-bootstrap starvation — a starvation-release tier in `compute_next_vanguard`, a validate-time
+guard and a run-end truthful-outcome check, test-first), the MSRV floor raised to a measured 1.88
+(one `workspace.package.rust-version`, all crates inheriting, `resolver = "3"`, the 22-17 lockfile
+pin-backs reverted so RUSTSEC-2026-0009 cleared without an exception), CR-01 (the fingerprint now
+hashes entry set, defer flags, dynamic targets, dispatch rules and output fields with serde-canonical
+bytes, pinned by a golden test), BUG-04 (resume now restores a `FrontierSnapshot` persisted on the
+Waypoint instead of rebuilding the Frontier from scratch — promoted into scope by developer decision
+at the 22.1-05 checkpoint), and G-22-1's closing evidence as whole-run-success CI runs 33706948313
+and 33758221386 (declared 26 → 28 Postgres contract tests). 7/7 plans, verification 18/18. Advisory
+code review left one pre-release fingerprint-encoding finding (delimiter collisions) and two warnings
+in `22.1-REVIEW.md` for a follow-up.
+
 **Phase 22 complete (2026-09-02)** — battlefield-state-superstep-engine, the v0.10.0 milestone's
 first phase: typed Battlefield state, the superstep WarEngine with checkpoint/resume over three
 WaypointPort backends (the Postgres Tier 2 contract suite now provably executes in CI — run
@@ -1516,5 +1530,5 @@ requirements, 86 forward requirements across 16 phases, 60 variant entries acros
 69 warnings, 0 locked decisions, 0 blockers, 11 ADR candidates**)*
 
 ---
-*Last updated: 2026-09-02 after Phase 22 completion (v0.10.0 milestone; next: Phase 22.1
-engine-readiness-defect-and-msrv-follow-up).*
+*Last updated: 2026-09-03 after Phase 22.1 completion (v0.10.0 milestone; next: Phase 23
+control-flow — dynamic routing, fan-out and subgraphs).*

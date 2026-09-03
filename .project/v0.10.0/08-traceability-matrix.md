@@ -37,6 +37,7 @@
 | BUG-01 | Custom edge condition silently true | CF-FR-01…04; overview §7 | Fail-closed at validation; test-first mandate |
 | BUG-02 | Silent stranded node (unreachable node, run reports Completed) | ENG-FR-02a; doc 01 acceptance 2a; overview §7 | Reachability-from-entry validation; worker_template / Route targets / `dynamic_target` exemptions; test-first; pre-release fix, no migration entry |
 | BUG-03 | Cycle-bootstrap starvation (non-entry cycle node fed from outside can never take its first turn, run reports Completed) | ENG-FR-06a; overview §7 | Starvation-release fallback pass + validate-time guard + run-end truthful-outcome check; test-first; pre-release fix, no migration entry |
+| BUG-04 | resume rebuilt the Frontier from scratch, losing pre-crash edge resolutions; a pending join across the crash point is dropped and the run reports Completed | ENG-FR-12a; overview §7 | frontier snapshot persisted on the Waypoint, keyed by edge identity, seeded on resume; shared contract-suite round-trip and pre-BUG-04 compatibility cases on all three backends; test-first; pre-release fix, no migration entry |
 
 **Verification protocol (for the post-implementation audit):**
 1. For each row, locate the implementing code + the tests named in the PRD's Test Plan; confirm the acceptance criteria of the owning PRD pass in CI.

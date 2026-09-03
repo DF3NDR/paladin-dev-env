@@ -579,6 +579,23 @@ struct Frontier {
     incoming: HashMap<NodeId, Vec<usize>>,
 }
 
+/// Per-node edge-resolution facts shared by [`Frontier::is_ready`] and the
+/// starvation-release fallback pass in `compute_next_vanguard` (ENG-FR-06a):
+/// whether any incoming edge has fired at or after `node`'s `last_executed`
+/// threshold (a "fresh" fire -- any fired edge at all, for a node that has
+/// never executed), and the indices of any incoming edges still unresolved
+/// (`Pending`) from a live, not-yet-proven-dead source
+/// ([`Frontier::edge_resolution`] already resolves a `Pending` edge from a
+/// dead source to not-firing, so every index collected here is genuinely
+/// still pending). Returned by [`Frontier::node_edge_summary`].
+struct NodeEdgeSummary {
+    /// At least one incoming edge fired at or after `node`'s
+    /// `last_executed` threshold.
+    any_fresh_fire: bool,
+    /// Incoming edge indices still unresolved from a live source.
+    pending_from_live: Vec<usize>,
+}
+
 impl Frontier {
     /// Build the initial frontier for `graph`: every edge `Pending`, then
     /// propagate structural deadness (non-entry nodes with no incoming
@@ -695,35 +712,50 @@ impl Frontier {
         }
     }
 
-    /// Whether `node` is executable for the NEXT Vanguard (ENG-FR-06): it
-    /// has at least one incoming edge, none of them is still pending from a
-    /// run-reachable source (a `Pending` edge from a proven-dead source
-    /// counts as resolved not-firing, via [`Frontier::edge_resolution`]),
-    /// and at least one has fired at or after the superstep `node` last
-    /// executed (any fired edge at all, for a node that has never
-    /// executed).
-    fn is_ready(&self, graph: &WarGraph, node: &NodeId) -> bool {
-        let Some(incoming) = self.incoming.get(node) else {
-            return false;
-        };
+    /// Compute [`NodeEdgeSummary`] for `node`, or `None` if `node` has no
+    /// declared incoming edges at all (never executable). Uses the same
+    /// `u64 -> i64` threshold convention as the caller that used to inline
+    /// this loop: `node`'s `last_executed` absent maps to `-1`, so a node
+    /// that has never executed treats any fired edge as fresh.
+    fn node_edge_summary(&self, graph: &WarGraph, node: &NodeId) -> Option<NodeEdgeSummary> {
+        let incoming = self.incoming.get(node)?;
         if incoming.is_empty() {
-            return false;
+            return None;
         }
         let threshold: i64 = self.last_executed.get(node).map_or(-1, |&s| s as i64);
-        let mut any_pending = false;
         let mut any_fresh_fire = false;
-        for idx in incoming {
-            match self.edge_resolution(graph, *idx) {
+        let mut pending_from_live = Vec::new();
+        for &idx in incoming {
+            match self.edge_resolution(graph, idx) {
                 Some((true, resolved_at)) => {
                     if resolved_at as i64 >= threshold {
                         any_fresh_fire = true;
                     }
                 }
                 Some((false, _)) => {}
-                None => any_pending = true,
+                None => pending_from_live.push(idx),
             }
         }
-        !any_pending && any_fresh_fire
+        Some(NodeEdgeSummary {
+            any_fresh_fire,
+            pending_from_live,
+        })
+    }
+
+    /// Whether `node` is executable for the NEXT Vanguard (ENG-FR-06): it
+    /// has at least one incoming edge, none of them is still pending from a
+    /// run-reachable source (a `Pending` edge from a proven-dead source
+    /// counts as resolved not-firing, via [`Frontier::edge_resolution`]),
+    /// and at least one has fired at or after the superstep `node` last
+    /// executed (any fired edge at all, for a node that has never
+    /// executed). Delegates to [`Frontier::node_edge_summary`], the same
+    /// per-node edge-resolution helper the ENG-FR-06a starvation-release
+    /// pass uses.
+    fn is_ready(&self, graph: &WarGraph, node: &NodeId) -> bool {
+        let Some(summary) = self.node_edge_summary(graph, node) else {
+            return false;
+        };
+        summary.pending_from_live.is_empty() && summary.any_fresh_fire
     }
 }
 
@@ -734,6 +766,20 @@ impl Frontier {
 /// `defer`-marked node the `Frontier` reports executable instead, ordered by
 /// this graph's node registration order (`node_order`) rather than
 /// `HashMap` order -- the aggregate-after-all-branches case.
+///
+/// If NEITHER the normal-ready pass nor this defer-release pass has
+/// anything to schedule, a third fallback pass ([`starved_release`],
+/// ENG-FR-06a, BUG-03) releases nodes that are starved rather than
+/// genuinely blocked: a node that already holds at least one fresh fired
+/// incoming edge, whose every other unresolved incoming edge is `Pending`
+/// from a live source that has NEVER executed. Without this pass, a cycle
+/// whose only path back to one of its own members is that member's own
+/// not-yet-resolved incoming edge can never bootstrap its first execution,
+/// and the run reports `Completed` over a node that never ran -- the same
+/// truthful-outcome violation BUG-02 fixed by a different mechanism. This
+/// release engages ONLY when nothing else is executable, so a diamond join
+/// still waits for every incoming edge from a live source that HAS already
+/// executed (that node is legitimately waiting, not starved).
 fn compute_next_vanguard(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
     let mut ready = Vec::new();
     let mut seen = HashSet::new();
@@ -751,6 +797,11 @@ fn compute_next_vanguard(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
         return ready;
     }
 
+    let starved = starved_release(graph, frontier);
+    if !starved.is_empty() {
+        return starved;
+    }
+
     let mut deferred_ready = Vec::new();
     for node in graph.node_order() {
         if graph.is_deferred(node) && frontier.is_ready(graph, node) {
@@ -758,6 +809,46 @@ fn compute_next_vanguard(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
         }
     }
     deferred_ready
+}
+
+/// The ENG-FR-06a starvation-release fallback (BUG-03), called by
+/// [`compute_next_vanguard`] only when both the normal-ready pass and the
+/// defer-release pass return empty. A node is released here when it is
+/// starved rather than genuinely blocked: `!frontier.dead.contains(node)`,
+/// `!graph.is_deferred(node)`, [`Frontier::node_edge_summary`] reports at
+/// least one fresh fired incoming edge, and every remaining unresolved
+/// incoming edge is `Pending` from a live source that has never executed
+/// (no entry in `frontier.last_executed`). A node blocked by an unresolved
+/// edge from a live source that HAS already executed is not starved -- it
+/// is legitimately waiting on that source's NEXT firing, and releasing it
+/// would violate join semantics (ENG-FR-06). Iterates `graph.node_order()`,
+/// never raw `HashMap`/`HashSet` order (ENG-FR-04), so a simultaneous
+/// starvation release is deterministically ordered.
+///
+/// Introduces no new persisted state: every fact used here is derived from
+/// `frontier.edge_state`, `frontier.dead` and `frontier.last_executed`, all
+/// rebuilt fresh within a run (D-03).
+fn starved_release(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
+    let mut starved = Vec::new();
+    for node in graph.node_order() {
+        if frontier.dead.contains(node) || graph.is_deferred(node) {
+            continue;
+        }
+        let Some(summary) = frontier.node_edge_summary(graph, node) else {
+            continue;
+        };
+        if !summary.any_fresh_fire {
+            continue;
+        }
+        let only_never_executed_sources = summary.pending_from_live.iter().all(|&idx| {
+            let source = &graph.edges()[idx].from;
+            !frontier.last_executed.contains_key(source)
+        });
+        if only_never_executed_sources {
+            starved.push(node.clone());
+        }
+    }
+    starved
 }
 
 /// Evaluate an [`EdgeCondition`] against the whole post-merge Battlefield,

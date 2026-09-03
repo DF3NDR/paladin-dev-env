@@ -309,7 +309,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 22.1-06-PLAN.md — BUG-04 resume frontier loss: RED reproduction, `FrontierSnapshot` persisted on the Waypoint, three-backend contract cases, BUG-04 / ENG-FR-12a registration
+- [x] 22.1-06-PLAN.md — BUG-04 resume frontier loss: RED reproduction, `FrontierSnapshot` persisted on the Waypoint, three-backend contract cases, BUG-04 / ENG-FR-12a registration
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

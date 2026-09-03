@@ -32,6 +32,9 @@ pub mod chain_of_command_service;
 pub mod commander;
 pub mod conclave_execution_service;
 pub mod council_service;
+/// Registered evaluators for `EdgeCondition::Custom` (BUG-01, CF-01), shared
+/// by `campaign_service` and `engine`.
+pub mod edge_evaluator;
 /// Superstep execution engine over typed `Battlefield` state (Phase 22).
 pub mod engine;
 pub mod error_aggregation;
@@ -43,3 +46,7 @@ pub mod retry;
 
 /// In-memory `PaladinRegistry` implementation (also used by the application facade).
 pub mod in_memory_registry;
+
+pub use edge_evaluator::{
+    EdgeConditionEvaluator, EdgeContext, EdgeEvaluatorError, EdgeEvaluatorRegistry,
+};

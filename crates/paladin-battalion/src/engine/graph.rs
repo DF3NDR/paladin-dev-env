@@ -22,6 +22,7 @@ use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, canonical_edge_condition,
 };
 
+use crate::edge_evaluator::EdgeEvaluatorRegistry;
 use crate::engine::EngineError;
 use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::StateNode;
@@ -287,7 +288,11 @@ impl WarGraph {
     /// defence-in-depth against a shape the ENG-FR-06a starvation release
     /// still cannot schedule, never masking a more fundamental structural
     /// error above it.
-    pub fn validate(&self, custom_dispatch: &CustomDispatchResolver) -> Result<(), EngineError> {
+    pub fn validate(
+        &self,
+        custom_dispatch: &CustomDispatchResolver,
+        edge_evaluators: &EdgeEvaluatorRegistry,
+    ) -> Result<(), EngineError> {
         if self.limits.max_supersteps == 0 {
             return Err(EngineError::InvalidLimits {
                 reason: "max_supersteps must be at least 1".to_string(),
@@ -324,8 +329,43 @@ impl WarGraph {
             }
         }
 
+        self.validate_edge_evaluators(edge_evaluators)?;
+
         self.validate_eligible_set()?;
         self.validate_schedulable()
+    }
+
+    /// BUG-01 / CF-FR-02's fail-closed clause: every declared edge carrying
+    /// `EdgeCondition::Custom(name)` must resolve to a registered evaluator
+    /// in `edge_evaluators`, checked here -- before any node executes --
+    /// so an unregistered custom condition never silently defaults to
+    /// always-true (the defect this clause replaces, `BUG-01`). Collects
+    /// EVERY offending name, sorted and deduplicated, rather than failing
+    /// on the first, matching [`WarGraph::validate_eligible_set`]'s
+    /// "report the whole problem at once" discipline. Checked before the
+    /// eligible-set clause since an unregistered custom condition is a
+    /// more specific, more actionable problem than a reachability failure
+    /// the same graph might also have.
+    fn validate_edge_evaluators(
+        &self,
+        edge_evaluators: &EdgeEvaluatorRegistry,
+    ) -> Result<(), EngineError> {
+        let mut names: Vec<String> = self
+            .edges
+            .iter()
+            .filter_map(|edge| match &edge.condition {
+                Some(EdgeCondition::Custom(name)) if !edge_evaluators.contains(name) => {
+                    Some(name.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        if names.is_empty() {
+            return Ok(());
+        }
+        Err(EngineError::UnregisteredEdgeCondition { names })
     }
 
     /// ENG-FR-02a / BUG-02's eligible-set reachability check, factored out

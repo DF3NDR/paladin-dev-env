@@ -56,6 +56,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+use crate::edge_evaluator::{EdgeConditionEvaluator, EdgeEvaluatorRegistry};
 #[cfg(test)]
 use paladin_core::platform::container::battlefield::CustomDispatchResolver;
 use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
@@ -350,6 +351,38 @@ pub enum EngineError {
         /// (ENG-FR-06a).
         reason: String,
     },
+
+    /// `WarGraph::validate` found one or more edges carrying
+    /// `EdgeCondition::Custom(name)` with no evaluator registered via
+    /// [`WarEngine::with_edge_evaluator`] (BUG-01, CF-FR-02). Checked
+    /// before any node executes, replacing the pre-fix behavior of
+    /// silently evaluating an unregistered `Custom` condition as `true`.
+    /// Carries EVERY offending name, sorted and deduplicated, mirroring
+    /// [`EngineError::UnreachableNode`]'s "report the whole problem at
+    /// once" discipline.
+    #[error("unregistered custom edge condition(s): {}", names.join(", "))]
+    UnregisteredEdgeCondition {
+        /// Every unregistered `EdgeCondition::Custom` name, sorted and
+        /// deduplicated.
+        names: Vec<String>,
+    },
+
+    /// A registered `EdgeConditionEvaluator::evaluate` call returned `Err`
+    /// while resolving an `EdgeCondition::Custom` edge (BUG-01, CF-FR-03).
+    /// Never treated as a default branch: the run fails, naming the edge
+    /// and the evaluator that failed.
+    #[error("edge evaluator '{evaluator}' failed for edge {from} -> {to}: {source}")]
+    EdgeEvaluatorFailed {
+        /// The edge's source node.
+        from: NodeId,
+        /// The edge's target node.
+        to: NodeId,
+        /// The registered evaluator's name.
+        evaluator: String,
+        /// The evaluator's own structured error.
+        #[source]
+        source: crate::edge_evaluator::EdgeEvaluatorError,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -383,6 +416,12 @@ pub struct WarEngine<W: WaypointPort> {
     /// `WarGraph::validate` and `Battlefield::merge` as a
     /// `CustomDispatchResolver` at `start`.
     dispatch_registry: DispatchRegistry,
+    /// Registered `EdgeCondition::Custom` evaluators (BUG-01, CF-01). Empty
+    /// by default: a v0.9 configuration with no `Custom` edges boots
+    /// identically (D-26). Never referenced from `paladin-core` (X-01) --
+    /// handed to `WarGraph::validate` and `superstep::run` as an
+    /// `EdgeEvaluatorRegistry` at `start`/`resume`.
+    edge_evaluators: EdgeEvaluatorRegistry,
     /// The bounded, drop-oldest `TraceSink` forwarder (ENG-FR-21). Always
     /// present -- constructed with no sink (`TraceDispatcher::new(None)`) by
     /// default, in which case `emit` is a no-op and no channel is
@@ -410,6 +449,7 @@ impl<W: WaypointPort> WarEngine<W> {
             durability: WaypointDurability::Strict,
             parallelism: None,
             dispatch_registry: DispatchRegistry::new(),
+            edge_evaluators: EdgeEvaluatorRegistry::new(),
             trace_dispatcher: Arc::new(TraceDispatcher::new(None)),
             interceptors: Vec::new(),
             cancellation_token: None,
@@ -442,6 +482,23 @@ impl<W: WaypointPort> WarEngine<W> {
     ) -> Result<Self, EngineError> {
         self.dispatch_registry.register(name, rule)?;
         Ok(self)
+    }
+
+    /// Register a named evaluator for `EdgeCondition::Custom(name)` edges
+    /// (BUG-01, CF-01), shaped like [`WarEngine::with_dispatch_rule`] but
+    /// infallible -- unlike a `DispatchRule::Custom` name, an
+    /// `EdgeCondition::Custom` name collides with no built-in
+    /// `EdgeCondition` variant, so there is no reserved-name failure mode.
+    /// An unregistered `Custom` name still fails [`WarGraph::validate`]
+    /// (and therefore [`WarEngine::start`]/[`WarEngine::resume`]) before any
+    /// node executes; it is never silently treated as always-true.
+    pub fn with_edge_evaluator(
+        mut self,
+        name: impl Into<String>,
+        evaluator: Arc<dyn EdgeConditionEvaluator>,
+    ) -> Self {
+        self.edge_evaluators.register(name, evaluator);
+        self
     }
 
     /// Attach `sink` as this engine's `TraceSink` (ENG-FR-21). Replaces any
@@ -485,7 +542,7 @@ impl<W: WaypointPort> WarEngine<W> {
         initial: StateDelta,
     ) -> Result<RunOutcome, EngineError> {
         let registry = self.dispatch_registry.resolver();
-        graph.validate(registry)?;
+        graph.validate(registry, &self.edge_evaluators)?;
 
         let battlefield = Battlefield::initialize(graph.schema().clone(), &initial)?;
         battlefield.validate_required()?;
@@ -498,6 +555,7 @@ impl<W: WaypointPort> WarEngine<W> {
             self.durability,
             self.parallelism,
             registry,
+            &self.edge_evaluators,
             graph,
             thread.clone(),
             battlefield,
@@ -605,7 +663,7 @@ impl<W: WaypointPort> WarEngine<W> {
         }
 
         let registry = self.dispatch_registry.resolver();
-        graph.validate(registry)?;
+        graph.validate(registry, &self.edge_evaluators)?;
 
         self.trace_dispatcher.emit(TraceEvent::RunStarted {
             thread_id: thread.clone(),
@@ -615,6 +673,7 @@ impl<W: WaypointPort> WarEngine<W> {
             self.durability,
             self.parallelism,
             registry,
+            &self.edge_evaluators,
             graph,
             thread.clone(),
             latest.battlefield,

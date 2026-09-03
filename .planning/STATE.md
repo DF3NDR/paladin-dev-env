@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 22.1
-current_phase_name: Engine readiness defect and MSRV follow-up
-status: executing
+current_phase: 23
+current_phase_name: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
+status: planning
 stopped_at: "Phase 22.1 wave 4 paused at blocking human checkpoint: plan 22.1-05 Task 3 (confirm G-22-1 closing evidence)"
-last_updated: "2026-09-03T11:26:59.447Z"
+last_updated: "2026-09-03T14:52:59.579Z"
 last_activity: 2026-09-03
-last_activity_desc: Phase 22.1 execution started
+last_activity_desc: Phase 22.1 complete, transitioned to Phase 23
 progress:
   total_phases: 2
   completed_phases: 2
-  total_plans: 22
-  completed_plans: 22
+  total_plans: 24
+  completed_plans: 24
 ---
 
 # Project State
@@ -51,16 +51,16 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 22.1 (Engine readiness defect and MSRV follow-up) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 22.1
-Last activity: 2026-09-03 — Phase 22.1 execution started
+Phase: 23 — Control Flow — Dynamic Routing, Fan-Out & Subgraphs
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-03 — Phase 22.1 complete, transitioned to Phase 23
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 204
+- Total plans completed: 211
 - Average duration: —
 - Total execution time: —
 
@@ -88,6 +88,7 @@ Last activity: 2026-09-03 — Phase 22.1 execution started
 | 20 | 7 | - | - |
 | 21 | 6 | - | - |
 | 22 | 17 | - | - |
+| 22.1 | 7 | - | - |
 
 *Updated after each plan completion*
 

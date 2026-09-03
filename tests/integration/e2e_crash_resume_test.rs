@@ -34,6 +34,7 @@ use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
 };
+use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId, Waypoint, WaypointStatus};
 use paladin_ports::output::waypoint_port::WaypointPort;
@@ -64,7 +65,7 @@ struct LoopGateNode;
 
 #[async_trait::async_trait]
 impl StateNode for LoopGateNode {
-    async fn run(&self, state: &Battlefield, _ctx: &NodeContext) -> Result<StateDelta, NodeError> {
+    async fn run(&self, state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
         let count_field = FieldName::new("loop_count").expect("valid field name");
         let status_field = FieldName::new("loop_status").expect("valid field name");
         let current = state
@@ -85,7 +86,7 @@ impl StateNode for LoopGateNode {
         delta
             .set(status_field, status)
             .map_err(|e| NodeError(e.to_string()))?;
-        Ok(delta)
+        Ok(delta.into())
     }
 }
 

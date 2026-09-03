@@ -8,6 +8,7 @@ pub mod citadel_error;
 pub mod comment;
 pub mod content;
 pub mod content_list;
+pub mod directive;
 pub mod document;
 pub mod execution_result;
 pub mod garrison;

@@ -7,7 +7,8 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
+use paladin_core::platform::container::battlefield::Battlefield;
+use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 
 /// Error returned by a [`StateNode`]'s execution.
@@ -29,10 +30,17 @@ pub struct NodeContext {
 }
 
 /// A pure state -> delta node: reads the Battlefield snapshot for its
-/// superstep and returns the partial update it contributes.
+/// superstep and returns the partial update it contributes, plus how the
+/// engine should route control next (CF-02).
 #[async_trait]
 pub trait StateNode: Send + Sync {
-    /// Execute against `state`, producing a [`StateDelta`] to be merged into
-    /// the Battlefield via each touched field's dispatch rule.
-    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<StateDelta, NodeError>;
+    /// Execute against `state`, producing a [`Directive`] whose `delta` is
+    /// merged into the Battlefield via each touched field's dispatch rule,
+    /// and whose `next` steers the superstep engine's routing (CF-FR-05).
+    ///
+    /// Every pre-CF-02 implementor -- which only ever produced a
+    /// `StateDelta` -- adopts this via `Ok(delta.into())`
+    /// (`impl From<StateDelta> for Directive` defaults `next:
+    /// NextStep::Edges`, preserving the prior behavior exactly).
+    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError>;
 }

@@ -18,6 +18,7 @@ use paladin_battalion::engine::{
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
 };
+use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId, WaypointStatus};
@@ -62,13 +63,13 @@ struct CountingNode {
 
 #[async_trait]
 impl StateNode for CountingNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<StateDelta, NodeError> {
+    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
         self.run_count.fetch_add(1, Ordering::SeqCst);
         let mut delta = StateDelta::new();
         delta
             .set(self.field.clone(), "checkpointed")
             .map_err(|e| NodeError(e.to_string()))?;
-        Ok(delta)
+        Ok(delta.into())
     }
 }
 

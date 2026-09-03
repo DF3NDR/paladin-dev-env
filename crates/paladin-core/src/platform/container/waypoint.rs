@@ -264,6 +264,14 @@ pub enum NodeOutcomeKind {
         /// Why the node was skipped.
         reason: String,
     },
+    /// The node ran and returned a `Directive` whose `next` was
+    /// `NextStep::End` (CF-FR-08): this node's `StateDelta` merged
+    /// normally, and its return also completed the run after this
+    /// superstep. Distinguishes the run-ending node from an ordinary
+    /// `Succeeded` node so which node ended the run is observable from a
+    /// persisted `Waypoint`'s `completed` records without re-running the
+    /// graph (D-09).
+    Ended,
 }
 
 /// A record of one node's execution within the superstep that produced a

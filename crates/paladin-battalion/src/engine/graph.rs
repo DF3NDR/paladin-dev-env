@@ -704,10 +704,10 @@ mod tests {
             _state: &paladin_core::platform::container::battlefield::Battlefield,
             _ctx: &crate::engine::node::NodeContext,
         ) -> Result<
-            paladin_core::platform::container::battlefield::StateDelta,
+            paladin_core::platform::container::directive::Directive,
             crate::engine::node::NodeError,
         > {
-            Ok(paladin_core::platform::container::battlefield::StateDelta::new())
+            Ok(paladin_core::platform::container::battlefield::StateDelta::new().into())
         }
     }
 

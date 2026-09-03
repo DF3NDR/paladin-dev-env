@@ -76,7 +76,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   restoring configuration; runtime evaluator errors fail the run rather than defaulting a branch
   (CF-FR-01…04; overview §7, M-B-01)
 
-- [ ] **CF-02**: Nodes steer routing by returning a `Directive` — `NextStep::{Edges, Goto, End,
+- [x] **CF-02**: Nodes steer routing by returning a `Directive` — `NextStep::{Edges, Goto, End,
   Muster, Parley}` with Goto target validation, documented-and-tested End-over-Goto precedence,
   and a configurable `DirectiveParser` for Paladin nodes (`PlainOutput` backward-compatible
   default; `StructuredDirective` JSON envelope with `on_parse_error` modes) (CF-FR-05…08)
@@ -357,7 +357,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ENG-07 | Phase 22 | Complete |
 | ENG-08 | Phase 22 | Complete |
 | CF-01 | Phase 23 | Pending |
-| CF-02 | Phase 23 | Pending |
+| CF-02 | Phase 23 | Complete |
 | CF-03 | Phase 23 | Pending |
 | CF-04 | Phase 23 | Pending |
 | CF-05 | Phase 23 | Pending |

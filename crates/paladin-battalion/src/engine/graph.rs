@@ -864,6 +864,229 @@ mod tests {
         assert_eq!(graph_a.fingerprint(), graph_b.fingerprint());
     }
 
+    // --- CR-01 / D-15 / D-17: golden hex plus per-property difference
+    // tests pinning WarGraph::fingerprint()'s extended canonical bytes.
+    // `golden_fingerprint_fixture` builds one graph exercising every
+    // hashed property (a Paladin node with an output_field, two edges
+    // with different conditions, two schema fields with different
+    // DispatchRules, a declared entry set, one defer-marked node and one
+    // dynamic_target-marked node) so a single spec, varied one field at a
+    // time, can build both the golden fixture and each difference test's
+    // one-property variant.
+
+    fn make_fixture_paladin(name: &str, prompt: &str, model: &str) -> Paladin {
+        let data = paladin_core::platform::container::paladin::PaladinData {
+            name: name.to_string(),
+            system_prompt: prompt.to_string(),
+            model: model.to_string(),
+            ..Default::default()
+        };
+        paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
+    }
+
+    /// The one-property-at-a-time knobs `golden_fingerprint_fixture`
+    /// builds a graph from. `Default` matches the golden fixture exactly;
+    /// each difference test clones the default and overrides exactly one
+    /// field.
+    struct FingerprintFixtureSpec {
+        entry: Vec<&'static str>,
+        defer_aggregator: bool,
+        dynamic_target_jump: bool,
+        worker_to_aggregator_condition: EdgeCondition,
+        notes_dispatch: DispatchRule,
+        worker_output_field: &'static str,
+        worker_prompt: &'static str,
+        worker_model: &'static str,
+        worker_input_template: &'static str,
+        limits: EngineLimits,
+    }
+
+    impl Default for FingerprintFixtureSpec {
+        fn default() -> Self {
+            Self {
+                entry: vec!["entry"],
+                defer_aggregator: true,
+                dynamic_target_jump: true,
+                worker_to_aggregator_condition: EdgeCondition::Contains("done".to_string()),
+                notes_dispatch: DispatchRule::Append,
+                worker_output_field: "notes",
+                worker_prompt: "process {status}",
+                worker_model: "gpt-4",
+                worker_input_template: "process {status}",
+                limits: EngineLimits::default(),
+            }
+        }
+    }
+
+    fn golden_fingerprint_fixture(spec: &FingerprintFixtureSpec) -> WarGraph {
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                FieldName::new("status").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+            FieldSpec::new(
+                FieldName::new("notes").unwrap(),
+                spec.notes_dispatch.clone(),
+                None,
+                false,
+            ),
+        ]);
+        let mut graph = WarGraph::new(schema, spec.limits.clone());
+
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_node(
+            NodeId::new("worker"),
+            NodeSpec::Paladin {
+                paladin: Box::new(make_fixture_paladin(
+                    "worker",
+                    spec.worker_prompt,
+                    spec.worker_model,
+                )),
+                input_template: InputMapping::new(spec.worker_input_template),
+                output_field: FieldName::new(spec.worker_output_field).unwrap(),
+            },
+        );
+        if spec.defer_aggregator {
+            graph.add_deferred_node(
+                NodeId::new("aggregator"),
+                NodeSpec::Function(StdArc::new(NoopNode)),
+            );
+        } else {
+            graph.add_node(
+                NodeId::new("aggregator"),
+                NodeSpec::Function(StdArc::new(NoopNode)),
+            );
+        }
+        graph.add_node(
+            NodeId::new("jump_target"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        if spec.dynamic_target_jump {
+            graph.mark_dynamic_target(NodeId::new("jump_target"));
+        }
+
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("entry"),
+            to: NodeId::new("worker"),
+            condition: Some(EdgeCondition::Always),
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("worker"),
+            to: NodeId::new("aggregator"),
+            condition: Some(spec.worker_to_aggregator_condition.clone()),
+        });
+
+        for id in &spec.entry {
+            graph.add_entry(NodeId::new(*id));
+        }
+
+        graph
+    }
+
+    /// Pins the exact canonical-bytes output of the golden fixture. Phase
+    /// 22's D-04 rated the canonical byte layout one-way after release
+    /// (changing it invalidates every stored Waypoint's fingerprint); this
+    /// test is what makes that hazard observable in CI rather than in a
+    /// released user's silently-broken `resume` (D-17). The pinned literal
+    /// may only be updated together with a deliberate format-version bump.
+    #[test]
+    fn fingerprint_golden_hex_pins_canonical_bytes() {
+        let graph = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        assert_eq!(
+            graph.fingerprint().as_str(),
+            "v1:af2d4a3111bb4fe91cf7c604ce051ef4d8c8f1dc57c76c58c34c87a6232b508d",
+            "canonicalization changed -- this invalidates every stored Waypoint's \
+             fingerprint; only update this literal together with a deliberate \
+             format-version bump"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_when_entry_set_changes() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            entry: vec!["entry", "jump_target"],
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_a_node_is_deferred() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            defer_aggregator: false,
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_a_node_is_marked_dynamic_target() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            dynamic_target_jump: false,
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_an_edge_condition_changes() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            worker_to_aggregator_condition: EdgeCondition::Contains("finished".to_string()),
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_a_field_dispatch_rule_changes() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            notes_dispatch: DispatchRule::LastWrite,
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_a_paladin_output_field_changes() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            worker_output_field: "other_notes",
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    /// ENG-FR-14 exclusions: a Paladin prompt, a model name, an
+    /// `InputMapping` template and `EngineLimits` must NOT move the
+    /// fingerprint -- raising a limit or tuning a prompt to let a resumed
+    /// run continue is a legitimate operator action.
+    #[test]
+    fn fingerprint_is_unchanged_by_prompt_model_input_mapping_and_limits() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            worker_prompt: "a completely different prompt asking for something else entirely",
+            worker_model: "claude-opus-4",
+            worker_input_template: "a totally different template referencing {notes}",
+            limits: EngineLimits {
+                max_supersteps: 999,
+                max_node_visits: 999,
+                run_timeout: None,
+            },
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_eq!(base.fingerprint(), variant.fingerprint());
+    }
+
     #[test]
     fn engine_limits_default_is_50_and_25() {
         let limits = EngineLimits::default();

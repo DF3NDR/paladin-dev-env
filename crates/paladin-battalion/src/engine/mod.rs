@@ -541,8 +541,24 @@ impl<W: WaypointPort> WarEngine<W> {
     /// `VanguardNodeMissing` -- and the Battlefield, Vanguard and per-node
     /// visit counts are restored and handed to the SAME superstep loop
     /// `start` uses, continuing from the superstep after the loaded
-    /// Waypoint's, so a divergence between fresh and resumed execution is
-    /// structurally impossible.
+    /// Waypoint's.
+    ///
+    /// What this guarantees, precisely (D-18): the fingerprint comparison
+    /// above detects exactly the properties [`WarGraph::fingerprint`]
+    /// documents as covered (see its rustdoc for the full, current list) --
+    /// it says nothing about any property that function does not cover.
+    /// `ResumeOptions::allow_graph_change` deliberately bypasses this check
+    /// entirely, trusting the caller that whatever changed is safe to
+    /// resume against for this thread.
+    ///
+    /// Separately, and NOT something the fingerprint check guards against
+    /// at all: this resume path rebuilds the `Frontier` from scratch
+    /// (`Frontier::new`), so per-edge resolutions recorded before the crash
+    /// are not restored. This is a currently-undispositioned finding,
+    /// recorded as the BUG-04 candidate under this phase's Deferred Ideas
+    /// (`22.1-CONTEXT.md`) and awaiting a developer disposition. This doc
+    /// comment does not claim that divergence between fresh and resumed
+    /// execution is impossible.
     pub async fn resume_with_options(
         &self,
         graph: &WarGraph,
@@ -1385,9 +1401,14 @@ mod tests {
         // audit, `22-deferred-items.md`): `a`'s self-loop is its sole
         // incoming edge, and `Frontier::is_ready` (`engine::superstep`)
         // leaves a self-loop `Pending` until the node has run once, so a
-        // non-entry `a` could never take its first turn. Entry status
-        // bootstraps it; it has nothing to do with BUG-02 eligible-set
-        // reachability, which `a` would satisfy either way.
+        // non-entry `a` could never take its first turn. `a` has no feed
+        // from outside itself, so this shape is unaffected by either
+        // BUG-02's eligible-set reachability check (which `a` would
+        // satisfy either way, as entry always does) or BUG-03's
+        // starvation-release fix (`Frontier::starved_release`,
+        // `engine::superstep`), which only releases a cycle node already
+        // holding a fresh fired edge from outside the cycle -- `a` never
+        // has one. Entry status is what bootstraps it here.
         let schema = BattlefieldSchema::new(vec![FieldSpec::new(
             FieldName::new("status").unwrap(),
             DispatchRule::LastWrite,

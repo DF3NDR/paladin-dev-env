@@ -1482,6 +1482,10 @@ mod tests {
     /// `a` could never take its first turn regardless of reachability.
     /// Declaring it entry is what bootstraps it; `a` would satisfy BUG-02's
     /// eligible-set check either way, since entry nodes are always eligible.
+    /// BUG-03's starvation-release fix ([`starved_release`]) does not apply
+    /// to this shape either: it releases a cycle node that already holds a
+    /// fresh fired edge from OUTSIDE the cycle, and `a` has no such edge --
+    /// its only incoming edge is its own self-loop.
     fn self_loop_graph(node: Arc<CountingFunctionNode>, limits: EngineLimits) -> WarGraph {
         let s = schema(vec![FieldSpec::new(
             field("status"),

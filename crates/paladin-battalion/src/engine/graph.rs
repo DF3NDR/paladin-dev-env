@@ -502,11 +502,47 @@ impl WarGraph {
         })
     }
 
-    /// Compute this graph's stable content fingerprint (ENG-FR-14): a hash
-    /// over node ids, edge specs and schema field names — deliberately NOT
-    /// over prompts or models. Node ids, edges (by `from`/`to`) and schema
-    /// field names are sorted before hashing so the result never depends on
-    /// `HashMap` iteration order (RESEARCH.md Pitfall 5).
+    /// Compute this graph's stable content fingerprint (ENG-FR-14 / CR-01,
+    /// D-15): a hash over every scheduling- and merge-relevant graph
+    /// property --
+    ///
+    /// - node ids, plus each `NodeSpec::Paladin`'s `output_field` (a
+    ///   `Function` node writes an unambiguous "no output field" marker
+    ///   instead, so a node named `x` with no output field can never
+    ///   produce the same bytes as one with an empty one);
+    /// - edges, by `from`/`to` plus the edge's serde-canonical
+    ///   `EdgeCondition`;
+    /// - schema field names, plus each field's serde-canonical
+    ///   `DispatchRule`;
+    /// - the declared entry set (`self.entry`);
+    /// - `self.defer_flags`;
+    /// - `self.dynamic_targets`.
+    ///
+    /// Deliberately NOT covered (ENG-FR-14): Paladin prompts, model names,
+    /// `InputMapping` templates, or `EngineLimits` -- raising a limit or
+    /// tuning a prompt to let a resumed run continue is a legitimate
+    /// operator action and must not trip `EngineError::GraphMismatch`.
+    ///
+    /// The edge condition and dispatch rule are hashed through their serde
+    /// representation (`serde_json::to_string`), never through `Debug`: a
+    /// `#[derive(Debug)]` change on either type would otherwise silently
+    /// move every stored fingerprint with no compiler warning, while the
+    /// serde representation is a stable, versioned contract (D-16). A
+    /// serialization failure degrades to stable empty bytes rather than a
+    /// panic, matching `evaluate_edge_condition`'s existing
+    /// `unwrap_or_default()` convention.
+    ///
+    /// Every collection above is sorted before hashing (node ids, edges,
+    /// schema fields, entry set, defer flags, dynamic targets), so the
+    /// result never depends on `HashMap`/`HashSet` iteration order
+    /// (RESEARCH.md Pitfall 5).
+    ///
+    /// A golden hex test pins the exact output of a fixture exercising
+    /// every hashed property (`engine::graph::tests::
+    /// fingerprint_golden_hex_pins_canonical_bytes`); changing this
+    /// function's byte layout invalidates every stored Waypoint's
+    /// fingerprint and must not be done without a deliberate format-version
+    /// bump (D-17).
     pub fn fingerprint(&self) -> GraphFingerprint {
         let mut node_ids: Vec<&NodeId> = self.nodes.keys().collect();
         node_ids.sort();
@@ -516,13 +552,31 @@ impl WarGraph {
             (a.from.as_str(), a.to.as_str()).cmp(&(b.from.as_str(), b.to.as_str()))
         });
 
-        let mut field_names: Vec<&FieldName> = self.schema.fields.iter().map(|f| &f.name).collect();
-        field_names.sort();
+        let mut fields: Vec<_> = self.schema.fields.iter().collect();
+        fields.sort_by(|a, b| a.name.as_str().cmp(b.name.as_str()));
+
+        let mut entry_ids: Vec<&NodeId> = self.entry.iter().collect();
+        entry_ids.sort();
+
+        let mut defer_ids: Vec<&NodeId> = self.defer_flags.iter().collect();
+        defer_ids.sort();
+
+        let mut dynamic_target_ids: Vec<&NodeId> = self.dynamic_targets.iter().collect();
+        dynamic_target_ids.sort();
 
         let mut buf = Vec::new();
         buf.extend_from_slice(b"nodes:");
         for id in &node_ids {
             buf.extend_from_slice(id.as_str().as_bytes());
+            match self.nodes.get(*id) {
+                Some(NodeSpec::Paladin { output_field, .. }) => {
+                    buf.extend_from_slice(b"|of:");
+                    buf.extend_from_slice(output_field.as_str().as_bytes());
+                }
+                _ => {
+                    buf.extend_from_slice(b"|nf");
+                }
+            }
             buf.push(b'|');
         }
         buf.extend_from_slice(b";edges:");
@@ -531,12 +585,31 @@ impl WarGraph {
             buf.push(b'-');
             buf.extend_from_slice(edge.to.as_str().as_bytes());
             buf.push(b':');
-            buf.extend_from_slice(format!("{:?}", edge.condition).as_bytes());
+            let condition_json = serde_json::to_string(&edge.condition).unwrap_or_default();
+            buf.extend_from_slice(condition_json.as_bytes());
             buf.push(b'|');
         }
         buf.extend_from_slice(b";schema:");
-        for name in &field_names {
-            buf.extend_from_slice(name.as_str().as_bytes());
+        for field in &fields {
+            buf.extend_from_slice(field.name.as_str().as_bytes());
+            buf.push(b':');
+            let dispatch_json = serde_json::to_string(&field.dispatch).unwrap_or_default();
+            buf.extend_from_slice(dispatch_json.as_bytes());
+            buf.push(b'|');
+        }
+        buf.extend_from_slice(b";entry:");
+        for id in &entry_ids {
+            buf.extend_from_slice(id.as_str().as_bytes());
+            buf.push(b'|');
+        }
+        buf.extend_from_slice(b";defer_flags:");
+        for id in &defer_ids {
+            buf.extend_from_slice(id.as_str().as_bytes());
+            buf.push(b'|');
+        }
+        buf.extend_from_slice(b";dynamic_targets:");
+        for id in &dynamic_target_ids {
+            buf.extend_from_slice(id.as_str().as_bytes());
             buf.push(b'|');
         }
 
@@ -600,16 +673,19 @@ mod tests {
     #[test]
     fn validate_accepts_self_loop() {
         // `a` is declared entry here for a reason unrelated to strandedness
-        // (this is a `validate`-only test; nothing runs). It is a readiness
-        // dodge: `a` has no other node to be fed by, so its self-loop edge
-        // is its ONLY incoming edge -- `Frontier::is_ready`
-        // (`engine::superstep`) treats that edge as `Pending` until `a` has
-        // executed once, meaning a non-entry `a` could never take its first
-        // turn regardless of reachability. Making it entry is what lets it
-        // run at all; this is the readiness-dodge classification audited in
-        // Phase 22 Plan 16 (`22-deferred-items.md`), not a stranded-node
-        // workaround -- `a` was never at risk of BUG-02's rejection since
-        // entry nodes are always eligible.
+        // (this is a `validate`-only test; nothing runs). `a` is this
+        // graph's only node, so its self-loop is its ONLY possible incoming
+        // edge; a single-node self-loop graph needs an entry to ever start
+        // at all -- that is why `a` is entry, not because the readiness
+        // rule (`Frontier::is_ready`, `engine::superstep`) requires it.
+        // `a` was never at risk of BUG-02's rejection either, since entry
+        // nodes are always eligible. This shape has no feed from outside
+        // itself at all, so BUG-03's starvation-release fix
+        // (`Frontier::starved_release`, `engine::superstep`) does not apply
+        // here either -- a non-entry `a` genuinely could never take a first
+        // turn in this exact shape, unlike the fed-from-outside shapes
+        // BUG-03 fixed. This is the readiness-dodge classification audited
+        // in Phase 22 Plan 16 (`22-deferred-items.md`).
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
         graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
         graph.add_edge(EdgeSpec {
@@ -753,9 +829,16 @@ mod tests {
         let a = graph.fingerprint();
         let b = graph.fingerprint();
         assert_eq!(a, b);
+        // Recomputed for CR-01 (D-15): this fixture declares "solo" as
+        // entry, and the entry set is now part of the hashed bytes, so the
+        // pinned literal necessarily changes when CR-01 lands -- the old
+        // value reflected exactly the under-covering fingerprint this task
+        // fixes. `fingerprint_golden_hex_pins_canonical_bytes` (Task 2) is
+        // the dedicated golden test guarding future canonicalization
+        // changes; this assertion only re-confirms same-input determinism.
         assert_eq!(
             a.as_str(),
-            "v1:f5532b613066cb2d1972451bad73120abafbf7cbafd8ecf572a043448c31d2d6"
+            "v1:2f2fbea59adf46ee43b2e85710e49fc4bf6b473006a8d2b8d8d9bc57058b43fc"
         );
     }
 
@@ -782,6 +865,229 @@ mod tests {
         graph_b.add_entry(NodeId::new("a"));
 
         assert_eq!(graph_a.fingerprint(), graph_b.fingerprint());
+    }
+
+    // --- CR-01 / D-15 / D-17: golden hex plus per-property difference
+    // tests pinning WarGraph::fingerprint()'s extended canonical bytes.
+    // `golden_fingerprint_fixture` builds one graph exercising every
+    // hashed property (a Paladin node with an output_field, two edges
+    // with different conditions, two schema fields with different
+    // DispatchRules, a declared entry set, one defer-marked node and one
+    // dynamic_target-marked node) so a single spec, varied one field at a
+    // time, can build both the golden fixture and each difference test's
+    // one-property variant.
+
+    fn make_fixture_paladin(name: &str, prompt: &str, model: &str) -> Paladin {
+        let data = paladin_core::platform::container::paladin::PaladinData {
+            name: name.to_string(),
+            system_prompt: prompt.to_string(),
+            model: model.to_string(),
+            ..Default::default()
+        };
+        paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
+    }
+
+    /// The one-property-at-a-time knobs `golden_fingerprint_fixture`
+    /// builds a graph from. `Default` matches the golden fixture exactly;
+    /// each difference test clones the default and overrides exactly one
+    /// field.
+    struct FingerprintFixtureSpec {
+        entry: Vec<&'static str>,
+        defer_aggregator: bool,
+        dynamic_target_jump: bool,
+        worker_to_aggregator_condition: EdgeCondition,
+        notes_dispatch: DispatchRule,
+        worker_output_field: &'static str,
+        worker_prompt: &'static str,
+        worker_model: &'static str,
+        worker_input_template: &'static str,
+        limits: EngineLimits,
+    }
+
+    impl Default for FingerprintFixtureSpec {
+        fn default() -> Self {
+            Self {
+                entry: vec!["entry"],
+                defer_aggregator: true,
+                dynamic_target_jump: true,
+                worker_to_aggregator_condition: EdgeCondition::Contains("done".to_string()),
+                notes_dispatch: DispatchRule::Append,
+                worker_output_field: "notes",
+                worker_prompt: "process {status}",
+                worker_model: "gpt-4",
+                worker_input_template: "process {status}",
+                limits: EngineLimits::default(),
+            }
+        }
+    }
+
+    fn golden_fingerprint_fixture(spec: &FingerprintFixtureSpec) -> WarGraph {
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                FieldName::new("status").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+            FieldSpec::new(
+                FieldName::new("notes").unwrap(),
+                spec.notes_dispatch.clone(),
+                None,
+                false,
+            ),
+        ]);
+        let mut graph = WarGraph::new(schema, spec.limits.clone());
+
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_node(
+            NodeId::new("worker"),
+            NodeSpec::Paladin {
+                paladin: Box::new(make_fixture_paladin(
+                    "worker",
+                    spec.worker_prompt,
+                    spec.worker_model,
+                )),
+                input_template: InputMapping::new(spec.worker_input_template),
+                output_field: FieldName::new(spec.worker_output_field).unwrap(),
+            },
+        );
+        if spec.defer_aggregator {
+            graph.add_deferred_node(
+                NodeId::new("aggregator"),
+                NodeSpec::Function(StdArc::new(NoopNode)),
+            );
+        } else {
+            graph.add_node(
+                NodeId::new("aggregator"),
+                NodeSpec::Function(StdArc::new(NoopNode)),
+            );
+        }
+        graph.add_node(
+            NodeId::new("jump_target"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        if spec.dynamic_target_jump {
+            graph.mark_dynamic_target(NodeId::new("jump_target"));
+        }
+
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("entry"),
+            to: NodeId::new("worker"),
+            condition: Some(EdgeCondition::Always),
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("worker"),
+            to: NodeId::new("aggregator"),
+            condition: Some(spec.worker_to_aggregator_condition.clone()),
+        });
+
+        for id in &spec.entry {
+            graph.add_entry(NodeId::new(*id));
+        }
+
+        graph
+    }
+
+    /// Pins the exact canonical-bytes output of the golden fixture. Phase
+    /// 22's D-04 rated the canonical byte layout one-way after release
+    /// (changing it invalidates every stored Waypoint's fingerprint); this
+    /// test is what makes that hazard observable in CI rather than in a
+    /// released user's silently-broken `resume` (D-17). The pinned literal
+    /// may only be updated together with a deliberate format-version bump.
+    #[test]
+    fn fingerprint_golden_hex_pins_canonical_bytes() {
+        let graph = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        assert_eq!(
+            graph.fingerprint().as_str(),
+            "v1:af2d4a3111bb4fe91cf7c604ce051ef4d8c8f1dc57c76c58c34c87a6232b508d",
+            "canonicalization changed -- this invalidates every stored Waypoint's \
+             fingerprint; only update this literal together with a deliberate \
+             format-version bump"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_when_entry_set_changes() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            entry: vec!["entry", "jump_target"],
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_a_node_is_deferred() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            defer_aggregator: false,
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_a_node_is_marked_dynamic_target() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            dynamic_target_jump: false,
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_an_edge_condition_changes() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            worker_to_aggregator_condition: EdgeCondition::Contains("finished".to_string()),
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_a_field_dispatch_rule_changes() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            notes_dispatch: DispatchRule::LastWrite,
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_changes_when_a_paladin_output_field_changes() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            worker_output_field: "other_notes",
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_ne!(base.fingerprint(), variant.fingerprint());
+    }
+
+    /// ENG-FR-14 exclusions: a Paladin prompt, a model name, an
+    /// `InputMapping` template and `EngineLimits` must NOT move the
+    /// fingerprint -- raising a limit or tuning a prompt to let a resumed
+    /// run continue is a legitimate operator action.
+    #[test]
+    fn fingerprint_is_unchanged_by_prompt_model_input_mapping_and_limits() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            worker_prompt: "a completely different prompt asking for something else entirely",
+            worker_model: "claude-opus-4",
+            worker_input_template: "a totally different template referencing {notes}",
+            limits: EngineLimits {
+                max_supersteps: 999,
+                max_node_visits: 999,
+                run_timeout: None,
+            },
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_eq!(base.fingerprint(), variant.fingerprint());
     }
 
     #[test]
@@ -975,11 +1281,14 @@ mod tests {
     #[tokio::test]
     async fn self_loop_on_entry_node_still_validates_and_runs() {
         // Readiness dodge, not a strandedness workaround: `a` is the only
-        // node in this graph, so its self-loop is its only incoming edge.
-        // `Frontier::is_ready` (`engine::superstep`) leaves a self-loop edge
-        // `Pending` until the node has executed once, so a non-entry `a`
-        // could never take its first turn -- entry status is what bootstraps
-        // it, independent of BUG-02 (Phase 22 Plan 16 audit,
+        // node in this graph, so its self-loop is its only incoming edge --
+        // a single-node self-loop graph needs an entry to ever start at
+        // all, regardless of BUG-02's eligible-set check (entry nodes are
+        // always eligible) or BUG-03's starvation-release fix
+        // (`Frontier::starved_release`, `engine::superstep`), neither of
+        // which this shape needs: `a` has no feed from outside itself, so a
+        // non-entry `a` genuinely could never take its first turn here.
+        // Entry status is what bootstraps it (Phase 22 Plan 16 audit,
         // `22-deferred-items.md`).
         let field_name = FieldName::new("status").unwrap();
         let node = CountingFunctionNode::new(move |run_index, _state| {
@@ -1021,16 +1330,19 @@ mod tests {
     fn validate_accepts_self_loop_on_node_reachable_from_entry_by_normal_edge() {
         // Deliberately `validate`-only -- this is the "unrelated" bucket of
         // the Phase 22 Plan 16 fixture audit (`22-deferred-items.md`): `b`
-        // here has BOTH a self-loop and an external incoming edge, which is
-        // exactly the combination the readiness rule (`Frontier::is_ready`
-        // in `engine::superstep`) can never schedule -- a `Pending` self-loop
-        // edge blocks `b`'s first turn even though the external edge from
-        // `a` fires. Running this graph to completion would reproduce that
-        // defect rather than test what this fixture is actually pinning
-        // (that `validate` itself, a static check, has no opinion about
-        // runtime readiness). See the ignored reproduction
+        // here has BOTH a self-loop and an external incoming edge from `a`.
+        // Before BUG-03 was fixed, running this graph to completion would
+        // have reproduced BUG-03's cycle-bootstrap starvation (a `Pending`
+        // self-loop edge blocked `b`'s first turn even though the external
+        // edge from `a` fired); `Frontier::starved_release`
+        // (`engine::superstep`) now releases `b` in exactly this shape, so
+        // running it would no longer reproduce a defect. This fixture
+        // stays `validate`-only regardless, because that is still the
+        // point it pins -- that `validate`, a static check, has no opinion
+        // about runtime readiness. See the now-passing regression tests
         // `self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`
-        // in `engine::superstep` for the runnable defect.
+        // and `cycle_node_fed_from_outside_the_cycle_takes_its_first_turn`
+        // in `engine::superstep` for the runnable BUG-03 coverage.
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
         graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
         graph.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));

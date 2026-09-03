@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use paladin_core::platform::container::battlefield::Battlefield;
-use paladin_core::platform::container::directive::Directive;
+use paladin_core::platform::container::directive::{Directive, MusterContext};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 
 /// Error returned by a [`StateNode`]'s execution.
@@ -27,6 +27,27 @@ pub struct NodeContext {
     pub thread_id: ThreadId,
     /// The superstep index this execution belongs to.
     pub superstep: u64,
+    /// This execution's Muster task context (CF-03, D-15): `Some` only for
+    /// a synthetic worker-task dispatch spawned from a returned
+    /// `NextStep::Muster(tasks)` Directive, `None` for every ordinary
+    /// vanguard execution. Never merged into the Battlefield — reachable
+    /// only through this field and its accessors, and through
+    /// `{muster.payload}`/`{muster.task_key}` in an `InputMapping` template.
+    pub muster: Option<MusterContext>,
+}
+
+impl NodeContext {
+    /// This execution's Muster task payload (CF-FR-10), or `None` outside a
+    /// Muster worker-task dispatch.
+    pub fn muster_payload(&self) -> Option<&serde_json::Value> {
+        self.muster.as_ref().map(|m| &m.payload)
+    }
+
+    /// This execution's Muster `task_key` (CF-FR-10), or `None` outside a
+    /// Muster worker-task dispatch.
+    pub fn task_key(&self) -> Option<&str> {
+        self.muster.as_ref().map(|m| m.task_key.as_str())
+    }
 }
 
 /// A pure state -> delta node: reads the Battlefield snapshot for its

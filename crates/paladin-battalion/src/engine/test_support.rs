@@ -136,18 +136,21 @@ impl WaypointPort for RecordingWaypointStore {
 }
 
 /// A closure computing a [`CountingFunctionNode`]'s [`Directive`] from its
-/// zero-indexed run number and the Battlefield snapshot it observed.
-type DirectiveFn = dyn Fn(usize, &Battlefield) -> Directive + Send + Sync;
+/// zero-indexed run number, the Battlefield snapshot it observed, and its
+/// [`NodeContext`] (CF-03: the vehicle for reading `ctx.muster_payload()`/
+/// `ctx.task_key()` in a Muster worker-template test double).
+type ContextDirectiveFn = dyn Fn(usize, &Battlefield, &NodeContext) -> Directive + Send + Sync;
 
 /// A [`StateNode`] test double: records how many times it ran, the raw
 /// pointer address of the Battlefield snapshot it observed on each run (for
 /// asserting `Arc`-shared-snapshot identity across concurrently-executing
 /// peers), and returns a [`Directive`] computed by a caller-supplied
-/// closure over the zero-indexed run number and the observed snapshot.
+/// closure over the zero-indexed run number, the observed snapshot, and the
+/// execution's [`NodeContext`].
 pub struct CountingFunctionNode {
     run_count: Arc<AtomicUsize>,
     observed_ptrs: Arc<Mutex<Vec<usize>>>,
-    directive_fn: Arc<DirectiveFn>,
+    directive_fn: Arc<ContextDirectiveFn>,
 }
 
 impl CountingFunctionNode {
@@ -156,7 +159,10 @@ impl CountingFunctionNode {
     /// on its second, and so on. Always routes via `NextStep::Edges`
     /// (`impl From<StateDelta> for Directive`'s default) -- use
     /// [`CountingFunctionNode::with_directive`] for a node whose routing
-    /// (`Goto`/`End`/`Muster`/`Parley`) is also caller-controlled.
+    /// (`Goto`/`End`/`Muster`/`Parley`) is also caller-controlled, or
+    /// [`CountingFunctionNode::with_context_directive`] for one that also
+    /// needs its `NodeContext` (e.g. a Muster worker reading
+    /// `ctx.muster_payload()`).
     pub fn new(
         delta_fn: impl Fn(usize, &Battlefield) -> StateDelta + Send + Sync + 'static,
     ) -> Arc<Self> {
@@ -170,6 +176,16 @@ impl CountingFunctionNode {
     /// `Goto`es back for its first few runs, then routes via `Edges`).
     pub fn with_directive(
         directive_fn: impl Fn(usize, &Battlefield) -> Directive + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Self::with_context_directive(move |run, state, _ctx| directive_fn(run, state))
+    }
+
+    /// Construct a node whose full [`Directive`] is computed by
+    /// `directive_fn(run_index, snapshot, ctx)`, additionally observing its
+    /// [`NodeContext`] -- CF-03's vehicle for a Muster worker-template test
+    /// double to read `ctx.muster_payload()`/`ctx.task_key()`.
+    pub fn with_context_directive(
+        directive_fn: impl Fn(usize, &Battlefield, &NodeContext) -> Directive + Send + Sync + 'static,
     ) -> Arc<Self> {
         Arc::new(Self {
             run_count: Arc::new(AtomicUsize::new(0)),
@@ -207,13 +223,13 @@ impl CountingFunctionNode {
 
 #[async_trait]
 impl StateNode for CountingFunctionNode {
-    async fn run(&self, state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError> {
         let run_index = self.run_count.fetch_add(1, Ordering::SeqCst);
         self.observed_ptrs
             .lock()
             .unwrap()
             .push(state as *const Battlefield as usize);
-        Ok((self.directive_fn)(run_index, state))
+        Ok((self.directive_fn)(run_index, state, ctx))
     }
 }
 

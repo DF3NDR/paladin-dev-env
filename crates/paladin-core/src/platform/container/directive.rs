@@ -93,6 +93,24 @@ pub struct MusterTask {
     pub task_key: String,
 }
 
+/// The per-task context a [`NextStep::Muster`] worker execution carries
+/// (CF-03, D-15): its isolated payload and its `task_key`. Reachable ONLY
+/// through `paladin_battalion::engine::node::NodeContext`'s `muster` field
+/// and its `muster_payload()`/`task_key()` accessors, and through
+/// `{muster.payload}`/`{muster.task_key}` in an `InputMapping` template
+/// (`paladin_battalion::engine::input_mapping`) — never merged into the
+/// Battlefield, and never reachable through a schema field (graph
+/// validation rejects a schema field named with the `muster.` prefix).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MusterContext {
+    /// This task's isolated payload, as given in the [`MusterTask`] that
+    /// spawned this execution.
+    pub payload: serde_json::Value,
+    /// This task's `task_key`, as given in the [`MusterTask`] that spawned
+    /// this execution.
+    pub task_key: String,
+}
+
 impl From<StateDelta> for Directive {
     /// Wrap a bare `StateDelta` as a `Directive` routed via
     /// [`NextStep::Edges`] — the shape every pre-CF-02 `StateNode`

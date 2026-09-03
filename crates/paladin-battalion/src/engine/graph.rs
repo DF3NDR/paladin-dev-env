@@ -173,6 +173,13 @@ pub struct WarGraph {
     /// jump target, seeded into `validate`'s eligible-set worklist
     /// alongside `entry` so such a node is not rejected as stranded.
     dynamic_targets: HashSet<NodeId>,
+    /// Node ids registered via [`WarGraph::add_worker_template`] (CF-03,
+    /// D-12): a node that runs only as a `NextStep::Muster` worker task,
+    /// never on its own. Seeded into `validate`'s eligible-set worklist
+    /// alongside `entry` and `dynamic_targets` (the unfilled seam
+    /// `validate_eligible_set`'s own rustdoc names) so a worker template is
+    /// not rejected as unreachable despite having no static incoming edge.
+    worker_templates: HashSet<NodeId>,
     edges: Vec<EdgeSpec>,
     schema: BattlefieldSchema,
     entry: Vec<NodeId>,
@@ -187,6 +194,7 @@ impl WarGraph {
             node_order: Vec::new(),
             defer_flags: HashSet::new(),
             dynamic_targets: HashSet::new(),
+            worker_templates: HashSet::new(),
             edges: Vec::new(),
             schema,
             entry: Vec::new(),
@@ -255,6 +263,26 @@ impl WarGraph {
     /// Whether `id` was marked via [`WarGraph::mark_dynamic_target`].
     pub fn is_dynamic_target(&self, id: &NodeId) -> bool {
         self.dynamic_targets.contains(id)
+    }
+
+    /// Register a node under `id`, marked as a **worker template** (CF-03,
+    /// D-12): mirrors [`WarGraph::add_deferred_node`]'s exact shape --
+    /// insert the node, then insert the id into the marker set. A worker
+    /// template runs only as a `NextStep::Muster` task dispatch, never on
+    /// its own: `WarGraph::validate` rejects one declared as an entry point
+    /// or as the `to` of any static edge (Task 2), and
+    /// `validate_eligible_set` exempts it from the "unreachable from
+    /// entry" rejection the same way a [`WarGraph::mark_dynamic_target`]
+    /// node already is.
+    pub fn add_worker_template(&mut self, id: NodeId, spec: NodeSpec) -> &mut Self {
+        self.add_node(id.clone(), spec);
+        self.worker_templates.insert(id);
+        self
+    }
+
+    /// Whether `id` was registered via [`WarGraph::add_worker_template`].
+    pub fn is_worker_template(&self, id: &NodeId) -> bool {
+        self.worker_templates.contains(id)
     }
 
     /// This graph's node ids in registration order (ENG-FR-04).
@@ -437,23 +465,31 @@ impl WarGraph {
             });
         }
 
-        // The eligible set: entry nodes and dynamic-target-marked nodes,
-        // expanded by following declared edges to a fixed point (edge
-        // CONDITIONS are ignored here -- they are runtime values, and a
-        // statically-declared edge is what proves intent for this static
-        // check). Two future sources of eligibility plug into this SAME
-        // worklist and nowhere else: nodes marked as worker templates,
-        // reachable via dynamic fan-out (Phase 23 / Muster), and nodes
-        // named as Route { to } targets in an eligible node's Aegis
+        // The eligible set: entry nodes, dynamic-target-marked nodes and
+        // worker-template-marked nodes, expanded by following declared
+        // edges to a fixed point (edge CONDITIONS are ignored here -- they
+        // are runtime values, and a statically-declared edge is what
+        // proves intent for this static check). Worker templates (CF-03,
+        // D-12) are reachable only via dynamic fan-out (`NextStep::Muster`),
+        // never a static edge, so they are seeded exactly like a
+        // `dynamic_target` -- the SAME worklist this function's rustdoc
+        // already named as the unfilled seam for exactly this concept. One
+        // more future source of eligibility plugs into this same worklist:
+        // nodes named as `Route { to }` targets in an eligible node's Aegis
         // `on_error` policy (Phase 25 / CF-FR handler routing) -- which is
         // why this is a fixed point rather than a single pass: a route
         // target discovered late can itself carry outgoing edges that need
-        // re-expanding. Neither concept exists in this tree yet; nothing
-        // is fabricated here to stand in for either -- these are insertion
-        // points, not stubs.
+        // re-expanding. That concept does not exist in this tree yet;
+        // nothing is fabricated here to stand in for it -- it remains an
+        // insertion point, not a stub.
         let mut eligible: HashSet<NodeId> = HashSet::new();
         let mut worklist: Vec<NodeId> = Vec::new();
-        for id in self.entry.iter().chain(self.dynamic_targets.iter()) {
+        for id in self
+            .entry
+            .iter()
+            .chain(self.dynamic_targets.iter())
+            .chain(self.worker_templates.iter())
+        {
             if eligible.insert(id.clone()) {
                 worklist.push(id.clone());
             }

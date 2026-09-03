@@ -36,7 +36,9 @@ use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
     Battlefield, CustomDispatchResolver, FieldName,
 };
-use paladin_core::platform::container::directive::{Directive, MusterTask, NextStep};
+use paladin_core::platform::container::directive::{
+    Directive, MusterContext, MusterTask, NextStep,
+};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, NodeExecutionRecord, NodeId, NodeOutcomeKind, ThreadId,
@@ -182,6 +184,23 @@ enum NodeRunOutcome {
     Failed(NodeFailure),
 }
 
+/// Accept an incoming `NextStep::Muster(tasks)` at the Directive-receipt
+/// point (CF-03, D-13) -- the SAME per-node accumulation loop where a
+/// `Goto` target is validated -- and BEFORE any task is dispatched. This
+/// tracer slice carries every task forward unconditionally; Plan 23-05's
+/// Task 2 extends this function with the malformed-Muster rejection clauses
+/// (empty list, duplicate `task_key`, `max_muster_tasks` breach, unknown or
+/// non-worker-template `worker`). Returns `tasks` sorted by `task_key`
+/// (`String` byte order) -- the ordering the deterministic task_key-order
+/// merge (D-13) relies on, since every accepted task then reaches [`run`]'s
+/// dispatch-building loop in this order and the existing
+/// sequential-await-per-handle + stable `deltas.sort_by(NodeId)` machinery
+/// preserves it into the final merge without any bespoke reordering.
+fn validate_muster_tasks(mut tasks: Vec<MusterTask>) -> Vec<MusterTask> {
+    tasks.sort_by(|a, b| a.task_key.cmp(&b.task_key));
+    tasks
+}
+
 /// Run the superstep loop starting from `vanguard` at `superstep_number`,
 /// over `battlefield`, persisting through `waypoint_port` under
 /// `durability`, bounding per-superstep concurrency at `parallelism` (or the
@@ -301,6 +320,13 @@ pub(crate) async fn run<W: WaypointPort>(
 
     let mut frontier = Frontier::for_run(graph, &frontier_snapshot);
 
+    // --- CF-03: a validated `NextStep::Muster(tasks)` accepted in
+    // superstep N is carried here, purely as a loop-local value (never
+    // persisted -- Plan 23-06 owns mid-muster crash survival, D-14), and
+    // dispatched as synthetic vanguard entries at the top of superstep
+    // N+1's iteration below.
+    let mut pending_muster: Option<Vec<MusterTask>> = None;
+
     loop {
         // --- ENG-FR-23: cancellation is observed only at a superstep
         // BOUNDARY -- here, at the top of the loop -- never mid-superstep.
@@ -406,14 +432,50 @@ pub(crate) async fn run<W: WaypointPort>(
             superstep: superstep_number,
         });
 
+        // --- CF-03: this superstep's dispatch entries = every ordinary
+        // `vanguard` node (`muster: None`) PLUS every task from a Muster
+        // accepted in the PREVIOUS superstep (`pending_muster`, taken here
+        // so it dispatches exactly once), each a synthetic entry sharing
+        // its `worker` template's `NodeId` with `NodeContext.muster` set
+        // (RESEARCH.md Pitfall 3: the SAME snapshot/spawn/semaphore
+        // machinery ordinary vanguard nodes use, never a bespoke "run these
+        // N tasks" loop). `pending_muster`'s tasks already arrive sorted by
+        // `task_key` (`validate_muster_tasks`); pushed in that order here,
+        // the existing sequential-await-per-handle plus the stable
+        // `deltas.sort_by(NodeId)` below preserve that order into the
+        // final merge with no bespoke reordering. Muster dispatch entries
+        // are NOT subject to `visit_counts`/`max_node_visits` (that bound
+        // governs a node's own re-entry into the vanguard across
+        // supersteps, e.g. a Goto refine loop; a Muster's fan-out width is
+        // bounded separately by `EngineLimits::max_muster_tasks`).
+        let muster_dispatch: Vec<(NodeId, Option<MusterContext>)> = pending_muster
+            .take()
+            .into_iter()
+            .flatten()
+            .map(|task| {
+                (
+                    task.worker,
+                    Some(MusterContext {
+                        payload: task.payload,
+                        task_key: task.task_key,
+                    }),
+                )
+            })
+            .collect();
+        let dispatch_entries: Vec<(NodeId, Option<MusterContext>)> = vanguard
+            .iter()
+            .map(|id| (id.clone(), None))
+            .chain(muster_dispatch)
+            .collect();
+
         // --- ENG-FR-05/ENG-NFR-02: exactly one Arc-shared read snapshot
         // for the whole superstep, cloned once.
         let snapshot = Arc::new(battlefield.clone());
-        let limit = parallelism.unwrap_or(vanguard.len()).max(1);
+        let limit = parallelism.unwrap_or(dispatch_entries.len()).max(1);
         let semaphore = Arc::new(Semaphore::new(limit));
 
-        let mut handles = Vec::with_capacity(vanguard.len());
-        for node_id in &vanguard {
+        let mut handles = Vec::with_capacity(dispatch_entries.len());
+        for (node_id, muster_ctx) in &dispatch_entries {
             let spec = graph.node(node_id).ok_or_else(|| {
                 EngineError::Node(NodeError(format!(
                     "vanguard node {node_id} not found in graph"
@@ -442,6 +504,7 @@ pub(crate) async fn run<W: WaypointPort>(
                 node_id: node_id.clone(),
                 thread_id: thread.clone(),
                 superstep: superstep_number,
+                muster: muster_ctx.clone(),
             };
             let nid = node_id.clone();
             handles.push(tokio::spawn(async move {
@@ -541,14 +604,18 @@ pub(crate) async fn run<W: WaypointPort>(
         // `Frontier::record_execution` resolves its static outgoing edges
         // `NotFiring` directly instead of evaluating them (D-08c, serves
         // Goto/Muster/End/Parley alike); `end_requested` is the first node
-        // this superstep to return `NextStep::End` (D-09). A Goto target
-        // validation failure or a returned Parley both fail the run before
-        // any of this bookkeeping is acted on further (checked together
-        // with `node_failure`, before the merge).
+        // this superstep to return `NextStep::End` (D-09); `mustered` is a
+        // validated `NextStep::Muster` task list (CF-03, D-13), threaded
+        // into `pending_muster` for the NEXT superstep's dispatch below. A
+        // Goto target validation failure, an invalid Muster, or a returned
+        // Parley all fail the run before any of this bookkeeping is acted
+        // on further (checked together with `node_failure`, before the
+        // merge).
         let mut goto_targets: Vec<NodeId> = Vec::new();
         let mut notfiring_nodes: HashSet<NodeId> = HashSet::new();
         let mut end_requested: Option<NodeId> = None;
         let mut routing_failure: Option<(NodeId, EngineError)> = None;
+        let mut mustered: Option<Vec<MusterTask>> = None;
         for handle in handles {
             let (node_id, started_at, duration_ms, paladin_id, token_count, outcome) = handle
                 .await
@@ -577,12 +644,19 @@ pub(crate) async fn run<W: WaypointPort>(
                             }
                             NodeOutcomeKind::Succeeded
                         }
-                        NextStep::Muster(_) => {
-                            // Dispatch mechanism lands in a later plan
-                            // (CF-03); this phase only honours D-08c's
-                            // NotFiring rule so a Muster directive can
-                            // never leave an outgoing edge `Pending`.
+                        NextStep::Muster(tasks) => {
+                            // CF-03, D-13: accepted here, at
+                            // Directive-receipt time -- the SAME per-node
+                            // accumulation loop Goto validates in -- and
+                            // carried into `pending_muster` for dispatch
+                            // next superstep, never inside the
+                            // worker-dispatch loop itself. Malformed-Muster
+                            // rejection (empty/duplicate/limit/unknown
+                            // worker) is Plan 23-05's Task 2.
                             notfiring_nodes.insert(node_id.clone());
+                            if mustered.is_none() {
+                                mustered = Some(validate_muster_tasks(tasks.clone()));
+                            }
                             NodeOutcomeKind::Succeeded
                         }
                         NextStep::End => {
@@ -730,7 +804,17 @@ pub(crate) async fn run<W: WaypointPort>(
                     completed_records,
                     WaypointStatus::Failed {
                         error: error.to_string(),
-                        failed_node: ran.first().cloned().unwrap_or_else(|| vanguard[0].clone()),
+                        // CF-03: `vanguard` alone may be empty in a
+                        // muster-only superstep, so the fallback reads from
+                        // `dispatch_entries` (ordinary nodes + muster
+                        // tasks) instead -- `ran`/`deltas` are only
+                        // non-empty when at least one dispatch entry
+                        // succeeded, so this branch is unreachable in
+                        // practice, but must not panic if it ever is.
+                        failed_node: ran
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| dispatch_entries[0].0.clone()),
                     },
                     visit_counts,
                     frontier.snapshot(graph),
@@ -783,6 +867,16 @@ pub(crate) async fn run<W: WaypointPort>(
             }
         }
 
+        // --- CF-03, D-13: a validated Muster accepted this superstep
+        // dispatches next superstep regardless of what `next_vanguard`
+        // (static-edge-derived) computed -- a worker template has no
+        // static incoming edge (D-12), so `compute_next_vanguard` can never
+        // select it on its own. `has_pending_muster` therefore stands in
+        // for "there is more work next superstep" everywhere below that
+        // would otherwise treat an empty `next_vanguard` as the run being
+        // truly done.
+        let has_pending_muster = mustered.is_some();
+
         // --- D-09 / CF-FR-08: `End` completes the run after this
         // superstep's merge -- which already happened above, so every
         // peer's delta is reflected in `battlefield` -- regardless of what
@@ -821,11 +915,16 @@ pub(crate) async fn run<W: WaypointPort>(
         // D-04's run-end truthful-outcome check: an independent net over
         // the SAME `frontier` `compute_next_vanguard` just consumed, run
         // only when that computation says there is nothing left to
-        // schedule. A non-empty result here means the scheduler's own
-        // invariant broke -- some node in the eligible set still holds an
-        // unconsumed fired incoming edge -- so `Completed` is refused in
-        // favor of a typed, checkpointed failure naming every such node.
-        if next_vanguard.is_empty() {
+        // schedule -- AND there is no pending Muster (CF-03): a worker
+        // template legitimately has no static incoming edge, so an empty
+        // `next_vanguard` alongside a pending Muster is "waiting to
+        // dispatch next superstep," not the scheduler silently walking
+        // away from ready work. A non-empty result here means the
+        // scheduler's own invariant broke -- some node in the eligible set
+        // still holds an unconsumed fired incoming edge -- so `Completed`
+        // is refused in favor of a typed, checkpointed failure naming every
+        // such node.
+        if next_vanguard.is_empty() && !has_pending_muster {
             let starved = starved_at_completion(graph, &frontier);
             if !starved.is_empty() {
                 let names = starved
@@ -865,7 +964,7 @@ pub(crate) async fn run<W: WaypointPort>(
             }
         }
 
-        let status = if next_vanguard.is_empty() {
+        let status = if next_vanguard.is_empty() && !has_pending_muster {
             WaypointStatus::Completed
         } else {
             WaypointStatus::Running
@@ -885,7 +984,7 @@ pub(crate) async fn run<W: WaypointPort>(
         );
         persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
 
-        if next_vanguard.is_empty() {
+        if next_vanguard.is_empty() && !has_pending_muster {
             return Ok(RunOutcome::Completed {
                 final_state: battlefield,
                 waypoint: waypoint.waypoint_id,
@@ -893,6 +992,9 @@ pub(crate) async fn run<W: WaypointPort>(
         }
 
         vanguard = next_vanguard;
+        // --- CF-03: carry this superstep's validated Muster (if any) into
+        // the next iteration's dispatch-entry build above.
+        pending_muster = mustered;
         parent_waypoint_id = Some(waypoint.waypoint_id);
         superstep_number += 1;
     }

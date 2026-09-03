@@ -539,6 +539,22 @@ impl WarGraph {
     /// result never depends on `HashMap`/`HashSet` iteration order
     /// (RESEARCH.md Pitfall 5).
     ///
+    /// **Length-prefixed encoding (Phase 22.1 CR-01, D-17, `v2`).** Every
+    /// variable-length field ([`push_field`]) is preceded by its byte length
+    /// as a fixed-width 8-byte little-endian integer before its bytes are
+    /// written, so no byte sequence can be reinterpreted as a different
+    /// split across a field or node/edge boundary. The prior `v1` encoding
+    /// joined fields with unescaped ASCII delimiters (`|`, `-`, `:`) that
+    /// were themselves legal characters inside a `NodeId`/`FieldName`
+    /// (neither type restricts its character set beyond non-emptiness), so
+    /// two structurally different graphs could be crafted to fingerprint
+    /// identically -- e.g. two Function nodes `"a"` and `"b"` versus a
+    /// single Function node named `"a|nf|b"`. `GRAPH_FINGERPRINT_VERSION`
+    /// was bumped to `"v2"` alongside this fix (`paladin-core`'s
+    /// `waypoint.rs`) so every fingerprint stored under the old encoding is
+    /// recognized as a version-tag mismatch on `resume` rather than
+    /// silently reinterpreted under the new one.
+    ///
     /// A golden hex test pins the exact output of a fixture exercising
     /// every hashed property (`engine::graph::tests::
     /// fingerprint_golden_hex_pins_canonical_bytes`); changing this
@@ -569,54 +585,57 @@ impl WarGraph {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"nodes:");
         for id in &node_ids {
-            buf.extend_from_slice(id.as_str().as_bytes());
+            push_field(&mut buf, id.as_str().as_bytes());
             match self.nodes.get(*id) {
                 Some(NodeSpec::Paladin { output_field, .. }) => {
-                    buf.extend_from_slice(b"|of:");
-                    buf.extend_from_slice(output_field.as_str().as_bytes());
+                    buf.push(1); // "has output field" tag
+                    push_field(&mut buf, output_field.as_str().as_bytes());
                 }
                 _ => {
-                    buf.extend_from_slice(b"|nf");
+                    buf.push(0); // "no output field" tag
                 }
             }
-            buf.push(b'|');
         }
         buf.extend_from_slice(b";edges:");
         for edge in &edges {
-            buf.extend_from_slice(edge.from.as_str().as_bytes());
-            buf.push(b'-');
-            buf.extend_from_slice(edge.to.as_str().as_bytes());
-            buf.push(b':');
+            push_field(&mut buf, edge.from.as_str().as_bytes());
+            push_field(&mut buf, edge.to.as_str().as_bytes());
             let condition_json = canonical_edge_condition(&edge.condition);
-            buf.extend_from_slice(condition_json.as_bytes());
-            buf.push(b'|');
+            push_field(&mut buf, condition_json.as_bytes());
         }
         buf.extend_from_slice(b";schema:");
         for field in &fields {
-            buf.extend_from_slice(field.name.as_str().as_bytes());
-            buf.push(b':');
+            push_field(&mut buf, field.name.as_str().as_bytes());
             let dispatch_json = serde_json::to_string(&field.dispatch).unwrap_or_default();
-            buf.extend_from_slice(dispatch_json.as_bytes());
-            buf.push(b'|');
+            push_field(&mut buf, dispatch_json.as_bytes());
         }
         buf.extend_from_slice(b";entry:");
         for id in &entry_ids {
-            buf.extend_from_slice(id.as_str().as_bytes());
-            buf.push(b'|');
+            push_field(&mut buf, id.as_str().as_bytes());
         }
         buf.extend_from_slice(b";defer_flags:");
         for id in &defer_ids {
-            buf.extend_from_slice(id.as_str().as_bytes());
-            buf.push(b'|');
+            push_field(&mut buf, id.as_str().as_bytes());
         }
         buf.extend_from_slice(b";dynamic_targets:");
         for id in &dynamic_target_ids {
-            buf.extend_from_slice(id.as_str().as_bytes());
-            buf.push(b'|');
+            push_field(&mut buf, id.as_str().as_bytes());
         }
 
         GraphFingerprint::from_canonical_bytes(&buf)
     }
+}
+
+/// Write `bytes` to `buf` preceded by its length as a fixed-width 8-byte
+/// little-endian integer (Phase 22.1 CR-01, D-17). Used exclusively by
+/// [`WarGraph::fingerprint`] to build a canonical byte stream in which no
+/// field's bytes can be reinterpreted as a different split across a
+/// node/edge boundary -- the defect a delimiter-only encoding (`v1`) was
+/// vulnerable to whenever a `NodeId`/`FieldName` legally contained one of
+/// the delimiter bytes.
+fn push_field(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    buf.extend_from_slice(bytes);
 }
 
 #[cfg(test)]
@@ -831,16 +850,16 @@ mod tests {
         let a = graph.fingerprint();
         let b = graph.fingerprint();
         assert_eq!(a, b);
-        // Recomputed for CR-01 (D-15): this fixture declares "solo" as
-        // entry, and the entry set is now part of the hashed bytes, so the
-        // pinned literal necessarily changes when CR-01 lands -- the old
-        // value reflected exactly the under-covering fingerprint this task
-        // fixes. `fingerprint_golden_hex_pins_canonical_bytes` (Task 2) is
-        // the dedicated golden test guarding future canonicalization
-        // changes; this assertion only re-confirms same-input determinism.
+        // Recomputed for Phase 22.1 CR-01 (D-15, D-17): this fixture
+        // declares "solo" as entry, and the entry set is now part of the
+        // hashed bytes; the length-prefixed `v2` re-encoding (CR-01 fix)
+        // also changes the literal independently of any property change.
+        // `fingerprint_golden_hex_pins_canonical_bytes` (Task 2) is the
+        // dedicated golden test guarding future canonicalization changes;
+        // this assertion only re-confirms same-input determinism.
         assert_eq!(
             a.as_str(),
-            "v1:2f2fbea59adf46ee43b2e85710e49fc4bf6b473006a8d2b8d8d9bc57058b43fc"
+            "v2:9c4b3ff495ed7f1872420455f7691b991a58707e902a3211a5c19c1da8613520"
         );
     }
 
@@ -999,16 +1018,84 @@ mod tests {
     /// test is what makes that hazard observable in CI rather than in a
     /// released user's silently-broken `resume` (D-17). The pinned literal
     /// may only be updated together with a deliberate format-version bump.
+    ///
+    /// Re-pinned for Phase 22.1 CR-01/D-17's length-prefixed `v2` encoding
+    /// (see `fingerprint_distinguishes_length_prefix_collision_*` below for
+    /// the collision the prior `v1` delimiter-based encoding was vulnerable
+    /// to).
     #[test]
     fn fingerprint_golden_hex_pins_canonical_bytes() {
         let graph = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
         assert_eq!(
             graph.fingerprint().as_str(),
-            "v1:af2d4a3111bb4fe91cf7c604ce051ef4d8c8f1dc57c76c58c34c87a6232b508d",
+            "v2:8eaa709a9ed7356799747694382d508608f1b76f3ec9e2bdae079868f2f60711",
             "canonicalization changed -- this invalidates every stored Waypoint's \
              fingerprint; only update this literal together with a deliberate \
              format-version bump"
         );
+    }
+
+    // --- CR-01 (Phase 22.1) regression tests: the two collisions the prior
+    // delimiter-based `v1` encoding was vulnerable to must now fingerprint
+    // differently under the length-prefixed `v2` encoding.
+
+    #[test]
+    fn fingerprint_distinguishes_length_prefix_collision_two_nodes_vs_one() {
+        // Two independent Function nodes "a" and "b" vs. a single Function
+        // node named "a|nf|b". Under the old delimiter encoding both
+        // produced the same bytes ("a|nf|b|nf|"); under the length-prefixed
+        // encoding the byte length of each field is unambiguous.
+        let schema = one_field_schema();
+
+        let mut two_nodes = WarGraph::new(schema.clone(), EngineLimits::default());
+        two_nodes.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        two_nodes.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
+        two_nodes.add_entry(NodeId::new("a"));
+
+        let mut one_node = WarGraph::new(schema, EngineLimits::default());
+        one_node.add_node(
+            NodeId::new("a|nf|b"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        one_node.add_entry(NodeId::new("a|nf|b"));
+
+        assert_ne!(two_nodes.fingerprint(), one_node.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_distinguishes_length_prefix_collision_edge_split() {
+        // Edge "a" -> "b-c" vs. edge "a-b" -> "c". Under the old delimiter
+        // encoding both produced the same bytes ("a-b-c:null|"); under the
+        // length-prefixed encoding the split point is unambiguous.
+        let schema = one_field_schema();
+
+        let mut split_at_a = WarGraph::new(schema.clone(), EngineLimits::default());
+        split_at_a.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        split_at_a.add_node(
+            NodeId::new("b-c"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        split_at_a.add_edge(EdgeSpec {
+            from: NodeId::new("a"),
+            to: NodeId::new("b-c"),
+            condition: None,
+        });
+        split_at_a.add_entry(NodeId::new("a"));
+
+        let mut split_at_b = WarGraph::new(schema, EngineLimits::default());
+        split_at_b.add_node(
+            NodeId::new("a-b"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        split_at_b.add_node(NodeId::new("c"), NodeSpec::Function(StdArc::new(NoopNode)));
+        split_at_b.add_edge(EdgeSpec {
+            from: NodeId::new("a-b"),
+            to: NodeId::new("c"),
+            condition: None,
+        });
+        split_at_b.add_entry(NodeId::new("a-b"));
+
+        assert_ne!(split_at_a.fingerprint(), split_at_b.fingerprint());
     }
 
     #[test]

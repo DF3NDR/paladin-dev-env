@@ -149,19 +149,28 @@ impl std::fmt::Display for NodeId {
 /// specs and schema field names — deliberately NOT over prompts or models,
 /// which may be hot-swapped without changing run semantics (ENG-FR-14).
 ///
-/// Encoded as `v1:{blake3_hex}` (Phase 22 Task 1 decision, option-b): the
-/// `v1:` tag lets a future algorithm change emit `v2:` and be recognised
-/// rather than silently failing every stored thread's `resume` with
-/// `GraphMismatch`. See `.planning/phases/22-battlefield-state-superstep-engine/22-01-SUMMARY.md`
-/// for the decision record; the `v1:` tag is documented as part of the
-/// Waypoint payload format in MIGRATION.md §9.4 when that file lands (Plan
-/// 22-04).
+/// Encoded as `{GRAPH_FINGERPRINT_VERSION}:{blake3_hex}` (Phase 22 Task 1
+/// decision, option-b): the version tag lets a future algorithm change emit
+/// a new tag and be recognised rather than silently failing every stored
+/// thread's `resume` with `GraphMismatch`. See
+/// `.planning/phases/22-battlefield-state-superstep-engine/22-01-SUMMARY.md`
+/// for the decision record; the tag is documented as part of the Waypoint
+/// payload format in MIGRATION.md §9.4 when that file lands (Plan 22-04).
+///
+/// Bumped to `v2` (Phase 22.1 CR-01, D-17): `v1`'s canonical byte encoding
+/// (`WarGraph::fingerprint`, `paladin-battalion`) was delimiter-separated
+/// and unescaped, so two structurally different graphs could be crafted to
+/// hash identically whenever a `NodeId`/`FieldName` contained one of the
+/// separator bytes. `v2` uses a length-prefixed encoding with no delimiter
+/// collision; every `v1`-tagged fingerprint is now recognised as stale
+/// rather than silently reinterpreted.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct GraphFingerprint(String);
 
-/// Fingerprint algorithm/encoding version tag (Task 1 decision, option-b).
-pub const GRAPH_FINGERPRINT_VERSION: &str = "v1";
+/// Fingerprint algorithm/encoding version tag (Task 1 decision, option-b;
+/// bumped to `v2` by Phase 22.1 CR-01 / D-17's collision-free re-encoding).
+pub const GRAPH_FINGERPRINT_VERSION: &str = "v2";
 
 impl GraphFingerprint {
     /// Compute a `GraphFingerprint` over a caller-supplied canonical byte
@@ -172,7 +181,7 @@ impl GraphFingerprint {
         Self(format!("{GRAPH_FINGERPRINT_VERSION}:{}", hash.to_hex()))
     }
 
-    /// Borrow the encoded fingerprint string (`"v1:{hex}"`).
+    /// Borrow the encoded fingerprint string (`"v2:{hex}"`).
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -551,7 +560,7 @@ mod tests {
         let a = GraphFingerprint::from_canonical_bytes(b"node:a|edge:none|schema:result");
         let b = GraphFingerprint::from_canonical_bytes(b"node:a|edge:none|schema:result");
         assert_eq!(a, b);
-        assert!(a.as_str().starts_with("v1:"));
+        assert!(a.as_str().starts_with("v2:"));
     }
 
     #[test]

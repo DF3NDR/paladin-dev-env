@@ -127,18 +127,23 @@ fn field(name: &str) -> FieldName {
 /// take its first turn unless seeded directly into the initial Vanguard as a
 /// graph entry.
 ///
-/// (Phase 22 Plan 16 audit, `22-deferred-items.md`: every self-loop test in
-/// this workspace that actually EXECUTES its looping node uses this same
-/// graph-entry arrangement, confirmed by direct enumeration rather than
-/// assumed. One exception exists --
+/// (Phase 22 Plan 16 audit, `22-deferred-items.md`: `loop_gate`'s
+/// standalone self-loop-as-entry arrangement is the same readiness-dodge
+/// pattern the Plan 16 audit enumerated by direct reading, not assumed,
+/// across the fixtures that actually EXECUTE their looping node. One
+/// exception exists --
 /// `engine::graph::tests::validate_accepts_self_loop_on_node_reachable_from_entry_by_normal_edge`
 /// constructs the harder self-loop-plus-upstream-edge shape this comment
 /// describes, but only calls `validate`, never runs the graph -- so it never
 /// reaches `is_ready` and needs no entry-point workaround. The general
 /// "self-looping AND fed by a separate upstream edge" case this comment
-/// warns about is exactly what Plan 16's ignored reproduction test,
-/// `engine::superstep::tests::self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`,
-/// demonstrates is a live, unfixed defect distinct from BUG-02.)
+/// warns about is BUG-03's cycle-bootstrap starvation defect, registered
+/// and fixed in Phase 22.1 by `Frontier::starved_release`
+/// (`engine::superstep`) -- see the now-passing regression tests
+/// `engine::superstep::tests::self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`
+/// and
+/// `engine::superstep::tests::cycle_node_fed_from_outside_the_cycle_takes_its_first_turn`,
+/// not an ignored reproduction.)
 ///
 /// An uninterrupted run takes exactly `LOOP_BOUND + 5` supersteps:
 /// `loop_gate` x `LOOP_BOUND` (supersteps 1..=LOOP_BOUND), then researcher,

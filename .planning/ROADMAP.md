@@ -343,7 +343,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 23-04-PLAN.md — per-node `DirectiveParser` for Paladin nodes: `PlainOutput` default, `StructuredDirective` envelope, `on_parse_error` (CF-02)
+- [x] 23-04-PLAN.md — per-node `DirectiveParser` for Paladin nodes: `PlainOutput` default, `StructuredDirective` envelope, `on_parse_error` (CF-02)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

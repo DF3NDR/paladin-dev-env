@@ -334,7 +334,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 23-01-PLAN.md — BUG-01 fail-closed on both paths (registered `EdgeConditionEvaluator`, RED-then-GREEN) + M-B-01 worked example (CF-01)
+- [x] 23-01-PLAN.md — BUG-01 fail-closed on both paths (registered `EdgeConditionEvaluator`, RED-then-GREEN) + M-B-01 worked example (CF-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

@@ -1339,7 +1339,7 @@ mod tests {
         assert_eq!(node.run_count(), 4);
     }
 
-    /// **Known defect, distinct from BUG-02** (Phase 22 Plan 16 audit,
+    /// **BUG-03** (found during the Phase 22 Plan 16 fixture audit,
     /// `22-deferred-items.md`): a node that is BOTH self-looping AND fed by
     /// a separate upstream edge can never take its first turn, and the run
     /// still reports `Completed` regardless.
@@ -1362,26 +1362,16 @@ mod tests {
     /// statically reachable from `entry` over a declared edge, so
     /// `validate` accepts this graph cleanly (asserted below) -- the defect
     /// is a property of `Frontier::is_ready`'s RUNTIME readiness
-    /// computation, not of static reachability. Fixing it would be a
-    /// change to the readiness rule itself (a self-edge should not gate a
-    /// node's first execution, e.g. by seeding it as trivially resolved
-    /// until the node's first run) -- a frontier semantics change, not a
-    /// validation change, and out of scope for this plan.
+    /// computation, not of static reachability.
     ///
-    /// Ignored so the default workspace run stays green; run on demand with
-    /// `cargo test -p paladin-battalion --lib engine::superstep --
-    /// --ignored` to reproduce. The assertions below describe CORRECT
-    /// behaviour (per the plan: never invert a reproduction to match
-    /// today's wrong behaviour) and fail today because `b` never runs.
+    /// Fixed by ENG-FR-06a's starvation-release fallback pass in
+    /// `compute_next_vanguard` (D-03): when neither the normal-ready pass
+    /// nor the defer-release pass has anything to schedule, a node blocked
+    /// only by its own not-yet-resolved incoming edges from live,
+    /// never-executed sources is released anyway, rather than the run
+    /// silently reporting `Completed` over it. The assertions below
+    /// describe correct behaviour and, with the fix landed, now pass.
     #[tokio::test]
-    #[ignore = "known defect (Phase 22 Plan 16 audit): a node that is both \
-                self-looping and fed by an upstream edge can never take its \
-                first turn -- Frontier::is_ready treats its own unresolved \
-                self-edge as blocking, and the run reports Completed with \
-                the node's run_count() at 0. Distinct from BUG-02 (fixed in \
-                Plan 22-15): this node IS statically reachable, so \
-                WarGraph::validate accepts the graph cleanly. See \
-                22-deferred-items.md for the recommended disposition."]
     async fn self_looping_node_fed_by_upstream_edge_can_never_take_first_turn() {
         let s = schema(vec![
             FieldSpec::new(field("entry_ran"), DispatchRule::LastWrite, None, false),
@@ -1446,6 +1436,105 @@ mod tests {
             "the run must not report Completed while b's run_count() is 0 -- that is the exact \
              truthful-outcome violation BUG-02 fixed by a different mechanism; got outcome = \
              {outcome:?}, b.run_count() = {}",
+            b_node.run_count()
+        );
+    }
+
+    /// **BUG-03**, general (non-self-loop) shape: `entry -> a`, `a -> b`,
+    /// `b -> a`. `a` is fed both from outside the cycle (`entry`) and from
+    /// inside it (`b`'s back-edge) -- the same starvation shape as the
+    /// self-loop reproduction above, but with two distinct nodes forming
+    /// the cycle rather than one node looping to itself. `a`'s incoming
+    /// edges are `entry -> a` (fires once `entry` runs) and `b -> a`
+    /// (stays `Pending` until `b` runs -- but `b` cannot run until `a`
+    /// runs first, since `a -> b` is `a`'s only outgoing edge into the
+    /// cycle). Before the fix, `is_ready(a)` requires both edges resolved,
+    /// so `a` never runs and neither does `b`; the run still reports
+    /// `Completed`.
+    ///
+    /// Only `entry` is a declared entry node -- `a` and `b` are ordinary
+    /// non-entry nodes, reachable only through the cycle's own edges.
+    #[tokio::test]
+    async fn cycle_node_fed_from_outside_the_cycle_takes_its_first_turn() {
+        let s = schema(vec![
+            FieldSpec::new(field("entry_ran"), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(field("status"), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let entry_id = NodeId::new("entry");
+        let a_id = NodeId::new("a");
+        let b_id = NodeId::new("b");
+
+        let entry_node = CountingFunctionNode::fixed(field("entry_ran"), serde_json::json!(true));
+        let a_node = CountingFunctionNode::fixed(field("status"), serde_json::json!("a-ran"));
+        // Bounded so a correct engine terminates: "looping" on b's first
+        // run, "done" from its second run on -- exactly the self-loop
+        // reproduction's bounding style above, applied to the back-edge
+        // `b -> a` instead of a self-edge.
+        let b_node = CountingFunctionNode::new(|run_index, _state| {
+            let status = if run_index == 0 { "looping" } else { "done" };
+            let mut d = paladin_core::platform::container::battlefield::StateDelta::new();
+            d.set(field("status"), status).unwrap();
+            d
+        });
+
+        graph.add_node(entry_id.clone(), NodeSpec::Function(entry_node));
+        graph.add_node(a_id.clone(), NodeSpec::Function(a_node.clone()));
+        graph.add_node(b_id.clone(), NodeSpec::Function(b_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: entry_id.clone(),
+            to: a_id.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: a_id.clone(),
+            to: b_id.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: b_id.clone(),
+            to: a_id.clone(),
+            condition: Some(EdgeCondition::Contains("looping".to_string())),
+        });
+        graph.add_entry(entry_id);
+
+        // The shape is statically legal: `a` is reachable from `entry` over
+        // a declared edge (`validate_accepts_two_node_cycle` in `graph.rs`
+        // already proves the two-node-cycle topology validates on its own).
+        assert!(
+            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            "a is reachable from entry over a static edge, so validate() must accept this \
+             graph -- the defect this test reproduces is a runtime readiness problem, not a \
+             reachability one"
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("cycle-bootstrap-general-repro").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        // Correct behaviour: both `a` and `b` must execute at least once
+        // before the run can complete -- both are legitimately reachable
+        // and the cycle is bounded to resolve after two round trips.
+        assert!(
+            a_node.run_count() >= 1,
+            "a must execute at least once -- it is reachable from entry and the cycle it \
+             anchors is bounded to terminate, so a correct engine schedules it; got \
+             run_count() == 0, meaning Frontier::is_ready never placed it in any Vanguard"
+        );
+        assert!(
+            b_node.run_count() >= 1,
+            "b must execute at least once -- it is reachable from a and the cycle is bounded \
+             to terminate, so a correct engine schedules it; got run_count() == 0"
+        );
+        // Correct behaviour: the run must never report Completed while a
+        // reachable, never-executed node's visit count is zero.
+        assert!(
+            !(matches!(outcome, RunOutcome::Completed { .. })
+                && (a_node.run_count() == 0 || b_node.run_count() == 0)),
+            "the run must not report Completed while a or b's run_count() is 0 -- that is the \
+             exact truthful-outcome violation BUG-02 fixed by a different mechanism; got \
+             outcome = {outcome:?}, a.run_count() = {}, b.run_count() = {}",
+            a_node.run_count(),
             b_node.run_count()
         );
     }

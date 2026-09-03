@@ -531,6 +531,28 @@ pub enum EngineError {
         /// Explains the rule and names the offenders.
         reason: String,
     },
+
+    /// `resume`/`resume_with_options` loaded a mid-muster progress
+    /// Waypoint (CF-FR-12, D-14) whose `MusterProgress.tasks` names a
+    /// `worker` the (possibly new, under `allow_graph_change`) graph no
+    /// longer declares, or declares but no longer registers as a worker
+    /// template. Never silently dropped -- mirrors
+    /// [`EngineError::VanguardNodeMissing`]'s "a resume that continued
+    /// without a node the caller expected to run would look like a
+    /// successful resume that quietly skipped work" rationale, applied to a
+    /// restored Muster's worker set.
+    #[error(
+        "resume mid-muster progress record (mustering node {node}) names a worker missing or \
+         not a worker template in the resume graph: {worker}"
+    )]
+    MusterProgressWorkerMissing {
+        /// The node whose `NextStep::Muster` produced the loaded progress
+        /// record.
+        node: NodeId,
+        /// The restored task's `worker`, absent from the resume graph or
+        /// no longer a worker template.
+        worker: NodeId,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -711,6 +733,7 @@ impl<W: WaypointPort> WarEngine<W> {
             BTreeMap::new(),
             None,
             None,
+            None,
             1,
             &self.paladin_port,
             &self.trace_dispatcher,
@@ -771,6 +794,20 @@ impl<W: WaypointPort> WarEngine<W> {
     /// dropped, and an edge the new graph adds starts `Pending` --
     /// unresolved, never mis-assigned a stale resolution from a
     /// same-source-or-target edge that used to occupy that identity.
+    ///
+    /// Mid-muster resume (CF-FR-12, D-14): when the loaded Waypoint carries
+    /// `muster_progress: Some(progress)`, this call re-enters that SAME
+    /// superstep (`latest.superstep`, never `+ 1`) dispatching only
+    /// `progress.unfinished_tasks()` -- the tasks whose `task_key` is absent
+    /// from `progress.completed` -- alongside the loaded Waypoint's ordinary
+    /// `vanguard`. Every restored task's `worker` is checked against the
+    /// (possibly new) graph first: an absent or no-longer-worker-template
+    /// `worker` fails with `EngineError::MusterProgressWorkerMissing`,
+    /// mirroring `VanguardNodeMissing`'s "never silently skip expected
+    /// work" rule. The superstep loop then merges every task's delta --
+    /// restored plus newly produced -- in `task_key` order exactly once, so
+    /// the resumed run reaches the same final Battlefield the uninterrupted
+    /// run would have.
     pub async fn resume_with_options(
         &self,
         graph: &WarGraph,
@@ -810,12 +847,40 @@ impl<W: WaypointPort> WarEngine<W> {
             }
         }
 
+        // --- CF-FR-12, D-14: a mid-muster progress Waypoint additionally
+        // names every unfinished task's `worker` -- checked against the
+        // (possibly new) graph before this call decides how to re-enter the
+        // superstep loop, mirroring the ordinary-vanguard check just above.
+        if let Some(progress) = &latest.muster_progress {
+            for task in &progress.tasks {
+                match graph.node(&task.worker) {
+                    Some(_) if graph.is_worker_template(&task.worker) => {}
+                    _ => {
+                        return Err(EngineError::MusterProgressWorkerMissing {
+                            node: progress.node.clone(),
+                            worker: task.worker.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
         let registry = self.dispatch_registry.resolver();
         graph.validate(registry, &self.edge_evaluators)?;
 
         self.trace_dispatcher.emit(TraceEvent::RunStarted {
             thread_id: thread.clone(),
         });
+        // --- CF-FR-12, D-14: a mid-muster progress Waypoint re-enters the
+        // SAME superstep it was written at (never `+ 1`, unlike an ordinary
+        // superstep-complete Waypoint) -- the muster's own dispatch
+        // superstep is not yet finished, so continuing it is "resuming
+        // superstep N", not "starting superstep N+1".
+        let resume_superstep = if latest.muster_progress.is_some() {
+            latest.superstep
+        } else {
+            latest.superstep + 1
+        };
         let outcome = superstep::run(
             self.waypoint_port.as_ref(),
             self.durability,
@@ -828,8 +893,9 @@ impl<W: WaypointPort> WarEngine<W> {
             latest.vanguard,
             latest.visit_counts,
             Some(latest.frontier),
+            latest.muster_progress,
             Some(latest.waypoint_id),
-            latest.superstep + 1,
+            resume_superstep,
             &self.paladin_port,
             &self.trace_dispatcher,
             &self.interceptors,

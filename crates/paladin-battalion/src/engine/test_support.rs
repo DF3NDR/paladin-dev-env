@@ -27,12 +27,14 @@ use crate::engine::node::{NodeContext, NodeError, StateNode};
 
 /// A [`WaypointPort`] test double wrapping an [`InMemoryWaypointStore`],
 /// additionally recording every `save` call and able to fail its NEXT save
-/// on demand (one-shot; auto-resets after firing).
+/// on demand (one-shot; auto-resets after firing), or a specific Nth save
+/// call (also one-shot).
 #[derive(Default)]
 pub struct RecordingWaypointStore {
     inner: InMemoryWaypointStore,
     save_calls: AtomicUsize,
     fail_next_save: AtomicBool,
+    fail_at_call: AtomicUsize,
 }
 
 impl RecordingWaypointStore {
@@ -46,6 +48,17 @@ impl RecordingWaypointStore {
     /// only that one call fails.
     pub fn fail_next_save(&self) {
         self.fail_next_save.store(true, Ordering::SeqCst);
+    }
+
+    /// Arrange for the `n`th `save` call (1-indexed, across the whole
+    /// store's lifetime) to fail with `WaypointError::Backend`. Fires
+    /// exactly once, at that specific call, then never again -- lets a test
+    /// target a save deep inside a multi-write superstep (e.g. the second
+    /// of several progress-Waypoint writes inside a Muster superstep,
+    /// CF-FR-12/D-14) without needing to synchronize with the run in
+    /// progress.
+    pub fn fail_nth_save(&self, n: usize) {
+        self.fail_at_call.store(n, Ordering::SeqCst);
     }
 
     /// How many times `save` has been called (successful or not).
@@ -74,12 +87,23 @@ impl RecordingWaypointStore {
 #[async_trait]
 impl WaypointPort for RecordingWaypointStore {
     async fn save(&self, wp: &Waypoint) -> Result<(), WaypointError> {
-        self.save_calls.fetch_add(1, Ordering::SeqCst);
-        if self.fail_next_save.swap(false, Ordering::SeqCst) {
+        let call_number = self.save_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        let fail_next = self.fail_next_save.swap(false, Ordering::SeqCst);
+        // Only clear `fail_at_call` when THIS call is the targeted one --
+        // reading it on every call would otherwise disarm the target before
+        // it is ever reached.
+        let fail_nth = self.fail_at_call.load(Ordering::SeqCst) == call_number
+            && call_number != 0
+            && self
+                .fail_at_call
+                .compare_exchange(call_number, 0, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok();
+        if fail_next || fail_nth {
             return Err(WaypointError::Backend {
-                source: Box::<dyn std::error::Error + Send + Sync>::from(
-                    "simulated save failure (RecordingWaypointStore::fail_next_save)",
-                ),
+                source: Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                    "simulated save failure (RecordingWaypointStore::fail_next_save / \
+                     fail_nth_save, call #{call_number})"
+                )),
             });
         }
         self.inner.save(wp).await

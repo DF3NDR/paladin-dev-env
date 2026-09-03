@@ -52,6 +52,7 @@ pub fn sample_waypoint_at(
         schema_version: Waypoint::current_schema_version(),
         visit_counts: std::collections::BTreeMap::new(),
         frontier: FrontierSnapshot::default(),
+        muster_progress: None,
     }
 }
 

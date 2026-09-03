@@ -34,15 +34,15 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
-    Battlefield, CustomDispatchResolver, FieldName,
+    Battlefield, CustomDispatchResolver, FieldName, StateDelta,
 };
 use paladin_core::platform::container::directive::{
     Directive, MusterContext, MusterTask, NextStep,
 };
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::waypoint::{
-    FrontierEdgeState, FrontierSnapshot, NodeExecutionRecord, NodeId, NodeOutcomeKind, ThreadId,
-    Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
+    FrontierEdgeState, FrontierSnapshot, MusterProgress, NodeExecutionRecord, NodeId,
+    NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
 };
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::trace_sink_port::TraceEvent;
@@ -282,6 +282,15 @@ fn validate_muster_tasks(
 /// recorded before an earlier interruption, so a resumed run schedules the
 /// same nodes in the same supersteps as an uninterrupted one.
 ///
+/// `initial_muster_progress` (CF-FR-12, D-14) seeds a mid-muster resume:
+/// `None` for a fresh `start` or an ordinary (non-muster) `resume`,
+/// `Some(progress)` when the loaded Waypoint carried a `muster_progress`
+/// record. When `Some`, this call re-enters the SAME superstep the record
+/// was written at (never `superstep_number + 1`) and dispatches only
+/// `progress.unfinished_tasks()` -- the caller (`WarEngine::resume_with_options`)
+/// is responsible for passing `superstep_number` equal to the loaded
+/// Waypoint's own `superstep`, not one past it, to match.
+///
 /// `trace` receives every `TraceEvent` this loop's own steps produce
 /// (`SuperstepStarted`, `NodeStarted`/`NodeFinished`, `DeltaMerged`,
 /// `WaypointSaved`) -- `RunStarted`/`RunFinished` bracket the call from
@@ -308,6 +317,7 @@ pub(crate) async fn run<W: WaypointPort>(
     mut vanguard: Vec<NodeId>,
     mut visit_counts: BTreeMap<NodeId, u32>,
     frontier_snapshot: Option<FrontierSnapshot>,
+    initial_muster_progress: Option<MusterProgress>,
     mut parent_waypoint_id: Option<WaypointId>,
     mut superstep_number: u64,
     paladin_port: &Arc<dyn PaladinPort>,
@@ -315,6 +325,18 @@ pub(crate) async fn run<W: WaypointPort>(
     interceptors: &[Arc<dyn NodeInterceptor>],
     cancellation: &Option<CancellationToken>,
 ) -> Result<RunOutcome, EngineError> {
+    // --- CF-FR-12, D-14: seed a mid-muster resume. `pending_muster` (the
+    // FULL validated task list plus the mustering node) and
+    // `muster_carryover` (completed tasks' unmerged deltas, restored from
+    // the loaded progress Waypoint) both come from `initial_muster_progress`
+    // when it is `Some`; both stay empty for a fresh `start` or an ordinary
+    // (non-muster) `resume`, exactly as before this field existed.
+    let mut pending_muster: Option<(NodeId, Vec<MusterTask>)> = initial_muster_progress
+        .as_ref()
+        .map(|progress| (progress.node.clone(), progress.tasks.clone()));
+    let mut muster_carryover: Option<BTreeMap<String, StateDelta>> =
+        initial_muster_progress.map(|progress| progress.completed);
+
     // The entry-vanguard-empty case: nothing to run, ever. Persist exactly
     // one Waypoint and return immediately (ENG-FR-01 step 7's "Vanguard
     // empty -> Completed" path, reached without executing a superstep at
@@ -324,7 +346,13 @@ pub(crate) async fn run<W: WaypointPort>(
     // `starved_at_completion` guards (an empty entry Vanguard over a graph
     // whose Frontier disagrees is the same invariant violation as the
     // mid-loop site, just caught before any superstep ever ran).
-    if vanguard.is_empty() {
+    //
+    // CF-03/CF-FR-12: a pending Muster (fresh from the previous superstep,
+    // or restored from a mid-muster resume) always means there IS more work
+    // -- a worker template has no static incoming edge, so `vanguard` alone
+    // being empty here never means the run is done while a Muster is
+    // pending.
+    if vanguard.is_empty() && pending_muster.is_none() {
         let entry_frontier = Frontier::for_run(graph, &frontier_snapshot);
         let starved = starved_at_completion(graph, &entry_frontier);
         if !starved.is_empty() {
@@ -356,6 +384,7 @@ pub(crate) async fn run<W: WaypointPort>(
                 },
                 visit_counts,
                 entry_frontier.snapshot(graph),
+                None,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -375,6 +404,7 @@ pub(crate) async fn run<W: WaypointPort>(
             WaypointStatus::Completed,
             visit_counts,
             entry_frontier.snapshot(graph),
+            None,
         );
         persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
         return Ok(RunOutcome::Completed {
@@ -385,12 +415,18 @@ pub(crate) async fn run<W: WaypointPort>(
 
     let mut frontier = Frontier::for_run(graph, &frontier_snapshot);
 
-    // --- CF-03: a validated `NextStep::Muster(tasks)` accepted in
-    // superstep N is carried here, purely as a loop-local value (never
-    // persisted -- Plan 23-06 owns mid-muster crash survival, D-14), and
-    // dispatched as synthetic vanguard entries at the top of superstep
-    // N+1's iteration below.
-    let mut pending_muster: Option<Vec<MusterTask>> = None;
+    // --- CF-03 / CF-FR-12: a validated `NextStep::Muster(tasks)` accepted
+    // in superstep N is carried in `pending_muster` (declared above, before
+    // the entry-vanguard-empty check, so a mid-muster resume's restored
+    // value survives that check too), purely as a loop-local value never
+    // itself persisted -- what IS persisted, incrementally, is each
+    // completed task's delta into a progress Waypoint's own
+    // `MusterProgress` (D-14). Dispatched as synthetic vanguard entries at
+    // the top of this (for a resume) or the next (for a fresh Muster
+    // acceptance) iteration below. `muster_carryover` pairs with
+    // `pending_muster`: `Some(completed)` ONLY on the one iteration that
+    // dispatches a mid-muster resume's restored task set (`.take()`n so it
+    // is never mistakenly reapplied to a later, unrelated Muster).
 
     loop {
         // --- ENG-FR-23: cancellation is observed only at a superstep
@@ -416,6 +452,7 @@ pub(crate) async fn run<W: WaypointPort>(
                 WaypointStatus::Halted,
                 visit_counts,
                 frontier.snapshot(graph),
+                None,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Halted {
@@ -444,6 +481,7 @@ pub(crate) async fn run<W: WaypointPort>(
                 },
                 visit_counts,
                 frontier.snapshot(graph),
+                None,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -483,6 +521,7 @@ pub(crate) async fn run<W: WaypointPort>(
                 },
                 visit_counts,
                 frontier.snapshot(graph),
+                None,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -497,32 +536,49 @@ pub(crate) async fn run<W: WaypointPort>(
             superstep: superstep_number,
         });
 
-        // --- CF-03: this superstep's dispatch entries = every ordinary
-        // `vanguard` node (`muster: None`) PLUS every task from a Muster
-        // accepted in the PREVIOUS superstep (`pending_muster`, taken here
+        // --- CF-03 / CF-FR-12: this superstep's dispatch entries = every
+        // ordinary `vanguard` node (`muster: None`) PLUS every UNFINISHED
+        // task from a Muster accepted in the PREVIOUS superstep, or
+        // restored from a mid-muster resume (`pending_muster`, taken here
         // so it dispatches exactly once), each a synthetic entry sharing
         // its `worker` template's `NodeId` with `NodeContext.muster` set
         // (RESEARCH.md Pitfall 3: the SAME snapshot/spawn/semaphore
         // machinery ordinary vanguard nodes use, never a bespoke "run these
-        // N tasks" loop). `pending_muster`'s tasks already arrive sorted by
-        // `task_key` (`validate_muster_tasks`); pushed in that order here,
-        // the existing sequential-await-per-handle plus the stable
-        // `deltas.sort_by(NodeId)` below preserve that order into the
-        // final merge with no bespoke reordering. Muster dispatch entries
-        // are NOT subject to `visit_counts`/`max_node_visits` (that bound
-        // governs a node's own re-entry into the vanguard across
-        // supersteps, e.g. a Goto refine loop; a Muster's fan-out width is
-        // bounded separately by `EngineLimits::max_muster_tasks`).
-        let muster_dispatch: Vec<(NodeId, Option<MusterContext>)> = pending_muster
-            .take()
-            .into_iter()
-            .flatten()
+        // N tasks" loop). `muster_tasks` (the FULL task list) already
+        // arrives sorted by `task_key` (`validate_muster_tasks`, or a
+        // restored `MusterProgress.tasks`); `muster_carryover_this_round`
+        // (D-14) removes any task already completed before an interruption
+        // -- non-empty only for the one round that dispatches a mid-muster
+        // resume's restored task set -- so `dispatch_tasks` never re-runs an
+        // already-completed task. Filtering preserves `muster_tasks`'
+        // relative task_key order; pushed in that order here, the existing
+        // sequential-await-per-handle plus the stable `deltas.sort_by(NodeId)`
+        // below preserve it into the final merge with no bespoke reordering.
+        // Muster dispatch entries are NOT subject to
+        // `visit_counts`/`max_node_visits` (that bound governs a node's own
+        // re-entry into the vanguard across supersteps, e.g. a Goto refine
+        // loop; a Muster's fan-out width is bounded separately by
+        // `EngineLimits::max_muster_tasks`).
+        let (muster_node, muster_tasks): (Option<NodeId>, Vec<MusterTask>) =
+            match pending_muster.take() {
+                Some((node, tasks)) => (Some(node), tasks),
+                None => (None, Vec::new()),
+            };
+        let muster_carryover_this_round: BTreeMap<String, StateDelta> =
+            muster_carryover.take().unwrap_or_default();
+        let dispatch_tasks: Vec<MusterTask> = muster_tasks
+            .iter()
+            .filter(|task| !muster_carryover_this_round.contains_key(&task.task_key))
+            .cloned()
+            .collect();
+        let muster_dispatch: Vec<(NodeId, Option<MusterContext>)> = dispatch_tasks
+            .iter()
             .map(|task| {
                 (
-                    task.worker,
+                    task.worker.clone(),
                     Some(MusterContext {
-                        payload: task.payload,
-                        task_key: task.task_key,
+                        payload: task.payload.clone(),
+                        task_key: task.task_key.clone(),
                     }),
                 )
             })
@@ -532,6 +588,12 @@ pub(crate) async fn run<W: WaypointPort>(
             .map(|id| (id.clone(), None))
             .chain(muster_dispatch)
             .collect();
+        // --- CF-FR-12, D-14: running accumulator of this muster's
+        // completed-but-unmerged task deltas -- seeded with the restored
+        // carryover (if any), grown as each dispatched task in
+        // `dispatch_tasks` succeeds below, and written onto every progress
+        // Waypoint this round produces.
+        let mut muster_completed_so_far: BTreeMap<String, StateDelta> = muster_carryover_this_round;
 
         // --- ENG-FR-05/ENG-NFR-02: exactly one Arc-shared read snapshot
         // for the whole superstep, cloned once.
@@ -680,8 +742,10 @@ pub(crate) async fn run<W: WaypointPort>(
         let mut notfiring_nodes: HashSet<NodeId> = HashSet::new();
         let mut end_requested: Option<NodeId> = None;
         let mut routing_failure: Option<(NodeId, EngineError)> = None;
-        let mut mustered: Option<Vec<MusterTask>> = None;
-        for handle in handles {
+        let mut mustered: Option<(NodeId, Vec<MusterTask>)> = None;
+        for (entry, handle) in dispatch_entries.iter().zip(handles) {
+            let (_entry_node_id, entry_muster_ctx) = entry;
+            let is_muster_task = entry_muster_ctx.is_some();
             let (node_id, started_at, duration_ms, paladin_id, token_count, outcome) = handle
                 .await
                 .map_err(|e| EngineError::Node(NodeError(format!("task join error: {e}"))))?;
@@ -724,7 +788,7 @@ pub(crate) async fn run<W: WaypointPort>(
                             ) {
                                 Ok(sorted_tasks) => {
                                     if mustered.is_none() {
-                                        mustered = Some(sorted_tasks);
+                                        mustered = Some((node_id.clone(), sorted_tasks));
                                     }
                                 }
                                 Err(err) => {
@@ -768,7 +832,54 @@ pub(crate) async fn run<W: WaypointPort>(
                         outcome: outcome_kind,
                         attempt: 1,
                     });
-                    deltas.push((node_id, delta));
+
+                    if is_muster_task {
+                        // --- CF-FR-12, D-14: a mustered worker task's own
+                        // completion. Its delta is NOT pushed into `deltas`
+                        // here -- that would merge it into `battlefield`
+                        // before every sibling task has resolved, breaking
+                        // ENG-FR-05 snapshot isolation. Instead: record it
+                        // into the running `muster_completed_so_far` map and
+                        // persist a progress Waypoint AT THIS SUPERSTEP's
+                        // index, `status: Running`, whose `battlefield` is
+                        // still the unmerged superstep-start snapshot --
+                        // one progress Waypoint per completed task, bounded
+                        // by `max_muster_tasks` (`validate_muster_tasks`
+                        // already bounded `dispatch_tasks`' length before
+                        // any task started). The consolidated,
+                        // task_key-ordered fold into `deltas` happens once,
+                        // after this whole loop (see below).
+                        if let Some(task_key) =
+                            entry_muster_ctx.as_ref().map(|ctx| ctx.task_key.clone())
+                        {
+                            muster_completed_so_far.insert(task_key, delta);
+                        }
+                        if let Some(node) = &muster_node {
+                            let progress = MusterProgress {
+                                node: node.clone(),
+                                tasks: muster_tasks.clone(),
+                                completed: muster_completed_so_far.clone(),
+                            };
+                            let progress_waypoint = build_waypoint(
+                                &thread,
+                                parent_waypoint_id,
+                                superstep_number,
+                                graph,
+                                &battlefield,
+                                vanguard.clone(),
+                                completed_records.clone(),
+                                WaypointStatus::Running,
+                                visit_counts.clone(),
+                                frontier.snapshot(graph),
+                                Some(progress),
+                            );
+                            persist_waypoint(waypoint_port, durability, &progress_waypoint, trace)
+                                .await?;
+                            parent_waypoint_id = Some(progress_waypoint.waypoint_id);
+                        }
+                    } else {
+                        deltas.push((node_id, delta));
+                    }
                 }
                 NodeRunOutcome::Skipped(reason) => {
                     completed_records.push(NodeExecutionRecord {
@@ -825,6 +936,7 @@ pub(crate) async fn run<W: WaypointPort>(
                 },
                 visit_counts,
                 frontier.snapshot(graph),
+                None,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -854,12 +966,34 @@ pub(crate) async fn run<W: WaypointPort>(
                 },
                 visit_counts,
                 frontier.snapshot(graph),
+                None,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
                 error,
                 waypoint: Some(waypoint.waypoint_id),
             });
+        }
+
+        // --- CF-FR-12, D-14: fold this muster's completed-task deltas
+        // (restored carryover + everything newly dispatched this round)
+        // into `deltas`, in `muster_tasks`' own (task_key-sorted) order --
+        // NOT in per-handle completion/await order -- so that siblings
+        // sharing one worker template's `NodeId` retain their correct
+        // relative task_key order after `deltas.sort_by(NodeId)`'s stable
+        // sort below (CF-FR-11). This is the ONE point a Muster's deltas
+        // enter the merge: never incrementally as each task completes
+        // (that would break snapshot isolation for still-running siblings
+        // and make a resumed run double-merge), exactly once here, whether
+        // every task ran fresh this round or some were restored from a
+        // mid-muster resume.
+        // `muster_tasks` is non-empty only when `muster_node` is `Some`
+        // (they are always constructed together above); iterating it
+        // unconditionally is a no-op when no Muster was in play this round.
+        for task in &muster_tasks {
+            if let Some(delta) = muster_completed_so_far.get(&task.task_key) {
+                deltas.push((task.worker.clone(), delta.clone()));
+            }
         }
 
         // --- Merge, only after every node in this superstep has completed
@@ -894,6 +1028,7 @@ pub(crate) async fn run<W: WaypointPort>(
                     },
                     visit_counts,
                     frontier.snapshot(graph),
+                    None,
                 );
                 persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
                 return Ok(RunOutcome::Failed {
@@ -980,6 +1115,7 @@ pub(crate) async fn run<W: WaypointPort>(
                 WaypointStatus::Completed,
                 visit_counts.clone(),
                 frontier.snapshot(graph),
+                None,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Completed {
@@ -1031,6 +1167,7 @@ pub(crate) async fn run<W: WaypointPort>(
                     },
                     visit_counts.clone(),
                     frontier.snapshot(graph),
+                    None,
                 );
                 persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
                 return Ok(RunOutcome::Failed {
@@ -1057,6 +1194,7 @@ pub(crate) async fn run<W: WaypointPort>(
             status,
             visit_counts.clone(),
             frontier.snapshot(graph),
+            None,
         );
         persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
 
@@ -1702,6 +1840,7 @@ fn build_waypoint(
     status: WaypointStatus,
     visit_counts: BTreeMap<NodeId, u32>,
     frontier: FrontierSnapshot,
+    muster_progress: Option<MusterProgress>,
 ) -> Waypoint {
     Waypoint {
         thread_id: thread.clone(),
@@ -1717,6 +1856,7 @@ fn build_waypoint(
         schema_version: Waypoint::current_schema_version(),
         visit_counts,
         frontier,
+        muster_progress,
     }
 }
 
@@ -1821,6 +1961,7 @@ mod tests {
             BTreeMap::new(),
             None,
             None,
+            None,
             1,
             &no_paladin_port(),
             &no_trace(),
@@ -1855,6 +1996,7 @@ mod tests {
             .unwrap(),
             graph.entry().to_vec(),
             BTreeMap::new(),
+            None,
             None,
             None,
             1,
@@ -2639,6 +2781,7 @@ mod tests {
             Vec::new(),
             BTreeMap::new(),
             Some(snapshot),
+            None,
             None,
             2,
             &no_paladin_port(),
@@ -4194,6 +4337,7 @@ mod tests {
             BTreeMap::new(),
             None,
             None,
+            None,
             1,
             &no_paladin_port(),
             &no_trace(),
@@ -4223,6 +4367,7 @@ mod tests {
             Battlefield::new(graph.schema().clone()),
             graph.entry().to_vec(),
             BTreeMap::new(),
+            None,
             None,
             None,
             1,
@@ -4280,6 +4425,7 @@ mod tests {
             Battlefield::new(graph.schema().clone()),
             graph.entry().to_vec(),
             BTreeMap::new(),
+            None,
             None,
             None,
             1,

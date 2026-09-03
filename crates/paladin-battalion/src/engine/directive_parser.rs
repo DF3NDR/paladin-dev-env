@@ -307,6 +307,56 @@ mod tests {
         assert_eq!(OnParseError::default(), OnParseError::FailRun);
     }
 
+    // --- Task 2 (red): pinning D-11's extraction order and the
+    // deny_unknown_fields rejection not yet added to `Envelope`.
+
+    #[test]
+    fn empty_output_resolves_through_on_parse_error() {
+        let fail_run = DirectiveParser::StructuredDirective {
+            on_parse_error: OnParseError::FailRun,
+        };
+        assert!(fail_run.parse("", &field("out")).is_err());
+
+        let fallback = DirectiveParser::StructuredDirective {
+            on_parse_error: OnParseError::FallbackPlain,
+        };
+        let directive = fallback.parse("", &field("out")).unwrap();
+        assert_eq!(
+            directive.delta.values.get(&field("out")),
+            Some(&serde_json::json!(""))
+        );
+    }
+
+    #[test]
+    fn output_with_two_fenced_json_blocks_uses_the_first() {
+        let parser = DirectiveParser::StructuredDirective {
+            on_parse_error: OnParseError::FailRun,
+        };
+        let output = "first:\n```json\n\
+                       {\"delta\": {\"which\": \"first\"}, \"next\": \"edges\"}\n\
+                       ```\nsecond:\n```json\n\
+                       {\"delta\": {\"which\": \"second\"}, \"next\": \"edges\"}\n\
+                       ```\n";
+        let directive = parser.parse(output, &field("out")).unwrap();
+        assert_eq!(
+            directive.delta.values.get(&field("which")),
+            Some(&serde_json::json!("first")),
+            "the FIRST fenced json block must win, never the last"
+        );
+    }
+
+    #[test]
+    fn envelope_with_an_unknown_top_level_key_is_rejected() {
+        let parser = DirectiveParser::StructuredDirective {
+            on_parse_error: OnParseError::FailRun,
+        };
+        let output = r#"{"delta": {"verdict": "approved"}, "next": "edges", "bogus": true}"#;
+        assert!(
+            parser.parse(output, &field("out")).is_err(),
+            "an envelope carrying a key other than delta/next must fail, not be ignored"
+        );
+    }
+
     #[test]
     fn structured_directive_goto_parses_into_next_goto() {
         let parser = DirectiveParser::StructuredDirective {

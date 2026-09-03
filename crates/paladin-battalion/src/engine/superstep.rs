@@ -1941,6 +1941,82 @@ mod tests {
         }
     }
 
+    // --- Task 2 (red/green): the FailRun/FallbackPlain end-to-end proof and
+    // the no-partial-merge guarantee, asserted in full through superstep::run.
+
+    #[tokio::test]
+    async fn structured_directive_parse_failure_does_not_merge_a_partial_delta() {
+        let ok_field = field("ok_field");
+        let s = schema(vec![FieldSpec::new(
+            ok_field.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let succeeding = NodeId::new("succeeding");
+        let failing = NodeId::new("failing");
+        graph.add_node(
+            succeeding.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("succeeding"),
+                InputMapping::new("go"),
+                field("unused_out"),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        graph.add_node(
+            failing.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("failing"),
+                InputMapping::new("go"),
+                field("unused_out2"),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        graph.add_entry(succeeding);
+        graph.add_entry(failing);
+
+        let recording = Arc::new(RecordingPaladinPort::new());
+        recording.set_output(
+            "succeeding",
+            r#"{"delta": {"ok_field": "should-not-appear"}, "next": "edges"}"#,
+        );
+        recording.set_output("failing", "definitely not json");
+        let port: Arc<dyn PaladinPort> = recording;
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("partial-delta-no-merge").unwrap();
+        let outcome = run_with_port(&graph, thread.clone(), &store, &port).await;
+
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Failed {
+                    error: EngineError::DirectiveParseFailed { .. },
+                    ..
+                }
+            ),
+            "expected Failed(DirectiveParseFailed), got {outcome:?}"
+        );
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        let failed_waypoint = waypoints
+            .iter()
+            .find(|w| matches!(w.status, WaypointStatus::Failed { .. }))
+            .expect("a Failed waypoint was persisted");
+        assert_eq!(
+            failed_waypoint.battlefield.get::<String>(&ok_field).unwrap(),
+            None,
+            "no delta may be merged when a sibling node's directive fails to parse -- the \
+             whole superstep's deltas are discarded together, before merge"
+        );
+    }
+
     // --- CF-02: Directive-driven Goto -----------------------------------
 
     #[tokio::test]

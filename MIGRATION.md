@@ -19,7 +19,54 @@
 
 **Worked examples** (owed alongside the rows above, per D-08's rule that a pending item is acceptable only in later-epic-owned content):
 
-- M-B-01: TBD — owner CF-01, Phase 23. A concrete before/after `EdgeCondition::Custom` configuration diff lands when CF-01 ships the registered-evaluator mechanism.
+- M-B-01: **landed (CF-01, Phase 23).** A v0.9 campaign edge like
+
+  ```rust
+  // v0.9 — this edge silently fired on EVERY run, regardless of what
+  // `analyzer` actually output, because `EdgeCondition::Custom` had no
+  // registration mechanism and evaluated as always-true (BUG-01).
+  campaign.add_edge(CampaignEdge::new(
+      analyzer_id,
+      escalate_id,
+      EdgeCondition::Custom("is_urgent".to_string()),
+  ))?;
+  let service = CampaignExecutionService::new(paladin_port);
+  ```
+
+  now fails loudly at validation unless an evaluator is registered for
+  `"is_urgent"`. The v0.10 fix registers one on the service (the same
+  `CampaignEdge`/`EdgeCondition::Custom` construction is unchanged):
+
+  ```rust
+  use paladin_battalion::edge_evaluator::{EdgeConditionEvaluator, EdgeContext, EdgeEvaluatorError};
+
+  struct IsUrgent;
+
+  #[async_trait::async_trait]
+  impl EdgeConditionEvaluator for IsUrgent {
+      async fn evaluate(&self, output: &str, _ctx: &EdgeContext<'_>) -> Result<bool, EdgeEvaluatorError> {
+          Ok(output.to_lowercase().contains("urgent"))
+      }
+  }
+
+  let service = CampaignExecutionService::new(paladin_port)
+      .with_evaluator("is_urgent", Arc::new(IsUrgent));
+  ```
+
+  The `WarEngine` path registers the same evaluator via
+  `WarEngine::with_edge_evaluator("is_urgent", Arc::new(IsUrgent))`.
+  A user who does not want an evaluator at all can instead replace the
+  condition with `EdgeCondition::Contains("urgent".to_string())`,
+  `EdgeCondition::Regex(...)`, or `EdgeCondition::Always` — no registry
+  entry needed for any of the three. Skipping both routes produces this
+  exact validation error, transcribed verbatim from the shipped code
+  (`BattalionError::InvalidGraph`'s `Display`, legacy path; the
+  `WarEngine` path's `EngineError::UnregisteredEdgeCondition` names the
+  same offending set):
+
+  ```text
+  Invalid graph: unregistered custom edge condition(s): is_urgent -- register with CampaignExecutionService::with_evaluator before calling execute
+  ```
 - M-B-02: TBD — owner HITL-04, Phase 24. A concrete `terminationGracePeriodSeconds` before/after example lands when HITL-04 ships graceful shutdown.
 - M-B-03: TBD — owner RT-07, Phase 26. A concrete `tool_error_mode` before/after example lands when RT-07 ships the tool-loop default and records its rationale here.
 - M-B-04: no worked example owed — this phase (ENG-08) both introduces the behavior and documents it in full above.
@@ -37,9 +84,9 @@ Columns: **Crate · Type/Trait · Change · Mitigation (`#[non_exhaustive]` / de
 | `paladin-ports` | LLM request struct (the type passed to `LlmPort::generate`) | new optional field `response_format` | TBD — owner RT-05, Phase 26 | TBD — owner RT-05, Phase 26 | RT-FR-17 |
 | `paladin-ports` / `paladin-memory` | Garrison entry type | new field `is_summary: bool` (+ SQLite column) | TBD — owner RT-03, Phase 26 | TBD — owner RT-03, Phase 26 | RT-FR-12 |
 | `paladin-ports` | `PaladinResult` | new metadata (serving provider from fallback) | TBD — owner FT-05, Phase 25 | TBD — owner FT-05, Phase 25 | FT-FR-17 |
-| `paladin-core` | `EdgeCondition` | *no variant change*, but semantics of `Custom` change (see M-B-01) | TBD — owner CF-01, Phase 23 | TBD — owner CF-01, Phase 23 | CF-FR-01 |
+| `paladin-core` | `EdgeCondition` | *no variant change*, but semantics of `Custom` change (see M-B-01) | none required — no signature or variant change; the semantic change is M-B-01 | N | CF-FR-01 |
 | `paladin-battalion` | `Commander` / `CommanderBuilder` | new `StrategySelection` option (additive method; verify no public field added) | TBD — owner CF-05, Phase 23 | TBD — owner CF-05, Phase 23 | CF-FR-19 |
-| `paladin-battalion` | `CampaignExecutionService` | new evaluator-registry builder method (constructor unchanged) | TBD — owner CF-01, Phase 23 | TBD — owner CF-01, Phase 23 | CF-FR-01 |
+| `paladin-battalion` | `CampaignExecutionService` | new evaluator-registry builder method (constructor unchanged) | additive builder method (`with_evaluator`); `new(paladin_port)` unchanged | N | CF-FR-01 |
 | `paladin-core` | `Waypoint` (new in 0.10; listed for completeness) | `AwaitingInput` carries `Vec<ParleyRequest>` — settle before first release, no compat needed | N/A — new type introduced in v0.10, not a pre-existing public API. Stub landed in Plan 22-01; payload finalized by HITL-01, Phase 24. | N/A (new type; X-10 governs only pre-existing types) | HITL-FR-03 |
 
 **Note on Plan 22-01 (this phase's tracer plan):** Plan 22-01 added the `battlefield`, `battlefield_error`, and `waypoint` modules to `paladin-core`, `waypoint_port` to `paladin-ports`, the `waypoint` adapter module to `paladin-storage`, and the `engine` module to `paladin-battalion`. All of these are **new** modules/types — none of Plan 22-01's changes touched a *pre-existing* public type's signature (its "modified" files were module-registration edits, e.g. adding a `mod battlefield;` line). **This is a deliberate zero**, not an omission: no register row is added for Plan 22-01.
@@ -91,4 +138,4 @@ TBD — no item is marked `#[deprecated]` by this phase. Entries are added here 
 
 ## 9.8 Upgrade checklist
 
-TBD — a full ordered, copy-pasteable operator checklist (back up state dirs/DBs → apply migrations → update config → adjust termination grace → register custom evaluators if used → deploy → verify with `paladin-cli` health/graph-validate commands) is written once the subsystems it references exist to check against (migrations land with ENG-05; termination grace lands with HITL-04, Phase 24; custom evaluator registration lands with CF-01, Phase 23). Finalized at closeout, owner SHIP-01, Phase 29.
+TBD — a full ordered, copy-pasteable operator checklist (back up state dirs/DBs → apply migrations → update config → adjust termination grace → register custom evaluators if used → deploy → verify with `paladin-cli` health/graph-validate commands) is written once the subsystems it references exist to check against (migrations land with ENG-05; termination grace lands with HITL-04, Phase 24; custom evaluator registration **landed with CF-01, Phase 23** — `CampaignExecutionService::with_evaluator` on the legacy path, `WarEngine::with_edge_evaluator` on the `WarEngine` path, see M-B-01). Finalized at closeout, owner SHIP-01, Phase 29.

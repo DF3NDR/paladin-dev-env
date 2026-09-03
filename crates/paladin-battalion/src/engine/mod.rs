@@ -56,6 +56,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
+use crate::edge_evaluator::{EdgeConditionEvaluator, EdgeEvaluatorRegistry};
 #[cfg(test)]
 use paladin_core::platform::container::battlefield::CustomDispatchResolver;
 use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
@@ -350,6 +351,38 @@ pub enum EngineError {
         /// (ENG-FR-06a).
         reason: String,
     },
+
+    /// `WarGraph::validate` found one or more edges carrying
+    /// `EdgeCondition::Custom(name)` with no evaluator registered via
+    /// [`WarEngine::with_edge_evaluator`] (BUG-01, CF-FR-02). Checked
+    /// before any node executes, replacing the pre-fix behavior of
+    /// silently evaluating an unregistered `Custom` condition as `true`.
+    /// Carries EVERY offending name, sorted and deduplicated, mirroring
+    /// [`EngineError::UnreachableNode`]'s "report the whole problem at
+    /// once" discipline.
+    #[error("unregistered custom edge condition(s): {}", names.join(", "))]
+    UnregisteredEdgeCondition {
+        /// Every unregistered `EdgeCondition::Custom` name, sorted and
+        /// deduplicated.
+        names: Vec<String>,
+    },
+
+    /// A registered `EdgeConditionEvaluator::evaluate` call returned `Err`
+    /// while resolving an `EdgeCondition::Custom` edge (BUG-01, CF-FR-03).
+    /// Never treated as a default branch: the run fails, naming the edge
+    /// and the evaluator that failed.
+    #[error("edge evaluator '{evaluator}' failed for edge {from} -> {to}: {source}")]
+    EdgeEvaluatorFailed {
+        /// The edge's source node.
+        from: NodeId,
+        /// The edge's target node.
+        to: NodeId,
+        /// The registered evaluator's name.
+        evaluator: String,
+        /// The evaluator's own structured error.
+        #[source]
+        source: crate::edge_evaluator::EdgeEvaluatorError,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -383,6 +416,12 @@ pub struct WarEngine<W: WaypointPort> {
     /// `WarGraph::validate` and `Battlefield::merge` as a
     /// `CustomDispatchResolver` at `start`.
     dispatch_registry: DispatchRegistry,
+    /// Registered `EdgeCondition::Custom` evaluators (BUG-01, CF-01). Empty
+    /// by default: a v0.9 configuration with no `Custom` edges boots
+    /// identically (D-26). Never referenced from `paladin-core` (X-01) --
+    /// handed to `WarGraph::validate` and `superstep::run` as an
+    /// `EdgeEvaluatorRegistry` at `start`/`resume`.
+    edge_evaluators: EdgeEvaluatorRegistry,
     /// The bounded, drop-oldest `TraceSink` forwarder (ENG-FR-21). Always
     /// present -- constructed with no sink (`TraceDispatcher::new(None)`) by
     /// default, in which case `emit` is a no-op and no channel is
@@ -410,6 +449,7 @@ impl<W: WaypointPort> WarEngine<W> {
             durability: WaypointDurability::Strict,
             parallelism: None,
             dispatch_registry: DispatchRegistry::new(),
+            edge_evaluators: EdgeEvaluatorRegistry::new(),
             trace_dispatcher: Arc::new(TraceDispatcher::new(None)),
             interceptors: Vec::new(),
             cancellation_token: None,
@@ -442,6 +482,23 @@ impl<W: WaypointPort> WarEngine<W> {
     ) -> Result<Self, EngineError> {
         self.dispatch_registry.register(name, rule)?;
         Ok(self)
+    }
+
+    /// Register a named evaluator for `EdgeCondition::Custom(name)` edges
+    /// (BUG-01, CF-01), shaped like [`WarEngine::with_dispatch_rule`] but
+    /// infallible -- unlike a `DispatchRule::Custom` name, an
+    /// `EdgeCondition::Custom` name collides with no built-in
+    /// `EdgeCondition` variant, so there is no reserved-name failure mode.
+    /// An unregistered `Custom` name still fails [`WarGraph::validate`]
+    /// (and therefore [`WarEngine::start`]/[`WarEngine::resume`]) before any
+    /// node executes; it is never silently treated as always-true.
+    pub fn with_edge_evaluator(
+        mut self,
+        name: impl Into<String>,
+        evaluator: Arc<dyn EdgeConditionEvaluator>,
+    ) -> Self {
+        self.edge_evaluators.register(name, evaluator);
+        self
     }
 
     /// Attach `sink` as this engine's `TraceSink` (ENG-FR-21). Replaces any
@@ -485,7 +542,7 @@ impl<W: WaypointPort> WarEngine<W> {
         initial: StateDelta,
     ) -> Result<RunOutcome, EngineError> {
         let registry = self.dispatch_registry.resolver();
-        graph.validate(registry)?;
+        graph.validate(registry, &self.edge_evaluators)?;
 
         let battlefield = Battlefield::initialize(graph.schema().clone(), &initial)?;
         battlefield.validate_required()?;
@@ -498,6 +555,7 @@ impl<W: WaypointPort> WarEngine<W> {
             self.durability,
             self.parallelism,
             registry,
+            &self.edge_evaluators,
             graph,
             thread.clone(),
             battlefield,
@@ -605,7 +663,7 @@ impl<W: WaypointPort> WarEngine<W> {
         }
 
         let registry = self.dispatch_registry.resolver();
-        graph.validate(registry)?;
+        graph.validate(registry, &self.edge_evaluators)?;
 
         self.trace_dispatcher.emit(TraceEvent::RunStarted {
             thread_id: thread.clone(),
@@ -615,6 +673,7 @@ impl<W: WaypointPort> WarEngine<W> {
             self.durability,
             self.parallelism,
             registry,
+            &self.edge_evaluators,
             graph,
             thread.clone(),
             latest.battlefield,
@@ -2637,6 +2696,169 @@ mod tests {
                 },
             ) => assert_eq!(state_a, state_b),
             other => panic!("expected both runs to complete, got {other:?}"),
+        }
+    }
+
+    // --- BUG-01 / CF-01: registered-evaluator edge conditions, engine
+    // runtime half (`WarEngine::start`). These reproduce BUG-01 on the
+    // `WarEngine` path and are committed FAILING (RED) before the fix
+    // (GREEN) lands in the same task, per D-05 / traceability protocol
+    // step 4.
+
+    /// Evaluator returning a fixed verdict every call.
+    struct FixedVerdictEvaluator(bool);
+
+    #[async_trait]
+    impl EdgeConditionEvaluator for FixedVerdictEvaluator {
+        async fn evaluate(
+            &self,
+            _output: &str,
+            _ctx: &crate::edge_evaluator::EdgeContext<'_>,
+        ) -> Result<bool, crate::edge_evaluator::EdgeEvaluatorError> {
+            Ok(self.0)
+        }
+    }
+
+    /// Evaluator that always fails.
+    struct FailingEdgeEvaluator;
+
+    #[async_trait]
+    impl EdgeConditionEvaluator for FailingEdgeEvaluator {
+        async fn evaluate(
+            &self,
+            _output: &str,
+            _ctx: &crate::edge_evaluator::EdgeContext<'_>,
+        ) -> Result<bool, crate::edge_evaluator::EdgeEvaluatorError> {
+            Err(crate::edge_evaluator::EdgeEvaluatorError::Evaluation {
+                evaluator: "is_urgent".to_string(),
+                reason: "simulated failure".to_string(),
+            })
+        }
+    }
+
+    /// A two-node graph, `source` (entry) -> `target`, connected by one
+    /// edge carrying `EdgeCondition::Custom("is_urgent")`. `source` and
+    /// `target` write to DIFFERENT fields, so `target`'s field staying
+    /// unset is unambiguous evidence `target` never ran (rather than
+    /// merely being masked by `source`'s own write).
+    fn source_target_custom_edge_graph() -> (WarGraph, NodeId, NodeId) {
+        let source_field = FieldName::new("source_marker").unwrap();
+        let target_field = FieldName::new("target_marker").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(source_field.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(target_field.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let source = NodeId::new("source");
+        let target = NodeId::new("target");
+        graph.add_node(
+            source.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                source_field,
+                serde_json::json!("n/a"),
+            )),
+        );
+        graph.add_node(
+            target.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                target_field,
+                serde_json::json!("ran"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: source.clone(),
+            to: target.clone(),
+            condition: Some(EdgeCondition::Custom("is_urgent".to_string())),
+        });
+        graph.add_entry(source.clone());
+        (graph, source, target)
+    }
+
+    #[tokio::test]
+    async fn registered_engine_evaluator_true_and_false_route_correctly() {
+        let target_field = FieldName::new("target_marker").unwrap();
+
+        let (graph_true, ..) = source_target_custom_edge_graph();
+        let engine_true = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_edge_evaluator("is_urgent", Arc::new(FixedVerdictEvaluator(true)));
+        let outcome_true = engine_true
+            .start(
+                &graph_true,
+                ThreadId::new("engine-evaluator-true").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        match outcome_true {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&target_field).unwrap(),
+                    Some("ran".to_string()),
+                    "true verdict should route to and execute the target"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        let (graph_false, ..) = source_target_custom_edge_graph();
+        let engine_false = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_edge_evaluator("is_urgent", Arc::new(FixedVerdictEvaluator(false)));
+        let outcome_false = engine_false
+            .start(
+                &graph_false,
+                ThreadId::new("engine-evaluator-false").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        match outcome_false {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&target_field).unwrap(),
+                    None,
+                    "false verdict should not route to or execute the target"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn engine_evaluator_error_fails_the_run_naming_edge_and_evaluator() {
+        let (graph, source, target) = source_target_custom_edge_graph();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_edge_evaluator("is_urgent", Arc::new(FailingEdgeEvaluator));
+
+        let err = engine
+            .start(
+                &graph,
+                ThreadId::new("engine-evaluator-error").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap_err();
+
+        match err {
+            EngineError::EdgeEvaluatorFailed {
+                from,
+                to,
+                evaluator,
+                ..
+            } => {
+                assert_eq!(from, source);
+                assert_eq!(to, target);
+                assert_eq!(evaluator, "is_urgent");
+            }
+            other => panic!("expected EdgeEvaluatorFailed, got {other:?}"),
         }
     }
 }

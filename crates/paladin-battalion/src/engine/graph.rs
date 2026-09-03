@@ -22,6 +22,7 @@ use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, canonical_edge_condition,
 };
 
+use crate::edge_evaluator::EdgeEvaluatorRegistry;
 use crate::engine::EngineError;
 use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::StateNode;
@@ -287,7 +288,11 @@ impl WarGraph {
     /// defence-in-depth against a shape the ENG-FR-06a starvation release
     /// still cannot schedule, never masking a more fundamental structural
     /// error above it.
-    pub fn validate(&self, custom_dispatch: &CustomDispatchResolver) -> Result<(), EngineError> {
+    pub fn validate(
+        &self,
+        custom_dispatch: &CustomDispatchResolver,
+        edge_evaluators: &EdgeEvaluatorRegistry,
+    ) -> Result<(), EngineError> {
         if self.limits.max_supersteps == 0 {
             return Err(EngineError::InvalidLimits {
                 reason: "max_supersteps must be at least 1".to_string(),
@@ -324,8 +329,43 @@ impl WarGraph {
             }
         }
 
+        self.validate_edge_evaluators(edge_evaluators)?;
+
         self.validate_eligible_set()?;
         self.validate_schedulable()
+    }
+
+    /// BUG-01 / CF-FR-02's fail-closed clause: every declared edge carrying
+    /// `EdgeCondition::Custom(name)` must resolve to a registered evaluator
+    /// in `edge_evaluators`, checked here -- before any node executes --
+    /// so an unregistered custom condition never silently defaults to
+    /// always-true (the defect this clause replaces, `BUG-01`). Collects
+    /// EVERY offending name, sorted and deduplicated, rather than failing
+    /// on the first, matching [`WarGraph::validate_eligible_set`]'s
+    /// "report the whole problem at once" discipline. Checked before the
+    /// eligible-set clause since an unregistered custom condition is a
+    /// more specific, more actionable problem than a reachability failure
+    /// the same graph might also have.
+    fn validate_edge_evaluators(
+        &self,
+        edge_evaluators: &EdgeEvaluatorRegistry,
+    ) -> Result<(), EngineError> {
+        let mut names: Vec<String> = self
+            .edges
+            .iter()
+            .filter_map(|edge| match &edge.condition {
+                Some(EdgeCondition::Custom(name)) if !edge_evaluators.contains(name) => {
+                    Some(name.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        if names.is_empty() {
+            return Ok(());
+        }
+        Err(EngineError::UnregisteredEdgeCondition { names })
     }
 
     /// ENG-FR-02a / BUG-02's eligible-set reachability check, factored out
@@ -688,7 +728,14 @@ mod tests {
         });
         graph.add_entry(NodeId::new("a"));
 
-        assert!(graph.validate(&CustomDispatchResolver::new()).is_ok());
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
     }
 
     #[test]
@@ -716,7 +763,14 @@ mod tests {
         });
         graph.add_entry(NodeId::new("a"));
 
-        assert!(graph.validate(&CustomDispatchResolver::new()).is_ok());
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
     }
 
     #[test]
@@ -729,7 +783,10 @@ mod tests {
             },
         );
         assert!(matches!(
-            graph.validate(&CustomDispatchResolver::new()),
+            graph.validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new()
+            ),
             Err(EngineError::InvalidLimits { .. })
         ));
     }
@@ -744,7 +801,10 @@ mod tests {
             },
         );
         assert!(matches!(
-            graph.validate(&CustomDispatchResolver::new()),
+            graph.validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new()
+            ),
             Err(EngineError::InvalidLimits { .. })
         ));
     }
@@ -758,7 +818,14 @@ mod tests {
                 ..EngineLimits::default()
             },
         );
-        assert!(graph.validate(&CustomDispatchResolver::new()).is_ok());
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
     }
 
     #[test]
@@ -770,7 +837,12 @@ mod tests {
             to: NodeId::new("b"),
             condition: None,
         });
-        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
         assert!(matches!(err, EngineError::UnknownNode(id) if id == NodeId::new("ghost")));
     }
 
@@ -783,7 +855,12 @@ mod tests {
             to: NodeId::new("ghost"),
             condition: None,
         });
-        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
         assert!(matches!(err, EngineError::UnknownNode(id) if id == NodeId::new("ghost")));
     }
 
@@ -792,7 +869,12 @@ mod tests {
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
         graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
         graph.add_entry(NodeId::new("ghost"));
-        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
         assert!(matches!(err, EngineError::UnknownNode(id) if id == NodeId::new("ghost")));
     }
 
@@ -808,7 +890,12 @@ mod tests {
         graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
         graph.add_entry(NodeId::new("a"));
 
-        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
         match err {
             EngineError::Battlefield(BattlefieldError::CustomDispatchNotRegistered { name }) => {
                 assert_eq!(name, "merge_scores");
@@ -835,7 +922,11 @@ mod tests {
             StdArc::new(|_c: &serde_json::Value, d: &serde_json::Value| Ok(d.clone())),
         );
 
-        assert!(graph.validate(&registry).is_ok());
+        assert!(
+            graph
+                .validate(&registry, &EdgeEvaluatorRegistry::new())
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1218,6 +1309,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
             graph,
             ThreadId::new("reachability-regression").unwrap(),
             Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap(),
@@ -1253,7 +1345,12 @@ mod tests {
         });
         graph.add_entry(NodeId::new("entry"));
 
-        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
         match err {
             EngineError::UnreachableNode { nodes, reason } => {
                 assert_eq!(nodes, vec![NodeId::new("stranded")]);
@@ -1285,7 +1382,12 @@ mod tests {
         }
         graph.add_entry(NodeId::new("entry"));
 
-        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
         match err {
             EngineError::UnreachableNode { nodes, reason } => {
                 assert_eq!(
@@ -1335,7 +1437,14 @@ mod tests {
         });
         graph.add_entry(NodeId::new("entry"));
 
-        assert!(graph.validate(&CustomDispatchResolver::new()).is_ok());
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
 
         let outcome = run_to_completion(&graph).await;
         assert!(matches!(outcome, RunOutcome::Completed { .. }));
@@ -1362,7 +1471,14 @@ mod tests {
         graph.mark_dynamic_target(NodeId::new("jump-target"));
 
         // No edge at all into "jump-target" -- the marker alone is enough.
-        assert!(graph.validate(&CustomDispatchResolver::new()).is_ok());
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
 
         let outcome = run_to_completion(&graph).await;
         assert!(matches!(outcome, RunOutcome::Completed { .. }));
@@ -1407,7 +1523,12 @@ mod tests {
         graph.add_entry(NodeId::new("a"));
 
         assert!(
-            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok(),
             "self-loops remain legal on entry nodes -- the check rejects strandedness, not loops"
         );
 
@@ -1448,7 +1569,14 @@ mod tests {
         });
         graph.add_entry(NodeId::new("a"));
 
-        assert!(graph.validate(&CustomDispatchResolver::new()).is_ok());
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1457,7 +1585,12 @@ mod tests {
         graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
         // No add_entry call at all.
 
-        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
         match err {
             EngineError::UnreachableNode { nodes, reason } => {
                 assert_eq!(nodes, vec![NodeId::new("a")]);
@@ -1484,7 +1617,12 @@ mod tests {
         );
         graph.add_entry(NodeId::new("entry"));
 
-        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
         match err {
             EngineError::UnreachableNode { nodes, .. } => {
                 assert_eq!(nodes, vec![NodeId::new("isolated")]);
@@ -1518,7 +1656,10 @@ mod tests {
         graph.add_entry(NodeId::new("entry"));
 
         assert!(matches!(
-            graph.validate(&CustomDispatchResolver::new()),
+            graph.validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new()
+            ),
             Err(EngineError::InvalidLimits { .. })
         ));
     }
@@ -1546,7 +1687,12 @@ mod tests {
         });
         graph.add_entry(NodeId::new("entry"));
 
-        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
         assert!(matches!(err, EngineError::UnknownNode(id) if id == NodeId::new("ghost")));
     }
 
@@ -1574,7 +1720,12 @@ mod tests {
         });
         graph.add_entry(NodeId::new("entry"));
 
-        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
         match err {
             EngineError::Battlefield(BattlefieldError::CustomDispatchNotRegistered { name }) => {
                 assert_eq!(name, "merge_scores");
@@ -1624,7 +1775,12 @@ mod tests {
 
         assert!(graph.unschedulable_unfed_nodes().is_empty());
         assert!(
-            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok(),
             "a cycle fed from entry must validate cleanly -- it is schedulable via the \
              starvation release"
         );
@@ -1723,10 +1879,116 @@ mod tests {
         });
         graph.add_entry(NodeId::new("entry"));
 
-        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
         assert!(
             matches!(err, EngineError::UnreachableNode { .. }),
             "expected UnreachableNode (eligible-set clause runs first), got {err:?}"
+        );
+    }
+
+    // --- BUG-01 / CF-01: registered-evaluator edge conditions, engine
+    // validation half. These reproduce BUG-01 on the `WarEngine` path and
+    // are committed FAILING (RED) before the fix (GREEN) lands in the same
+    // task, per D-05 / traceability protocol step 4.
+
+    #[test]
+    fn unregistered_custom_edge_condition_fails_graph_validation() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("a"),
+            to: NodeId::new("b"),
+            condition: Some(EdgeCondition::Custom("is_urgent".to_string())),
+        });
+        graph.add_entry(NodeId::new("a"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        match err {
+            EngineError::UnregisteredEdgeCondition { names } => {
+                assert_eq!(names, vec!["is_urgent".to_string()]);
+            }
+            other => panic!("expected UnregisteredEdgeCondition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_unregistered_custom_name_is_listed_sorted_and_deduped() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("c"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("a"),
+            to: NodeId::new("b"),
+            condition: Some(EdgeCondition::Custom("zeta".to_string())),
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("a"),
+            to: NodeId::new("c"),
+            condition: Some(EdgeCondition::Custom("alpha".to_string())),
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("b"),
+            to: NodeId::new("c"),
+            condition: Some(EdgeCondition::Custom("alpha".to_string())),
+        });
+        graph.add_entry(NodeId::new("a"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        match err {
+            EngineError::UnregisteredEdgeCondition { names } => {
+                assert_eq!(names, vec!["alpha".to_string(), "zeta".to_string()]);
+            }
+            other => panic!("expected UnregisteredEdgeCondition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_registered_custom_edge_condition() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("a"),
+            to: NodeId::new("b"),
+            condition: Some(EdgeCondition::Custom("is_urgent".to_string())),
+        });
+        graph.add_entry(NodeId::new("a"));
+
+        struct AlwaysTrue;
+        #[async_trait::async_trait]
+        impl crate::edge_evaluator::EdgeConditionEvaluator for AlwaysTrue {
+            async fn evaluate(
+                &self,
+                _output: &str,
+                _ctx: &crate::edge_evaluator::EdgeContext<'_>,
+            ) -> Result<bool, crate::edge_evaluator::EdgeEvaluatorError> {
+                Ok(true)
+            }
+        }
+        let mut evaluators = EdgeEvaluatorRegistry::new();
+        evaluators.register("is_urgent", StdArc::new(AlwaysTrue));
+
+        assert!(
+            graph
+                .validate(&CustomDispatchResolver::new(), &evaluators)
+                .is_ok()
         );
     }
 }

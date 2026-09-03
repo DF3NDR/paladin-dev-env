@@ -45,6 +45,7 @@ use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::trace_sink_port::TraceEvent;
 use paladin_ports::output::waypoint_port::WaypointPort;
 
+use crate::edge_evaluator::EdgeEvaluatorRegistry;
 use crate::engine::graph::{NodeSpec, WarGraph};
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 use crate::engine::input_mapping::InputMapping;
@@ -174,6 +175,7 @@ pub(crate) async fn run<W: WaypointPort>(
     durability: WaypointDurability,
     parallelism: Option<usize>,
     registry: &CustomDispatchResolver,
+    evaluators: &EdgeEvaluatorRegistry,
     graph: &WarGraph,
     thread: ThreadId,
     mut battlefield: Battlefield,
@@ -583,7 +585,16 @@ pub(crate) async fn run<W: WaypointPort>(
         });
 
         for node_id in &ran {
-            frontier.record_execution(graph, node_id, superstep_number, &battlefield)?;
+            frontier
+                .record_execution(
+                    graph,
+                    node_id,
+                    superstep_number,
+                    &battlefield,
+                    evaluators,
+                    &thread,
+                )
+                .await?;
         }
         frontier.propagate_dead(graph);
         let next_vanguard = compute_next_vanguard(graph, &frontier);
@@ -821,12 +832,14 @@ impl Frontier {
     /// each as `Fired`/`NotFiring` at this superstep (ENG-FR-06). Re-running
     /// a node (a cycle or self-loop) overwrites its edges' previous state
     /// with the fresh evaluation.
-    fn record_execution(
+    async fn record_execution(
         &mut self,
         graph: &WarGraph,
         node: &NodeId,
         superstep: u64,
         battlefield: &Battlefield,
+        evaluators: &EdgeEvaluatorRegistry,
+        thread: &ThreadId,
     ) -> Result<(), EngineError> {
         self.last_executed.insert(node.clone(), superstep);
         for (idx, edge) in graph.edges().iter().enumerate() {
@@ -835,7 +848,19 @@ impl Frontier {
             }
             let fires = match &edge.condition {
                 None => true,
-                Some(condition) => evaluate_edge_condition(condition, battlefield)?,
+                Some(condition) => {
+                    evaluate_edge_condition(
+                        condition,
+                        battlefield,
+                        graph,
+                        evaluators,
+                        node,
+                        &edge.to,
+                        thread,
+                        superstep,
+                    )
+                    .await?
+                }
             };
             self.edge_state[idx] = if fires {
                 EdgeState::Fired(superstep)
@@ -1177,18 +1202,37 @@ fn starved_at_completion(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
     starved
 }
 
-/// Evaluate an [`EdgeCondition`] against the whole post-merge Battlefield,
-/// rendered as its canonical (schema-ordered, `BTreeMap`-backed) JSON
-/// string — deterministic by construction, since `Battlefield`'s own
+/// Evaluate an [`EdgeCondition`] for the edge `source -> target`, whose
+/// source node completed at `superstep` on `thread` (BUG-01, CF-01).
+///
+/// `Always`/`Contains`/`Regex` are evaluated against the whole post-merge
+/// Battlefield, rendered as its canonical (schema-ordered, `BTreeMap`-backed)
+/// JSON string — deterministic by construction, since `Battlefield`'s own
 /// `Serialize` impl already guarantees byte-identical output for
-/// byte-identical state (ENG-FR-08). This is the typed-state analog of
+/// byte-identical state (ENG-FR-08). `Custom(name)` looks `name` up in
+/// `evaluators` (a miss here is unreachable in practice --
+/// `WarGraph::validate` already rejected any unregistered `Custom` name
+/// before any node executed -- but is still resolved as a fail-closed
+/// internal error rather than any default branch, should that invariant
+/// ever be violated) and awaits its verdict, passing (D-02): the string
+/// value of `source`'s `output_field` (empty string if unset) when `source`
+/// is a `NodeSpec::Paladin` node, else the same canonical Battlefield JSON
+/// the `Contains`/`Regex` arms render. This is the typed-state analog of
 /// `campaign_service.rs::evaluate_edge_condition`, which matches against a
 /// single Paladin's string output; here there is no single canonical
-/// "output string" per node; the whole merged state is the sanest, most
-/// general substitute available at this phase.
-fn evaluate_edge_condition(
+/// "output string" per node in the general case, so the Paladin
+/// `output_field` value is used when one exists and the whole merged state
+/// is the sanest, most general substitute otherwise.
+#[allow(clippy::too_many_arguments)]
+async fn evaluate_edge_condition(
     condition: &EdgeCondition,
     battlefield: &Battlefield,
+    graph: &WarGraph,
+    evaluators: &EdgeEvaluatorRegistry,
+    source: &NodeId,
+    target: &NodeId,
+    thread: &ThreadId,
+    superstep: u64,
 ) -> Result<bool, EngineError> {
     match condition {
         EdgeCondition::Always => Ok(true),
@@ -1203,12 +1247,35 @@ fn evaluate_edge_condition(
             })?;
             Ok(regex.is_match(&rendered))
         }
-        EdgeCondition::Custom(_) => {
-            // Engine-level custom edge predicates (mirroring
-            // DispatchRule::Custom's registry) are a later plan's
-            // expansion; default to firing, matching
-            // campaign_service.rs's own placeholder for the same variant.
-            Ok(true)
+        EdgeCondition::Custom(name) => {
+            let evaluator = evaluators.get(name).cloned().ok_or_else(|| {
+                EngineError::Node(NodeError(format!(
+                    "internal error: edge evaluator '{name}' missing after graph validation"
+                )))
+            })?;
+            let output = match graph.node(source) {
+                Some(NodeSpec::Paladin { output_field, .. }) => battlefield
+                    .get::<String>(output_field)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
+                _ => serde_json::to_string(battlefield).unwrap_or_default(),
+            };
+            let ctx = crate::edge_evaluator::EdgeContext {
+                source,
+                target,
+                battlefield: Some(battlefield),
+                thread: Some(thread),
+                superstep: Some(superstep),
+            };
+            evaluator.evaluate(&output, &ctx).await.map_err(|err| {
+                EngineError::EdgeEvaluatorFailed {
+                    from: source.clone(),
+                    to: target.clone(),
+                    evaluator: name.clone(),
+                    source: err,
+                }
+            })
         }
     }
 }
@@ -1320,6 +1387,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
             graph,
             thread,
             Battlefield::initialize(
@@ -1529,6 +1597,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -1559,6 +1628,7 @@ mod tests {
             WaypointDurability::BestEffort,
             None,
             &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -1615,6 +1685,7 @@ mod tests {
             WaypointDurability::Strict,
             Some(2),
             &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -1837,7 +1908,12 @@ mod tests {
         // from `entry` over a declared edge, so eligible-set validation
         // accepts this graph. This is NOT a reachability problem.
         assert!(
-            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok(),
             "b is reachable from entry over a static edge, so validate() must accept this \
              graph -- the defect this test reproduces is a runtime readiness problem, not a \
              reachability one"
@@ -1929,7 +2005,12 @@ mod tests {
         // a declared edge (`validate_accepts_two_node_cycle` in `graph.rs`
         // already proves the two-node-cycle topology validates on its own).
         assert!(
-            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok(),
             "a is reachable from entry over a static edge, so validate() must accept this \
              graph -- the defect this test reproduces is a runtime readiness problem, not a \
              reachability one"
@@ -2083,7 +2164,12 @@ mod tests {
         graph.add_entry(entry_id);
 
         assert!(
-            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok(),
             "agg is reachable from entry over a static edge, so validate() must accept this \
              graph"
         );

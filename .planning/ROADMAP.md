@@ -338,8 +338,8 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 23-02-PLAN.md — `Directive`/`NextStep`/`MusterTask` in core, `StateNode::run` return change, Goto/End/Parley arms (CF-02)
-- [ ] 23-03-PLAN.md — `LlmDecisionEvaluator` (one call per decision per superstep) + Commander `StrategySelection::Semantic` (CF-05)
+- [x] 23-02-PLAN.md — `Directive`/`NextStep`/`MusterTask` in core, `StateNode::run` return change, Goto/End/Parley arms (CF-02)
+- [x] 23-03-PLAN.md — `LlmDecisionEvaluator` (one call per decision per superstep) + Commander `StrategySelection::Semantic` (CF-05)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

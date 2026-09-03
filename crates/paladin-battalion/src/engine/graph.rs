@@ -1328,9 +1328,11 @@ mod tests {
     }
 
     /// ENG-FR-14 exclusions: a Paladin prompt, a model name, an
-    /// `InputMapping` template and `EngineLimits` must NOT move the
+    /// `InputMapping` template and `EngineLimits` (including CF-03's
+    /// `max_muster_tasks`, RESEARCH Pitfall 5) must NOT move the
     /// fingerprint -- raising a limit or tuning a prompt to let a resumed
-    /// run continue is a legitimate operator action.
+    /// run continue is a legitimate operator action. Extended in place
+    /// (not a new sibling test) per Plan 23-05's Task 2.
     #[test]
     fn fingerprint_is_unchanged_by_prompt_model_input_mapping_and_limits() {
         let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
@@ -1342,6 +1344,7 @@ mod tests {
                 max_supersteps: 999,
                 max_node_visits: 999,
                 run_timeout: None,
+                max_muster_tasks: 999,
             },
             ..FingerprintFixtureSpec::default()
         });
@@ -1353,6 +1356,29 @@ mod tests {
         let limits = EngineLimits::default();
         assert_eq!(limits.max_supersteps, 50);
         assert_eq!(limits.max_node_visits, 25);
+    }
+
+    #[test]
+    fn engine_limits_default_max_muster_tasks_is_100() {
+        assert_eq!(EngineLimits::default().max_muster_tasks, 100);
+    }
+
+    #[test]
+    fn validate_rejects_zero_max_muster_tasks() {
+        let graph = WarGraph::new(
+            one_field_schema(),
+            EngineLimits {
+                max_muster_tasks: 0,
+                ..EngineLimits::default()
+            },
+        );
+        assert!(matches!(
+            graph.validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new()
+            ),
+            Err(EngineError::InvalidLimits { .. })
+        ));
     }
 
     // --- CF-03, D-12: worker-template well-formedness (Plan 23-05).
@@ -1382,6 +1408,114 @@ mod tests {
                 .is_ok()
         );
         assert!(graph.is_worker_template(&NodeId::new("worker")));
+    }
+
+    #[test]
+    fn worker_template_may_not_be_an_entry_node() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_worker_template(
+            NodeId::new("worker"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_entry(NodeId::new("worker"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(err, EngineError::WorkerTemplateIsEntry { .. }));
+    }
+
+    #[test]
+    fn worker_template_may_not_have_static_incoming_edges() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("planner"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_worker_template(
+            NodeId::new("worker"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("planner"),
+            to: NodeId::new("worker"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("planner"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::WorkerTemplateHasStaticIncomingEdge { .. }
+        ));
+    }
+
+    #[test]
+    fn worker_template_may_have_static_outgoing_edges() {
+        // A worker template MAY route to a defer-marked aggregator (D-17) --
+        // only its INCOMING side is restricted.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("planner"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_worker_template(
+            NodeId::new("worker"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_deferred_node(
+            NodeId::new("aggregator"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("worker"),
+            to: NodeId::new("aggregator"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("planner"));
+
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn schema_field_named_with_the_muster_prefix_is_rejected() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("muster.payload").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(NodeId::new("a"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        match err {
+            EngineError::MusterPrefixSchemaField { fields, .. } => {
+                assert_eq!(fields, vec!["muster.payload".to_string()]);
+            }
+            other => panic!("expected MusterPrefixSchemaField, got {other:?}"),
+        }
     }
 
     // --- BUG-02 / ENG-FR-02a: eligible-set reachability regression tests

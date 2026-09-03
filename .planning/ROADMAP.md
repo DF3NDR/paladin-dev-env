@@ -313,7 +313,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 22.1-07-PLAN.md — CI evidence re-capture on the final head after BUG-04 (dated section appended to 22.1-CI-EVIDENCE.md)
+- [x] 22.1-07-PLAN.md — CI evidence re-capture on the final head after BUG-04 (dated section appended to 22.1-CI-EVIDENCE.md)
 
 ### Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 

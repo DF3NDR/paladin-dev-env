@@ -266,6 +266,90 @@ pub enum EngineError {
         /// The restored vanguard node absent from the new graph.
         node: NodeId,
     },
+
+    /// `WarGraph::validate` found one or more declared nodes forming a
+    /// component that can never receive a fired edge from outside itself,
+    /// and that carries no declared runtime-entry marker (D-03, the guard
+    /// half of BUG-03's fix). ENG-FR-06a's starvation-release fallback pass
+    /// in `compute_next_vanguard` bootstraps a cycle's first execution ONLY
+    /// when at least one of its members is fed by an edge from a node
+    /// outside the cycle -- a component with no such external feed can
+    /// never take its first turn, no matter how many supersteps run.
+    /// Carries EVERY offending node in one error, in this graph's
+    /// registration order (`WarGraph::node_order`, never `HashMap` order),
+    /// mirroring [`EngineError::UnreachableNode`]'s "report the whole
+    /// problem at once" discipline.
+    ///
+    /// Exists so a graph shape the starvation release can never schedule
+    /// fails before any node executes, rather than running to a false
+    /// `Completed` -- the same class of silent lie BUG-02's eligible-set
+    /// check ended for static unreachability, applied here to a dynamic
+    /// scheduling limitation the eligible-set check cannot see (a cycle
+    /// fed only from within itself IS statically reachable from `entry`
+    /// once any one of its members is, so `UnreachableNode` never fires on
+    /// it).
+    ///
+    /// Checked LAST among `validate`'s clauses -- after
+    /// `validate_eligible_set` -- so for a graph with no declared
+    /// runtime-entry marker the eligible-set clause is what a caller sees
+    /// first; this clause is defence-in-depth against a future relaxation
+    /// of that clause or a misapplied [`graph::WarGraph::mark_dynamic_target`]
+    /// marker, not the primary guard for an ordinary stranded node.
+    ///
+    /// Distinct from [`EngineError::StarvedNodeAtCompletion`]: this is a
+    /// validate-time "this shape cannot be scheduled" failure, decided
+    /// before any node runs; that is a run-end "the engine's own invariant
+    /// broke" failure, decided after a run's own Vanguard emptied. The two
+    /// never share a message because they are different failure classes
+    /// caught at different times for different reasons.
+    #[error("unschedulable cycle in graph: {reason}")]
+    UnschedulableCycle {
+        /// Every node in an externally-unfed component, in the graph's
+        /// registration order (deterministic, never `HashMap` order).
+        nodes: Vec<NodeId>,
+        /// Explains the fixpoint rule and names the two ways to fix an
+        /// offending component: feed it from an entry-reachable node
+        /// outside the component, or mark its entry point
+        /// [`graph::WarGraph::mark_dynamic_target`].
+        reason: String,
+    },
+
+    /// `superstep::run`'s run-end truthful-outcome check (D-04) found a
+    /// non-dead, declared node still holding an unconsumed fired incoming
+    /// edge at the exact moment the run was about to report
+    /// `RunOutcome::Completed`. The engine refuses to report `Completed`
+    /// here: a node with work waiting that the scheduler never dispatched
+    /// means the scheduler's own invariant -- every node that can fire is
+    /// eventually run before `Completed` is reported -- broke, and BUG-03's
+    /// entire premise is that such breakage must be loud, not silent.
+    ///
+    /// This check is deliberately INDEPENDENT of `compute_next_vanguard`
+    /// and the ENG-FR-06a starvation-release pass it calls: it re-derives
+    /// its answer from the same `Frontier` state those passes already
+    /// updated, rather than re-invoking their logic, so a future regression
+    /// in the release mechanism cannot silently satisfy both the release
+    /// and this check at once. Carries EVERY such node in one error, in
+    /// this graph's registration order, mirroring
+    /// [`EngineError::UnreachableNode`] and
+    /// [`EngineError::UnschedulableCycle`].
+    ///
+    /// Distinct from [`EngineError::UnschedulableCycle`]: that is a
+    /// validate-time "this shape cannot be scheduled" failure, decided
+    /// before any node runs; this is a run-end "the engine's own invariant
+    /// broke" failure, decided after a run's own Vanguard emptied. The two
+    /// never share a message because they are different failure classes
+    /// caught at different times for different reasons.
+    #[error("starved node(s) at completion: {reason}")]
+    StarvedNodeAtCompletion {
+        /// Every node holding an unconsumed fired incoming edge at the
+        /// moment `Completed` was about to be reported, in the graph's
+        /// registration order (deterministic, never `HashMap` order).
+        nodes: Vec<NodeId>,
+        /// Names the invariant that broke: a node in the eligible set held
+        /// an unconsumed fired incoming edge while the Vanguard was empty
+        /// (ENG-FR-06a).
+        reason: String,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.

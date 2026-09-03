@@ -179,10 +179,53 @@ pub(crate) async fn run<W: WaypointPort>(
     cancellation: &Option<CancellationToken>,
 ) -> Result<RunOutcome, EngineError> {
     // The entry-vanguard-empty case: nothing to run, ever. Persist exactly
-    // one Completed Waypoint and return immediately (ENG-FR-01 step 7's
-    // "Vanguard empty -> Completed" path, reached without executing a
-    // superstep at all).
+    // one Waypoint and return immediately (ENG-FR-01 step 7's "Vanguard
+    // empty -> Completed" path, reached without executing a superstep at
+    // all) -- UNLESS D-04's run-end truthful-outcome check finds a node
+    // still holding an unconsumed fired incoming edge on a freshly built
+    // `Frontier`, in which case this is the OTHER decision site
+    // `starved_at_completion` guards (an empty entry Vanguard over a graph
+    // whose Frontier disagrees is the same invariant violation as the
+    // mid-loop site, just caught before any superstep ever ran).
     if vanguard.is_empty() {
+        let entry_frontier = Frontier::new(graph);
+        let starved = starved_at_completion(graph, &entry_frontier);
+        if !starved.is_empty() {
+            let names = starved
+                .iter()
+                .map(NodeId::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let error = EngineError::StarvedNodeAtCompletion {
+                nodes: starved.clone(),
+                reason: format!(
+                    "the entry Vanguard was empty but the eligible set still holds an \
+                     unconsumed fired incoming edge on: {names} -- a node in the eligible set \
+                     held an unconsumed fired incoming edge while the Vanguard was empty \
+                     (ENG-FR-06a)"
+                ),
+            };
+            let waypoint = build_waypoint(
+                &thread,
+                parent_waypoint_id,
+                0,
+                graph,
+                &battlefield,
+                Vec::new(),
+                Vec::new(),
+                WaypointStatus::Failed {
+                    error: error.to_string(),
+                    failed_node: starved[0].clone(),
+                },
+                visit_counts,
+            );
+            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+            return Ok(RunOutcome::Failed {
+                error,
+                waypoint: Some(waypoint.waypoint_id),
+            });
+        }
+
         let waypoint = build_waypoint(
             &thread,
             parent_waypoint_id,
@@ -513,6 +556,53 @@ pub(crate) async fn run<W: WaypointPort>(
         }
         frontier.propagate_dead(graph);
         let next_vanguard = compute_next_vanguard(graph, &frontier);
+
+        // D-04's run-end truthful-outcome check: an independent net over
+        // the SAME `frontier` `compute_next_vanguard` just consumed, run
+        // only when that computation says there is nothing left to
+        // schedule. A non-empty result here means the scheduler's own
+        // invariant broke -- some node in the eligible set still holds an
+        // unconsumed fired incoming edge -- so `Completed` is refused in
+        // favor of a typed, checkpointed failure naming every such node.
+        if next_vanguard.is_empty() {
+            let starved = starved_at_completion(graph, &frontier);
+            if !starved.is_empty() {
+                let names = starved
+                    .iter()
+                    .map(NodeId::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let error = EngineError::StarvedNodeAtCompletion {
+                    nodes: starved.clone(),
+                    reason: format!(
+                        "the computed next Vanguard was empty but the eligible set still \
+                         holds an unconsumed fired incoming edge on: {names} -- a node in the \
+                         eligible set held an unconsumed fired incoming edge while the \
+                         Vanguard was empty (ENG-FR-06a)"
+                    ),
+                };
+                let waypoint = build_waypoint(
+                    &thread,
+                    parent_waypoint_id,
+                    superstep_number,
+                    graph,
+                    &battlefield,
+                    next_vanguard.clone(),
+                    completed_records,
+                    WaypointStatus::Failed {
+                        error: error.to_string(),
+                        failed_node: starved[0].clone(),
+                    },
+                    visit_counts.clone(),
+                );
+                persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+                return Ok(RunOutcome::Failed {
+                    error,
+                    waypoint: Some(waypoint.waypoint_id),
+                });
+            }
+        }
+
         let status = if next_vanguard.is_empty() {
             WaypointStatus::Completed
         } else {
@@ -760,26 +850,42 @@ impl Frontier {
 }
 
 /// Compute the Vanguard for the superstep after the one `frontier` was just
-/// updated for (ENG-FR-06): every non-deferred node the `Frontier` reports
-/// executable, in `graph.edges()`'s stable insertion order (ENG-FR-04),
-/// de-duplicated. If no non-deferred node is executable, releases every
-/// `defer`-marked node the `Frontier` reports executable instead, ordered by
-/// this graph's node registration order (`node_order`) rather than
-/// `HashMap` order -- the aggregate-after-all-branches case.
+/// updated for (ENG-FR-06). Four tiers, each engaged only when every prior
+/// tier returned empty:
 ///
-/// If NEITHER the normal-ready pass nor this defer-release pass has
-/// anything to schedule, a third fallback pass ([`starved_release`],
-/// ENG-FR-06a, BUG-03) releases nodes that are starved rather than
-/// genuinely blocked: a node that already holds at least one fresh fired
-/// incoming edge, whose every other unresolved incoming edge is `Pending`
-/// from a live source that has NEVER executed. Without this pass, a cycle
-/// whose only path back to one of its own members is that member's own
-/// not-yet-resolved incoming edge can never bootstrap its first execution,
-/// and the run reports `Completed` over a node that never ran -- the same
-/// truthful-outcome violation BUG-02 fixed by a different mechanism. This
-/// release engages ONLY when nothing else is executable, so a diamond join
-/// still waits for every incoming edge from a live source that HAS already
-/// executed (that node is legitimately waiting, not starved).
+/// 1. **Normal-ready**: every non-deferred node the `Frontier` reports
+///    executable, in `graph.edges()`'s stable insertion order (ENG-FR-04),
+///    de-duplicated.
+/// 2. **Starvation release** ([`starved_release`], ENG-FR-06a, BUG-03):
+///    releases a non-deferred node that is starved rather than genuinely
+///    blocked -- it already holds at least one fresh fired incoming edge,
+///    and every other unresolved incoming edge is `Pending` from a live
+///    source that has NEVER executed. Without this tier, a cycle whose only
+///    path back to one of its own members is that member's own
+///    not-yet-resolved incoming edge can never bootstrap its first
+///    execution, and the run reports `Completed` over a node that never
+///    ran -- the same truthful-outcome violation BUG-02 fixed by a
+///    different mechanism.
+/// 3. **Defer release**: every `defer`-marked node the `Frontier` reports
+///    executable, ordered by this graph's node registration order
+///    (`node_order`) rather than `HashMap` order -- the
+///    aggregate-after-all-branches case.
+/// 4. **Deferred starvation release** ([`starved_deferred_release`], D-02a):
+///    the SAME starvation rule as tier 2, applied to `defer`-marked nodes
+///    instead of excluding them. Without this tier, a `defer`-marked
+///    aggregator caught in the exact starvation shape tier 2 exists to fix
+///    would never be released -- tier 2 deliberately skips deferred nodes
+///    so an aggregator still waits for a released cycle node to run first
+///    (tiers 2 and 3 are strictly ordered for that reason), but a deferred
+///    node starved by its OWN cycle-bootstrap back-edge, not by a sibling
+///    it is aggregating after, needs the same rescue tier 2 gives every
+///    other node.
+///
+/// Each tier engages ONLY when every earlier tier is empty, so a diamond
+/// join still waits for every incoming edge from a live source that HAS
+/// already executed (that node is legitimately waiting, not starved), and a
+/// `defer`-marked aggregator still waits for a released cycle node before
+/// firing.
 fn compute_next_vanguard(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
     let mut ready = Vec::new();
     let mut seen = HashSet::new();
@@ -808,19 +914,23 @@ fn compute_next_vanguard(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
             deferred_ready.push(node.clone());
         }
     }
-    deferred_ready
+    if !deferred_ready.is_empty() {
+        return deferred_ready;
+    }
+
+    starved_deferred_release(graph, frontier)
 }
 
-/// The ENG-FR-06a starvation-release fallback (BUG-03), called by
-/// [`compute_next_vanguard`] only when both the normal-ready pass and the
-/// defer-release pass return empty. A node is released here when it is
-/// starved rather than genuinely blocked: `!frontier.dead.contains(node)`,
-/// `!graph.is_deferred(node)`, [`Frontier::node_edge_summary`] reports at
-/// least one fresh fired incoming edge, and every remaining unresolved
-/// incoming edge is `Pending` from a live source that has never executed
-/// (no entry in `frontier.last_executed`). A node blocked by an unresolved
-/// edge from a live source that HAS already executed is not starved -- it
-/// is legitimately waiting on that source's NEXT firing, and releasing it
+/// Shared starvation-classification loop behind [`starved_release`] and
+/// [`starved_deferred_release`]: a node is released here when
+/// `!frontier.dead.contains(node)`, `graph.is_deferred(node) == deferred`
+/// (selecting either the non-deferred or the deferred population),
+/// [`Frontier::node_edge_summary`] reports at least one fresh fired
+/// incoming edge, and every remaining unresolved incoming edge is `Pending`
+/// from a live source that has never executed (no entry in
+/// `frontier.last_executed`). A node blocked by an unresolved edge from a
+/// live source that HAS already executed is not starved -- it is
+/// legitimately waiting on that source's NEXT firing, and releasing it
 /// would violate join semantics (ENG-FR-06). Iterates `graph.node_order()`,
 /// never raw `HashMap`/`HashSet` order (ENG-FR-04), so a simultaneous
 /// starvation release is deterministically ordered.
@@ -828,10 +938,10 @@ fn compute_next_vanguard(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
 /// Introduces no new persisted state: every fact used here is derived from
 /// `frontier.edge_state`, `frontier.dead` and `frontier.last_executed`, all
 /// rebuilt fresh within a run (D-03).
-fn starved_release(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
+fn starved_nodes(graph: &WarGraph, frontier: &Frontier, deferred: bool) -> Vec<NodeId> {
     let mut starved = Vec::new();
     for node in graph.node_order() {
-        if frontier.dead.contains(node) || graph.is_deferred(node) {
+        if frontier.dead.contains(node) || graph.is_deferred(node) != deferred {
             continue;
         }
         let Some(summary) = frontier.node_edge_summary(graph, node) else {
@@ -845,6 +955,62 @@ fn starved_release(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
             !frontier.last_executed.contains_key(source)
         });
         if only_never_executed_sources {
+            starved.push(node.clone());
+        }
+    }
+    starved
+}
+
+/// The ENG-FR-06a starvation-release fallback (BUG-03), called by
+/// [`compute_next_vanguard`] only when both the normal-ready pass and the
+/// defer-release pass return empty. Releases NON-deferred starved nodes --
+/// see [`starved_nodes`] for the shared classification rule.
+fn starved_release(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
+    starved_nodes(graph, frontier, false)
+}
+
+/// D-02a's deferred-node starvation-release tier, called by
+/// [`compute_next_vanguard`] only when the normal-ready pass, the
+/// non-deferred starvation release, AND the ordinary defer release all
+/// return empty. Releases DEFERRED starved nodes -- see [`starved_nodes`]
+/// for the shared classification rule. Exists so a `defer`-marked
+/// aggregator caught in the same cycle-bootstrap starvation shape
+/// [`starved_release`] fixes for ordinary nodes is released too, rather
+/// than leaving `superstep::starved_at_completion`'s D-04 check to (rightly)
+/// fail the run over a legitimately-declared aggregator.
+fn starved_deferred_release(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
+    starved_nodes(graph, frontier, true)
+}
+
+/// D-04's run-end truthful-outcome check, called from [`run`] at BOTH
+/// places it is about to report `RunOutcome::Completed` -- the mid-loop
+/// branch where `compute_next_vanguard` returned empty, and the early
+/// return for a Vanguard empty at entry. Returns, in `graph.node_order()`
+/// order (ENG-FR-04, never `HashMap`/`HashSet` order), every declared node
+/// that is not `frontier.dead` and whose [`Frontier::node_edge_summary`]
+/// reports at least one fresh fired incoming edge: work the scheduler was
+/// about to walk away from without ever dispatching it.
+///
+/// Deliberately independent of `compute_next_vanguard` and the
+/// `starved_release` fallback it calls (D-04): this re-derives its answer
+/// from the SAME `Frontier` state those passes already updated for this
+/// superstep, rather than re-invoking their scheduling logic, so a future
+/// regression in the release mechanism cannot silently satisfy both the
+/// release and this check at once. An empty result is what makes
+/// `RunOutcome::Completed` truthful: every declared, non-dead node's
+/// incoming edges are either resolved not-firing, resolved fired-and-then-
+/// consumed by that node's own subsequent execution, or genuinely still
+/// pending from a source that has never run and never will (which is
+/// exactly `frontier.dead`'s job to have already caught).
+fn starved_at_completion(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
+    let mut starved = Vec::new();
+    for node in graph.node_order() {
+        if frontier.dead.contains(node) {
+            continue;
+        }
+        if let Some(summary) = frontier.node_edge_summary(graph, node)
+            && summary.any_fresh_fire
+        {
             starved.push(node.clone());
         }
     }
@@ -1630,6 +1796,149 @@ mod tests {
         );
     }
 
+    // --- D-04 / D-02a: run-end truthful-outcome check and the deferred-
+    // node starvation tier (Phase 22.1 Plan 02).
+
+    #[test]
+    fn completion_check_names_every_node_holding_an_unconsumed_fired_edge() {
+        // Hand-constructed Frontier state, exercising `starved_at_completion`
+        // directly rather than through a full run -- entry -> b (idx 0) and
+        // entry -> c (idx 1), with both edges marked Fired but neither
+        // target ever executed. Both non-entry, non-dead nodes must be
+        // named, in node_order order.
+        let s = schema(vec![FieldSpec::new(
+            field("log"),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let entry = NodeId::new("entry");
+        let b = NodeId::new("b");
+        let c = NodeId::new("c");
+        graph.add_node(
+            entry.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("entry"),
+            )),
+        );
+        graph.add_node(
+            b.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("b"),
+            )),
+        );
+        graph.add_node(
+            c.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("c"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: entry.clone(),
+            to: b.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: entry.clone(),
+            to: c.clone(),
+            condition: None,
+        });
+        graph.add_entry(entry.clone());
+
+        let mut frontier = Frontier::new(&graph);
+        frontier.edge_state[0] = EdgeState::Fired(1);
+        frontier.edge_state[1] = EdgeState::Fired(1);
+
+        assert_eq!(
+            starved_at_completion(&graph, &frontier),
+            vec![b.clone(), c.clone()],
+            "every node holding an unconsumed fired incoming edge must be named, in \
+             node_order order"
+        );
+
+        // The state at the end of a normal completed run: both targets
+        // executed, consuming their fired edges' freshness (their
+        // `last_executed` now postdates the superstep the edge fired at).
+        frontier.last_executed.insert(b.clone(), 2);
+        frontier.last_executed.insert(c.clone(), 2);
+        assert!(
+            starved_at_completion(&graph, &frontier).is_empty(),
+            "a normally completed run's final frontier must report no starved nodes"
+        );
+    }
+
+    #[tokio::test]
+    async fn deferred_aggregator_starved_by_a_cycle_is_still_released() {
+        // The exact self-loop cycle-bootstrap starvation shape
+        // `self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`
+        // reproduces above, but with the cycle node registered `defer`
+        // instead of plain: `starved_release` (tier 2) deliberately skips
+        // deferred nodes, so without the D-02a deferred-starvation tier
+        // (tier 4), this aggregator would never be released and the run
+        // would fail with `StarvedNodeAtCompletion` instead of completing.
+        let s = schema(vec![
+            FieldSpec::new(field("entry_ran"), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(field("status"), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let entry_id = NodeId::new("entry");
+        let agg_id = NodeId::new("agg");
+
+        let entry_node = CountingFunctionNode::fixed(field("entry_ran"), serde_json::json!(true));
+        // Bounded so a correct engine terminates: "looping" on its first
+        // run, "done" from its second run on.
+        let agg_node = CountingFunctionNode::new(|run_index, _state| {
+            let status = if run_index == 0 { "looping" } else { "done" };
+            let mut d = paladin_core::platform::container::battlefield::StateDelta::new();
+            d.set(field("status"), status).unwrap();
+            d
+        });
+
+        graph.add_node(entry_id.clone(), NodeSpec::Function(entry_node));
+        graph.add_deferred_node(agg_id.clone(), NodeSpec::Function(agg_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: entry_id.clone(),
+            to: agg_id.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: agg_id.clone(),
+            to: agg_id.clone(),
+            condition: Some(EdgeCondition::Contains("looping".to_string())),
+        });
+        graph.add_entry(entry_id);
+
+        assert!(
+            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            "agg is reachable from entry over a static edge, so validate() must accept this \
+             graph"
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("deferred-starvation").unwrap();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_default(&graph, thread, &store),
+        )
+        .await
+        .expect("a starved deferred aggregator must not deadlock");
+
+        assert!(
+            agg_node.run_count() >= 1,
+            "the deferred aggregator must execute at least once despite being starved by its \
+             own cycle-bootstrap back-edge; got run_count() == 0"
+        );
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "a starved deferred aggregator that IS released by the D-02a tier must complete \
+             normally, not report StarvedNodeAtCompletion; got outcome = {outcome:?}"
+        );
+    }
+
     fn linear_chain_graph(length: usize, limits: EngineLimits) -> WarGraph {
         let s = schema(vec![FieldSpec::new(
             field("log"),
@@ -2284,6 +2593,197 @@ mod tests {
                     assert_eq!(
                         &vanguard_sequence, ref_sequence,
                         "seed {seed} produced a different Vanguard sequence"
+                    );
+                }
+            }
+        }
+    }
+
+    /// D-02c: the SAME 20-seed determinism harness as
+    /// `eng_fr_08_determinism_over_twenty_randomized_scheduling_iterations`
+    /// above (extended, not rebuilt), applied to the two cycle-bootstrap
+    /// shapes Plan 22.1-01 fixed -- the self-loop shape
+    /// (`self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`)
+    /// and the general `entry -> a -> b -> a` shape
+    /// (`cycle_node_fed_from_outside_the_cycle_takes_its_first_turn`). Each
+    /// shape gets its own 20-iteration loop with its own reference, since
+    /// the two are structurally different graphs; `YieldingNode`-backed
+    /// nodes with a seed-dependent yield count perturb real async
+    /// completion interleaving exactly as the pre-existing test's nodes do,
+    /// so a byte-identical result across seeds is not true only by
+    /// accident of incidental single-threaded ordering.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn eng_fr_08_determinism_over_twenty_randomized_iterations_for_cycle_bootstrap_shapes() {
+        type Reference = (String, Vec<usize>, std::mem::Discriminant<RunOutcome>);
+
+        // --- Shape 1: self-loop fed from upstream (entry -> b, b -> b). --
+        let mut self_loop_reference: Option<Reference> = None;
+        for seed in 0..20u64 {
+            let s = schema(vec![
+                FieldSpec::new(field("entry_ran"), DispatchRule::LastWrite, None, false),
+                FieldSpec::new(field("status"), DispatchRule::LastWrite, None, false),
+            ]);
+            let mut graph = WarGraph::new(s, EngineLimits::default());
+            let entry_id = NodeId::new("entry");
+            let b_id = NodeId::new("b");
+
+            let entry_base =
+                CountingFunctionNode::fixed(field("entry_ran"), serde_json::json!(true));
+            let entry_node = YieldingNode::new(entry_base.clone(), seed as usize % 3);
+            let b_base = CountingFunctionNode::new(|run_index, _state| {
+                let status = if run_index == 0 { "looping" } else { "done" };
+                let mut d = paladin_core::platform::container::battlefield::StateDelta::new();
+                d.set(field("status"), status).unwrap();
+                d
+            });
+            let b_node = YieldingNode::new(b_base.clone(), (seed as usize + 1) % 3);
+
+            graph.add_node(entry_id.clone(), NodeSpec::Function(entry_node));
+            graph.add_node(b_id.clone(), NodeSpec::Function(b_node));
+            graph.add_edge(EdgeSpec {
+                from: entry_id.clone(),
+                to: b_id.clone(),
+                condition: None,
+            });
+            graph.add_edge(EdgeSpec {
+                from: b_id.clone(),
+                to: b_id.clone(),
+                condition: Some(EdgeCondition::Contains("looping".to_string())),
+            });
+
+            let mut entry_ids = vec![entry_id.clone()];
+            shuffle_seeded(&mut entry_ids, seed);
+            for id in &entry_ids {
+                graph.add_entry(id.clone());
+            }
+
+            let store = RecordingWaypointStore::new();
+            let thread = ThreadId::new(format!("determinism-selfloop-{seed}")).unwrap();
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                run_default(&graph, thread, &store),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("self-loop shape seed {seed} must not hang"));
+
+            let discriminant = std::mem::discriminant(&outcome);
+            let final_state = match outcome {
+                RunOutcome::Completed { final_state, .. } => final_state,
+                other => panic!("self-loop shape seed {seed}: expected Completed, got {other:?}"),
+            };
+            let serialized = serde_json::to_string(&final_state).unwrap();
+            let run_counts = vec![entry_base.run_count(), b_base.run_count()];
+
+            match &self_loop_reference {
+                None => self_loop_reference = Some((serialized, run_counts, discriminant)),
+                Some((ref_state, ref_counts, ref_discriminant)) => {
+                    assert_eq!(
+                        &serialized, ref_state,
+                        "self-loop shape seed {seed} produced a non-byte-identical final \
+                         Battlefield"
+                    );
+                    assert_eq!(
+                        &run_counts, ref_counts,
+                        "self-loop shape seed {seed} produced different per-node run counts"
+                    );
+                    assert_eq!(
+                        &discriminant, ref_discriminant,
+                        "self-loop shape seed {seed} produced a different RunOutcome \
+                         discriminant"
+                    );
+                }
+            }
+        }
+
+        // --- Shape 2: general cycle, entry -> a -> b -> a. ---------------
+        let mut cycle_reference: Option<Reference> = None;
+        for seed in 0..20u64 {
+            let s = schema(vec![
+                FieldSpec::new(field("entry_ran"), DispatchRule::LastWrite, None, false),
+                FieldSpec::new(field("status"), DispatchRule::LastWrite, None, false),
+            ]);
+            let mut graph = WarGraph::new(s, EngineLimits::default());
+            let entry_id = NodeId::new("entry");
+            let a_id = NodeId::new("a");
+            let b_id = NodeId::new("b");
+
+            let entry_base =
+                CountingFunctionNode::fixed(field("entry_ran"), serde_json::json!(true));
+            let entry_node = YieldingNode::new(entry_base.clone(), seed as usize % 3);
+            let a_base = CountingFunctionNode::fixed(field("status"), serde_json::json!("a-ran"));
+            let a_node = YieldingNode::new(a_base.clone(), (seed as usize + 1) % 3);
+            let b_base = CountingFunctionNode::new(|run_index, _state| {
+                let status = if run_index == 0 { "looping" } else { "done" };
+                let mut d = paladin_core::platform::container::battlefield::StateDelta::new();
+                d.set(field("status"), status).unwrap();
+                d
+            });
+            let b_node = YieldingNode::new(b_base.clone(), (seed as usize + 2) % 3);
+
+            graph.add_node(entry_id.clone(), NodeSpec::Function(entry_node));
+            graph.add_node(a_id.clone(), NodeSpec::Function(a_node));
+            graph.add_node(b_id.clone(), NodeSpec::Function(b_node));
+            graph.add_edge(EdgeSpec {
+                from: entry_id.clone(),
+                to: a_id.clone(),
+                condition: None,
+            });
+            graph.add_edge(EdgeSpec {
+                from: a_id.clone(),
+                to: b_id.clone(),
+                condition: None,
+            });
+            graph.add_edge(EdgeSpec {
+                from: b_id.clone(),
+                to: a_id.clone(),
+                condition: Some(EdgeCondition::Contains("looping".to_string())),
+            });
+
+            let mut entry_ids = vec![entry_id.clone()];
+            shuffle_seeded(&mut entry_ids, seed);
+            for id in &entry_ids {
+                graph.add_entry(id.clone());
+            }
+
+            let store = RecordingWaypointStore::new();
+            let thread = ThreadId::new(format!("determinism-cycle-{seed}")).unwrap();
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                run_default(&graph, thread, &store),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("general cycle shape seed {seed} must not hang"));
+
+            let discriminant = std::mem::discriminant(&outcome);
+            let final_state = match outcome {
+                RunOutcome::Completed { final_state, .. } => final_state,
+                other => {
+                    panic!("general cycle shape seed {seed}: expected Completed, got {other:?}")
+                }
+            };
+            let serialized = serde_json::to_string(&final_state).unwrap();
+            let run_counts = vec![
+                entry_base.run_count(),
+                a_base.run_count(),
+                b_base.run_count(),
+            ];
+
+            match &cycle_reference {
+                None => cycle_reference = Some((serialized, run_counts, discriminant)),
+                Some((ref_state, ref_counts, ref_discriminant)) => {
+                    assert_eq!(
+                        &serialized, ref_state,
+                        "general cycle shape seed {seed} produced a non-byte-identical final \
+                         Battlefield"
+                    );
+                    assert_eq!(
+                        &run_counts, ref_counts,
+                        "general cycle shape seed {seed} produced different per-node run counts"
+                    );
+                    assert_eq!(
+                        &discriminant, ref_discriminant,
+                        "general cycle shape seed {seed} produced a different RunOutcome \
+                         discriminant"
                     );
                 }
             }

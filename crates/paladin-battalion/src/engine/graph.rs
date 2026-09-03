@@ -275,6 +275,16 @@ impl WarGraph {
     /// entry node, or on any node reachable from entry by a normal edge —
     /// this check rejects strandedness, a node that could NEVER become
     /// ready, not cycles.
+    ///
+    /// A THIRD clause -- [`WarGraph::validate_schedulable`], D-03's
+    /// unschedulable-cycle guard (BUG-03) -- runs after the eligible-set
+    /// clause, for the same "more specific error stays first" reason: a
+    /// component fed only from within itself IS statically reachable from
+    /// `entry` (once any one of its members is), so the eligible-set clause
+    /// never catches it, and it is checked last so it functions purely as
+    /// defence-in-depth against a shape the ENG-FR-06a starvation release
+    /// still cannot schedule, never masking a more fundamental structural
+    /// error above it.
     pub fn validate(&self, custom_dispatch: &CustomDispatchResolver) -> Result<(), EngineError> {
         if self.limits.max_supersteps == 0 {
             return Err(EngineError::InvalidLimits {
@@ -312,7 +322,8 @@ impl WarGraph {
             }
         }
 
-        self.validate_eligible_set()
+        self.validate_eligible_set()?;
+        self.validate_schedulable()
     }
 
     /// ENG-FR-02a / BUG-02's eligible-set reachability check, factored out
@@ -391,6 +402,102 @@ impl WarGraph {
                 "unreachable from entry and not marked dynamic_target: {names} -- make \
                  reachable via a static edge from an entry node, or mark with \
                  WarGraph::mark_dynamic_target if it is a runtime jump target"
+            ),
+        })
+    }
+
+    /// D-03's fixpoint: every declared node that can NEVER receive a fired
+    /// edge from outside its own component, and therefore can never be
+    /// bootstrapped by ENG-FR-06a's starvation-release pass
+    /// (`superstep::starved_release`) -- that pass only ever releases a node
+    /// already holding at least one fresh fired incoming edge, and a
+    /// component fed only by its own members can never produce one.
+    ///
+    /// Seeds `unfed` with every declared node that is NOT an entry point and
+    /// has at least one incoming edge (a node with zero incoming edges is
+    /// the eligible-set clause's problem, not this one's), then repeatedly
+    /// removes any node that has an incoming edge whose source is NOT
+    /// itself still in `unfed` -- such a node can receive a fired edge from
+    /// outside the shrinking set, and is therefore reachable by the
+    /// starvation release once that outside source runs. What survives to a
+    /// fixpoint is exactly the node set of one or more components with no
+    /// edge crossing in from anywhere else.
+    ///
+    /// Nodes marked [`WarGraph::mark_dynamic_target`] are removed from the
+    /// survivors after the fixpoint converges: a dynamic target is the
+    /// declared runtime-entry escape hatch (ENG-FR-02a / BUG-02) and is
+    /// exempt from this check for the same reason it is exempt from the
+    /// eligible-set check -- ENG-FR-02a's future worker-template (Phase 23)
+    /// and Route-target (Phase 25) exemptions join this same exclusion list
+    /// when those features land; nothing is fabricated here to stand in for
+    /// either.
+    ///
+    /// Returns the survivors in `self.node_order` order (ENG-FR-04,
+    /// deterministic, never `HashMap`/`HashSet` order).
+    fn unschedulable_unfed_nodes(&self) -> Vec<NodeId> {
+        let entry_set: HashSet<&NodeId> = self.entry.iter().collect();
+        let mut incoming: HashMap<&NodeId, Vec<&NodeId>> = HashMap::new();
+        for edge in &self.edges {
+            incoming.entry(&edge.to).or_default().push(&edge.from);
+        }
+
+        let mut unfed: HashSet<NodeId> = self
+            .node_order
+            .iter()
+            .filter(|id| !entry_set.contains(id) && incoming.contains_key(id))
+            .cloned()
+            .collect();
+
+        loop {
+            let to_remove: Vec<NodeId> = unfed
+                .iter()
+                .filter(|node| {
+                    let sources = incoming.get(*node).cloned().unwrap_or_default();
+                    sources.iter().any(|source| !unfed.contains(*source))
+                })
+                .cloned()
+                .collect();
+            if to_remove.is_empty() {
+                break;
+            }
+            for node in to_remove {
+                unfed.remove(&node);
+            }
+        }
+
+        self.node_order
+            .iter()
+            .filter(|id| unfed.contains(*id) && !self.dynamic_targets.contains(*id))
+            .cloned()
+            .collect()
+    }
+
+    /// D-03's `validate()` clause consuming
+    /// [`WarGraph::unschedulable_unfed_nodes`] -- see that method for the
+    /// fixpoint rule, and [`EngineError::UnschedulableCycle`] for why this
+    /// check exists and why it is checked last. Factored out only for
+    /// readability, exactly as [`WarGraph::validate_eligible_set`] is --
+    /// always called last from [`WarGraph::validate`], never on its own.
+    fn validate_schedulable(&self) -> Result<(), EngineError> {
+        let offenders = self.unschedulable_unfed_nodes();
+        if offenders.is_empty() {
+            return Ok(());
+        }
+
+        let names = offenders
+            .iter()
+            .map(NodeId::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(EngineError::UnschedulableCycle {
+            nodes: offenders,
+            reason: format!(
+                "no edge from outside the component reaches: {names} -- ENG-FR-06a's \
+                 starvation release can only bootstrap a cycle already holding a fresh fired \
+                 edge from an external source, so this component can never take its first \
+                 turn -- feed it from an entry-reachable node outside the component, or mark \
+                 its entry point with WarGraph::mark_dynamic_target if it is a runtime jump \
+                 target"
             ),
         })
     }
@@ -1072,5 +1179,152 @@ mod tests {
             }
             other => panic!("expected CustomDispatchNotRegistered, got {other:?}"),
         }
+    }
+
+    // --- D-03 / BUG-03: unschedulable-cycle validate-time guard (Phase
+    // 22.1 Plan 02). `unschedulable_unfed_nodes` is the fixpoint
+    // `validate_schedulable` consumes -- see both methods' rustdoc for the
+    // rule. These tests exercise the private fixpoint directly (same-module
+    // access) so the fixpoint's own behaviour is pinned independently of
+    // `validate`'s clause ordering, which the fourth test below pins
+    // separately.
+
+    #[test]
+    fn unschedulable_unfed_nodes_is_empty_for_a_cycle_fed_from_entry() {
+        // entry -> a, a -> b, b -> a; only "entry" is a declared entry
+        // point. This is exactly the shape ENG-FR-06a's starvation release
+        // (Plan 22.1-01) fixed: "a" is fed from outside the {a, b}
+        // component by "entry", so the whole component is reachable from a
+        // single external firing -- this fixpoint must NOT reject it.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("entry"),
+            to: NodeId::new("a"),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("a"),
+            to: NodeId::new("b"),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("b"),
+            to: NodeId::new("a"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("entry"));
+
+        assert!(graph.unschedulable_unfed_nodes().is_empty());
+        assert!(
+            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            "a cycle fed from entry must validate cleanly -- it is schedulable via the \
+             starvation release"
+        );
+    }
+
+    #[test]
+    fn unschedulable_unfed_nodes_names_every_node_of_an_externally_unfed_cycle() {
+        // An entry node plus a disjoint 2-cycle x -> y, y -> x: neither x
+        // nor y is entry, and no edge reaches the pair from outside it --
+        // the component can never receive a fired edge from anywhere but
+        // its own members, so the starvation release can never bootstrap
+        // it.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_node(NodeId::new("x"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("y"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("x"),
+            to: NodeId::new("y"),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("y"),
+            to: NodeId::new("x"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("entry"));
+
+        assert_eq!(
+            graph.unschedulable_unfed_nodes(),
+            vec![NodeId::new("x"), NodeId::new("y")],
+            "both cycle members must be named, in node_order order"
+        );
+    }
+
+    #[test]
+    fn unschedulable_unfed_nodes_exempts_runtime_entry_marked_nodes() {
+        // Same externally-unfed 2-cycle as above, but both members are
+        // marked dynamic_target -- the declared runtime-entry escape hatch
+        // must exempt them from this check exactly as it does from the
+        // eligible-set check.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_node(NodeId::new("x"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("y"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("x"),
+            to: NodeId::new("y"),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("y"),
+            to: NodeId::new("x"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("entry"));
+        graph.mark_dynamic_target(NodeId::new("x"));
+        graph.mark_dynamic_target(NodeId::new("y"));
+
+        assert!(
+            graph.unschedulable_unfed_nodes().is_empty(),
+            "runtime-entry-marked nodes must be exempted from the unschedulable-cycle check"
+        );
+    }
+
+    #[test]
+    fn validate_prefers_unreachable_node_error_over_unschedulable_cycle() {
+        // The externally-unfed 2-cycle, unmarked: validate_eligible_set
+        // rejects "x" and "y" as UnreachableNode first (they are not
+        // statically reachable from "entry" and carry no dynamic_target
+        // marker), so validate() must never reach validate_schedulable's
+        // UnschedulableCycle clause for this graph -- the ordering pinned
+        // by D-02(d).
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_node(NodeId::new("x"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(NodeId::new("y"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("x"),
+            to: NodeId::new("y"),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("y"),
+            to: NodeId::new("x"),
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("entry"));
+
+        let err = graph.validate(&CustomDispatchResolver::new()).unwrap_err();
+        assert!(
+            matches!(err, EngineError::UnreachableNode { .. }),
+            "expected UnreachableNode (eligible-set clause runs first), got {err:?}"
+        );
     }
 }

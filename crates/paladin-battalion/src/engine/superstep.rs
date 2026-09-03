@@ -579,6 +579,23 @@ struct Frontier {
     incoming: HashMap<NodeId, Vec<usize>>,
 }
 
+/// Per-node edge-resolution facts shared by [`Frontier::is_ready`] and the
+/// starvation-release fallback pass in `compute_next_vanguard` (ENG-FR-06a):
+/// whether any incoming edge has fired at or after `node`'s `last_executed`
+/// threshold (a "fresh" fire -- any fired edge at all, for a node that has
+/// never executed), and the indices of any incoming edges still unresolved
+/// (`Pending`) from a live, not-yet-proven-dead source
+/// ([`Frontier::edge_resolution`] already resolves a `Pending` edge from a
+/// dead source to not-firing, so every index collected here is genuinely
+/// still pending). Returned by [`Frontier::node_edge_summary`].
+struct NodeEdgeSummary {
+    /// At least one incoming edge fired at or after `node`'s
+    /// `last_executed` threshold.
+    any_fresh_fire: bool,
+    /// Incoming edge indices still unresolved from a live source.
+    pending_from_live: Vec<usize>,
+}
+
 impl Frontier {
     /// Build the initial frontier for `graph`: every edge `Pending`, then
     /// propagate structural deadness (non-entry nodes with no incoming
@@ -695,35 +712,50 @@ impl Frontier {
         }
     }
 
-    /// Whether `node` is executable for the NEXT Vanguard (ENG-FR-06): it
-    /// has at least one incoming edge, none of them is still pending from a
-    /// run-reachable source (a `Pending` edge from a proven-dead source
-    /// counts as resolved not-firing, via [`Frontier::edge_resolution`]),
-    /// and at least one has fired at or after the superstep `node` last
-    /// executed (any fired edge at all, for a node that has never
-    /// executed).
-    fn is_ready(&self, graph: &WarGraph, node: &NodeId) -> bool {
-        let Some(incoming) = self.incoming.get(node) else {
-            return false;
-        };
+    /// Compute [`NodeEdgeSummary`] for `node`, or `None` if `node` has no
+    /// declared incoming edges at all (never executable). Uses the same
+    /// `u64 -> i64` threshold convention as the caller that used to inline
+    /// this loop: `node`'s `last_executed` absent maps to `-1`, so a node
+    /// that has never executed treats any fired edge as fresh.
+    fn node_edge_summary(&self, graph: &WarGraph, node: &NodeId) -> Option<NodeEdgeSummary> {
+        let incoming = self.incoming.get(node)?;
         if incoming.is_empty() {
-            return false;
+            return None;
         }
         let threshold: i64 = self.last_executed.get(node).map_or(-1, |&s| s as i64);
-        let mut any_pending = false;
         let mut any_fresh_fire = false;
-        for idx in incoming {
-            match self.edge_resolution(graph, *idx) {
+        let mut pending_from_live = Vec::new();
+        for &idx in incoming {
+            match self.edge_resolution(graph, idx) {
                 Some((true, resolved_at)) => {
                     if resolved_at as i64 >= threshold {
                         any_fresh_fire = true;
                     }
                 }
                 Some((false, _)) => {}
-                None => any_pending = true,
+                None => pending_from_live.push(idx),
             }
         }
-        !any_pending && any_fresh_fire
+        Some(NodeEdgeSummary {
+            any_fresh_fire,
+            pending_from_live,
+        })
+    }
+
+    /// Whether `node` is executable for the NEXT Vanguard (ENG-FR-06): it
+    /// has at least one incoming edge, none of them is still pending from a
+    /// run-reachable source (a `Pending` edge from a proven-dead source
+    /// counts as resolved not-firing, via [`Frontier::edge_resolution`]),
+    /// and at least one has fired at or after the superstep `node` last
+    /// executed (any fired edge at all, for a node that has never
+    /// executed). Delegates to [`Frontier::node_edge_summary`], the same
+    /// per-node edge-resolution helper the ENG-FR-06a starvation-release
+    /// pass uses.
+    fn is_ready(&self, graph: &WarGraph, node: &NodeId) -> bool {
+        let Some(summary) = self.node_edge_summary(graph, node) else {
+            return false;
+        };
+        summary.pending_from_live.is_empty() && summary.any_fresh_fire
     }
 }
 
@@ -734,6 +766,20 @@ impl Frontier {
 /// `defer`-marked node the `Frontier` reports executable instead, ordered by
 /// this graph's node registration order (`node_order`) rather than
 /// `HashMap` order -- the aggregate-after-all-branches case.
+///
+/// If NEITHER the normal-ready pass nor this defer-release pass has
+/// anything to schedule, a third fallback pass ([`starved_release`],
+/// ENG-FR-06a, BUG-03) releases nodes that are starved rather than
+/// genuinely blocked: a node that already holds at least one fresh fired
+/// incoming edge, whose every other unresolved incoming edge is `Pending`
+/// from a live source that has NEVER executed. Without this pass, a cycle
+/// whose only path back to one of its own members is that member's own
+/// not-yet-resolved incoming edge can never bootstrap its first execution,
+/// and the run reports `Completed` over a node that never ran -- the same
+/// truthful-outcome violation BUG-02 fixed by a different mechanism. This
+/// release engages ONLY when nothing else is executable, so a diamond join
+/// still waits for every incoming edge from a live source that HAS already
+/// executed (that node is legitimately waiting, not starved).
 fn compute_next_vanguard(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
     let mut ready = Vec::new();
     let mut seen = HashSet::new();
@@ -751,6 +797,11 @@ fn compute_next_vanguard(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
         return ready;
     }
 
+    let starved = starved_release(graph, frontier);
+    if !starved.is_empty() {
+        return starved;
+    }
+
     let mut deferred_ready = Vec::new();
     for node in graph.node_order() {
         if graph.is_deferred(node) && frontier.is_ready(graph, node) {
@@ -758,6 +809,46 @@ fn compute_next_vanguard(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
         }
     }
     deferred_ready
+}
+
+/// The ENG-FR-06a starvation-release fallback (BUG-03), called by
+/// [`compute_next_vanguard`] only when both the normal-ready pass and the
+/// defer-release pass return empty. A node is released here when it is
+/// starved rather than genuinely blocked: `!frontier.dead.contains(node)`,
+/// `!graph.is_deferred(node)`, [`Frontier::node_edge_summary`] reports at
+/// least one fresh fired incoming edge, and every remaining unresolved
+/// incoming edge is `Pending` from a live source that has never executed
+/// (no entry in `frontier.last_executed`). A node blocked by an unresolved
+/// edge from a live source that HAS already executed is not starved -- it
+/// is legitimately waiting on that source's NEXT firing, and releasing it
+/// would violate join semantics (ENG-FR-06). Iterates `graph.node_order()`,
+/// never raw `HashMap`/`HashSet` order (ENG-FR-04), so a simultaneous
+/// starvation release is deterministically ordered.
+///
+/// Introduces no new persisted state: every fact used here is derived from
+/// `frontier.edge_state`, `frontier.dead` and `frontier.last_executed`, all
+/// rebuilt fresh within a run (D-03).
+fn starved_release(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
+    let mut starved = Vec::new();
+    for node in graph.node_order() {
+        if frontier.dead.contains(node) || graph.is_deferred(node) {
+            continue;
+        }
+        let Some(summary) = frontier.node_edge_summary(graph, node) else {
+            continue;
+        };
+        if !summary.any_fresh_fire {
+            continue;
+        }
+        let only_never_executed_sources = summary.pending_from_live.iter().all(|&idx| {
+            let source = &graph.edges()[idx].from;
+            !frontier.last_executed.contains_key(source)
+        });
+        if only_never_executed_sources {
+            starved.push(node.clone());
+        }
+    }
+    starved
 }
 
 /// Evaluate an [`EdgeCondition`] against the whole post-merge Battlefield,
@@ -1339,7 +1430,7 @@ mod tests {
         assert_eq!(node.run_count(), 4);
     }
 
-    /// **Known defect, distinct from BUG-02** (Phase 22 Plan 16 audit,
+    /// **BUG-03** (found during the Phase 22 Plan 16 fixture audit,
     /// `22-deferred-items.md`): a node that is BOTH self-looping AND fed by
     /// a separate upstream edge can never take its first turn, and the run
     /// still reports `Completed` regardless.
@@ -1362,26 +1453,16 @@ mod tests {
     /// statically reachable from `entry` over a declared edge, so
     /// `validate` accepts this graph cleanly (asserted below) -- the defect
     /// is a property of `Frontier::is_ready`'s RUNTIME readiness
-    /// computation, not of static reachability. Fixing it would be a
-    /// change to the readiness rule itself (a self-edge should not gate a
-    /// node's first execution, e.g. by seeding it as trivially resolved
-    /// until the node's first run) -- a frontier semantics change, not a
-    /// validation change, and out of scope for this plan.
+    /// computation, not of static reachability.
     ///
-    /// Ignored so the default workspace run stays green; run on demand with
-    /// `cargo test -p paladin-battalion --lib engine::superstep --
-    /// --ignored` to reproduce. The assertions below describe CORRECT
-    /// behaviour (per the plan: never invert a reproduction to match
-    /// today's wrong behaviour) and fail today because `b` never runs.
+    /// Fixed by ENG-FR-06a's starvation-release fallback pass in
+    /// `compute_next_vanguard` (D-03): when neither the normal-ready pass
+    /// nor the defer-release pass has anything to schedule, a node blocked
+    /// only by its own not-yet-resolved incoming edges from live,
+    /// never-executed sources is released anyway, rather than the run
+    /// silently reporting `Completed` over it. The assertions below
+    /// describe correct behaviour and, with the fix landed, now pass.
     #[tokio::test]
-    #[ignore = "known defect (Phase 22 Plan 16 audit): a node that is both \
-                self-looping and fed by an upstream edge can never take its \
-                first turn -- Frontier::is_ready treats its own unresolved \
-                self-edge as blocking, and the run reports Completed with \
-                the node's run_count() at 0. Distinct from BUG-02 (fixed in \
-                Plan 22-15): this node IS statically reachable, so \
-                WarGraph::validate accepts the graph cleanly. See \
-                22-deferred-items.md for the recommended disposition."]
     async fn self_looping_node_fed_by_upstream_edge_can_never_take_first_turn() {
         let s = schema(vec![
             FieldSpec::new(field("entry_ran"), DispatchRule::LastWrite, None, false),
@@ -1446,6 +1527,105 @@ mod tests {
             "the run must not report Completed while b's run_count() is 0 -- that is the exact \
              truthful-outcome violation BUG-02 fixed by a different mechanism; got outcome = \
              {outcome:?}, b.run_count() = {}",
+            b_node.run_count()
+        );
+    }
+
+    /// **BUG-03**, general (non-self-loop) shape: `entry -> a`, `a -> b`,
+    /// `b -> a`. `a` is fed both from outside the cycle (`entry`) and from
+    /// inside it (`b`'s back-edge) -- the same starvation shape as the
+    /// self-loop reproduction above, but with two distinct nodes forming
+    /// the cycle rather than one node looping to itself. `a`'s incoming
+    /// edges are `entry -> a` (fires once `entry` runs) and `b -> a`
+    /// (stays `Pending` until `b` runs -- but `b` cannot run until `a`
+    /// runs first, since `a -> b` is `a`'s only outgoing edge into the
+    /// cycle). Before the fix, `is_ready(a)` requires both edges resolved,
+    /// so `a` never runs and neither does `b`; the run still reports
+    /// `Completed`.
+    ///
+    /// Only `entry` is a declared entry node -- `a` and `b` are ordinary
+    /// non-entry nodes, reachable only through the cycle's own edges.
+    #[tokio::test]
+    async fn cycle_node_fed_from_outside_the_cycle_takes_its_first_turn() {
+        let s = schema(vec![
+            FieldSpec::new(field("entry_ran"), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(field("status"), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let entry_id = NodeId::new("entry");
+        let a_id = NodeId::new("a");
+        let b_id = NodeId::new("b");
+
+        let entry_node = CountingFunctionNode::fixed(field("entry_ran"), serde_json::json!(true));
+        let a_node = CountingFunctionNode::fixed(field("status"), serde_json::json!("a-ran"));
+        // Bounded so a correct engine terminates: "looping" on b's first
+        // run, "done" from its second run on -- exactly the self-loop
+        // reproduction's bounding style above, applied to the back-edge
+        // `b -> a` instead of a self-edge.
+        let b_node = CountingFunctionNode::new(|run_index, _state| {
+            let status = if run_index == 0 { "looping" } else { "done" };
+            let mut d = paladin_core::platform::container::battlefield::StateDelta::new();
+            d.set(field("status"), status).unwrap();
+            d
+        });
+
+        graph.add_node(entry_id.clone(), NodeSpec::Function(entry_node));
+        graph.add_node(a_id.clone(), NodeSpec::Function(a_node.clone()));
+        graph.add_node(b_id.clone(), NodeSpec::Function(b_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: entry_id.clone(),
+            to: a_id.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: a_id.clone(),
+            to: b_id.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: b_id.clone(),
+            to: a_id.clone(),
+            condition: Some(EdgeCondition::Contains("looping".to_string())),
+        });
+        graph.add_entry(entry_id);
+
+        // The shape is statically legal: `a` is reachable from `entry` over
+        // a declared edge (`validate_accepts_two_node_cycle` in `graph.rs`
+        // already proves the two-node-cycle topology validates on its own).
+        assert!(
+            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            "a is reachable from entry over a static edge, so validate() must accept this \
+             graph -- the defect this test reproduces is a runtime readiness problem, not a \
+             reachability one"
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("cycle-bootstrap-general-repro").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        // Correct behaviour: both `a` and `b` must execute at least once
+        // before the run can complete -- both are legitimately reachable
+        // and the cycle is bounded to resolve after two round trips.
+        assert!(
+            a_node.run_count() >= 1,
+            "a must execute at least once -- it is reachable from entry and the cycle it \
+             anchors is bounded to terminate, so a correct engine schedules it; got \
+             run_count() == 0, meaning Frontier::is_ready never placed it in any Vanguard"
+        );
+        assert!(
+            b_node.run_count() >= 1,
+            "b must execute at least once -- it is reachable from a and the cycle is bounded \
+             to terminate, so a correct engine schedules it; got run_count() == 0"
+        );
+        // Correct behaviour: the run must never report Completed while a
+        // reachable, never-executed node's visit count is zero.
+        assert!(
+            !(matches!(outcome, RunOutcome::Completed { .. })
+                && (a_node.run_count() == 0 || b_node.run_count() == 0)),
+            "the run must not report Completed while a or b's run_count() is 0 -- that is the \
+             exact truthful-outcome violation BUG-02 fixed by a different mechanism; got \
+             outcome = {outcome:?}, a.run_count() = {}, b.run_count() = {}",
+            a_node.run_count(),
             b_node.run_count()
         );
     }

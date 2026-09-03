@@ -3291,6 +3291,7 @@ dependencies = [
  "futures",
  "log",
  "paladin-ai-core",
+ "paladin-llm",
  "paladin-ports",
  "paladin-storage",
  "petgraph",

@@ -40,6 +40,11 @@ pub mod engine;
 pub mod error_aggregation;
 pub mod formation_service;
 pub mod grove_service;
+/// `LlmDecisionEvaluator`: LLM-evaluated edge routing (CF-05), registered
+/// through `edge_evaluator`'s registry like any other evaluator. Off by
+/// default -- reachable only when a workflow author constructs and
+/// registers one in code.
+pub mod llm_decision;
 pub mod maneuver;
 pub mod phalanx_service;
 pub mod retry;
@@ -50,3 +55,4 @@ pub mod in_memory_registry;
 pub use edge_evaluator::{
     EdgeConditionEvaluator, EdgeContext, EdgeEvaluatorError, EdgeEvaluatorRegistry,
 };
+pub use llm_decision::{LlmDecisionEvaluator, OnAmbiguous};

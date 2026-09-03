@@ -36,7 +36,7 @@ use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
     Battlefield, CustomDispatchResolver, FieldName,
 };
-use paladin_core::platform::container::directive::{Directive, NextStep};
+use paladin_core::platform::container::directive::{Directive, MusterTask, NextStep};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, NodeExecutionRecord, NodeId, NodeOutcomeKind, ThreadId,
@@ -1587,6 +1587,7 @@ mod tests {
     use crate::engine::directive_parser::{DirectiveParser, OnParseError};
     use crate::engine::graph::EdgeSpec;
     use crate::engine::graph::EngineLimits;
+    use crate::engine::node::StateNode;
     use crate::engine::test_support::{
         ConcurrencyTrackingNode, CountingFunctionNode, FailingFunctionNode, RecordingPaladinPort,
         RecordingWaypointStore, YieldingNode, shuffle_seeded,
@@ -2507,6 +2508,373 @@ mod tests {
                 .iter()
                 .any(|w| matches!(w.status, WaypointStatus::Completed)),
             "the run must not report Completed"
+        );
+    }
+
+    // --- CF-03: Muster dynamic fan-out (Plan 23-05).
+
+    fn muster_task(worker: &NodeId, payload: serde_json::Value, task_key: &str) -> MusterTask {
+        MusterTask {
+            worker: worker.clone(),
+            payload,
+            task_key: task_key.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn planner_musters_three_workers_that_all_run_in_one_superstep() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let decoy = NodeId::new("decoy");
+        let worker_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        let decoy_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(vec![
+                    muster_task(&worker, serde_json::json!("a"), "a"),
+                    muster_task(&worker, serde_json::json!("b"), "b"),
+                    muster_task(&worker, serde_json::json!("c"), "c"),
+                ]),
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node.clone()));
+        graph.add_node(decoy.clone(), NodeSpec::Function(decoy_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: planner.clone(),
+            to: decoy.clone(),
+            condition: None,
+        });
+        graph.add_entry(planner.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("muster-basic").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        assert_eq!(worker_node.run_count(), 3, "all three tasks must run");
+        assert_eq!(
+            decoy_node.run_count(),
+            0,
+            "the planner's own static outgoing edge must not also fire (D-08c)"
+        );
+
+        let saved = store.saved_waypoints(&thread).await;
+        let muster_superstep = saved
+            .iter()
+            .find(|w| w.superstep == 2)
+            .expect("superstep 2 (the muster superstep) waypoint");
+        let worker_records = muster_superstep
+            .completed
+            .iter()
+            .filter(|r| r.node_id == worker)
+            .count();
+        assert_eq!(
+            worker_records, 3,
+            "all three worker tasks must be recorded as having run in the same superstep"
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_deltas_merge_in_task_key_order_not_completion_order() {
+        // Each worker sleeps for a duration INVERSELY related to its
+        // task_key, so real completion order is c, b, a -- the opposite of
+        // lexicographic task_key order -- yet the merged "order" field must
+        // still read ["a", "b", "c"].
+        struct DelayedWorkerNode {
+            field: FieldName,
+        }
+        #[async_trait::async_trait]
+        impl StateNode for DelayedWorkerNode {
+            async fn run(
+                &self,
+                _state: &Battlefield,
+                ctx: &crate::engine::node::NodeContext,
+            ) -> Result<Directive, NodeError> {
+                let key = ctx.task_key().unwrap_or_default().to_string();
+                let delay_ms = match key.as_str() {
+                    "a" => 30,
+                    "b" => 15,
+                    _ => 0,
+                };
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                let mut delta = StateDelta::new();
+                delta.set_raw(self.field.clone(), serde_json::json!(key));
+                Ok(delta.into())
+            }
+        }
+
+        let order_field = field("order");
+        let s = schema(vec![FieldSpec::new(
+            order_field.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(vec![
+                    muster_task(&worker, serde_json::json!("a"), "a"),
+                    muster_task(&worker, serde_json::json!("b"), "b"),
+                    muster_task(&worker, serde_json::json!("c"), "c"),
+                ]),
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(
+            worker.clone(),
+            NodeSpec::Function(std::sync::Arc::new(DelayedWorkerNode {
+                field: order_field.clone(),
+            })),
+        );
+        graph.add_entry(planner);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("muster-order").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<Vec<String>>(&order_field).unwrap(),
+                    Some(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+                    "deltas must merge in task_key order regardless of completion order"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn each_worker_sees_only_its_own_payload() {
+        let seen_field = field("seen");
+        let s = schema(vec![FieldSpec::new(
+            seen_field.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(vec![
+                    muster_task(&worker, serde_json::json!("payload-a"), "a"),
+                    muster_task(&worker, serde_json::json!("payload-b"), "b"),
+                    muster_task(&worker, serde_json::json!("payload-c"), "c"),
+                ]),
+            })
+        };
+        let worker_node = {
+            let seen_field = seen_field.clone();
+            CountingFunctionNode::with_context_directive(move |_run, _state, ctx| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(
+                    seen_field.clone(),
+                    serde_json::json!({
+                        "task_key": ctx.task_key(),
+                        "payload": ctx.muster_payload(),
+                    }),
+                );
+                delta.into()
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node));
+        graph.add_entry(planner);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("muster-payload-isolation").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                let seen = final_state
+                    .get::<Vec<serde_json::Value>>(&seen_field)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(seen.len(), 3);
+                for entry in &seen {
+                    let task_key = entry["task_key"].as_str().unwrap();
+                    let expected_payload = format!("payload-{task_key}");
+                    assert_eq!(
+                        entry["payload"].as_str().unwrap(),
+                        expected_payload,
+                        "each worker must see only its own payload, never a sibling's"
+                    );
+                }
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn muster_payload_never_enters_the_battlefield() {
+        let ran_field = field("ran");
+        let s = schema(vec![FieldSpec::new(
+            ran_field.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        const MARKERS: [&str; 3] = [
+            "SECRET_PAYLOAD_MARKER_A",
+            "SECRET_PAYLOAD_MARKER_B",
+            "SECRET_PAYLOAD_MARKER_C",
+        ];
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(vec![
+                    muster_task(&worker, serde_json::json!(MARKERS[0]), "a"),
+                    muster_task(&worker, serde_json::json!(MARKERS[1]), "b"),
+                    muster_task(&worker, serde_json::json!(MARKERS[2]), "c"),
+                ]),
+            })
+        };
+        let worker_node = {
+            let ran_field = ran_field.clone();
+            // Deliberately never writes the payload anywhere -- only its
+            // task_key -- so the marker strings can appear ONLY if the
+            // engine itself leaked the payload into the Battlefield.
+            CountingFunctionNode::with_context_directive(move |_run, _state, ctx| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(ran_field.clone(), serde_json::json!(ctx.task_key()));
+                delta.into()
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node));
+        graph.add_entry(planner);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("muster-no-leak").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                let serialized = serde_json::to_string(&final_state).unwrap();
+                for marker in MARKERS {
+                    assert!(
+                        !serialized.contains(marker),
+                        "payload marker {marker} must never reach the Battlefield"
+                    );
+                }
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn deferred_aggregator_runs_once_after_every_task_resolves() {
+        let results_field = field("results");
+        let aggregated_field = field("aggregated");
+        let s = schema(vec![
+            FieldSpec::new(results_field.clone(), DispatchRule::Append, None, false),
+            FieldSpec::new(
+                aggregated_field.clone(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let aggregator = NodeId::new("aggregator");
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(vec![
+                    muster_task(&worker, serde_json::json!("a"), "a"),
+                    muster_task(&worker, serde_json::json!("b"), "b"),
+                    muster_task(&worker, serde_json::json!("c"), "c"),
+                ]),
+            })
+        };
+        let worker_node = {
+            let results_field = results_field.clone();
+            CountingFunctionNode::with_context_directive(move |_run, _state, ctx| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(results_field.clone(), serde_json::json!(ctx.task_key()));
+                delta.into()
+            })
+        };
+        let aggregator_node = {
+            let results_field = results_field.clone();
+            let aggregated_field = aggregated_field.clone();
+            CountingFunctionNode::new(move |_run, state| {
+                let results = state
+                    .get::<Vec<String>>(&results_field)
+                    .unwrap()
+                    .unwrap_or_default();
+                let mut delta = StateDelta::new();
+                delta.set_raw(aggregated_field.clone(), serde_json::json!(results));
+                delta
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node));
+        graph.add_deferred_node(
+            aggregator.clone(),
+            NodeSpec::Function(aggregator_node.clone()),
+        );
+        graph.add_edge(EdgeSpec {
+            from: worker.clone(),
+            to: aggregator.clone(),
+            condition: None,
+        });
+        graph.add_entry(planner);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("muster-defer-aggregate").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<Vec<String>>(&aggregated_field).unwrap(),
+                    Some(vec!["a".to_string(), "b".to_string(), "c".to_string()]),
+                    "the aggregator must see exactly three results in task_key order"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            aggregator_node.run_count(),
+            1,
+            "the deferred aggregator must run exactly once"
+        );
+
+        let saved = store.saved_waypoints(&thread).await;
+        let worker_superstep = saved
+            .iter()
+            .filter(|w| w.completed.iter().any(|r| r.node_id == worker))
+            .map(|w| w.superstep)
+            .max()
+            .expect("a superstep in which the worker ran");
+        let aggregator_superstep = saved
+            .iter()
+            .find(|w| w.completed.iter().any(|r| r.node_id == aggregator))
+            .map(|w| w.superstep)
+            .expect("a superstep in which the aggregator ran");
+        assert!(
+            aggregator_superstep > worker_superstep,
+            "the aggregator ({aggregator_superstep}) must run strictly after the workers \
+             ({worker_superstep})"
         );
     }
 

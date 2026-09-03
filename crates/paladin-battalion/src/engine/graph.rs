@@ -1319,6 +1319,35 @@ mod tests {
         assert_eq!(limits.max_node_visits, 25);
     }
 
+    // --- CF-03, D-12: worker-template well-formedness (Plan 23-05).
+
+    #[test]
+    fn worker_template_is_exempt_from_the_unreachable_rejection() {
+        // A worker template with no static incoming edges -- reachable only
+        // via runtime NextStep::Muster dispatch -- must still validate,
+        // exactly like a WarGraph::mark_dynamic_target node.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("planner"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_worker_template(
+            NodeId::new("worker"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_entry(NodeId::new("planner"));
+
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
+        assert!(graph.is_worker_template(&NodeId::new("worker")));
+    }
+
     // --- BUG-02 / ENG-FR-02a: eligible-set reachability regression tests
     // (Phase 22 Plan 15, gap G-22-3). These fail before the fix lands in
     // Task 2 -- see 22-15-SUMMARY.md for the pre-fix evidence capture that

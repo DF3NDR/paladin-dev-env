@@ -5,10 +5,10 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 23
 current_phase_name: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 status: planning
-stopped_at: "Phase 22.1 complete (verified 18/18, 7/7 plans); next: Phase 23 control flow"
-last_updated: "2026-09-03T14:56:13.205Z"
+stopped_at: "Phase 22.1 complete (verified 18/18, UAT 29/29 passed, security threats_open 0, 7/7 plans); next: Phase 23 control flow"
+last_updated: "2026-09-03T17:08:16Z"
 last_activity: 2026-09-03
-last_activity_desc: Phase 22.1 complete, transitioned to Phase 23
+last_activity_desc: Phase 22.1 UAT and security review complete, ready to plan Phase 23
 progress:
   total_phases: 2
   completed_phases: 2
@@ -20,12 +20,12 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-01 after the v0.9.0 milestone close)
+See: .planning/PROJECT.md (updated 2026-09-03 after Phase 22.1)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 22.1 — Engine readiness defect and MSRV follow-up
+**Current focus:** Phase 23 — Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
 **Progress:** [██████████] 100% — v0.9.0 shipped
@@ -54,7 +54,7 @@ names. See MILESTONES.md.
 Phase: 23 — Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-09-03 — Phase 22.1 complete, transitioned to Phase 23
+Last activity: 2026-09-03 — Phase 22.1 UAT (29/29) and security review (threats_open 0) complete; ready to plan Phase 23
 
 ## Performance Metrics
 
@@ -788,13 +788,13 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 22.1 complete (verified 18/18, 7/7 plans); next: Phase 23 control flow
+**Stopped at:** Phase 22.1 complete (verified 18/18, UAT 29/29 passed, security threats_open 0, 7/7 plans); next: Phase 23 control flow
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-03T14:56:13.164Z
+Last session: 2026-09-03T17:08:16Z
 Resume file:
 
 .planning/phases/22.1-engine-readiness-defect-and-msrv-follow-up/22.1-VERIFICATION.md

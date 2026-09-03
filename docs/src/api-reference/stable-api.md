@@ -134,7 +134,7 @@ During pre-1.0 development (0.x.y):
 
 ### Minimum Supported Rust Version (MSRV)
 
-- **Current MSRV**: Rust 1.93.1 (stable)
+- **Current MSRV**: Rust 1.88 (stable)
 - **MSRV Policy**: Increasing MSRV requires a minor version bump
 - **Support Window**: We support the latest stable Rust release and the previous 2 minor releases
 
@@ -450,7 +450,7 @@ Breaking changes in 0.x versions will be clearly documented.
 
 **Q: When will you increase MSRV (Minimum Supported Rust Version)?**
 
-A: MSRV increases require a minor version bump. We target the latest stable Rust and the previous 2 minor releases. Current MSRV: **Rust 1.93.1**.
+A: MSRV increases require a minor version bump. We target the latest stable Rust and the previous 2 minor releases. Current MSRV: **Rust 1.88**.
 
 ### Migration
 

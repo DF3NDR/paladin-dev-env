@@ -5,7 +5,7 @@
 [![docs.rs](https://img.shields.io/docsrs/paladin-ai)](https://docs.rs/paladin-ai)
 [![docs: mdBook](https://img.shields.io/badge/docs-mdBook-blue.svg)](https://df3ndr.github.io/paladin-dev-env/)
 [![license: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
-[![MSRV](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![MSRV](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org)
 
 **Paladin is a Rust framework for building and orchestrating teams of AI agents.**
 
@@ -98,7 +98,7 @@ for the full table, dependency graph, and copy-paste `Cargo.toml` profiles.
 
 ## Getting Started
 
-**Prerequisites:** Rust ≥ 1.85 (edition 2024). Docker is needed only for the optional services
+**Prerequisites:** Rust ≥ 1.88 (edition 2024). Docker is needed only for the optional services
 (Redis, MinIO, MySQL, Qdrant) used by some adapters and integration tests.
 
 Add Paladin to your project:

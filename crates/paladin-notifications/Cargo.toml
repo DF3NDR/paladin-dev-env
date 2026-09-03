@@ -2,7 +2,7 @@
 name = "paladin-notifications"
 version = "0.9.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version.workspace = true
 authors = ["Am0rfu5"]
 description = "Notification adapter implementations for the Paladin framework (email, push, system)"
 readme = "README.md"

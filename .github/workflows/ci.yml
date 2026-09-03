@@ -231,8 +231,9 @@ jobs:
           echo "  3. Update the baseline: ./scripts/extract-public-api.sh .project/current-exports.txt"
           echo "  4. Commit the updated baseline"
 
-  # MSRV verification (X-11.1, D-07). Dedicated job pinned to the workspace's
-  # declared `rust-version = "1.85"` (all 11 publishable manifests, see
+  # MSRV verification (X-11.2, D-07). Dedicated job pinned to the workspace's
+  # declared `workspace.package.rust-version = "1.88"` (single source, all ten
+  # crate manifests inherit it via `rust-version.workspace = true`, see
   # MIGRATION.md §9.3), independent of and parallel with every other job --
   # no `needs:` edge, so it cannot gate or be gated by anything else. The
   # pinned dev toolchain (rust-toolchain.toml, 1.97.1) would otherwise
@@ -241,23 +242,28 @@ jobs:
   # matrix. `--all-features --all-targets` builds the full workspace,
   # including every optional adapter, at the floor version -- not just the
   # default feature set -- so a feature-gated dependency that silently needs
-  # a newer compiler cannot hide behind `default-features`.
+  # a newer compiler cannot hide behind `default-features`. 1.88 is the
+  # measured floor: `rmcp`'s exact `=2.1.0` pin's `transport-child-process`
+  # feature reaches `process-wrap ^9.0` (needs rustc >= 1.87), and
+  # RUSTSEC-2026-0009's fix (`time` >= 0.3.47) needs rustc >= 1.88 -- the
+  # higher of the two sets the floor, clearing the advisory with no new
+  # security exception (D-06/D-07).
   msrv:
-    name: MSRV (Rust 1.85)
+    name: MSRV (Rust 1.88)
     runs-on: ubuntu-latest
     env:
-      RUSTUP_TOOLCHAIN: "1.85"
+      RUSTUP_TOOLCHAIN: "1.88"
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Install Rust 1.85 toolchain
-        uses: dtolnay/rust-toolchain@1.85
+      - name: Install Rust 1.88 toolchain
+        uses: dtolnay/rust-toolchain@1.88
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: msrv-1.85
+          key: msrv-1.88
 
       - name: Check workspace at MSRV (all features, all targets)
         run: cargo check --workspace --all-features --all-targets

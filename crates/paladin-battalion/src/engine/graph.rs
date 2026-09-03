@@ -18,7 +18,9 @@ use paladin_core::platform::container::battlefield::{
 };
 use paladin_core::platform::container::battlefield_error::BattlefieldError;
 use paladin_core::platform::container::paladin::Paladin;
-use paladin_core::platform::container::waypoint::{GraphFingerprint, NodeId};
+use paladin_core::platform::container::waypoint::{
+    GraphFingerprint, NodeId, canonical_edge_condition,
+};
 
 use crate::engine::EngineError;
 use crate::engine::input_mapping::InputMapping;
@@ -585,7 +587,7 @@ impl WarGraph {
             buf.push(b'-');
             buf.extend_from_slice(edge.to.as_str().as_bytes());
             buf.push(b':');
-            let condition_json = serde_json::to_string(&edge.condition).unwrap_or_default();
+            let condition_json = canonical_edge_condition(&edge.condition);
             buf.extend_from_slice(condition_json.as_bytes());
             buf.push(b'|');
         }
@@ -1134,6 +1136,7 @@ mod tests {
             Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap(),
             graph.entry().to_vec(),
             std::collections::BTreeMap::new(),
+            None,
             None,
             1,
             &paladin_port,

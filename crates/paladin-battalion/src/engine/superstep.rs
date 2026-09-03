@@ -38,7 +38,8 @@ use paladin_core::platform::container::battlefield::{
 };
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::waypoint::{
-    NodeExecutionRecord, NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus,
+    FrontierEdgeState, FrontierSnapshot, NodeExecutionRecord, NodeId, NodeOutcomeKind, ThreadId,
+    Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
 };
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::trace_sink_port::TraceEvent;
@@ -147,6 +148,13 @@ enum NodeRunOutcome {
 /// caller-supplied lineage (`None` for a fresh `start`, `Some(id)` when a
 /// later plan re-enters this loop from `resume`).
 ///
+/// `frontier_snapshot` (BUG-04 / ENG-FR-12a) seeds the `Frontier` this call
+/// builds: `None` for a fresh `start` (`Frontier::new`, every edge
+/// `Pending`), `Some(snapshot)` for a `resume` (`Frontier::from_snapshot`),
+/// restoring the per-edge resolutions and per-node last-executed supersteps
+/// recorded before an earlier interruption, so a resumed run schedules the
+/// same nodes in the same supersteps as an uninterrupted one.
+///
 /// `trace` receives every `TraceEvent` this loop's own steps produce
 /// (`SuperstepStarted`, `NodeStarted`/`NodeFinished`, `DeltaMerged`,
 /// `WaypointSaved`) -- `RunStarted`/`RunFinished` bracket the call from
@@ -171,6 +179,7 @@ pub(crate) async fn run<W: WaypointPort>(
     mut battlefield: Battlefield,
     mut vanguard: Vec<NodeId>,
     mut visit_counts: BTreeMap<NodeId, u32>,
+    frontier_snapshot: Option<FrontierSnapshot>,
     mut parent_waypoint_id: Option<WaypointId>,
     mut superstep_number: u64,
     paladin_port: &Arc<dyn PaladinPort>,
@@ -188,7 +197,7 @@ pub(crate) async fn run<W: WaypointPort>(
     // whose Frontier disagrees is the same invariant violation as the
     // mid-loop site, just caught before any superstep ever ran).
     if vanguard.is_empty() {
-        let entry_frontier = Frontier::new(graph);
+        let entry_frontier = Frontier::for_run(graph, &frontier_snapshot);
         let starved = starved_at_completion(graph, &entry_frontier);
         if !starved.is_empty() {
             let names = starved
@@ -218,6 +227,7 @@ pub(crate) async fn run<W: WaypointPort>(
                     failed_node: starved[0].clone(),
                 },
                 visit_counts,
+                entry_frontier.snapshot(graph),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -236,6 +246,7 @@ pub(crate) async fn run<W: WaypointPort>(
             Vec::new(),
             WaypointStatus::Completed,
             visit_counts,
+            entry_frontier.snapshot(graph),
         );
         persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
         return Ok(RunOutcome::Completed {
@@ -244,7 +255,7 @@ pub(crate) async fn run<W: WaypointPort>(
         });
     }
 
-    let mut frontier = Frontier::new(graph);
+    let mut frontier = Frontier::for_run(graph, &frontier_snapshot);
 
     loop {
         // --- ENG-FR-23: cancellation is observed only at a superstep
@@ -269,6 +280,7 @@ pub(crate) async fn run<W: WaypointPort>(
                 Vec::new(),
                 WaypointStatus::Halted,
                 visit_counts,
+                frontier.snapshot(graph),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Halted {
@@ -296,6 +308,7 @@ pub(crate) async fn run<W: WaypointPort>(
                     failed_node: vanguard[0].clone(),
                 },
                 visit_counts,
+                frontier.snapshot(graph),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -334,6 +347,7 @@ pub(crate) async fn run<W: WaypointPort>(
                     failed_node: node,
                 },
                 visit_counts,
+                frontier.snapshot(graph),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -508,6 +522,7 @@ pub(crate) async fn run<W: WaypointPort>(
                     failed_node: node_id,
                 },
                 visit_counts,
+                frontier.snapshot(graph),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -537,6 +552,7 @@ pub(crate) async fn run<W: WaypointPort>(
                         failed_node: ran.first().cloned().unwrap_or_else(|| vanguard[0].clone()),
                     },
                     visit_counts,
+                    frontier.snapshot(graph),
                 );
                 persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
                 return Ok(RunOutcome::Failed {
@@ -594,6 +610,7 @@ pub(crate) async fn run<W: WaypointPort>(
                         failed_node: starved[0].clone(),
                     },
                     visit_counts.clone(),
+                    frontier.snapshot(graph),
                 );
                 persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
                 return Ok(RunOutcome::Failed {
@@ -619,6 +636,7 @@ pub(crate) async fn run<W: WaypointPort>(
             completed_records,
             status,
             visit_counts.clone(),
+            frontier.snapshot(graph),
         );
         persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
 
@@ -700,6 +718,83 @@ impl Frontier {
             edge_state,
             dead: HashSet::new(),
             last_executed: HashMap::new(),
+            incoming,
+        };
+        frontier.propagate_dead(graph);
+        frontier
+    }
+
+    /// Build the `Frontier` a `run` call starts from: fresh
+    /// ([`Frontier::new`]) when `frontier_snapshot` is `None` (a fresh
+    /// `start`), restored ([`Frontier::from_snapshot`]) when it is `Some`
+    /// (a `resume`, BUG-04 / ENG-FR-12a). The one call site for both of
+    /// `run`'s Frontier constructions (the early empty-Vanguard return and
+    /// the main loop), so `Frontier::new` has exactly one call site in this
+    /// module -- the fresh-start case -- and the resume path always reaches
+    /// `Frontier::from_snapshot`.
+    fn for_run(graph: &WarGraph, frontier_snapshot: &Option<FrontierSnapshot>) -> Self {
+        match frontier_snapshot {
+            Some(snapshot) => Self::from_snapshot(graph, snapshot),
+            None => Self::new(graph),
+        }
+    }
+
+    /// Build a `Frontier` for `graph` restored from a persisted
+    /// [`FrontierSnapshot`] (BUG-04 / ENG-FR-12a): every graph edge whose
+    /// identity (`from`, `to`, [`canonical_edge_condition`]) matches a
+    /// snapshot entry is set `Fired`/`NotFiring` at the snapshot's
+    /// `resolved_at`; every graph edge with no matching snapshot entry
+    /// starts `Pending`, exactly as [`Frontier::new`] would build it -- a
+    /// snapshot edge with no matching graph edge is silently dropped (D-22:
+    /// under `ResumeOptions::allow_graph_change`, an edge the new graph no
+    /// longer declares must not resurrect). `last_executed` entries naming a
+    /// node absent from `graph` are dropped the same way. Structural
+    /// deadness is then re-propagated exactly as `new` does, so the restored
+    /// frontier is indistinguishable in shape from one built fresh and then
+    /// driven to the same edge states by replaying every recorded
+    /// execution.
+    fn from_snapshot(graph: &WarGraph, snapshot: &FrontierSnapshot) -> Self {
+        let mut incoming: HashMap<NodeId, Vec<usize>> = HashMap::new();
+        for (idx, edge) in graph.edges().iter().enumerate() {
+            incoming.entry(edge.to.clone()).or_default().push(idx);
+        }
+
+        let mut by_identity: HashMap<(&str, &str, &str), &FrontierEdgeState> = HashMap::new();
+        for entry in &snapshot.edges {
+            by_identity.insert(
+                (
+                    entry.from.as_str(),
+                    entry.to.as_str(),
+                    entry.condition.as_str(),
+                ),
+                entry,
+            );
+        }
+
+        let mut edge_state = vec![EdgeState::Pending; graph.edges().len()];
+        for (idx, edge) in graph.edges().iter().enumerate() {
+            let condition = canonical_edge_condition(&edge.condition);
+            let key = (edge.from.as_str(), edge.to.as_str(), condition.as_str());
+            if let Some(entry) = by_identity.get(&key) {
+                edge_state[idx] = if entry.fired {
+                    EdgeState::Fired(entry.resolved_at)
+                } else {
+                    EdgeState::NotFiring(entry.resolved_at)
+                };
+            }
+        }
+
+        let last_executed: HashMap<NodeId, u64> = snapshot
+            .last_executed
+            .iter()
+            .filter(|(node, _)| graph.node(node).is_some())
+            .map(|(node, superstep)| (node.clone(), *superstep))
+            .collect();
+
+        let mut frontier = Self {
+            edge_state,
+            dead: HashSet::new(),
+            last_executed,
             incoming,
         };
         frontier.propagate_dead(graph);
@@ -846,6 +941,56 @@ impl Frontier {
             return false;
         };
         summary.pending_from_live.is_empty() && summary.any_fresh_fire
+    }
+
+    /// Snapshot this `Frontier` as of RIGHT NOW (BUG-04 / ENG-FR-12a): one
+    /// [`FrontierEdgeState`] per edge whose `edge_state` is `Fired` or
+    /// `NotFiring` (never for `Pending`, and never for the derived
+    /// dead-source resolution [`Frontier::edge_resolution`] computes on the
+    /// fly for a `Pending` edge from a proven-dead source -- that is
+    /// re-derived by [`Frontier::propagate_dead`] on restore, not persisted
+    /// here), de-duplicated by identity and sorted by `(from, to,
+    /// condition)`, plus `last_executed` as a `BTreeMap` -- both collections
+    /// keyed/ordered so two byte-identical runs produce byte-identical
+    /// `Waypoint` payloads (ENG-FR-04/08, RESEARCH.md Pitfall 5). A
+    /// duplicate-identity edge pair always resolves identically (both are
+    /// evaluated from the same `record_execution` call against the same
+    /// post-merge `Battlefield`), so collapsing them to one entry loses no
+    /// information.
+    fn snapshot(&self, graph: &WarGraph) -> FrontierSnapshot {
+        let mut edges: BTreeMap<(String, String, String), FrontierEdgeState> = BTreeMap::new();
+        for (idx, edge) in graph.edges().iter().enumerate() {
+            let (fired, resolved_at) = match self.edge_state[idx] {
+                EdgeState::Fired(s) => (true, s),
+                EdgeState::NotFiring(s) => (false, s),
+                EdgeState::Pending => continue,
+            };
+            let condition = canonical_edge_condition(&edge.condition);
+            let key = (
+                edge.from.as_str().to_string(),
+                edge.to.as_str().to_string(),
+                condition.clone(),
+            );
+            edges.insert(
+                key,
+                FrontierEdgeState {
+                    from: edge.from.clone(),
+                    to: edge.to.clone(),
+                    condition,
+                    fired,
+                    resolved_at,
+                },
+            );
+        }
+
+        FrontierSnapshot {
+            edges: edges.into_values().collect(),
+            last_executed: self
+                .last_executed
+                .iter()
+                .map(|(node, superstep)| (node.clone(), *superstep))
+                .collect(),
+        }
     }
 }
 
@@ -1064,6 +1209,7 @@ fn build_waypoint(
     completed: Vec<NodeExecutionRecord>,
     status: WaypointStatus,
     visit_counts: BTreeMap<NodeId, u32>,
+    frontier: FrontierSnapshot,
 ) -> Waypoint {
     Waypoint {
         thread_id: thread.clone(),
@@ -1078,6 +1224,7 @@ fn build_waypoint(
         created_at: Utc::now(),
         schema_version: Waypoint::current_schema_version(),
         visit_counts,
+        frontier,
     }
 }
 
@@ -1167,6 +1314,7 @@ mod tests {
             .unwrap(),
             graph.entry().to_vec(),
             BTreeMap::new(),
+            None,
             None,
             1,
             &no_paladin_port(),
@@ -1372,6 +1520,7 @@ mod tests {
             graph.entry().to_vec(),
             BTreeMap::new(),
             None,
+            None,
             1,
             &no_paladin_port(),
             &no_trace(),
@@ -1400,6 +1549,7 @@ mod tests {
             Battlefield::new(graph.schema().clone()),
             graph.entry().to_vec(),
             BTreeMap::new(),
+            None,
             None,
             1,
             &no_paladin_port(),
@@ -1455,6 +1605,7 @@ mod tests {
             Battlefield::new(graph.schema().clone()),
             graph.entry().to_vec(),
             BTreeMap::new(),
+            None,
             None,
             1,
             &no_paladin_port(),

@@ -504,6 +504,7 @@ impl<W: WaypointPort> WarEngine<W> {
             graph.entry().to_vec(),
             BTreeMap::new(),
             None,
+            None,
             1,
             &self.paladin_port,
             &self.trace_dispatcher,
@@ -551,14 +552,19 @@ impl<W: WaypointPort> WarEngine<W> {
     /// entirely, trusting the caller that whatever changed is safe to
     /// resume against for this thread.
     ///
-    /// Separately, and NOT something the fingerprint check guards against
-    /// at all: this resume path rebuilds the `Frontier` from scratch
-    /// (`Frontier::new`), so per-edge resolutions recorded before the crash
-    /// are not restored. This is a currently-undispositioned finding,
-    /// recorded as the BUG-04 candidate under this phase's Deferred Ideas
-    /// (`22.1-CONTEXT.md`) and awaiting a developer disposition. This doc
-    /// comment does not claim that divergence between fresh and resumed
-    /// execution is impossible.
+    /// The restored-frontier guarantee (BUG-04 / ENG-FR-12a): the loaded
+    /// Waypoint's `frontier` -- every incoming edge resolved before the
+    /// interruption, keyed by edge identity, plus each node's last-executed
+    /// superstep -- is restored into the `Frontier` this call's superstep
+    /// loop runs with, not rebuilt from scratch. A pre-crash fired edge into
+    /// a join node that was not yet ready is therefore seen again on
+    /// resume, so a resumed run schedules the same nodes in the same
+    /// supersteps as the uninterrupted run would have. Under
+    /// `options.allow_graph_change`, this degrades precisely: a restored
+    /// edge resolution whose identity the new graph no longer declares is
+    /// dropped, and an edge the new graph adds starts `Pending` --
+    /// unresolved, never mis-assigned a stale resolution from a
+    /// same-source-or-target edge that used to occupy that identity.
     pub async fn resume_with_options(
         &self,
         graph: &WarGraph,
@@ -614,6 +620,7 @@ impl<W: WaypointPort> WarEngine<W> {
             latest.battlefield,
             latest.vanguard,
             latest.visit_counts,
+            Some(latest.frontier),
             Some(latest.waypoint_id),
             latest.superstep + 1,
             &self.paladin_port,

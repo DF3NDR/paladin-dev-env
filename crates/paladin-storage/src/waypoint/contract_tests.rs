@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
 use paladin_core::platform::container::waypoint::{
-    GraphFingerprint, ThreadId, Waypoint, WaypointId, WaypointStatus,
+    FrontierSnapshot, GraphFingerprint, ThreadId, Waypoint, WaypointId, WaypointStatus,
 };
 use paladin_ports::output::waypoint_port::WaypointPort;
 
@@ -48,6 +48,7 @@ pub fn sample_waypoint_at(
         created_at,
         schema_version: Waypoint::current_schema_version(),
         visit_counts: std::collections::BTreeMap::new(),
+        frontier: FrontierSnapshot::default(),
     }
 }
 
@@ -267,6 +268,7 @@ pub async fn child_lineage_survives_round_trip(port: &dyn WaypointPort) {
         vec![],
         WaypointStatus::Running,
         std::collections::BTreeMap::new(),
+        FrontierSnapshot::default(),
     );
     port.save(&root).await.unwrap();
 
@@ -279,6 +281,7 @@ pub async fn child_lineage_survives_round_trip(port: &dyn WaypointPort) {
         vec![],
         WaypointStatus::Running,
         std::collections::BTreeMap::new(),
+        FrontierSnapshot::default(),
     );
     port.save(&child).await.unwrap();
 

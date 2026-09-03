@@ -5,12 +5,12 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 23
 current_phase_name: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 status: planning
-stopped_at: "Phase 22.1 complete (verified 18/18, UAT 29/29 passed, security threats_open 0, 7/7 plans); next: Phase 23 control flow"
-last_updated: "2026-09-03T17:08:16Z"
+stopped_at: Phase 23 context gathered
+last_updated: "2026-09-03T17:28:26.260Z"
 last_activity: 2026-09-03
-last_activity_desc: Phase 22.1 UAT and security review complete, ready to plan Phase 23
+last_activity_desc: Phase 22.1 UAT (29/29) and security review (threats_open 0) complete; ready to plan Phase 23
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
   total_plans: 24
   completed_plans: 24
@@ -788,16 +788,16 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 22.1 complete (verified 18/18, UAT 29/29 passed, security threats_open 0, 7/7 plans); next: Phase 23 control flow
+**Stopped at:** Phase 23 context gathered
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-03T17:08:16Z
+Last session: 2026-09-03T17:28:26.216Z
 Resume file:
 
-.planning/phases/22.1-engine-readiness-defect-and-msrv-follow-up/22.1-VERIFICATION.md
+/workspace/.planning/phases/23-control-flow-dynamic-routing-fan-out-subgraphs/23-CONTEXT.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

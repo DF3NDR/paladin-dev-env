@@ -332,17 +332,43 @@ Plans:
 **Plans**: 12 plans (9 waves)
 
 Plans:
+**Wave 1**
+
 - [ ] 23-01-PLAN.md — BUG-01 fail-closed on both paths (registered `EdgeConditionEvaluator`, RED-then-GREEN) + M-B-01 worked example (CF-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 23-02-PLAN.md — `Directive`/`NextStep`/`MusterTask` in core, `StateNode::run` return change, Goto/End/Parley arms (CF-02)
 - [ ] 23-03-PLAN.md — `LlmDecisionEvaluator` (one call per decision per superstep) + Commander `StrategySelection::Semantic` (CF-05)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 23-04-PLAN.md — per-node `DirectiveParser` for Paladin nodes: `PlainOutput` default, `StructuredDirective` envelope, `on_parse_error` (CF-02)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 23-05-PLAN.md — Muster fan-out: worker templates, one-superstep dispatch, `task_key` ordering, validation-before-dispatch, `muster.` namespace (CF-03)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 23-06-PLAN.md — mid-muster progress Waypoints, resume running only unfinished tasks, contract-suite coverage, ENG-FR-11 note (CF-03)
 - [ ] 23-07-PLAN.md — `EngineConfig` at `src/config/engine.rs` with `APP_ENGINE_*` overrides; closes MIGRATION §9.5 (CF-03)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 23-08-PLAN.md — `NodeSpec::Battalion` + `StateMap` subgraph composition, engine inheritance, recursion rejection (CF-04)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 23-09-PLAN.md — injective child `ThreadId`, `checkpoint_ns`, resume-mid-child, Formation-inside-Campaign test (CF-04)
 - [ ] 23-10-PLAN.md — graph fingerprint `v2` → `v3` with the six new hashed properties and a re-pinned golden (CF-02/03/04)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [ ] 23-11-PLAN.md — E2E-3 muster/defer/order integration test + 50-task multi-thread stress test (CF-03)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
 - [ ] 23-12-PLAN.md — mdBook control-flow page, §9.2 register closeout, CHANGELOG, program-gate evidence (CF-01…CF-05)
 
 ### Phase 24: Pause/Resume, History & Graceful Shutdown

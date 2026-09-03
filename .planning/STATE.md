@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 23
 current_phase_name: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
-status: planning
+status: executing
 stopped_at: Phase 23 context gathered
-last_updated: "2026-09-03T17:28:26.260Z"
+last_updated: "2026-09-03T18:47:49.682Z"
 last_activity: 2026-09-03
 last_activity_desc: Phase 22.1 UAT (29/29) and security review (threats_open 0) complete; ready to plan Phase 23
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 24
+  total_plans: 36
   completed_plans: 24
 ---
 
@@ -53,7 +53,7 @@ names. See MILESTONES.md.
 
 Phase: 23 — Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-03 — Phase 22.1 UAT (29/29) and security review (threats_open 0) complete; ready to plan Phase 23
 
 ## Performance Metrics

@@ -105,7 +105,7 @@ anything PRD 02, PRD 01, overview §3 (X-01…X-11), or Phase 22/22.1's CONTEXT 
   resolved (see D-29).
 
 ### Directive semantics at the engine boundary (CF-02)
-- **D-07: `StateNode::run` changes return type directly.** `Directive`, `NextStep` and
+- **D-07: Change the `StateNode` trait's `run` return type directly.** `Directive`, `NextStep` and
   `MusterTask` land in `paladin-core` (no new core deps — `serde_json::Value` is already a core
   dependency) with `impl From<StateDelta> for Directive` (`next: Edges`). `StateNode::run`
   becomes `Result<Directive, NodeError>`; every in-tree Function node and test-support node adopts
@@ -130,7 +130,7 @@ anything PRD 02, PRD 01, overview §3 (X-01…X-11), or Phase 22/22.1's CONTEXT 
   check's rustdoc and cover it with a test where End fires while another node still holds an
   unconsumed fired edge. Which node ended the run should be observable from the Waypoint's
   `completed` records (Claude's discretion on the exact `NodeOutcomeKind`/field).
-- **D-10: `NextStep::Parley` returned this phase is a typed failure.** The engine returns
+- **D-10: A returned Parley directive is a typed failure this phase.** The engine returns
   `EngineError::ParleyNotSupported { node }` (fail loudly); it is never silently treated as
   `Edges` and no `AwaitingInput` Waypoint is written here. Phase 24 replaces this arm with real
   suspension.
@@ -217,9 +217,9 @@ anything PRD 02, PRD 01, overview §3 (X-01…X-11), or Phase 22/22.1's CONTEXT 
   fingerprint mismatches on a later layout change.
 
 ### Subgraph identity & checkpoint namespacing (CF-04)
-- **D-19: `NodeSpec::Battalion { graph: Arc<WarGraph>, state_map: StateMap, restart_on_resume:
-  bool }`** on the already-`#[non_exhaustive]` enum (its rustdoc at `graph.rs:31` announces this
-  variant). `StateMap { inputs: Vec<(FieldName, FieldName)>, outputs: Vec<(FieldName,
+- **D-19: Add the Battalion variant to `NodeSpec`.** `NodeSpec::Battalion { graph: Arc<WarGraph>,
+  state_map: StateMap, restart_on_resume: bool }` on the already-`#[non_exhaustive]` enum (its
+  rustdoc at `graph.rs:31` announces this variant). `StateMap { inputs: Vec<(FieldName, FieldName)>, outputs: Vec<(FieldName,
   FieldName)> }` (parent, child) / (child, parent). Parent `validate` checks every mapped parent
   field exists in the parent schema and every mapped child field in the child schema, validates
   the child graph recursively with the **same** dispatch resolver and evaluator registry, and

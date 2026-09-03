@@ -218,11 +218,7 @@ impl WarGraph {
             };
             graph.add_node(
                 ids[i].clone(),
-                NodeSpec::Paladin {
-                    paladin: Box::new(paladin),
-                    input_template,
-                    output_field: output_field(),
-                },
+                NodeSpec::paladin(paladin, input_template, output_field()),
             );
         }
         for pair in ids.windows(2) {
@@ -256,11 +252,7 @@ impl WarGraph {
             let id = indexed_node_id("p", i);
             graph.add_node(
                 id.clone(),
-                NodeSpec::Paladin {
-                    paladin: Box::new(paladin),
-                    input_template: template.clone(),
-                    output_field: history_field(),
-                },
+                NodeSpec::paladin(paladin, template.clone(), history_field()),
             );
             graph.add_entry(id);
         }
@@ -311,11 +303,11 @@ impl WarGraph {
             };
             graph.add_node(
                 node_id.clone(),
-                NodeSpec::Paladin {
-                    paladin: Box::new(paladin.clone()),
+                NodeSpec::paladin(
+                    paladin.clone(),
                     input_template,
-                    output_field: dedicated_output_field(&node_id),
-                },
+                    dedicated_output_field(&node_id),
+                ),
             );
         }
 

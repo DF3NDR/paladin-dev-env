@@ -24,6 +24,7 @@ use paladin_core::platform::container::waypoint::{
 
 use crate::edge_evaluator::EdgeEvaluatorRegistry;
 use crate::engine::EngineError;
+use crate::engine::directive_parser::DirectiveParser;
 use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::StateNode;
 
@@ -45,17 +46,62 @@ pub enum NodeSpec {
         input_template: InputMapping,
         /// The field the Paladin's output is written to as a delta.
         output_field: FieldName,
+        /// How this node's raw string output is turned into a routing
+        /// `Directive` (CF-02, D-11). Defaults to `DirectiveParser::PlainOutput`
+        /// via [`NodeSpec::paladin`], reproducing pre-CF-02 behavior exactly.
+        directive_parser: DirectiveParser,
     },
     /// A pure, deterministic state -> delta node.
     Function(Arc<dyn StateNode>),
 }
 
+impl NodeSpec {
+    /// Construct a `NodeSpec::Paladin` with `DirectiveParser::PlainOutput`
+    /// (D-11's default): the raw output is written to `output_field` and the
+    /// node routes via its static outgoing edges, byte-identical to a
+    /// pre-CF-02 Paladin node. The constructor every in-tree call site uses,
+    /// so no call site needs to name the new `directive_parser` field.
+    pub fn paladin(
+        paladin: Paladin,
+        input_template: InputMapping,
+        output_field: FieldName,
+    ) -> Self {
+        NodeSpec::paladin_with_directive_parser(
+            paladin,
+            input_template,
+            output_field,
+            DirectiveParser::PlainOutput,
+        )
+    }
+
+    /// Construct a `NodeSpec::Paladin` with an explicit `DirectiveParser`
+    /// (D-11), for a node that opts into `DirectiveParser::StructuredDirective`.
+    pub fn paladin_with_directive_parser(
+        paladin: Paladin,
+        input_template: InputMapping,
+        output_field: FieldName,
+        directive_parser: DirectiveParser,
+    ) -> Self {
+        NodeSpec::Paladin {
+            paladin: Box::new(paladin),
+            input_template,
+            output_field,
+            directive_parser,
+        }
+    }
+}
+
 impl std::fmt::Debug for NodeSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NodeSpec::Paladin { output_field, .. } => f
+            NodeSpec::Paladin {
+                output_field,
+                directive_parser,
+                ..
+            } => f
                 .debug_struct("NodeSpec::Paladin")
                 .field("output_field", output_field)
+                .field("directive_parser", directive_parser)
                 .finish(),
             NodeSpec::Function(_) => f.debug_tuple("NodeSpec::Function").field(&"<fn>").finish(),
         }
@@ -1056,15 +1102,11 @@ mod tests {
         );
         graph.add_node(
             NodeId::new("worker"),
-            NodeSpec::Paladin {
-                paladin: Box::new(make_fixture_paladin(
-                    "worker",
-                    spec.worker_prompt,
-                    spec.worker_model,
-                )),
-                input_template: InputMapping::new(spec.worker_input_template),
-                output_field: FieldName::new(spec.worker_output_field).unwrap(),
-            },
+            NodeSpec::paladin(
+                make_fixture_paladin("worker", spec.worker_prompt, spec.worker_model),
+                InputMapping::new(spec.worker_input_template),
+                FieldName::new(spec.worker_output_field).unwrap(),
+            ),
         );
         if spec.defer_aggregator {
             graph.add_deferred_node(

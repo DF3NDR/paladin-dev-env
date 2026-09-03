@@ -181,19 +181,19 @@ fn build_graph() -> WarGraph {
 
     graph.add_node(
         researcher.clone(),
-        NodeSpec::Paladin {
-            paladin: Box::new(make_paladin("researcher")),
-            input_template: InputMapping::new("{topic}"),
-            output_field: field("research_out"),
-        },
+        NodeSpec::paladin(
+            make_paladin("researcher"),
+            InputMapping::new("{topic}"),
+            field("research_out"),
+        ),
     );
     graph.add_node(
         writer.clone(),
-        NodeSpec::Paladin {
-            paladin: Box::new(make_paladin("writer")),
-            input_template: InputMapping::new("{research_out}"),
-            output_field: field("writer_out"),
-        },
+        NodeSpec::paladin(
+            make_paladin("writer"),
+            InputMapping::new("{research_out}"),
+            field("writer_out"),
+        ),
     );
     graph.add_node(
         loop_gate.clone(),
@@ -201,27 +201,27 @@ fn build_graph() -> WarGraph {
     );
     graph.add_node(
         reviewer.clone(),
-        NodeSpec::Paladin {
-            paladin: Box::new(make_paladin("reviewer")),
-            input_template: InputMapping::new("{writer_out}"),
-            output_field: field("reviewer_out"),
-        },
+        NodeSpec::paladin(
+            make_paladin("reviewer"),
+            InputMapping::new("{writer_out}"),
+            field("reviewer_out"),
+        ),
     );
     graph.add_node(
         finalizer.clone(),
-        NodeSpec::Paladin {
-            paladin: Box::new(make_paladin("finalizer")),
-            input_template: InputMapping::new("{reviewer_out}"),
-            output_field: field("finalizer_out"),
-        },
+        NodeSpec::paladin(
+            make_paladin("finalizer"),
+            InputMapping::new("{reviewer_out}"),
+            field("finalizer_out"),
+        ),
     );
     graph.add_node(
         archiver.clone(),
-        NodeSpec::Paladin {
-            paladin: Box::new(make_paladin("archiver")),
-            input_template: InputMapping::new("{finalizer_out}"),
-            output_field: field("archiver_out"),
-        },
+        NodeSpec::paladin(
+            make_paladin("archiver"),
+            InputMapping::new("{finalizer_out}"),
+            field("archiver_out"),
+        ),
     );
 
     graph.add_edge(EdgeSpec {

@@ -1488,7 +1488,7 @@ mod tests {
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
     };
-    use paladin_core::platform::container::waypoint::ThreadId;
+    use paladin_core::platform::container::waypoint::{ParleyRequest, ThreadId};
 
     use crate::engine::graph::EdgeSpec;
     use crate::engine::graph::EngineLimits;
@@ -1772,6 +1772,270 @@ mod tests {
             1,
             "a node that is both tier-1-ready and a Goto target this superstep must run \
              exactly once"
+        );
+    }
+
+    // --- CF-02: End semantics, End-over-Goto precedence, typed Parley ---
+
+    #[tokio::test]
+    async fn end_completes_the_run_after_the_emitting_superstep_merges() {
+        let s = schema(vec![FieldSpec::new(
+            field("result"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let ender = NodeId::new("ender");
+        let peer = NodeId::new("peer");
+        let ender_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::End,
+        });
+        let peer_node = CountingFunctionNode::fixed(field("result"), serde_json::json!("peer-ran"));
+        graph.add_node(ender.clone(), NodeSpec::Function(ender_node));
+        graph.add_node(peer.clone(), NodeSpec::Function(peer_node.clone()));
+        graph.add_entry(ender);
+        graph.add_entry(peer);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("end-basic").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&field("result")).unwrap(),
+                    Some("peer-ran".to_string()),
+                    "the peer's delta must merge before End completes the run"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(peer_node.run_count(), 1);
+
+        let saved = store.saved_waypoints(&thread).await;
+        assert_eq!(
+            saved.len(),
+            1,
+            "no superstep after the one End fired in must run"
+        );
+    }
+
+    #[tokio::test]
+    async fn end_beats_goto_in_the_same_superstep() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let ender = NodeId::new("ender");
+        let gotoer = NodeId::new("gotoer");
+        let c = NodeId::new("c");
+        let ender_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::End,
+        });
+        let gotoer_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Goto(vec![NodeId::new("c")]),
+        });
+        let c_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        graph.add_node(ender.clone(), NodeSpec::Function(ender_node));
+        graph.add_node(gotoer.clone(), NodeSpec::Function(gotoer_node));
+        graph.add_node(c.clone(), NodeSpec::Function(c_node.clone()));
+        graph.add_entry(ender);
+        graph.add_entry(gotoer);
+        graph.mark_dynamic_target(c.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("end-beats-goto").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(
+            c_node.run_count(),
+            0,
+            "End must win over a peer's Goto in the same superstep"
+        );
+    }
+
+    #[tokio::test]
+    async fn end_terminated_run_does_not_trip_the_starvation_completion_check() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let x = NodeId::new("x");
+        let d = NodeId::new("d");
+        let ender = NodeId::new("ender");
+        let x_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        let d_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        let ender_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::End,
+        });
+        graph.add_node(x.clone(), NodeSpec::Function(x_node));
+        graph.add_node(d.clone(), NodeSpec::Function(d_node.clone()));
+        graph.add_node(ender.clone(), NodeSpec::Function(ender_node));
+        graph.add_edge(EdgeSpec {
+            from: x.clone(),
+            to: d.clone(),
+            condition: None,
+        });
+        graph.add_entry(x);
+        graph.add_entry(ender);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("end-suppresses-starvation").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "End must complete the run even though d's fired incoming edge from x is never \
+             consumed: got {outcome:?}"
+        );
+        assert_eq!(
+            d_node.run_count(),
+            0,
+            "d must never run -- End short-circuits before its superstep"
+        );
+    }
+
+    #[tokio::test]
+    async fn starvation_completion_check_still_fires_when_no_node_ended_the_run() {
+        // The entry-vanguard-empty variant of D-04's check (superstep.rs's
+        // top-of-`run` branch): seed a FrontierSnapshot whose entry -> d
+        // edge is already fired but never consumed (d never executed), pass
+        // an EMPTY vanguard, and confirm the check still fails the run when
+        // no node in this call emits `NextStep::End` at all (nothing runs
+        // here -- the vanguard is empty from the start).
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let entry = NodeId::new("entry");
+        let d = NodeId::new("d");
+        graph.add_node(
+            entry.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(|_run, _state| StateDelta::new())),
+        );
+        graph.add_node(
+            d.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(|_run, _state| StateDelta::new())),
+        );
+        graph.add_edge(EdgeSpec {
+            from: entry.clone(),
+            to: d.clone(),
+            condition: None,
+        });
+        graph.add_entry(entry.clone());
+
+        let snapshot = FrontierSnapshot {
+            edges: vec![FrontierEdgeState {
+                from: entry.clone(),
+                to: d.clone(),
+                condition: canonical_edge_condition(&None),
+                fired: true,
+                resolved_at: 1,
+            }],
+            last_executed: BTreeMap::from([(entry, 1)]),
+        };
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("starvation-still-fires").unwrap();
+        let outcome = run(
+            &store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &graph,
+            thread,
+            Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap(),
+            Vec::new(),
+            BTreeMap::new(),
+            Some(snapshot),
+            None,
+            2,
+            &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RunOutcome::Failed {
+                error: EngineError::StarvedNodeAtCompletion { nodes, .. },
+                ..
+            } => {
+                assert_eq!(nodes, vec![d]);
+            }
+            other => panic!("expected Failed(StarvedNodeAtCompletion), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn which_node_ended_the_run_is_observable_from_the_waypoint() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let ender = NodeId::new("ender");
+        let ender_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::End,
+        });
+        graph.add_node(ender.clone(), NodeSpec::Function(ender_node));
+        graph.add_entry(ender.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("end-observable").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let saved = store.saved_waypoints(&thread).await;
+        let wp = saved
+            .iter()
+            .find(|w| w.superstep == 1)
+            .expect("superstep 1 waypoint");
+        let record = wp
+            .completed
+            .iter()
+            .find(|r| r.node_id == ender)
+            .expect("ender's execution record");
+        assert_eq!(record.outcome, NodeOutcomeKind::Ended);
+    }
+
+    #[tokio::test]
+    async fn parley_returned_this_phase_fails_the_run() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let asker = NodeId::new("asker");
+        let asker_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(ParleyRequest {
+                prompt: "need input".to_string(),
+            }),
+        });
+        graph.add_node(asker.clone(), NodeSpec::Function(asker_node));
+        graph.add_entry(asker.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("parley-unsupported").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        match outcome {
+            RunOutcome::Failed {
+                error: EngineError::ParleyNotSupported { node },
+                ..
+            } => {
+                assert_eq!(node, asker);
+            }
+            other => panic!("expected Failed(ParleyNotSupported), got {other:?}"),
+        }
+
+        let saved = store.saved_waypoints(&thread).await;
+        assert!(
+            saved
+                .iter()
+                .all(|w| !matches!(w.status, WaypointStatus::AwaitingInput { .. })),
+            "no AwaitingInput waypoint may be written for an unsupported Parley"
+        );
+        assert!(
+            !saved
+                .iter()
+                .any(|w| matches!(w.status, WaypointStatus::Completed)),
+            "the run must not report Completed"
         );
     }
 

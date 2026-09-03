@@ -347,7 +347,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 23-05-PLAN.md — Muster fan-out: worker templates, one-superstep dispatch, `task_key` ordering, validation-before-dispatch, `muster.` namespace (CF-03)
+- [x] 23-05-PLAN.md — Muster fan-out: worker templates, one-superstep dispatch, `task_key` ordering, validation-before-dispatch, `muster.` namespace (CF-03)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

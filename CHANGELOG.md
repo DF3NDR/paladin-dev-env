@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Workspace MSRV floor raised from 1.85 to 1.88 (X-11.2 stop-and-flag resolution).** The
+  declared 1.85 floor could not actually be satisfied: the exact `rmcp = "=2.1.0"` pin's
+  `transport-child-process` feature reaches `process-wrap ^9.0`, whose every release requires
+  rustc >= 1.87, and clearing RUSTSEC-2026-0009 requires `time` >= 0.3.47, which requires rustc
+  >= 1.88. 1.88 is the lowest floor that satisfies both without a new security exception. The
+  floor now lives in exactly one place — `workspace.package.rust-version = "1.88"` in root
+  `Cargo.toml` — inherited by all ten crate manifests via `rust-version.workspace = true`, and
+  `[workspace] resolver = "3"` guards against a future `cargo update` silently re-resolving above
+  it. See [`MIGRATION.md` §9.3](MIGRATION.md#93-toolchain--dependencies) for the full dependency
+  chain and the two rejected alternatives.
+
 ### Added
 
 - **Waypoint retention is a public application-layer service.** `WaypointRetentionService`

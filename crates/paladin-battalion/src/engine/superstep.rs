@@ -1409,6 +1409,232 @@ mod tests {
         .unwrap()
     }
 
+    // --- CF-02: Directive-driven Goto -----------------------------------
+
+    #[tokio::test]
+    async fn function_node_goto_sends_control_to_the_named_node_next_superstep() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let a = NodeId::new("a");
+        let b = NodeId::new("b");
+        let c = NodeId::new("c");
+        let a_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Goto(vec![NodeId::new("c")]),
+        });
+        let b_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        let c_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        graph.add_node(a.clone(), NodeSpec::Function(a_node));
+        graph.add_node(b.clone(), NodeSpec::Function(b_node.clone()));
+        graph.add_node(c.clone(), NodeSpec::Function(c_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: b.clone(),
+            condition: None,
+        });
+        graph.add_entry(a.clone());
+        graph.mark_dynamic_target(c.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("goto-basic").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        assert_eq!(c_node.run_count(), 1, "the Goto target must run");
+        assert_eq!(
+            b_node.run_count(),
+            0,
+            "the node's own static outgoing edge must not also fire"
+        );
+
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved
+            .iter()
+            .find(|w| w.superstep == 1)
+            .expect("superstep 1 waypoint");
+        let edge_state = first
+            .frontier
+            .edges
+            .iter()
+            .find(|e| e.from == a && e.to == b)
+            .expect("a -> b edge state recorded");
+        assert!(
+            !edge_state.fired,
+            "a -> b must resolve NotFiring when a routes via Goto (D-08c)"
+        );
+    }
+
+    #[tokio::test]
+    async fn goto_to_an_undeclared_node_fails_the_run() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let a = NodeId::new("a");
+        let ghost = NodeId::new("ghost");
+        let a_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Goto(vec![NodeId::new("ghost")]),
+        });
+        graph.add_node(a.clone(), NodeSpec::Function(a_node));
+        graph.add_entry(a.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("goto-unknown").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        match outcome {
+            RunOutcome::Failed {
+                error: EngineError::GotoUnknownNode { from, to },
+                ..
+            } => {
+                assert_eq!(from, a);
+                assert_eq!(to, ghost);
+            }
+            other => panic!("expected Failed(GotoUnknownNode), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn goto_only_target_must_be_declared_dynamic() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let a = NodeId::new("a");
+        let c = NodeId::new("c");
+        let a_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Goto(vec![NodeId::new("c")]),
+        });
+        let c_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        graph.add_node(a.clone(), NodeSpec::Function(a_node));
+        graph.add_node(c.clone(), NodeSpec::Function(c_node.clone()));
+        graph.add_entry(a.clone());
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .expect_err("c is reachable only via Goto and not marked dynamic_target");
+        assert!(matches!(err, EngineError::UnreachableNode { .. }));
+
+        graph.mark_dynamic_target(c.clone());
+        graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .expect("c is now a declared dynamic target");
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("goto-dynamic-target").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(c_node.run_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn goto_refine_loop_terminates_on_the_reviewer_verdict() {
+        // writer -> reviewer, reviewer Goto(writer)s for its first two runs,
+        // then routes via Edges (reviewer has no outgoing edge, so the run
+        // completes once it stops looping) -- PRD acceptance 3.
+        const REFINE_ROUNDS: usize = 2;
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let writer = NodeId::new("writer");
+        let reviewer = NodeId::new("reviewer");
+        let writer_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        let reviewer_node = CountingFunctionNode::with_directive(|run, _state| {
+            let next = if run < REFINE_ROUNDS {
+                NextStep::Goto(vec![NodeId::new("writer")])
+            } else {
+                NextStep::Edges
+            };
+            Directive {
+                delta: StateDelta::new(),
+                next,
+            }
+        });
+        graph.add_node(writer.clone(), NodeSpec::Function(writer_node.clone()));
+        graph.add_node(reviewer.clone(), NodeSpec::Function(reviewer_node));
+        graph.add_edge(EdgeSpec {
+            from: writer.clone(),
+            to: reviewer.clone(),
+            condition: None,
+        });
+        graph.add_entry(writer);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("goto-refine-loop").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert!(
+            writer_node.run_count() > 1,
+            "the writer must re-run at least once via Goto, got {}",
+            writer_node.run_count()
+        );
+    }
+
+    #[tokio::test]
+    async fn unbounded_goto_loop_trips_the_node_visit_limit() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let a = NodeId::new("a");
+        let a_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Goto(vec![NodeId::new("a")]),
+        });
+        graph.add_node(a.clone(), NodeSpec::Function(a_node));
+        graph.add_entry(a.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("goto-unbounded").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        match outcome {
+            RunOutcome::Failed {
+                error: EngineError::NodeVisitLimitExceeded { node, limit },
+                ..
+            } => {
+                assert_eq!(node, a);
+                assert_eq!(limit, EngineLimits::default().max_node_visits);
+            }
+            other => panic!("expected Failed(NodeVisitLimitExceeded), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn goto_target_that_is_also_tier_one_ready_is_scheduled_exactly_once() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let a = NodeId::new("a");
+        let b = NodeId::new("b");
+        let c = NodeId::new("c");
+        let a_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        let b_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Goto(vec![NodeId::new("c")]),
+        });
+        let c_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        graph.add_node(a.clone(), NodeSpec::Function(a_node));
+        graph.add_node(b.clone(), NodeSpec::Function(b_node));
+        graph.add_node(c.clone(), NodeSpec::Function(c_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: c.clone(),
+            condition: None,
+        });
+        graph.add_entry(a);
+        graph.add_entry(b);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("goto-tier1-both").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(
+            c_node.run_count(),
+            1,
+            "a node that is both tier-1-ready and a Goto target this superstep must run \
+             exactly once"
+        );
+    }
+
     #[tokio::test]
     async fn empty_entry_vanguard_completes_immediately_with_one_waypoint() {
         let graph = WarGraph::new(schema(vec![]), EngineLimits::default());

@@ -2599,6 +2599,197 @@ mod tests {
         }
     }
 
+    /// D-02c: the SAME 20-seed determinism harness as
+    /// `eng_fr_08_determinism_over_twenty_randomized_scheduling_iterations`
+    /// above (extended, not rebuilt), applied to the two cycle-bootstrap
+    /// shapes Plan 22.1-01 fixed -- the self-loop shape
+    /// (`self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`)
+    /// and the general `entry -> a -> b -> a` shape
+    /// (`cycle_node_fed_from_outside_the_cycle_takes_its_first_turn`). Each
+    /// shape gets its own 20-iteration loop with its own reference, since
+    /// the two are structurally different graphs; `YieldingNode`-backed
+    /// nodes with a seed-dependent yield count perturb real async
+    /// completion interleaving exactly as the pre-existing test's nodes do,
+    /// so a byte-identical result across seeds is not true only by
+    /// accident of incidental single-threaded ordering.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn eng_fr_08_determinism_over_twenty_randomized_iterations_for_cycle_bootstrap_shapes() {
+        type Reference = (String, Vec<usize>, std::mem::Discriminant<RunOutcome>);
+
+        // --- Shape 1: self-loop fed from upstream (entry -> b, b -> b). --
+        let mut self_loop_reference: Option<Reference> = None;
+        for seed in 0..20u64 {
+            let s = schema(vec![
+                FieldSpec::new(field("entry_ran"), DispatchRule::LastWrite, None, false),
+                FieldSpec::new(field("status"), DispatchRule::LastWrite, None, false),
+            ]);
+            let mut graph = WarGraph::new(s, EngineLimits::default());
+            let entry_id = NodeId::new("entry");
+            let b_id = NodeId::new("b");
+
+            let entry_base =
+                CountingFunctionNode::fixed(field("entry_ran"), serde_json::json!(true));
+            let entry_node = YieldingNode::new(entry_base.clone(), seed as usize % 3);
+            let b_base = CountingFunctionNode::new(|run_index, _state| {
+                let status = if run_index == 0 { "looping" } else { "done" };
+                let mut d = paladin_core::platform::container::battlefield::StateDelta::new();
+                d.set(field("status"), status).unwrap();
+                d
+            });
+            let b_node = YieldingNode::new(b_base.clone(), (seed as usize + 1) % 3);
+
+            graph.add_node(entry_id.clone(), NodeSpec::Function(entry_node));
+            graph.add_node(b_id.clone(), NodeSpec::Function(b_node));
+            graph.add_edge(EdgeSpec {
+                from: entry_id.clone(),
+                to: b_id.clone(),
+                condition: None,
+            });
+            graph.add_edge(EdgeSpec {
+                from: b_id.clone(),
+                to: b_id.clone(),
+                condition: Some(EdgeCondition::Contains("looping".to_string())),
+            });
+
+            let mut entry_ids = vec![entry_id.clone()];
+            shuffle_seeded(&mut entry_ids, seed);
+            for id in &entry_ids {
+                graph.add_entry(id.clone());
+            }
+
+            let store = RecordingWaypointStore::new();
+            let thread = ThreadId::new(format!("determinism-selfloop-{seed}")).unwrap();
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                run_default(&graph, thread, &store),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("self-loop shape seed {seed} must not hang"));
+
+            let discriminant = std::mem::discriminant(&outcome);
+            let final_state = match outcome {
+                RunOutcome::Completed { final_state, .. } => final_state,
+                other => panic!("self-loop shape seed {seed}: expected Completed, got {other:?}"),
+            };
+            let serialized = serde_json::to_string(&final_state).unwrap();
+            let run_counts = vec![entry_base.run_count(), b_base.run_count()];
+
+            match &self_loop_reference {
+                None => self_loop_reference = Some((serialized, run_counts, discriminant)),
+                Some((ref_state, ref_counts, ref_discriminant)) => {
+                    assert_eq!(
+                        &serialized, ref_state,
+                        "self-loop shape seed {seed} produced a non-byte-identical final \
+                         Battlefield"
+                    );
+                    assert_eq!(
+                        &run_counts, ref_counts,
+                        "self-loop shape seed {seed} produced different per-node run counts"
+                    );
+                    assert_eq!(
+                        &discriminant, ref_discriminant,
+                        "self-loop shape seed {seed} produced a different RunOutcome \
+                         discriminant"
+                    );
+                }
+            }
+        }
+
+        // --- Shape 2: general cycle, entry -> a -> b -> a. ---------------
+        let mut cycle_reference: Option<Reference> = None;
+        for seed in 0..20u64 {
+            let s = schema(vec![
+                FieldSpec::new(field("entry_ran"), DispatchRule::LastWrite, None, false),
+                FieldSpec::new(field("status"), DispatchRule::LastWrite, None, false),
+            ]);
+            let mut graph = WarGraph::new(s, EngineLimits::default());
+            let entry_id = NodeId::new("entry");
+            let a_id = NodeId::new("a");
+            let b_id = NodeId::new("b");
+
+            let entry_base =
+                CountingFunctionNode::fixed(field("entry_ran"), serde_json::json!(true));
+            let entry_node = YieldingNode::new(entry_base.clone(), seed as usize % 3);
+            let a_base = CountingFunctionNode::fixed(field("status"), serde_json::json!("a-ran"));
+            let a_node = YieldingNode::new(a_base.clone(), (seed as usize + 1) % 3);
+            let b_base = CountingFunctionNode::new(|run_index, _state| {
+                let status = if run_index == 0 { "looping" } else { "done" };
+                let mut d = paladin_core::platform::container::battlefield::StateDelta::new();
+                d.set(field("status"), status).unwrap();
+                d
+            });
+            let b_node = YieldingNode::new(b_base.clone(), (seed as usize + 2) % 3);
+
+            graph.add_node(entry_id.clone(), NodeSpec::Function(entry_node));
+            graph.add_node(a_id.clone(), NodeSpec::Function(a_node));
+            graph.add_node(b_id.clone(), NodeSpec::Function(b_node));
+            graph.add_edge(EdgeSpec {
+                from: entry_id.clone(),
+                to: a_id.clone(),
+                condition: None,
+            });
+            graph.add_edge(EdgeSpec {
+                from: a_id.clone(),
+                to: b_id.clone(),
+                condition: None,
+            });
+            graph.add_edge(EdgeSpec {
+                from: b_id.clone(),
+                to: a_id.clone(),
+                condition: Some(EdgeCondition::Contains("looping".to_string())),
+            });
+
+            let mut entry_ids = vec![entry_id.clone()];
+            shuffle_seeded(&mut entry_ids, seed);
+            for id in &entry_ids {
+                graph.add_entry(id.clone());
+            }
+
+            let store = RecordingWaypointStore::new();
+            let thread = ThreadId::new(format!("determinism-cycle-{seed}")).unwrap();
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                run_default(&graph, thread, &store),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("general cycle shape seed {seed} must not hang"));
+
+            let discriminant = std::mem::discriminant(&outcome);
+            let final_state = match outcome {
+                RunOutcome::Completed { final_state, .. } => final_state,
+                other => {
+                    panic!("general cycle shape seed {seed}: expected Completed, got {other:?}")
+                }
+            };
+            let serialized = serde_json::to_string(&final_state).unwrap();
+            let run_counts = vec![
+                entry_base.run_count(),
+                a_base.run_count(),
+                b_base.run_count(),
+            ];
+
+            match &cycle_reference {
+                None => cycle_reference = Some((serialized, run_counts, discriminant)),
+                Some((ref_state, ref_counts, ref_discriminant)) => {
+                    assert_eq!(
+                        &serialized, ref_state,
+                        "general cycle shape seed {seed} produced a non-byte-identical final \
+                         Battlefield"
+                    );
+                    assert_eq!(
+                        &run_counts, ref_counts,
+                        "general cycle shape seed {seed} produced different per-node run counts"
+                    );
+                    assert_eq!(
+                        &discriminant, ref_discriminant,
+                        "general cycle shape seed {seed} produced a different RunOutcome \
+                         discriminant"
+                    );
+                }
+            }
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn x05_eight_node_parallel_stress_100_iterations_exact_counts() {
         const NODES: usize = 8;

@@ -25,10 +25,20 @@
 //!   to that field's schema `default`; a declared field with no value and no
 //!   default is [`InputMappingError::NoValueOrDefault`].
 //! - A template with no placeholder renders literally, unchanged.
+//! - A placeholder in the `muster.` namespace (`{muster.payload}`,
+//!   `{muster.task_key}`, CF-03 / D-15) resolves ONLY from the executing
+//!   node's [`MusterContext`](paladin_core::platform::container::directive::MusterContext)
+//!   — passed to [`InputMapping::render`] separately — never from the
+//!   Battlefield. With no muster context present (an ordinary,
+//!   non-Muster-worker execution), such a placeholder is a typed
+//!   [`InputMappingError::UndeclaredField`], never a silent Battlefield
+//!   read. Graph validation independently rejects any schema field named
+//!   with the `muster.` prefix, so this namespace can never be shadowed.
 
 use thiserror::Error;
 
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName};
+use paladin_core::platform::container::directive::MusterContext;
 
 /// Error returned by [`InputMapping::render`].
 ///
@@ -75,7 +85,12 @@ impl InputMapping {
     }
 
     /// Render this template against `state`, substituting each `{field}`
-    /// placeholder per the module-level resolution rules.
+    /// placeholder per the module-level resolution rules. `muster` is the
+    /// executing node's Muster task context (CF-03, D-15) -- `Some` only
+    /// for a worker-template dispatch, in which case a `{muster.payload}`/
+    /// `{muster.task_key}` placeholder resolves from it; `None` for every
+    /// ordinary execution, in which case such a placeholder is a typed
+    /// error rather than a silent Battlefield read.
     ///
     /// # Examples
     ///
@@ -94,9 +109,13 @@ impl InputMapping {
     /// let battlefield = Battlefield::new(schema);
     ///
     /// let mapping = InputMapping::new("research {topic}");
-    /// assert_eq!(mapping.render(&battlefield).unwrap(), "research rust");
+    /// assert_eq!(mapping.render(&battlefield, None).unwrap(), "research rust");
     /// ```
-    pub fn render(&self, state: &Battlefield) -> Result<String, InputMappingError> {
+    pub fn render(
+        &self,
+        state: &Battlefield,
+        muster: Option<&MusterContext>,
+    ) -> Result<String, InputMappingError> {
         let mut rendered = String::with_capacity(self.template.len());
         let mut rest = self.template.as_str();
 
@@ -111,7 +130,7 @@ impl InputMapping {
                 break;
             };
             let placeholder = &after_open[..rel_end];
-            rendered.push_str(&Self::resolve(placeholder, state)?);
+            rendered.push_str(&Self::resolve(placeholder, state, muster)?);
             rest = &after_open[rel_end + 1..];
         }
         rendered.push_str(rest);
@@ -119,8 +138,17 @@ impl InputMapping {
         Ok(rendered)
     }
 
-    /// Resolve one `{field}` placeholder's text against `state`.
-    fn resolve(placeholder: &str, state: &Battlefield) -> Result<String, InputMappingError> {
+    /// Resolve one `{field}` placeholder's text against `state`, or against
+    /// `muster` for a `muster.`-prefixed placeholder (CF-03, D-15).
+    fn resolve(
+        placeholder: &str,
+        state: &Battlefield,
+        muster: Option<&MusterContext>,
+    ) -> Result<String, InputMappingError> {
+        if let Some(name) = placeholder.strip_prefix("muster.") {
+            return Self::resolve_muster(name, placeholder, muster);
+        }
+
         let field =
             FieldName::new(placeholder).map_err(|_| InputMappingError::UndeclaredField {
                 field: placeholder.to_string(),
@@ -145,6 +173,32 @@ impl InputMapping {
             serde_json::Value::String(s) => s.clone(),
             other => other.to_string(),
         })
+    }
+
+    /// Resolve a `muster.`-namespaced placeholder (`name` is the text after
+    /// the `muster.` prefix) from `muster`, never from the Battlefield
+    /// (D-15). Absent context, or an unrecognized name, is
+    /// [`InputMappingError::UndeclaredField`] naming the FULL placeholder
+    /// (including the `muster.` prefix) -- never a silent Battlefield
+    /// fallback.
+    fn resolve_muster(
+        name: &str,
+        placeholder: &str,
+        muster: Option<&MusterContext>,
+    ) -> Result<String, InputMappingError> {
+        let ctx = muster.ok_or_else(|| InputMappingError::UndeclaredField {
+            field: placeholder.to_string(),
+        })?;
+        match name {
+            "payload" => Ok(match &ctx.payload {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            }),
+            "task_key" => Ok(ctx.task_key.clone()),
+            _ => Err(InputMappingError::UndeclaredField {
+                field: placeholder.to_string(),
+            }),
+        }
     }
 }
 
@@ -188,7 +242,7 @@ mod tests {
         let battlefield = battlefield_with_value(schema, "name", serde_json::json!("world"));
 
         let mapping = InputMapping::new("hello {name}!");
-        assert_eq!(mapping.render(&battlefield).unwrap(), "hello world!");
+        assert_eq!(mapping.render(&battlefield, None).unwrap(), "hello world!");
     }
 
     #[test]
@@ -198,7 +252,7 @@ mod tests {
             battlefield_with_value(schema, "payload", serde_json::json!({"a": 1, "b": "x"}));
 
         let mapping = InputMapping::new("data={payload}");
-        let rendered = mapping.render(&battlefield).unwrap();
+        let rendered = mapping.render(&battlefield, None).unwrap();
         assert_eq!(rendered, r#"data={"a":1,"b":"x"}"#);
     }
 
@@ -208,7 +262,7 @@ mod tests {
         let battlefield = battlefield_with_value(schema, "count", serde_json::json!(42));
 
         let mapping = InputMapping::new("count={count}");
-        assert_eq!(mapping.render(&battlefield).unwrap(), "count=42");
+        assert_eq!(mapping.render(&battlefield, None).unwrap(), "count=42");
     }
 
     #[test]
@@ -230,7 +284,7 @@ mod tests {
             .unwrap();
 
         let mapping = InputMapping::new("{first}-{second}");
-        assert_eq!(mapping.render(&battlefield).unwrap(), "a-b");
+        assert_eq!(mapping.render(&battlefield, None).unwrap(), "a-b");
     }
 
     #[test]
@@ -239,7 +293,7 @@ mod tests {
         let battlefield = Battlefield::new(schema);
 
         let mapping = InputMapping::new("value={missing}");
-        let err = mapping.render(&battlefield).unwrap_err();
+        let err = mapping.render(&battlefield, None).unwrap_err();
         assert_eq!(
             err,
             InputMappingError::UndeclaredField {
@@ -258,7 +312,7 @@ mod tests {
         let battlefield = Battlefield::new(schema);
 
         let mapping = InputMapping::new("about {topic}");
-        assert_eq!(mapping.render(&battlefield).unwrap(), "about rust");
+        assert_eq!(mapping.render(&battlefield, None).unwrap(), "about rust");
     }
 
     #[test]
@@ -267,7 +321,7 @@ mod tests {
         let battlefield = Battlefield::new(schema);
 
         let mapping = InputMapping::new("about {topic}");
-        let err = mapping.render(&battlefield).unwrap_err();
+        let err = mapping.render(&battlefield, None).unwrap_err();
         assert_eq!(
             err,
             InputMappingError::NoValueOrDefault {
@@ -283,7 +337,7 @@ mod tests {
 
         let mapping = InputMapping::new("no placeholders here");
         assert_eq!(
-            mapping.render(&battlefield).unwrap(),
+            mapping.render(&battlefield, None).unwrap(),
             "no placeholders here"
         );
     }
@@ -294,6 +348,86 @@ mod tests {
         let battlefield = Battlefield::new(schema);
 
         let mapping = InputMapping::new("dangling {brace");
-        assert_eq!(mapping.render(&battlefield).unwrap(), "dangling {brace");
+        assert_eq!(
+            mapping.render(&battlefield, None).unwrap(),
+            "dangling {brace"
+        );
+    }
+
+    // --- CF-03, D-15: the `muster.` namespace (Plan 23-05, Task 3).
+
+    #[test]
+    fn renders_muster_payload_placeholder_from_context() {
+        let schema = schema_with(vec![]);
+        let battlefield = Battlefield::new(schema);
+        let ctx = MusterContext {
+            payload: serde_json::json!("widget-42"),
+            task_key: "k1".to_string(),
+        };
+
+        let mapping = InputMapping::new("process {muster.payload}");
+        assert_eq!(
+            mapping.render(&battlefield, Some(&ctx)).unwrap(),
+            "process widget-42"
+        );
+    }
+
+    #[test]
+    fn renders_muster_task_key_placeholder_from_context() {
+        let schema = schema_with(vec![]);
+        let battlefield = Battlefield::new(schema);
+        let ctx = MusterContext {
+            payload: serde_json::json!({"a": 1}),
+            task_key: "task-7".to_string(),
+        };
+
+        let mapping = InputMapping::new("key={muster.task_key}");
+        assert_eq!(
+            mapping.render(&battlefield, Some(&ctx)).unwrap(),
+            "key=task-7"
+        );
+    }
+
+    #[test]
+    fn muster_placeholder_with_no_context_is_a_typed_error_not_a_battlefield_read() {
+        // A Battlefield field literally named "muster.payload" (graph
+        // validation rejects declaring this in a real WarGraph schema, but
+        // this unit test exercises InputMapping::render in isolation) must
+        // NOT be read when no muster context is present -- the placeholder
+        // fails typed rather than silently falling through to state.get_raw.
+        let schema = schema_with(vec![field(
+            "muster.payload",
+            DispatchRule::LastWrite,
+            Some(serde_json::json!("battlefield-value")),
+        )]);
+        let battlefield = Battlefield::new(schema);
+
+        let mapping = InputMapping::new("{muster.payload}");
+        let err = mapping.render(&battlefield, None).unwrap_err();
+        assert_eq!(
+            err,
+            InputMappingError::UndeclaredField {
+                field: "muster.payload".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn unrecognized_muster_placeholder_name_is_a_typed_error() {
+        let schema = schema_with(vec![]);
+        let battlefield = Battlefield::new(schema);
+        let ctx = MusterContext {
+            payload: serde_json::json!("x"),
+            task_key: "k".to_string(),
+        };
+
+        let mapping = InputMapping::new("{muster.nonexistent}");
+        let err = mapping.render(&battlefield, Some(&ctx)).unwrap_err();
+        assert_eq!(
+            err,
+            InputMappingError::UndeclaredField {
+                field: "muster.nonexistent".to_string()
+            }
+        );
     }
 }

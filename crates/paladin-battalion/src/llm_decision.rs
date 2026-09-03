@@ -197,7 +197,9 @@ impl LlmDecisionEvaluator {
     ) -> Result<String, EdgeEvaluatorError> {
         match ctx.battlefield {
             Some(battlefield) => InputMapping::new(self.prompt_template.clone())
-                .render(battlefield)
+                // CF-03, D-15: `LlmDecision`'s prompt template is never a
+                // Muster worker execution, so no muster context applies.
+                .render(battlefield, None)
                 .map_err(|e| self.evaluation_error(format!("template rendering failed: {e}"))),
             None => Ok(self.prompt_template.replace("{output}", output)),
         }

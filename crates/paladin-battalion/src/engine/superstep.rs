@@ -50,7 +50,7 @@ use paladin_ports::output::waypoint_port::WaypointPort;
 
 use crate::edge_evaluator::EdgeEvaluatorRegistry;
 use crate::engine::directive_parser::{DirectiveParseError, DirectiveParser};
-use crate::engine::graph::{NodeSpec, WarGraph};
+use crate::engine::graph::{EngineLimits, NodeSpec, WarGraph};
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::NodeError;
@@ -128,7 +128,11 @@ async fn execute_vanguard_node(
             directive_parser,
         } => {
             let paladin_id = Some(paladin.uuid);
-            let rendered = match input_template.render(snapshot) {
+            // --- CF-03, D-15: the executing task's Muster context (`Some`
+            // only for a worker-template dispatch), so `{muster.payload}`/
+            // `{muster.task_key}` resolve from it, never from the
+            // Battlefield.
+            let rendered = match input_template.render(snapshot, ctx.muster.as_ref()) {
                 Ok(rendered) => rendered,
                 Err(e) => {
                     return (
@@ -184,21 +188,82 @@ enum NodeRunOutcome {
     Failed(NodeFailure),
 }
 
-/// Accept an incoming `NextStep::Muster(tasks)` at the Directive-receipt
+/// The `tasks.len() > limits.max_muster_tasks` comparison (D-13's
+/// `precision` edge truth), factored out of [`validate_muster_tasks`] so it
+/// is independently unit-testable without allocating a multi-billion-
+/// element `Vec`: `limit` is always widened to `usize` here, `count`
+/// (already a `usize`) is never narrowed with `as u32` -- a task list
+/// longer than `u32::MAX` cannot wrap into a passing count.
+fn muster_task_count_exceeds_limit(count: usize, limit: u32) -> bool {
+    count > limit as usize
+}
+
+/// Validate an incoming `NextStep::Muster(tasks)` at the Directive-receipt
 /// point (CF-03, D-13) -- the SAME per-node accumulation loop where a
-/// `Goto` target is validated -- and BEFORE any task is dispatched. This
-/// tracer slice carries every task forward unconditionally; Plan 23-05's
-/// Task 2 extends this function with the malformed-Muster rejection clauses
-/// (empty list, duplicate `task_key`, `max_muster_tasks` breach, unknown or
-/// non-worker-template `worker`). Returns `tasks` sorted by `task_key`
-/// (`String` byte order) -- the ordering the deterministic task_key-order
-/// merge (D-13) relies on, since every accepted task then reaches [`run`]'s
-/// dispatch-building loop in this order and the existing
+/// `Goto` target is validated -- and BEFORE any task is dispatched: an
+/// empty task list, a duplicate `task_key`, a task count exceeding
+/// `limits.max_muster_tasks`, and a task naming an unknown or
+/// non-worker-template `worker` are all rejected here, never inside the
+/// worker-dispatch loop where a partial launch would be unrecoverable
+/// (RESEARCH.md anti-pattern 3). On success, returns `tasks` sorted by
+/// `task_key` (`String` byte order) -- the ordering the deterministic
+/// task_key-order merge (D-13) relies on, since every accepted task then
+/// reaches [`run`]'s dispatch-building loop in this order and the existing
 /// sequential-await-per-handle + stable `deltas.sort_by(NodeId)` machinery
 /// preserves it into the final merge without any bespoke reordering.
-fn validate_muster_tasks(mut tasks: Vec<MusterTask>) -> Vec<MusterTask> {
+///
+/// The count check widens `limits.max_muster_tasks` (`u32`) to `usize`
+/// rather than narrowing `tasks.len()` with `as u32`, so a task list longer
+/// than `u32::MAX` cannot wrap into a passing count (the `precision` edge
+/// truth).
+fn validate_muster_tasks(
+    graph: &WarGraph,
+    node: &NodeId,
+    limits: &EngineLimits,
+    mut tasks: Vec<MusterTask>,
+) -> Result<Vec<MusterTask>, EngineError> {
+    if tasks.is_empty() {
+        return Err(EngineError::EmptyMuster { node: node.clone() });
+    }
+
+    if muster_task_count_exceeds_limit(tasks.len(), limits.max_muster_tasks) {
+        return Err(EngineError::MusterTaskLimitExceeded {
+            node: node.clone(),
+            requested: tasks.len(),
+            limit: limits.max_muster_tasks,
+        });
+    }
+
+    let mut seen_keys: HashSet<&str> = HashSet::new();
+    for task in &tasks {
+        if !seen_keys.insert(task.task_key.as_str()) {
+            return Err(EngineError::DuplicateMusterTaskKey {
+                node: node.clone(),
+                task_key: task.task_key.clone(),
+            });
+        }
+    }
+
+    for task in &tasks {
+        match graph.node(&task.worker) {
+            None => {
+                return Err(EngineError::MusterUnknownWorker {
+                    node: node.clone(),
+                    worker: task.worker.clone(),
+                });
+            }
+            Some(_) if !graph.is_worker_template(&task.worker) => {
+                return Err(EngineError::MusterWorkerNotATemplate {
+                    node: node.clone(),
+                    worker: task.worker.clone(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
+
     tasks.sort_by(|a, b| a.task_key.cmp(&b.task_key));
-    tasks
+    Ok(tasks)
 }
 
 /// Run the superstep loop starting from `vanguard` at `superstep_number`,
@@ -645,17 +710,28 @@ pub(crate) async fn run<W: WaypointPort>(
                             NodeOutcomeKind::Succeeded
                         }
                         NextStep::Muster(tasks) => {
-                            // CF-03, D-13: accepted here, at
-                            // Directive-receipt time -- the SAME per-node
-                            // accumulation loop Goto validates in -- and
-                            // carried into `pending_muster` for dispatch
-                            // next superstep, never inside the
-                            // worker-dispatch loop itself. Malformed-Muster
-                            // rejection (empty/duplicate/limit/unknown
-                            // worker) is Plan 23-05's Task 2.
+                            // CF-03, D-13: validated here, at
+                            // Directive-receipt time, before any task is
+                            // dispatched -- the SAME per-node accumulation
+                            // loop Goto validates in, never inside the
+                            // worker-dispatch loop a later superstep runs.
                             notfiring_nodes.insert(node_id.clone());
-                            if mustered.is_none() {
-                                mustered = Some(validate_muster_tasks(tasks.clone()));
+                            match validate_muster_tasks(
+                                graph,
+                                &node_id,
+                                graph.limits(),
+                                tasks.clone(),
+                            ) {
+                                Ok(sorted_tasks) => {
+                                    if mustered.is_none() {
+                                        mustered = Some(sorted_tasks);
+                                    }
+                                }
+                                Err(err) => {
+                                    if routing_failure.is_none() {
+                                        routing_failure = Some((node_id.clone(), err));
+                                    }
+                                }
                             }
                             NodeOutcomeKind::Succeeded
                         }
@@ -1688,7 +1764,6 @@ mod tests {
 
     use crate::engine::directive_parser::{DirectiveParser, OnParseError};
     use crate::engine::graph::EdgeSpec;
-    use crate::engine::graph::EngineLimits;
     use crate::engine::node::StateNode;
     use crate::engine::test_support::{
         ConcurrencyTrackingNode, CountingFunctionNode, FailingFunctionNode, RecordingPaladinPort,

@@ -134,6 +134,14 @@ pub struct EngineLimits {
     /// Optional wall-clock timeout for the whole run. Carried and validated
     /// but not acted on this phase — Doc 04 owns timeout semantics.
     pub run_timeout: Option<Duration>,
+    /// Maximum number of tasks a single `NextStep::Muster` directive may
+    /// request (CF-FR-13, D-16, T-23-18). Must be `>= 1`. Enforced at
+    /// Directive-receipt time, before any task is dispatched
+    /// (`engine::superstep`) — never inside the worker-dispatch loop.
+    /// Deliberately excluded from [`WarGraph::fingerprint`] like every
+    /// other `EngineLimits` field: raising this limit to let a resumed run
+    /// continue is a legitimate operator action.
+    pub max_muster_tasks: u32,
 }
 
 impl Default for EngineLimits {
@@ -142,6 +150,7 @@ impl Default for EngineLimits {
             max_supersteps: 50,
             max_node_visits: 25,
             run_timeout: None,
+            max_muster_tasks: 100,
         }
     }
 }
@@ -377,6 +386,11 @@ impl WarGraph {
                 reason: "max_node_visits must be at least 1".to_string(),
             });
         }
+        if self.limits.max_muster_tasks == 0 {
+            return Err(EngineError::InvalidLimits {
+                reason: "max_muster_tasks must be at least 1".to_string(),
+            });
+        }
 
         for edge in &self.edges {
             if !self.nodes.contains_key(&edge.from) {
@@ -403,10 +417,98 @@ impl WarGraph {
             }
         }
 
+        self.validate_muster_prefix_schema_fields()?;
         self.validate_edge_evaluators(edge_evaluators)?;
+        self.validate_worker_templates()?;
 
         self.validate_eligible_set()?;
         self.validate_schedulable()
+    }
+
+    /// CF-03 / D-15's namespace-reservation clause: a Battlefield schema
+    /// field whose name starts with the `muster.` prefix is rejected, so
+    /// `{muster.payload}`/`{muster.task_key}` in an `InputMapping` template
+    /// are unambiguously `NodeContext.muster` references and can never be
+    /// shadowed by a same-named schema field the Battlefield would
+    /// otherwise resolve them from. Collects every offending field name,
+    /// mirroring [`WarGraph::validate_edge_evaluators`]'s "report the whole
+    /// problem at once" discipline.
+    fn validate_muster_prefix_schema_fields(&self) -> Result<(), EngineError> {
+        let mut fields: Vec<String> = self
+            .schema
+            .fields
+            .iter()
+            .filter(|f| f.name.as_str().starts_with("muster."))
+            .map(|f| f.name.as_str().to_string())
+            .collect();
+        if fields.is_empty() {
+            return Ok(());
+        }
+        fields.sort_unstable();
+        Err(EngineError::MusterPrefixSchemaField {
+            fields,
+            reason: "the muster. prefix is reserved for {muster.payload}/{muster.task_key} \
+                     InputMapping placeholders, resolved from a Muster worker's NodeContext, \
+                     never from the Battlefield -- rename the schema field"
+                .to_string(),
+        })
+    }
+
+    /// CF-03 / D-12's worker-template well-formedness clause: a node marked
+    /// [`WarGraph::add_worker_template`] runs only when mustered (CF-FR-10),
+    /// so it may not double as an entry point, and no static edge may
+    /// target it (only `NextStep::Muster` ever dispatches it). A worker
+    /// template MAY have static outgoing edges (e.g. to a `defer`-marked
+    /// aggregator, D-17) -- only its INCOMING side is restricted. Collects
+    /// every offender of each clause, mirroring
+    /// [`WarGraph::validate_edge_evaluators`]'s discipline.
+    fn validate_worker_templates(&self) -> Result<(), EngineError> {
+        let mut entry_offenders: Vec<NodeId> = self
+            .worker_templates
+            .iter()
+            .filter(|id| self.entry.contains(id))
+            .cloned()
+            .collect();
+        if !entry_offenders.is_empty() {
+            entry_offenders.sort();
+            let names = entry_offenders
+                .iter()
+                .map(NodeId::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(EngineError::WorkerTemplateIsEntry {
+                nodes: entry_offenders,
+                reason: format!(
+                    "worker template(s) declared as entry point(s): {names} -- a worker \
+                     template runs only when mustered, never on its own"
+                ),
+            });
+        }
+
+        let mut incoming_offenders: Vec<NodeId> = self
+            .worker_templates
+            .iter()
+            .filter(|id| self.edges.iter().any(|e| &e.to == *id))
+            .cloned()
+            .collect();
+        if !incoming_offenders.is_empty() {
+            incoming_offenders.sort();
+            let names = incoming_offenders
+                .iter()
+                .map(NodeId::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(EngineError::WorkerTemplateHasStaticIncomingEdge {
+                nodes: incoming_offenders,
+                reason: format!(
+                    "worker template(s) with a static incoming edge: {names} -- a worker \
+                     template runs only as a NextStep::Muster task dispatch, so no static edge \
+                     may target it"
+                ),
+            });
+        }
+
+        Ok(())
     }
 
     /// BUG-01 / CF-FR-02's fail-closed clause: every declared edge carrying

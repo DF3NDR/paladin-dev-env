@@ -305,7 +305,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 22.1-05-PLAN.md — G-22-1 closing CI evidence (whole-run success) + UAT pointer
+- [x] 22.1-05-PLAN.md — G-22-1 closing CI evidence (whole-run success) + UAT pointer
 
 ### Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 

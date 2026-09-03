@@ -1599,6 +1599,357 @@ mod tests {
         }
     }
 
+    // --- BUG-04 / ENG-FR-12a: the Frontier is restored on resume ----------
+
+    /// The D-24 join shape: `entry -> a`, `entry -> b`, `a -> d`, `b -> c`,
+    /// `c -> d`, only `entry` declared entry. `conditional_c_to_d` selects
+    /// between the mandated RED proof (`c -> d` carries a condition that
+    /// evaluates false against the Battlefield `c` produces, so `a -> d`'s
+    /// pre-crash fire is the ONLY thing that can ever make `d` ready) and
+    /// the plain equivalence shape (every edge unconditional).
+    fn bug_04_join_shape_graph(
+        conditional_c_to_d: bool,
+    ) -> (WarGraph, NodeId, NodeId, NodeId, NodeId, NodeId) {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("trace").unwrap(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let entry = NodeId::new("entry");
+        let a = NodeId::new("a");
+        let b = NodeId::new("b");
+        let c = NodeId::new("c");
+        let d = NodeId::new("d");
+        let label = |value: &str| {
+            CountingFunctionNode::fixed(FieldName::new("trace").unwrap(), serde_json::json!(value))
+        };
+        graph.add_node(entry.clone(), NodeSpec::Function(label("ENTRY")));
+        graph.add_node(a.clone(), NodeSpec::Function(label("A")));
+        graph.add_node(b.clone(), NodeSpec::Function(label("B")));
+        graph.add_node(c.clone(), NodeSpec::Function(label("C")));
+        graph.add_node(d.clone(), NodeSpec::Function(label("D")));
+        graph.add_edge(EdgeSpec {
+            from: entry.clone(),
+            to: a.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: entry.clone(),
+            to: b.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: d.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: b.clone(),
+            to: c.clone(),
+            condition: None,
+        });
+        // None of ENTRY/A/B/C ever write "UNLOCK", so this condition always
+        // evaluates false -- c -> d never fires by itself, and only a -> d's
+        // pre-crash fire can ever make d ready.
+        let c_to_d_condition =
+            conditional_c_to_d.then(|| EdgeCondition::Contains("UNLOCK".to_string()));
+        graph.add_edge(EdgeSpec {
+            from: c.clone(),
+            to: d.clone(),
+            condition: c_to_d_condition,
+        });
+        graph.add_entry(entry.clone());
+        (graph, entry, a, b, c, d)
+    }
+
+    #[tokio::test]
+    async fn resume_restores_pre_crash_edge_resolutions_and_executes_the_pending_join() {
+        let (control_graph, _entry, _a, _b, c, d) = bug_04_join_shape_graph(true);
+        let control_store = Arc::new(RecordingWaypointStore::new());
+        let control_engine =
+            WarEngine::new(Arc::new(UnimplementedPaladinPort), control_store.clone());
+        let thread = ThreadId::new("bug-04-join-conditional").unwrap();
+        let control_outcome = control_engine
+            .start(&control_graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let control_final = match control_outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected control run to complete, got {other:?}"),
+        };
+
+        let control_waypoints = ascending_history(&control_store, &thread).await;
+        assert_eq!(
+            control_waypoints.len(),
+            4,
+            "entry -> {{a,b}} -> c -> d takes four supersteps"
+        );
+        assert_eq!(
+            control_waypoints[1].vanguard,
+            vec![c.clone()],
+            "the crash point's persisted vanguard must be exactly [c] (D-24)"
+        );
+
+        // Simulate the crash: re-save only the Waypoints up to and including
+        // the crash point (superstep 1: entry ran; superstep 2: a and b
+        // ran) into a fresh store, then resume with a fresh WarEngine.
+        let store2 = Arc::new(RecordingWaypointStore::new());
+        for wp in &control_waypoints[0..2] {
+            store2.save(wp).await.unwrap();
+        }
+        let (resume_graph, ..) = bug_04_join_shape_graph(true);
+        let engine2 = WarEngine::new(Arc::new(UnimplementedPaladinPort), store2.clone());
+        let resumed = engine2.resume(&resume_graph, thread.clone()).await.unwrap();
+
+        let resumed_waypoints = ascending_history(&store2, &thread).await;
+        let d_executions = resumed_waypoints
+            .iter()
+            .flat_map(|wp| wp.completed.iter())
+            .filter(|r| r.node_id == d && matches!(r.outcome, NodeOutcomeKind::Succeeded))
+            .count();
+        assert_eq!(
+            d_executions, 1,
+            "d must execute exactly once in the resumed run, matching the control run -- \
+             BUG-04: resume rebuilding the Frontier from scratch loses the pre-crash a -> d \
+             fire, so d never becomes ready and the run reports Completed without it"
+        );
+
+        match resumed {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state, control_final,
+                    "resumed final Battlefield must equal the control run's"
+                );
+            }
+            other => panic!("expected resumed run to complete, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_after_a_join_shape_crash_matches_the_control_run_superstep_for_superstep() {
+        let (control_graph, _entry, _a, _b, c, _d) = bug_04_join_shape_graph(false);
+        let control_store = Arc::new(RecordingWaypointStore::new());
+        let control_engine =
+            WarEngine::new(Arc::new(UnimplementedPaladinPort), control_store.clone());
+        let thread = ThreadId::new("bug-04-join-unconditional").unwrap();
+        let control_outcome = control_engine
+            .start(&control_graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let control_final = match control_outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected control run to complete, got {other:?}"),
+        };
+
+        let control_waypoints = ascending_history(&control_store, &thread).await;
+        assert_eq!(control_waypoints.len(), 4);
+        let crash_superstep = control_waypoints[1].superstep;
+        assert_eq!(control_waypoints[1].vanguard, vec![c.clone()]);
+
+        let store2 = Arc::new(RecordingWaypointStore::new());
+        for wp in &control_waypoints[0..2] {
+            store2.save(wp).await.unwrap();
+        }
+        let (resume_graph, ..) = bug_04_join_shape_graph(false);
+        let engine2 = WarEngine::new(Arc::new(UnimplementedPaladinPort), store2.clone());
+        let resumed = engine2.resume(&resume_graph, thread.clone()).await.unwrap();
+        let resumed_final = match resumed {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected resumed run to complete, got {other:?}"),
+        };
+        assert_eq!(
+            resumed_final, control_final,
+            "resumed final Battlefield must equal the control run's"
+        );
+
+        let resumed_waypoints = ascending_history(&store2, &thread).await;
+        let control_by_superstep: std::collections::HashMap<
+            u64,
+            std::collections::HashSet<NodeId>,
+        > = control_waypoints
+            .iter()
+            .map(|wp| {
+                (
+                    wp.superstep,
+                    wp.completed.iter().map(|r| r.node_id.clone()).collect(),
+                )
+            })
+            .collect();
+        let resumed_by_superstep: std::collections::HashMap<
+            u64,
+            std::collections::HashSet<NodeId>,
+        > = resumed_waypoints
+            .iter()
+            .map(|wp| {
+                (
+                    wp.superstep,
+                    wp.completed.iter().map(|r| r.node_id.clone()).collect(),
+                )
+            })
+            .collect();
+
+        for (superstep, control_set) in &control_by_superstep {
+            if *superstep <= crash_superstep {
+                continue;
+            }
+            let resumed_set = resumed_by_superstep.get(superstep).unwrap_or_else(|| {
+                panic!(
+                    "resumed run has no waypoint for superstep {superstep}; control executed \
+                     {control_set:?} there"
+                )
+            });
+            assert_eq!(
+                resumed_set, control_set,
+                "superstep {superstep}: resumed executed-node set must equal the control run's"
+            );
+        }
+
+        let completed_before_crash: std::collections::HashSet<NodeId> = control_waypoints[0..2]
+            .iter()
+            .flat_map(|wp| wp.completed.iter().map(|r| r.node_id.clone()))
+            .collect();
+        let post_resume_executed: std::collections::HashSet<NodeId> = resumed_waypoints
+            .iter()
+            .filter(|wp| wp.superstep > crash_superstep)
+            .flat_map(|wp| wp.completed.iter().map(|r| r.node_id.clone()))
+            .collect();
+        for node in &completed_before_crash {
+            assert!(
+                !post_resume_executed.contains(node),
+                "{node} completed before the crash point but ran again post-resume"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_with_allow_graph_change_drops_unknown_snapshot_edges_and_starts_new_edges_pending()
+     {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("trace").unwrap(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph_a = WarGraph::new(schema.clone(), EngineLimits::default());
+        let p = NodeId::new("p");
+        let q = NodeId::new("q");
+        let t = NodeId::new("t");
+        graph_a.add_node(
+            p.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("trace").unwrap(),
+                serde_json::json!("p"),
+            )),
+        );
+        graph_a.add_node(
+            q.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("trace").unwrap(),
+                serde_json::json!("q"),
+            )),
+        );
+        graph_a.add_node(
+            t.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("trace").unwrap(),
+                serde_json::json!("t"),
+            )),
+        );
+        graph_a.add_edge(EdgeSpec {
+            from: p.clone(),
+            to: q.clone(),
+            condition: None,
+        });
+        graph_a.add_edge(EdgeSpec {
+            from: q.clone(),
+            to: t.clone(),
+            condition: None,
+        });
+        graph_a.add_entry(p.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("resume-allow-change-drops-unknown-and-starts-pending").unwrap();
+        engine
+            .start(&graph_a, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let waypoints = ascending_history(&store, &thread).await;
+        assert_eq!(waypoints.len(), 3, "p -> q -> t takes three supersteps");
+        let waypoint_after_q = waypoints[1].clone();
+        assert_eq!(waypoint_after_q.vanguard, vec![t.clone()]);
+
+        let store2 = InMemoryWaypointStore::new();
+        store2.save(&waypoint_after_q).await.unwrap();
+        let engine2 = WarEngine::new(Arc::new(UnimplementedPaladinPort), Arc::new(store2));
+
+        // Graph B: p -> q UNCHANGED; q -> t REMOVED, q -> u ADDED. `t` keeps
+        // no incoming edge at all in the new graph -- it is the restored
+        // vanguard node and must still validate, so it is declared a second
+        // entry rather than given a new incoming edge.
+        let mut graph_b = WarGraph::new(schema, EngineLimits::default());
+        graph_b.add_node(
+            p.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("trace").unwrap(),
+                serde_json::json!("p"),
+            )),
+        );
+        graph_b.add_node(
+            q.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("trace").unwrap(),
+                serde_json::json!("q"),
+            )),
+        );
+        graph_b.add_node(
+            t.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("trace").unwrap(),
+                serde_json::json!("t"),
+            )),
+        );
+        let u = NodeId::new("u");
+        let u_node =
+            CountingFunctionNode::fixed(FieldName::new("trace").unwrap(), serde_json::json!("u"));
+        graph_b.add_node(u.clone(), NodeSpec::Function(u_node.clone()));
+        graph_b.add_edge(EdgeSpec {
+            from: p.clone(),
+            to: q.clone(),
+            condition: None,
+        });
+        graph_b.add_edge(EdgeSpec {
+            from: q.clone(),
+            to: u.clone(),
+            condition: None,
+        });
+        graph_b.add_entry(p.clone());
+        graph_b.add_entry(t.clone());
+        assert_ne!(graph_a.fingerprint(), graph_b.fingerprint());
+
+        let outcome = engine2
+            .resume_with_options(
+                &graph_b,
+                thread,
+                ResumeOptions {
+                    allow_graph_change: true,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(
+            u_node.run_count(),
+            0,
+            "the NEW q -> u edge must start Pending -- the OLD q -> t snapshot resolution must \
+             not be mis-assigned onto it merely because both edges share source node q"
+        );
+    }
+
     // --- Task 1: TraceSink, end to end through a real WarEngine run ------
 
     use crate::engine::test_support::{

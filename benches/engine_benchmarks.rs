@@ -45,7 +45,7 @@ use paladin_core::platform::container::battlefield::{
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::waypoint::{
-    GraphFingerprint, NodeId, ThreadId, Waypoint, WaypointStatus,
+    FrontierSnapshot, GraphFingerprint, NodeId, ThreadId, Waypoint, WaypointStatus,
 };
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
 use paladin_ports::output::waypoint_port::WaypointPort;
@@ -102,6 +102,7 @@ fn fresh_waypoint_with_payload(payload: &str) -> Waypoint {
         vec![],
         WaypointStatus::Running,
         std::collections::BTreeMap::new(),
+        FrontierSnapshot::default(),
     )
 }
 

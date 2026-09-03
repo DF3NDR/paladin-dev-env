@@ -648,6 +648,22 @@ mod tests {
         contract_tests::prune_thread_large_keep_set_1200_to_1100(&fresh_store().await).await;
     }
 
+    // ── BUG-04 / ENG-FR-12a: FrontierSnapshot (Plan 22.1-06) ─────────────
+
+    #[tokio::test]
+    async fn frontier_survives_save_latest_and_get_round_trip() {
+        contract_tests::frontier_survives_save_latest_and_get_round_trip(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn pre_bug_04_payload_without_frontier_loads_with_an_empty_snapshot() {
+        contract_tests::pre_bug_04_payload_without_frontier_loads_with_an_empty_snapshot(
+            &fresh_store().await,
+        )
+        .await;
+    }
+
     // ── Backend-specific tests (T-22-17, T-22-18) ───────────────────────
 
     #[tokio::test]

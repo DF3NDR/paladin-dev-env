@@ -615,4 +615,217 @@ mod tests {
             .expect("format_result should succeed without a Herald configured");
         assert_eq!(unformatted, None);
     }
+
+    // --- BUG-01 / CF-01: registered-evaluator edge conditions, legacy
+    // path. These reproduce BUG-01 (`EdgeCondition::Custom` silently
+    // defaulting to `Ok(true)`) and are committed FAILING (RED) before the
+    // fix (GREEN) lands in the same task, per D-05 / traceability protocol
+    // step 4.
+
+    use crate::edge_evaluator::EdgeEvaluatorError;
+    use paladin_core::platform::container::battalion::campaign::CampaignEdge;
+    use paladin_ports::output::paladin_port::StopReason;
+
+    /// A [`PaladinPort`] test double recording every executed Paladin's
+    /// name, in call order -- the legacy-path analog of
+    /// `engine::test_support::RecordingPaladinPort`, kept local since this
+    /// module has no shared test-support module of its own.
+    #[derive(Default)]
+    struct RecordingPort {
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingPort {
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+
+        fn called_names(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PaladinPort for RecordingPort {
+        async fn execute(
+            &self,
+            paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
+        {
+            self.calls.lock().unwrap().push(paladin.node.name.clone());
+            Ok(PaladinResult {
+                output: "the situation is urgent".to_string(),
+                token_count: 0,
+                execution_time_ms: 0,
+                loop_count: 1,
+                stop_reason: StopReason::Completed,
+                ..Default::default()
+            })
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<
+            tokio::sync::mpsc::Receiver<
+                Result<
+                    paladin_ports::output::paladin_port::PaladinStreamChunk,
+                    paladin_core::platform::container::paladin_error::PaladinError,
+                >,
+            >,
+            paladin_core::platform::container::paladin_error::PaladinError,
+        > {
+            unimplemented!("not exercised by these tests")
+        }
+
+        fn validate(
+            &self,
+            _paladin: &Paladin,
+        ) -> Result<(), paladin_core::platform::container::paladin_error::PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// Evaluator returning a fixed verdict every call.
+    struct FixedVerdictEvaluator(bool);
+
+    #[async_trait::async_trait]
+    impl EdgeConditionEvaluator for FixedVerdictEvaluator {
+        async fn evaluate(
+            &self,
+            _output: &str,
+            _ctx: &EdgeContext<'_>,
+        ) -> Result<bool, EdgeEvaluatorError> {
+            Ok(self.0)
+        }
+    }
+
+    /// Evaluator that always fails.
+    struct FailingEvaluator;
+
+    #[async_trait::async_trait]
+    impl EdgeConditionEvaluator for FailingEvaluator {
+        async fn evaluate(
+            &self,
+            _output: &str,
+            _ctx: &EdgeContext<'_>,
+        ) -> Result<bool, EdgeEvaluatorError> {
+            Err(EdgeEvaluatorError::Evaluation {
+                evaluator: "is_urgent".to_string(),
+                reason: "simulated failure".to_string(),
+            })
+        }
+    }
+
+    fn make_named_paladin(name: &str) -> Paladin {
+        let data = paladin_core::platform::container::paladin::PaladinData {
+            name: name.to_string(),
+            ..Default::default()
+        };
+        Paladin::new(data, Some(name.to_string()))
+    }
+
+    /// A two-node campaign, `a` (entry) -> `b`, connected by a single edge
+    /// carrying `EdgeCondition::Custom(condition_name)`.
+    fn two_node_custom_edge_campaign(condition_name: &str) -> (Campaign, Uuid, Uuid) {
+        let mut campaign = Campaign::new(BattalionConfig::new("custom_edge_campaign"));
+        let a_id = campaign.add_paladin(make_named_paladin("a"));
+        let b_id = campaign.add_paladin(make_named_paladin("b"));
+        campaign
+            .set_entry_point(a_id)
+            .expect("a should be a valid entry point");
+        campaign
+            .add_edge(CampaignEdge::new(
+                a_id,
+                b_id,
+                EdgeCondition::Custom(condition_name.to_string()),
+            ))
+            .expect("edge between two declared paladins should be valid");
+        (campaign, a_id, b_id)
+    }
+
+    #[tokio::test]
+    async fn unregistered_custom_condition_is_rejected_before_any_paladin_executes() {
+        let (campaign, _a, _b) = two_node_custom_edge_campaign("is_urgent");
+        let port = Arc::new(RecordingPort::default());
+        let service = CampaignExecutionService::new(port.clone());
+
+        let err = service
+            .execute(&campaign, "start")
+            .await
+            .expect_err("unregistered custom condition must fail validation");
+        match err {
+            BattalionError::InvalidGraph(msg) => {
+                assert!(
+                    msg.contains("is_urgent"),
+                    "message should name the offending condition: {msg}"
+                );
+            }
+            other => panic!("expected InvalidGraph, got {other:?}"),
+        }
+        assert_eq!(
+            port.call_count(),
+            0,
+            "no Paladin should execute before validation passes"
+        );
+    }
+
+    #[tokio::test]
+    async fn registered_true_evaluator_routes_the_custom_edge() {
+        let (campaign, _a, _b) = two_node_custom_edge_campaign("is_urgent");
+        let port = Arc::new(RecordingPort::default());
+        let service = CampaignExecutionService::new(port.clone())
+            .with_evaluator("is_urgent", Arc::new(FixedVerdictEvaluator(true)));
+
+        service
+            .execute(&campaign, "start")
+            .await
+            .expect("a registered true evaluator should route the edge");
+
+        assert_eq!(port.called_names(), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn registered_false_evaluator_does_not_route_the_custom_edge() {
+        let (campaign, _a, _b) = two_node_custom_edge_campaign("is_urgent");
+        let port = Arc::new(RecordingPort::default());
+        let service = CampaignExecutionService::new(port.clone())
+            .with_evaluator("is_urgent", Arc::new(FixedVerdictEvaluator(false)));
+
+        service
+            .execute(&campaign, "start")
+            .await
+            .expect("a false verdict should not fail the run, only skip the edge");
+
+        assert_eq!(port.called_names(), vec!["a".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn evaluator_error_fails_the_legacy_run_naming_the_edge() {
+        let (campaign, a_id, b_id) = two_node_custom_edge_campaign("is_urgent");
+        let port = Arc::new(RecordingPort::default());
+        let service = CampaignExecutionService::new(port.clone())
+            .with_evaluator("is_urgent", Arc::new(FailingEvaluator));
+
+        let err = service
+            .execute(&campaign, "start")
+            .await
+            .expect_err("an evaluator error must fail the run, not silently succeed or skip");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&a_id.to_string()),
+            "error should name the source node: {msg}"
+        );
+        assert!(
+            msg.contains(&b_id.to_string()),
+            "error should name the target node: {msg}"
+        );
+        assert!(
+            msg.contains("is_urgent"),
+            "error should name the evaluator: {msg}"
+        );
+    }
 }

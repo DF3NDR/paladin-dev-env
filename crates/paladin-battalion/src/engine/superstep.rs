@@ -1320,6 +1320,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
             graph,
             thread,
             Battlefield::initialize(
@@ -1529,6 +1530,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -1559,6 +1561,7 @@ mod tests {
             WaypointDurability::BestEffort,
             None,
             &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -1615,6 +1618,7 @@ mod tests {
             WaypointDurability::Strict,
             Some(2),
             &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -1837,7 +1841,12 @@ mod tests {
         // from `entry` over a declared edge, so eligible-set validation
         // accepts this graph. This is NOT a reachability problem.
         assert!(
-            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok(),
             "b is reachable from entry over a static edge, so validate() must accept this \
              graph -- the defect this test reproduces is a runtime readiness problem, not a \
              reachability one"
@@ -1929,7 +1938,12 @@ mod tests {
         // a declared edge (`validate_accepts_two_node_cycle` in `graph.rs`
         // already proves the two-node-cycle topology validates on its own).
         assert!(
-            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok(),
             "a is reachable from entry over a static edge, so validate() must accept this \
              graph -- the defect this test reproduces is a runtime readiness problem, not a \
              reachability one"
@@ -2083,7 +2097,12 @@ mod tests {
         graph.add_entry(entry_id);
 
         assert!(
-            graph.validate(&CustomDispatchResolver::new()).is_ok(),
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok(),
             "agg is reachable from entry over a static edge, so validate() must accept this \
              graph"
         );

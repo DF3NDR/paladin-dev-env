@@ -2639,4 +2639,167 @@ mod tests {
             other => panic!("expected both runs to complete, got {other:?}"),
         }
     }
+
+    // --- BUG-01 / CF-01: registered-evaluator edge conditions, engine
+    // runtime half (`WarEngine::start`). These reproduce BUG-01 on the
+    // `WarEngine` path and are committed FAILING (RED) before the fix
+    // (GREEN) lands in the same task, per D-05 / traceability protocol
+    // step 4.
+
+    /// Evaluator returning a fixed verdict every call.
+    struct FixedVerdictEvaluator(bool);
+
+    #[async_trait]
+    impl EdgeConditionEvaluator for FixedVerdictEvaluator {
+        async fn evaluate(
+            &self,
+            _output: &str,
+            _ctx: &crate::edge_evaluator::EdgeContext<'_>,
+        ) -> Result<bool, crate::edge_evaluator::EdgeEvaluatorError> {
+            Ok(self.0)
+        }
+    }
+
+    /// Evaluator that always fails.
+    struct FailingEdgeEvaluator;
+
+    #[async_trait]
+    impl EdgeConditionEvaluator for FailingEdgeEvaluator {
+        async fn evaluate(
+            &self,
+            _output: &str,
+            _ctx: &crate::edge_evaluator::EdgeContext<'_>,
+        ) -> Result<bool, crate::edge_evaluator::EdgeEvaluatorError> {
+            Err(crate::edge_evaluator::EdgeEvaluatorError::Evaluation {
+                evaluator: "is_urgent".to_string(),
+                reason: "simulated failure".to_string(),
+            })
+        }
+    }
+
+    /// A two-node graph, `source` (entry) -> `target`, connected by one
+    /// edge carrying `EdgeCondition::Custom("is_urgent")`. `source` and
+    /// `target` write to DIFFERENT fields, so `target`'s field staying
+    /// unset is unambiguous evidence `target` never ran (rather than
+    /// merely being masked by `source`'s own write).
+    fn source_target_custom_edge_graph() -> (WarGraph, NodeId, NodeId) {
+        let source_field = FieldName::new("source_marker").unwrap();
+        let target_field = FieldName::new("target_marker").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(source_field.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(target_field.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let source = NodeId::new("source");
+        let target = NodeId::new("target");
+        graph.add_node(
+            source.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                source_field,
+                serde_json::json!("n/a"),
+            )),
+        );
+        graph.add_node(
+            target.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                target_field,
+                serde_json::json!("ran"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: source.clone(),
+            to: target.clone(),
+            condition: Some(EdgeCondition::Custom("is_urgent".to_string())),
+        });
+        graph.add_entry(source.clone());
+        (graph, source, target)
+    }
+
+    #[tokio::test]
+    async fn registered_engine_evaluator_true_and_false_route_correctly() {
+        let target_field = FieldName::new("target_marker").unwrap();
+
+        let (graph_true, ..) = source_target_custom_edge_graph();
+        let engine_true = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_edge_evaluator("is_urgent", Arc::new(FixedVerdictEvaluator(true)));
+        let outcome_true = engine_true
+            .start(
+                &graph_true,
+                ThreadId::new("engine-evaluator-true").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        match outcome_true {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&target_field).unwrap(),
+                    Some("ran".to_string()),
+                    "true verdict should route to and execute the target"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        let (graph_false, ..) = source_target_custom_edge_graph();
+        let engine_false = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_edge_evaluator("is_urgent", Arc::new(FixedVerdictEvaluator(false)));
+        let outcome_false = engine_false
+            .start(
+                &graph_false,
+                ThreadId::new("engine-evaluator-false").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        match outcome_false {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&target_field).unwrap(),
+                    None,
+                    "false verdict should not route to or execute the target"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn engine_evaluator_error_fails_the_run_naming_edge_and_evaluator() {
+        let (graph, source, target) = source_target_custom_edge_graph();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_edge_evaluator("is_urgent", Arc::new(FailingEdgeEvaluator));
+
+        let err = engine
+            .start(
+                &graph,
+                ThreadId::new("engine-evaluator-error").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap_err();
+
+        match err {
+            EngineError::EdgeEvaluatorFailed {
+                from,
+                to,
+                evaluator,
+                ..
+            } => {
+                assert_eq!(from, source);
+                assert_eq!(to, target);
+                assert_eq!(evaluator, "is_urgent");
+            }
+            other => panic!("expected EdgeEvaluatorFailed, got {other:?}"),
+        }
+    }
 }

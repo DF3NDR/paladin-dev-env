@@ -476,6 +476,7 @@ mod tests {
         graph
             .validate(
                 &paladin_core::platform::container::battlefield::CustomDispatchResolver::new(),
+                &crate::edge_evaluator::EdgeEvaluatorRegistry::new(),
             )
             .expect("empty formation graph must validate");
 
@@ -534,6 +535,7 @@ mod tests {
         graph
             .validate(
                 &paladin_core::platform::container::battlefield::CustomDispatchResolver::new(),
+                &crate::edge_evaluator::EdgeEvaluatorRegistry::new(),
             )
             .expect("empty phalanx graph must validate");
 
@@ -685,6 +687,7 @@ mod tests {
         graph
             .validate(
                 &paladin_core::platform::container::battlefield::CustomDispatchResolver::new(),
+                &crate::edge_evaluator::EdgeEvaluatorRegistry::new(),
             )
             .expect("an empty campaign-bridged graph must still validate");
     }

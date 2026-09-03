@@ -724,6 +724,25 @@ mod tests {
         contract_tests::prune_thread_large_keep_set_1200_to_1100(&store).await;
     }
 
+    // ── BUG-04 / ENG-FR-12a: FrontierSnapshot (Plan 22.1-06) ─────────────
+
+    #[tokio::test]
+    async fn frontier_survives_save_latest_and_get_round_trip() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::frontier_survives_save_latest_and_get_round_trip(&store).await;
+    }
+
+    #[tokio::test]
+    async fn pre_bug_04_payload_without_frontier_loads_with_an_empty_snapshot() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::pre_bug_04_payload_without_frontier_loads_with_an_empty_snapshot(&store)
+            .await;
+    }
+
     #[tokio::test]
     async fn prune_thread_thread_id_and_waypoint_id_with_sql_metacharacters_round_trip_as_data() {
         let Some(store) = store_or_skip().await else {

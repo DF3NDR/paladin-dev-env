@@ -11,11 +11,14 @@
 //! This module is plain (not `#[cfg(test)]`) so both unit tests inside each
 //! backend crate and future Docker-gated integration tests can call it.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
 use paladin_core::platform::container::waypoint::{
-    FrontierSnapshot, GraphFingerprint, ThreadId, Waypoint, WaypointId, WaypointStatus,
+    FrontierEdgeState, FrontierSnapshot, GraphFingerprint, NodeId, ThreadId, Waypoint, WaypointId,
+    WaypointStatus, canonical_edge_condition,
 };
 use paladin_ports::output::waypoint_port::WaypointPort;
 
@@ -529,6 +532,93 @@ pub async fn prune_thread_large_keep_set_1200_to_1100(port: &dyn WaypointPort) {
     }
 }
 
+// ── BUG-04 / ENG-FR-12a: the FrontierSnapshot round-trips ────────────────
+
+/// A `FrontierSnapshot` fixture carrying two resolved edges (one fired, one
+/// not) and a non-empty `last_executed`, shared by both frontier contract
+/// clauses so every backend exercises byte-identical inputs, exactly as
+/// [`sample_waypoint`] does today.
+fn frontier_fixture() -> FrontierSnapshot {
+    FrontierSnapshot {
+        edges: vec![
+            FrontierEdgeState {
+                from: NodeId::new("a"),
+                to: NodeId::new("b"),
+                condition: canonical_edge_condition(&None),
+                fired: true,
+                resolved_at: 2,
+            },
+            FrontierEdgeState {
+                from: NodeId::new("b"),
+                to: NodeId::new("c"),
+                condition: canonical_edge_condition(&None),
+                fired: false,
+                resolved_at: 3,
+            },
+        ],
+        last_executed: BTreeMap::from([(NodeId::new("a"), 2), (NodeId::new("b"), 3)]),
+    }
+}
+
+/// `frontier` survives `save` -> `latest` -> `get`, byte-identical after a
+/// serde round trip (ENG-FR-12a): a `FrontierSnapshot` carrying at least one
+/// `fired: true` and one `fired: false` entry with distinct `resolved_at`
+/// values, plus a non-empty `last_executed`, round-trips exactly through
+/// `save`/`latest`/`get`, and `history` still returns the matching summary
+/// for that waypoint id (`history` carries no payload, so `get` is the
+/// payload-bearing third call D-23 asks for).
+pub async fn frontier_survives_save_latest_and_get_round_trip(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-frontier-round-trip").unwrap();
+    let mut wp = sample_waypoint(&thread, 0);
+    wp.frontier = frontier_fixture();
+    port.save(&wp).await.unwrap();
+
+    let expected_json = serde_json::to_string(&wp).unwrap();
+
+    let latest = port.latest(&thread).await.unwrap().unwrap();
+    let latest_json = serde_json::to_string(&latest).unwrap();
+    assert_eq!(latest_json, expected_json);
+    assert_eq!(latest.frontier, wp.frontier);
+
+    let fetched = port.get(&thread, &wp.waypoint_id).await.unwrap().unwrap();
+    let fetched_json = serde_json::to_string(&fetched).unwrap();
+    assert_eq!(fetched_json, expected_json);
+    assert_eq!(fetched.frontier, wp.frontier);
+
+    let history = port.history(&thread, None, None).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].waypoint_id, wp.waypoint_id);
+}
+
+/// A `Waypoint` payload written before `frontier` existed (D-23) still
+/// loads, with an empty snapshot: serialize a `Waypoint`, remove the
+/// `frontier` key entirely (simulating a pre-BUG-04 payload), deserialize
+/// back, confirm `#[serde(default)]` produced an empty `FrontierSnapshot`,
+/// then round-trip that value through the backend and confirm `latest`
+/// returns it unchanged with the same empty snapshot -- proving both the
+/// deserialization default AND the backend's write/read path handle a value
+/// that originated from a pre-BUG-04 payload. Backend-agnostic by
+/// construction, so all three backends run the identical assertion.
+pub async fn pre_bug_04_payload_without_frontier_loads_with_an_empty_snapshot(
+    port: &dyn WaypointPort,
+) {
+    let thread = ThreadId::new("contract-frontier-pre-bug-04-payload").unwrap();
+    let wp = sample_waypoint(&thread, 0);
+
+    let mut value = serde_json::to_value(&wp).unwrap();
+    value
+        .as_object_mut()
+        .expect("Waypoint serializes to a JSON object")
+        .remove("frontier");
+    let restored: Waypoint = serde_json::from_value(value).unwrap();
+    assert_eq!(restored.frontier, FrontierSnapshot::default());
+
+    port.save(&restored).await.unwrap();
+    let loaded = port.latest(&thread).await.unwrap().unwrap();
+    assert_eq!(loaded.frontier, FrontierSnapshot::default());
+    assert_eq!(loaded, restored);
+}
+
 /// Runs every contract function above against `port`.
 ///
 /// **Requires a freshly constructed, still-empty `port`** — call this once,
@@ -564,4 +654,6 @@ pub async fn run_all(port: &dyn WaypointPort) {
     prune_thread_idempotent_second_run_removes_nothing(port).await;
     prune_thread_converges_from_superset_to_target(port).await;
     prune_thread_large_keep_set_1200_to_1100(port).await;
+    frontier_survives_save_latest_and_get_round_trip(port).await;
+    pre_bug_04_payload_without_frontier_loads_with_an_empty_snapshot(port).await;
 }

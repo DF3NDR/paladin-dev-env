@@ -501,13 +501,14 @@ pub(crate) async fn run<W: WaypointPort>(
         // node whose `Directive.next` was not `Edges`, so
         // `Frontier::record_execution` resolves its static outgoing edges
         // `NotFiring` directly instead of evaluating them (D-08c, serves
-        // Goto/Muster/End/Parley alike -- End and Parley's own routing
-        // behavior beyond this marking lands in Task 2). A Goto target
-        // validation failure fails the run before any of this bookkeeping
-        // is acted on further (checked together with `node_failure`,
-        // before the merge).
+        // Goto/Muster/End/Parley alike); `end_requested` is the first node
+        // this superstep to return `NextStep::End` (D-09). A Goto target
+        // validation failure or a returned Parley both fail the run before
+        // any of this bookkeeping is acted on further (checked together
+        // with `node_failure`, before the merge).
         let mut goto_targets: Vec<NodeId> = Vec::new();
         let mut notfiring_nodes: HashSet<NodeId> = HashSet::new();
+        let mut end_requested: Option<NodeId> = None;
         let mut routing_failure: Option<(NodeId, EngineError)> = None;
         for handle in handles {
             let (node_id, started_at, duration_ms, paladin_id, token_count, outcome) = handle
@@ -546,16 +547,26 @@ pub(crate) async fn run<W: WaypointPort>(
                             NodeOutcomeKind::Succeeded
                         }
                         NextStep::End => {
-                            // Full run-completion semantics land in Task 2
-                            // (D-09); this task only applies D-08c's
-                            // NotFiring rule.
                             notfiring_nodes.insert(node_id.clone());
-                            NodeOutcomeKind::Succeeded
+                            if end_requested.is_none() {
+                                end_requested = Some(node_id.clone());
+                            }
+                            NodeOutcomeKind::Ended
                         }
                         NextStep::Parley(_) => {
-                            // The typed rejection (D-10) lands in Task 2;
-                            // this task only applies D-08c's NotFiring rule.
+                            // D-10: never coerced to `Edges`; still marked
+                            // NotFiring per D-08c even though the run is
+                            // about to fail, for the same "no NextStep
+                            // variant leaves an edge Pending" uniformity.
                             notfiring_nodes.insert(node_id.clone());
+                            if routing_failure.is_none() {
+                                routing_failure = Some((
+                                    node_id.clone(),
+                                    EngineError::ParleyNotSupported {
+                                        node: node_id.clone(),
+                                    },
+                                ));
+                            }
                             NodeOutcomeKind::Succeeded
                         }
                     };
@@ -723,8 +734,40 @@ pub(crate) async fn run<W: WaypointPort>(
             }
         }
 
-        // D-09's `End` completion (peers merged, End beats Goto) lands in
-        // Task 2, ahead of the truthful-outcome check below.
+        // --- D-09 / CF-FR-08: `End` completes the run after this
+        // superstep's merge -- which already happened above, so every
+        // peer's delta is reflected in `battlefield` -- regardless of what
+        // `compute_next_vanguard` and the `Goto` union just produced
+        // (`End` beats `Goto` in the same superstep). This bypasses the
+        // `StarvedNodeAtCompletion` check entirely rather than gating it on
+        // `next_vanguard.is_empty()`: the check's job is to catch the
+        // scheduler silently walking away from ready work it never
+        // dispatched, and an explicit, node-authored `End` is not that --
+        // it is deliberate, observable termination (recorded via
+        // `NodeOutcomeKind::Ended` above), never a scheduler lie. The
+        // suppression is scoped to exactly this fact (`end_requested`),
+        // never to the general emptiness of `next_vanguard`: a run with no
+        // `End` and a genuine starvation-invariant violation still reaches
+        // the check below and fails loudly.
+        if end_requested.is_some() {
+            let waypoint = build_waypoint(
+                &thread,
+                parent_waypoint_id,
+                superstep_number,
+                graph,
+                &battlefield,
+                Vec::new(),
+                completed_records,
+                WaypointStatus::Completed,
+                visit_counts.clone(),
+                frontier.snapshot(graph),
+            );
+            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+            return Ok(RunOutcome::Completed {
+                final_state: battlefield,
+                waypoint: waypoint.waypoint_id,
+            });
+        }
 
         // D-04's run-end truthful-outcome check: an independent net over
         // the SAME `frontier` `compute_next_vanguard` just consumed, run

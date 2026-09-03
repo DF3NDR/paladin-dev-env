@@ -395,6 +395,20 @@ pub enum EngineError {
         /// The undeclared `Goto` target.
         to: NodeId,
     },
+
+    /// A `Directive`'s `NextStep::Parley` was returned (CF-02, D-10).
+    /// Suspension is Phase 24 (`HITL-01`)'s mechanism; this phase fails the
+    /// run loudly rather than coercing `Parley` to `Edges` or writing a
+    /// `WaypointStatus::AwaitingInput` checkpoint that no `resume` path yet
+    /// honours. Phase 24 replaces this arm with real suspension -- its
+    /// removal there is expected, not a regression.
+    #[error(
+        "node {node} returned NextStep::Parley, which this phase does not support (Phase 24 lands suspension)"
+    )]
+    ParleyNotSupported {
+        /// The node whose `Directive` returned `Parley`.
+        node: NodeId,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.

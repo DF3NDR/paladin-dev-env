@@ -297,7 +297,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 22.1-02-PLAN.md — Truthful-outcome guards: validate-time unschedulable-shape check, run-end starvation check, determinism coverage
+- [x] 22.1-02-PLAN.md — Truthful-outcome guards: validate-time unschedulable-shape check, run-end starvation check, determinism coverage
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

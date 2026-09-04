@@ -1043,11 +1043,24 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
             };
         let muster_carryover_this_round: BTreeMap<String, StateDelta> =
             muster_carryover.take().unwrap_or_default();
-        let dispatch_tasks: Vec<MusterTask> = muster_tasks
-            .iter()
-            .filter(|task| !muster_carryover_this_round.contains_key(&task.task_key))
-            .cloned()
-            .collect();
+        // --- WR-02 (23-REVIEW.md): reuses `MusterProgress::unfinished_tasks`
+        // -- the method the module's own rustdoc says resume relies on --
+        // instead of hand-rolling an equivalent `task_key` filter a second
+        // time, so the two can never silently diverge. `node` is a required
+        // `MusterProgress` field but is never read by `unfinished_tasks`
+        // itself; when no Muster is pending this round `muster_tasks` is
+        // empty and `unfinished_tasks()` trivially returns an empty `Vec`
+        // regardless of `node`, so the same documented placeholder
+        // `MusterProgress::default` uses (`NodeId::new(String::new())`) is
+        // reused here rather than inventing a second one.
+        let dispatch_tasks: Vec<MusterTask> = MusterProgress {
+            node: muster_node
+                .clone()
+                .unwrap_or_else(|| NodeId::new(String::new())),
+            tasks: muster_tasks.clone(),
+            completed: muster_carryover_this_round.clone(),
+        }
+        .unfinished_tasks();
         let muster_dispatch: Vec<(NodeId, Option<MusterContext>)> = dispatch_tasks
             .iter()
             .map(|task| {

@@ -14,7 +14,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::platform::container::battalion::campaign::EdgeCondition;
-use crate::platform::container::battlefield::{BATTLEFIELD_SCHEMA_VERSION, Battlefield};
+use crate::platform::container::battlefield::{
+    BATTLEFIELD_SCHEMA_VERSION, Battlefield, StateDelta,
+};
+use crate::platform::container::directive::MusterTask;
 
 /// Maximum length, in bytes, of a [`ThreadId`].
 ///
@@ -249,6 +252,65 @@ pub struct FrontierSnapshot {
     pub last_executed: BTreeMap<NodeId, u64>,
 }
 
+/// A Muster's in-progress state as of one progress [`Waypoint`] (CF-FR-12,
+/// D-14): the mustering node, the FULL validated (sorted by `task_key`)
+/// task list -- the same shape `validate_muster_tasks`
+/// (`engine::superstep`, `paladin-battalion`) accepted -- and every
+/// completed task's UNMERGED [`StateDelta`], keyed by `task_key`. Carried
+/// on a `Waypoint` whose `battlefield` is still the superstep-START
+/// snapshot (unchanged): the deltas recorded here are merged into the real
+/// Battlefield exactly once, after every task in `tasks` has resolved,
+/// through the engine's existing end-of-superstep merge path in
+/// `task_key` order -- never incrementally, which would break snapshot
+/// isolation for the still-running siblings and make a resumed run
+/// double-merge.
+///
+/// `completed` is a `BTreeMap` (never a `HashMap`), matching
+/// `visit_counts`'/`frontier`'s precedent, so this field serializes
+/// byte-identically regardless of insertion order (RESEARCH.md Pitfall 5).
+///
+/// Resume reads [`MusterProgress::unfinished_tasks`] to decide which tasks
+/// still need to run -- it does NOT reconstruct that set from the
+/// Battlefield, which by design has not changed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MusterProgress {
+    /// The node whose `NextStep::Muster` produced this record.
+    pub node: NodeId,
+    /// The full, validated (sorted by `task_key`) muster task list, carried
+    /// here so a resumed run does not need the original `Directive` to
+    /// re-enter the muster.
+    pub tasks: Vec<MusterTask>,
+    /// Every completed task's UNMERGED `StateDelta`, keyed by `task_key`.
+    pub completed: BTreeMap<String, StateDelta>,
+}
+
+impl MusterProgress {
+    /// The tasks in `self.tasks` whose `task_key` is absent from
+    /// `self.completed` -- the set a resumed run must still execute, in
+    /// `self.tasks`' own (`task_key`-sorted) order.
+    pub fn unfinished_tasks(&self) -> Vec<MusterTask> {
+        self.tasks
+            .iter()
+            .filter(|task| !self.completed.contains_key(&task.task_key))
+            .cloned()
+            .collect()
+    }
+}
+
+impl Default for MusterProgress {
+    /// An empty, no-op `MusterProgress` -- never produced by the engine
+    /// itself (a real record always carries a real mustering `node` and a
+    /// non-empty `tasks` list), provided so callers needing a placeholder
+    /// value (e.g. test fixtures) do not need to invent one.
+    fn default() -> Self {
+        Self {
+            node: NodeId::new(String::new()),
+            tasks: Vec::new(),
+            completed: BTreeMap::new(),
+        }
+    }
+}
+
 /// The outcome of one node's execution within a superstep, recorded on the
 /// `Waypoint` that superstep produces.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -380,6 +442,19 @@ pub struct Waypoint {
     /// failing to deserialize.
     #[serde(default)]
     pub frontier: FrontierSnapshot,
+    /// A Muster's in-progress state as of this waypoint (CF-FR-12, D-14):
+    /// `Some` only for a progress Waypoint written mid-muster (`status`
+    /// `Running`, `superstep` equal to the muster's own dispatch
+    /// superstep); `None` for every ordinary superstep-complete Waypoint,
+    /// exactly as before this field existed.
+    ///
+    /// `#[serde(default)]`, matching `visit_counts`'/`frontier`'s
+    /// precedent: a `Waypoint` payload written before this field existed
+    /// still loads, with `None` -- a resume over such a payload behaves
+    /// exactly as it did before this field existed, rather than failing to
+    /// deserialize.
+    #[serde(default)]
+    pub muster_progress: Option<MusterProgress>,
 }
 
 impl Waypoint {
@@ -395,6 +470,12 @@ impl Waypoint {
     /// `parent_waypoint_id` is always `None`: this is the lineage root. Use
     /// [`Waypoint::new_child`] for every subsequent `Waypoint` in the thread,
     /// so lineage cannot be constructed incorrectly by hand.
+    ///
+    /// `muster_progress` always starts `None` here: a fresh root is never
+    /// itself a mid-muster progress checkpoint (`engine::superstep`'s
+    /// `build_waypoint`, the sole production writer of a `Some`
+    /// `muster_progress` value, constructs every `Waypoint` -- progress or
+    /// not -- directly rather than through this constructor).
     #[allow(clippy::too_many_arguments)]
     pub fn new_root(
         thread_id: ThreadId,
@@ -421,6 +502,7 @@ impl Waypoint {
             schema_version: Self::current_schema_version(),
             visit_counts,
             frontier,
+            muster_progress: None,
         }
     }
 
@@ -430,6 +512,9 @@ impl Waypoint {
     /// parent's thread) and `parent_waypoint_id` is set to
     /// `Some(parent.waypoint_id)`, so lineage is exactly the previous
     /// `Waypoint` of that thread by construction.
+    ///
+    /// `muster_progress` always starts `None` here -- see
+    /// [`Waypoint::new_root`]'s rustdoc for why.
     #[allow(clippy::too_many_arguments)]
     pub fn new_child(
         parent: &Waypoint,
@@ -456,6 +541,7 @@ impl Waypoint {
             schema_version: Self::current_schema_version(),
             visit_counts,
             frontier,
+            muster_progress: None,
         }
     }
 }
@@ -600,6 +686,7 @@ mod tests {
             schema_version: Waypoint::current_schema_version(),
             visit_counts: BTreeMap::new(),
             frontier: FrontierSnapshot::default(),
+            muster_progress: None,
         };
 
         let json = serde_json::to_string(&waypoint).unwrap();
@@ -699,6 +786,7 @@ mod tests {
                 }],
                 last_executed: BTreeMap::from([(NodeId::new("a"), 1)]),
             },
+            muster_progress: None,
         };
 
         // Simulate a pre-BUG-04 payload: serialize, then strip the
@@ -789,5 +877,119 @@ mod tests {
             alpha_pos < mike_pos && mike_pos < zulu_pos,
             "last_executed keys must serialize in sorted order: {json}"
         );
+    }
+
+    // --- CF-FR-12 / D-14: MusterProgress ------------------------------------
+
+    #[test]
+    fn waypoint_payload_without_muster_progress_field_deserializes_as_none() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("result").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let waypoint = Waypoint {
+            thread_id: ThreadId::new("thread-1").unwrap(),
+            waypoint_id: WaypointId::new(),
+            parent_waypoint_id: None,
+            superstep: 2,
+            graph_fingerprint: GraphFingerprint::from_canonical_bytes(b"fixture"),
+            battlefield: Battlefield::new(schema),
+            vanguard: vec![],
+            completed: vec![],
+            status: WaypointStatus::Running,
+            created_at: Utc::now(),
+            schema_version: Waypoint::current_schema_version(),
+            visit_counts: BTreeMap::new(),
+            frontier: FrontierSnapshot::default(),
+            muster_progress: Some(MusterProgress {
+                node: NodeId::new("planner"),
+                tasks: vec![],
+                completed: BTreeMap::new(),
+            }),
+        };
+
+        // Simulate a pre-CF-FR-12 payload: serialize, then strip the
+        // `muster_progress` key entirely before deserializing back, rather
+        // than merely round-tripping the value already present.
+        let mut value = serde_json::to_value(&waypoint).unwrap();
+        value
+            .as_object_mut()
+            .expect("Waypoint serializes to a JSON object")
+            .remove("muster_progress");
+        assert!(
+            !value.to_string().contains("muster_progress"),
+            "the muster_progress key must be genuinely absent from the fixture payload"
+        );
+
+        let restored: Waypoint = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.muster_progress, None);
+        // Every other field is untouched by the missing key.
+        assert_eq!(restored.thread_id, waypoint.thread_id);
+        assert_eq!(restored.superstep, waypoint.superstep);
+    }
+
+    #[test]
+    fn muster_progress_round_trips_through_serde_json() {
+        let mut completed = BTreeMap::new();
+        let mut delta = StateDelta::new();
+        delta.set_raw(FieldName::new("x").unwrap(), serde_json::json!("a-result"));
+        completed.insert("a".to_string(), delta);
+
+        let progress = MusterProgress {
+            node: NodeId::new("planner"),
+            tasks: vec![
+                MusterTask {
+                    worker: NodeId::new("worker"),
+                    payload: serde_json::json!("payload-a"),
+                    task_key: "a".to_string(),
+                },
+                MusterTask {
+                    worker: NodeId::new("worker"),
+                    payload: serde_json::json!("payload-b"),
+                    task_key: "b".to_string(),
+                },
+            ],
+            completed,
+        };
+
+        let json = serde_json::to_string(&progress).unwrap();
+        let restored: MusterProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(progress, restored);
+    }
+
+    #[test]
+    fn muster_progress_unfinished_tasks_excludes_completed_keys() {
+        let mut completed = BTreeMap::new();
+        completed.insert("a".to_string(), StateDelta::new());
+        let progress = MusterProgress {
+            node: NodeId::new("planner"),
+            tasks: vec![
+                MusterTask {
+                    worker: NodeId::new("worker"),
+                    payload: serde_json::json!("a"),
+                    task_key: "a".to_string(),
+                },
+                MusterTask {
+                    worker: NodeId::new("worker"),
+                    payload: serde_json::json!("b"),
+                    task_key: "b".to_string(),
+                },
+                MusterTask {
+                    worker: NodeId::new("worker"),
+                    payload: serde_json::json!("c"),
+                    task_key: "c".to_string(),
+                },
+            ],
+            completed,
+        };
+
+        let unfinished: Vec<String> = progress
+            .unfinished_tasks()
+            .into_iter()
+            .map(|t| t.task_key)
+            .collect();
+        assert_eq!(unfinished, vec!["b".to_string(), "c".to_string()]);
     }
 }

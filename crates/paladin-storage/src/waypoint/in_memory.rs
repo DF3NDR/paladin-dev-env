@@ -393,4 +393,17 @@ mod tests {
         )
         .await;
     }
+
+    // ── CF-FR-12 / D-14: MusterProgress (Plan 23-06) ──────────────────────
+
+    #[tokio::test]
+    async fn muster_progress_round_trips() {
+        contract_tests::muster_progress_round_trips(&InMemoryWaypointStore::new()).await;
+    }
+
+    #[tokio::test]
+    async fn muster_progress_none_round_trips_as_none() {
+        contract_tests::muster_progress_none_round_trips_as_none(&InMemoryWaypointStore::new())
+            .await;
+    }
 }

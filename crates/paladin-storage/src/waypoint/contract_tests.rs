@@ -15,10 +15,11 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 
-use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
+use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema, FieldName};
+use paladin_core::platform::container::directive::MusterTask;
 use paladin_core::platform::container::waypoint::{
-    FrontierEdgeState, FrontierSnapshot, GraphFingerprint, NodeId, ThreadId, Waypoint, WaypointId,
-    WaypointStatus, canonical_edge_condition,
+    FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeId, ThreadId,
+    Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
 };
 use paladin_ports::output::waypoint_port::WaypointPort;
 
@@ -52,6 +53,7 @@ pub fn sample_waypoint_at(
         schema_version: Waypoint::current_schema_version(),
         visit_counts: std::collections::BTreeMap::new(),
         frontier: FrontierSnapshot::default(),
+        muster_progress: None,
     }
 }
 
@@ -619,6 +621,90 @@ pub async fn pre_bug_04_payload_without_frontier_loads_with_an_empty_snapshot(
     assert_eq!(loaded, restored);
 }
 
+// ── CF-FR-12 / D-14: MusterProgress round-trips ───────────────────────────
+
+/// A fully populated `MusterProgress` fixture: five tasks (`a`..`e`), two
+/// completed with distinct, non-trivial deltas (`a`, `c`) and three still
+/// pending -- shared by both `MusterProgress` contract clauses so every
+/// backend exercises byte-identical inputs, matching [`frontier_fixture`]'s
+/// precedent.
+fn muster_progress_fixture() -> MusterProgress {
+    let worker = NodeId::new("worker");
+    let tasks = ["a", "b", "c", "d", "e"]
+        .iter()
+        .map(|key| MusterTask {
+            worker: worker.clone(),
+            payload: serde_json::json!({ "task_key": key }),
+            task_key: key.to_string(),
+        })
+        .collect();
+
+    let mut completed = BTreeMap::new();
+    let mut delta_a = paladin_core::platform::container::battlefield::StateDelta::new();
+    delta_a.set_raw(
+        FieldName::new("result").unwrap(),
+        serde_json::json!("result-a"),
+    );
+    completed.insert("a".to_string(), delta_a);
+    let mut delta_c = paladin_core::platform::container::battlefield::StateDelta::new();
+    delta_c.set_raw(
+        FieldName::new("result").unwrap(),
+        serde_json::json!("result-c"),
+    );
+    completed.insert("c".to_string(), delta_c);
+
+    MusterProgress {
+        node: NodeId::new("planner"),
+        tasks,
+        completed,
+    }
+}
+
+/// A `Waypoint` whose `muster_progress` is `Some` with a fully populated
+/// [`muster_progress_fixture`] (two completed tasks with distinct keys and
+/// non-trivial deltas, plus a pending task) round-trips through
+/// `save` -> `latest` -> `get`, byte-identical after a serde round trip and
+/// equal field-for-field (CF-FR-12, D-14).
+pub async fn muster_progress_round_trips(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-muster-progress-round-trip").unwrap();
+    let mut wp = sample_waypoint(&thread, 2);
+    wp.status = WaypointStatus::Running;
+    wp.muster_progress = Some(muster_progress_fixture());
+    port.save(&wp).await.unwrap();
+
+    let expected_json = serde_json::to_string(&wp).unwrap();
+
+    let latest = port.latest(&thread).await.unwrap().unwrap();
+    let latest_json = serde_json::to_string(&latest).unwrap();
+    assert_eq!(latest_json, expected_json);
+    assert_eq!(latest.muster_progress, wp.muster_progress);
+
+    let fetched = port.get(&thread, &wp.waypoint_id).await.unwrap().unwrap();
+    let fetched_json = serde_json::to_string(&fetched).unwrap();
+    assert_eq!(fetched_json, expected_json);
+    assert_eq!(fetched.muster_progress, wp.muster_progress);
+
+    let history = port.history(&thread, None, None).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].waypoint_id, wp.waypoint_id);
+}
+
+/// A `Waypoint` whose `muster_progress` is `None` (the ordinary,
+/// non-muster case, unchanged by this field's addition) round-trips as
+/// `None` (CF-FR-12, D-14) -- the additive-field precedent
+/// [`pre_bug_04_payload_without_frontier_loads_with_an_empty_snapshot`]
+/// established for `frontier`, applied here to `muster_progress`.
+pub async fn muster_progress_none_round_trips_as_none(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-muster-progress-none").unwrap();
+    let wp = sample_waypoint(&thread, 0);
+    assert_eq!(wp.muster_progress, None);
+    port.save(&wp).await.unwrap();
+
+    let loaded = port.latest(&thread).await.unwrap().unwrap();
+    assert_eq!(loaded.muster_progress, None);
+    assert_eq!(loaded, wp);
+}
+
 /// Runs every contract function above against `port`.
 ///
 /// **Requires a freshly constructed, still-empty `port`** — call this once,
@@ -656,4 +742,6 @@ pub async fn run_all(port: &dyn WaypointPort) {
     prune_thread_large_keep_set_1200_to_1100(port).await;
     frontier_survives_save_latest_and_get_round_trip(port).await;
     pre_bug_04_payload_without_frontier_loads_with_an_empty_snapshot(port).await;
+    muster_progress_round_trips(port).await;
+    muster_progress_none_round_trips_as_none(port).await;
 }

@@ -1660,6 +1660,7 @@ mod tests {
             std::collections::BTreeMap::new(),
             None,
             None,
+            None,
             1,
             &paladin_port,
             &trace,

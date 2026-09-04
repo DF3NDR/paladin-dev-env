@@ -13,6 +13,7 @@
 | G-07 | Dynamic routing from node output | CF-FR-05…08 | Directive / NextStep::Goto/End |
 | G-08 | Dynamic parallel fan-out (map-reduce) | CF-FR-09…13; FT-FR-06 (retry per task) | Muster + task_key ordering |
 | — (deferred/join precision) | Join & defer semantics | ENG-FR-06; CF-FR-12 | Not-firing edges don't deadlock joins |
+| — (mid-muster crash recovery) | Progress Waypoints inside a Muster superstep | ENG-FR-11 (clarification note); CF-FR-12 | Zero-or-more `status: Running` progress Waypoints per muster superstep, carrying the superstep-start Battlefield and unmerged per-task deltas keyed by `task_key`; resume re-enters the same superstep and dispatches only unfinished tasks (Plan 23-06, D-14) |
 | G-09 | Subgraph composition | CF-FR-14…17; HITL-FR-12 (fork interaction) | Battalion-as-node, namespaced waypoints |
 | G-10 | Per-node retry policy | FT-FR-03…07 + FT §2.1 | Backoff, jitter, predicate, attempt isolation |
 | G-11 | Per-node timeout (wall + idle) | FT-FR-08…10 | heartbeat-based progress |

@@ -75,6 +75,82 @@ impl ThreadId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Derive a child `ThreadId` from a parent thread and a Battalion node's
+    /// id (CF-FR-15, D-20): the durable identity under which a
+    /// `NodeSpec::Battalion` node's embedded child run addresses its own
+    /// Waypoints through the SAME `WaypointPort` the parent uses.
+    ///
+    /// # Injectivity
+    ///
+    /// Encodes as a FIXED-WIDTH (16 lowercase-hex-digit, i.e. 64-bit),
+    /// length-prefixed segment for `parent`, immediately followed by
+    /// `parent`'s own bytes, then the same shape for `node`:
+    /// `format!("{:016x}{parent}{:016x}{node}", parent.len(), node.len())`.
+    /// Mirrors `engine::graph::push_field`'s length-prefixed byte encoding
+    /// (`paladin-battalion`, introduced by Phase 22.1 CR-01) adapted to
+    /// TEXT rather than an opaque hash input: a raw binary length prefix
+    /// (`push_field`'s own `u64::to_le_bytes()`) can contain a byte in the
+    /// ASCII whitespace range or a byte that is not valid UTF-8 on its own,
+    /// either of which would corrupt or outright fail construction of the
+    /// `String` a `ThreadId` wraps -- a fixed-width HEX-encoded length
+    /// avoids both hazards while keeping the same injectivity property.
+    ///
+    /// Because the prefix width is FIXED (never variable-width or
+    /// delimiter-terminated), the byte offset at which `parent`'s own bytes
+    /// start and end -- and where `node`'s begin -- is always fully
+    /// determined by the two length values alone. No byte sequence
+    /// occurring INSIDE `parent` or `node` (including one that happens to
+    /// look like a length prefix, or a `/`, `:`, or any other delimiter
+    /// character) can ever be reinterpreted as a different split between
+    /// the two segments. This is deliberately NOT a bare delimiter join
+    /// (`format!("{parent}/{node}")`-style): [`NodeId::new`] validates
+    /// nothing beyond non-emptiness, so a bare join is collidable by
+    /// construction -- e.g. parent `"t"` + node `"a/b"` and parent `"t/a"`
+    /// + node `"b"` would join to the identical string. This is the exact
+    /// defect class Phase 22.1's CR-01 found and fixed once already, in
+    /// `WarGraph::fingerprint()`'s canonical byte encoding
+    /// (`paladin-battalion/src/engine/graph.rs`); this method deliberately
+    /// reuses that fix's length-prefixed approach rather than reintroducing
+    /// the same hazard in a second place.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same [`ThreadIdError`] [`ThreadId::new`] would: `Empty`
+    /// is unreachable here (the encoded result always contains at least the
+    /// two 16-character length prefixes, so it is never empty);
+    /// `ContainsWhitespace` is reachable if `node`'s own bytes contain
+    /// whitespace ([`NodeId::new`] does not reject it, unlike
+    /// `ThreadId::new`); `TooLong` is reachable for a sufficiently long
+    /// `parent`/`node` pair, including one produced by nesting several
+    /// derivations deep. The derivation FAILS TYPED in every such case
+    /// rather than silently truncating the encoded result -- a truncated
+    /// encoding would reopen exactly the collision hazard this method
+    /// exists to close.
+    ///
+    /// ```
+    /// # use paladin_core::platform::container::waypoint::{ThreadId, NodeId};
+    /// let parent = ThreadId::new("run-1").unwrap();
+    /// let node = NodeId::new("subgraph");
+    /// let child = ThreadId::child(&parent, &node).unwrap();
+    /// assert_ne!(child.as_str(), parent.as_str());
+    ///
+    /// // Derivation composes: a grandchild derives from the child exactly
+    /// // as the child derived from the root.
+    /// let grandchild_node = NodeId::new("nested-subgraph");
+    /// let grandchild = ThreadId::child(&child, &grandchild_node).unwrap();
+    /// assert_ne!(grandchild.as_str(), child.as_str());
+    /// ```
+    pub fn child(parent: &ThreadId, node: &NodeId) -> Result<Self, ThreadIdError> {
+        let encoded = format!(
+            "{:016x}{}{:016x}{}",
+            parent.as_str().len(),
+            parent.as_str(),
+            node.as_str().len(),
+            node.as_str(),
+        );
+        Self::new(encoded)
+    }
 }
 
 impl std::fmt::Display for ThreadId {
@@ -455,6 +531,30 @@ pub struct Waypoint {
     /// deserialize.
     #[serde(default)]
     pub muster_progress: Option<MusterProgress>,
+    /// The namespace path of a `NodeSpec::Battalion` child run's Waypoints
+    /// (CF-FR-15, D-20): `None` for a top-level (non-child) run's own
+    /// Waypoints, `Some("parent_node_id/")` for a child run's, with nested
+    /// paths concatenating one segment per nesting level (e.g.
+    /// `"outer_node/inner_node/"` for a grandchild).
+    ///
+    /// A RECORD for observability and debugging ONLY -- NOT the isolation
+    /// mechanism (RESEARCH.md Pitfall 6). Isolation between a parent's and
+    /// a child's Waypoints comes entirely from [`ThreadId::child`]'s
+    /// distinct derived `ThreadId`: `thread_id` above is already the
+    /// child's own thread by the time a Waypoint carrying a `Some`
+    /// `checkpoint_ns` is constructed, so `WaypointPort::latest` on that
+    /// thread already returns only that child's own history. No lookup
+    /// path in this codebase derives a child's Waypoints by filtering a
+    /// parent thread's history by `checkpoint_ns` -- building one would
+    /// contradict this field's documented role.
+    ///
+    /// `#[serde(default)]`, matching `visit_counts`'/`frontier`'s/
+    /// `muster_progress`'s precedent: a `Waypoint` payload written before
+    /// this field existed still loads, with `None` -- a resume over such a
+    /// payload behaves exactly as it did before this field existed, rather
+    /// than failing to deserialize.
+    #[serde(default)]
+    pub checkpoint_ns: Option<String>,
 }
 
 impl Waypoint {
@@ -503,6 +603,7 @@ impl Waypoint {
             visit_counts,
             frontier,
             muster_progress: None,
+            checkpoint_ns: None,
         }
     }
 
@@ -542,6 +643,7 @@ impl Waypoint {
             visit_counts,
             frontier,
             muster_progress: None,
+            checkpoint_ns: None,
         }
     }
 }
@@ -634,6 +736,83 @@ mod tests {
         );
     }
 
+    // --- CF-FR-15 / D-20: ThreadId::child ------------------------------
+
+    #[test]
+    fn child_thread_derivation_is_injective_under_adversarial_names() {
+        // The exact CR-01 regression shape: a bare `format!("{parent}/{node}")`
+        // join would produce the IDENTICAL string for both pairs below,
+        // because `NodeId::new` validates nothing beyond non-emptiness --
+        // node `"a/b"` under parent thread `"t"` joins to `"t/a/b"`, and
+        // node `"b"` under parent thread `"t/a"` also joins to `"t/a/b"`.
+        // The length-prefixed encoding must NOT collide here.
+        let pair_a = ThreadId::child(&ThreadId::new("t").unwrap(), &NodeId::new("a/b")).unwrap();
+        let pair_b = ThreadId::child(&ThreadId::new("t/a").unwrap(), &NodeId::new("b")).unwrap();
+        assert_ne!(
+            pair_a, pair_b,
+            "length-prefixed derivation must not collide on the CR-01 shape"
+        );
+
+        // Repeat for a colon delimiter, in case a future encoding change
+        // reintroduces a different bare-delimiter join.
+        let colon_a = ThreadId::child(&ThreadId::new("t").unwrap(), &NodeId::new("a:b")).unwrap();
+        let colon_b = ThreadId::child(&ThreadId::new("t:a").unwrap(), &NodeId::new("b")).unwrap();
+        assert_ne!(colon_a, colon_b);
+    }
+
+    #[test]
+    fn derived_child_thread_id_passes_thread_id_validation() {
+        let parent = ThreadId::new("run-1").unwrap();
+        let node = NodeId::new("subgraph-node");
+        let child = ThreadId::child(&parent, &node).unwrap();
+
+        // Re-validating the already-constructed child's own string through
+        // `ThreadId::new` must succeed identically -- proving the derived
+        // value is itself a fully valid `ThreadId` by the type's own rules,
+        // not merely by having been wrapped in one already.
+        assert!(ThreadId::new(child.as_str().to_string()).is_ok());
+        assert!(!child.as_str().is_empty());
+        assert!(!child.as_str().chars().any(char::is_whitespace));
+        assert!(child.as_str().len() <= THREAD_ID_MAX_LEN);
+    }
+
+    #[test]
+    fn derived_child_thread_id_exceeding_max_len_fails_typed_rather_than_truncating() {
+        let parent = ThreadId::new("a".repeat(200)).unwrap();
+        let node = NodeId::new("b".repeat(200));
+        let result = ThreadId::child(&parent, &node);
+        assert!(
+            matches!(result, Err(ThreadIdError::TooLong { .. })),
+            "an over-long derivation must fail typed, not silently truncate: {result:?}"
+        );
+    }
+
+    #[test]
+    fn nested_child_thread_ids_compose() {
+        let root = ThreadId::new("root").unwrap();
+        let child = ThreadId::child(&root, &NodeId::new("outer")).unwrap();
+        let grandchild = ThreadId::child(&child, &NodeId::new("inner")).unwrap();
+
+        assert_ne!(root, child);
+        assert_ne!(child, grandchild);
+        assert_ne!(root, grandchild);
+        assert!(ThreadId::new(grandchild.as_str().to_string()).is_ok());
+    }
+
+    #[test]
+    fn child_derivation_propagates_a_node_ids_whitespace_as_a_typed_error() {
+        // `NodeId::new` validates nothing beyond wrapping the string (unlike
+        // `ThreadId::new`, which rejects whitespace) -- a whitespace-carrying
+        // `NodeId` must surface as a typed `ThreadIdError`, not silently
+        // produce an invalid `ThreadId`.
+        let parent = ThreadId::new("t").unwrap();
+        let node = NodeId::new("has space");
+        assert_eq!(
+            ThreadId::child(&parent, &node),
+            Err(ThreadIdError::ContainsWhitespace)
+        );
+    }
+
     #[test]
     fn waypoint_id_is_time_ordered() {
         let a = WaypointId::new();
@@ -687,6 +866,7 @@ mod tests {
             visit_counts: BTreeMap::new(),
             frontier: FrontierSnapshot::default(),
             muster_progress: None,
+            checkpoint_ns: None,
         };
 
         let json = serde_json::to_string(&waypoint).unwrap();
@@ -787,6 +967,7 @@ mod tests {
                 last_executed: BTreeMap::from([(NodeId::new("a"), 1)]),
             },
             muster_progress: None,
+            checkpoint_ns: None,
         };
 
         // Simulate a pre-BUG-04 payload: serialize, then strip the
@@ -908,6 +1089,7 @@ mod tests {
                 tasks: vec![],
                 completed: BTreeMap::new(),
             }),
+            checkpoint_ns: None,
         };
 
         // Simulate a pre-CF-FR-12 payload: serialize, then strip the
@@ -991,5 +1173,83 @@ mod tests {
             .map(|t| t.task_key)
             .collect();
         assert_eq!(unfinished, vec!["b".to_string(), "c".to_string()]);
+    }
+
+    // --- CF-FR-15 / D-20: checkpoint_ns -------------------------------------
+
+    #[test]
+    fn waypoint_payload_without_checkpoint_ns_deserializes_as_none() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("result").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let waypoint = Waypoint {
+            thread_id: ThreadId::new("thread-1").unwrap(),
+            waypoint_id: WaypointId::new(),
+            parent_waypoint_id: None,
+            superstep: 4,
+            graph_fingerprint: GraphFingerprint::from_canonical_bytes(b"fixture"),
+            battlefield: Battlefield::new(schema),
+            vanguard: vec![],
+            completed: vec![],
+            status: WaypointStatus::Running,
+            created_at: Utc::now(),
+            schema_version: Waypoint::current_schema_version(),
+            visit_counts: BTreeMap::new(),
+            frontier: FrontierSnapshot::default(),
+            muster_progress: None,
+            checkpoint_ns: Some("outer/inner/".to_string()),
+        };
+
+        // Simulate a pre-CF-FR-15 payload: serialize, then strip the
+        // `checkpoint_ns` key entirely before deserializing back, rather
+        // than merely round-tripping the value already present.
+        let mut value = serde_json::to_value(&waypoint).unwrap();
+        value
+            .as_object_mut()
+            .expect("Waypoint serializes to a JSON object")
+            .remove("checkpoint_ns");
+        assert!(
+            !value.to_string().contains("checkpoint_ns"),
+            "the checkpoint_ns key must be genuinely absent from the fixture payload"
+        );
+
+        let restored: Waypoint = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.checkpoint_ns, None);
+        // Every other field is untouched by the missing key.
+        assert_eq!(restored.thread_id, waypoint.thread_id);
+        assert_eq!(restored.superstep, waypoint.superstep);
+    }
+
+    #[test]
+    fn checkpoint_ns_round_trips_through_serde_json() {
+        let schema = BattlefieldSchema::new(vec![]);
+        let waypoint = Waypoint {
+            thread_id: ThreadId::new("thread-1").unwrap(),
+            waypoint_id: WaypointId::new(),
+            parent_waypoint_id: None,
+            superstep: 1,
+            graph_fingerprint: GraphFingerprint::from_canonical_bytes(b"fixture"),
+            battlefield: Battlefield::new(schema),
+            vanguard: vec![],
+            completed: vec![],
+            status: WaypointStatus::Running,
+            created_at: Utc::now(),
+            schema_version: Waypoint::current_schema_version(),
+            visit_counts: BTreeMap::new(),
+            frontier: FrontierSnapshot::default(),
+            muster_progress: None,
+            checkpoint_ns: Some("outer_node/inner_node/".to_string()),
+        };
+
+        let json = serde_json::to_string(&waypoint).unwrap();
+        let restored: Waypoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(waypoint, restored);
+        assert_eq!(
+            restored.checkpoint_ns,
+            Some("outer_node/inner_node/".to_string())
+        );
     }
 }

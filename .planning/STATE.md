@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 23
-current_phase_name: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
-status: executing
-stopped_at: Phase 23 executed (12/12 plans, code review fixed, verification human_needed) — awaiting UAT in 23-UAT.md
-last_updated: "2026-09-04T04:23:24.779Z"
-last_activity: 2026-09-03
-last_activity_desc: Phase 23 execution started
+current_phase: 24
+current_phase_name: Pause/Resume, History & Graceful Shutdown
+status: planning
+stopped_at: Phase 23 complete (UAT 80/80, verification passed, CF-01…CF-05 complete) — ready to plan Phase 24
+last_updated: "2026-09-04T21:19:44.201Z"
+last_activity: 2026-09-04
+last_activity_desc: Phase 23 complete, transitioned to Phase 24
 progress:
   total_phases: 3
   completed_phases: 3
@@ -20,15 +20,15 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-03 after Phase 22.1)
+See: .planning/PROJECT.md (updated 2026-09-04 after Phase 23)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 23 — Control Flow — Dynamic Routing, Fan-Out & Subgraphs
+**Current focus:** Phase 24 — Pause/Resume, History & Graceful Shutdown
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
-**Progress:** [██████████] 100% — v0.9.0 shipped
+**Progress:** [███░░░░░░░] v0.10.0 — 3 of 9 phases complete (22, 22.1, 23); 36/36 planned plans executed (Phase 24 not yet planned)
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -51,16 +51,16 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 23 (Control Flow — Dynamic Routing, Fan-Out & Subgraphs) — EXECUTING
-Plan: 1 of 12
-Status: Executing Phase 23
-Last activity: 2026-09-03 — Phase 23 execution started
+Phase: 24 — Pause/Resume, History & Graceful Shutdown
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-04 — Phase 23 complete, transitioned to Phase 24
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 211
+- Total plans completed: 223
 - Average duration: —
 - Total execution time: —
 
@@ -89,6 +89,7 @@ Last activity: 2026-09-03 — Phase 23 execution started
 | 21 | 6 | - | - |
 | 22 | 17 | - | - |
 | 22.1 | 7 | - | - |
+| 23 | 12 | - | - |
 
 *Updated after each plan completion*
 
@@ -121,6 +122,23 @@ Last activity: 2026-09-03 — Phase 23 execution started
 ## Accumulated Context
 
 ### Decisions
+
+**Phase 23 (closed 2026-09-04) — recorded as D-01 … D-30 in `23-CONTEXT.md`; the ones later
+phases must honor:**
+
+- D-05/D-06: BUG-01 fixed fail-closed in one RED-then-GREEN commit pair through a registered
+  `EdgeConditionEvaluator`; M-B-01 is the program's sole sanctioned behavioral break (worked
+  example in `MIGRATION.md` §9.1).
+- D-07: `StateNode::run` returns `Result<Directive, NodeError>`; `From<StateDelta>` keeps
+  plain-delta nodes source-compatible.
+- D-14: mid-muster resume rides intra-superstep progress Waypoints — `MusterProgress` is a stored
+  payload contract from v0.10.0 onward, so any shape change needs a data migration.
+- D-18: `GRAPH_FINGERPRINT_VERSION` is `v3`; every `EngineLimits` field (including
+  `max_muster_tasks`) stays excluded from the hash.
+- D-20/D-21: child subgraph checkpoints run under an injective `ThreadId::child`; the child
+  inherits the parent engine wholesale but uses its own graph's limits.
+- D-26: LLM-evaluated routing and `StrategySelection::Semantic` are code-configured only — no env
+  var, cargo feature or config field may switch them on.
 
 Decisions are logged in PROJECT.md Key Decisions table — **empty by evidence, and now finally so.**
 **All 263 corpus documents are ingested and 0 ADR-typed and 0 SPEC-typed documents exist among
@@ -333,6 +351,14 @@ Entering them here would fabricate authority the corpus does not contain.
 None yet.
 
 ### Blockers/Concerns
+
+**Phase 23 close (2026-09-04): no blockers.** Carried concerns: (1) Docker is unavailable in the
+devcontainer, so the Postgres Tier-2 Waypoint contract suite is provable only through CI's
+`postgres-integration` job — its SKIP-path and declared-count guards make a green job sufficient
+evidence; route it to UAT, never mark it passed locally. (2) `MIGRATION.md`'s remaining `TBD` rows
+are owned by Phase 24 (HITL-04 / M-B-02), Phase 26 (RT-07) and Phase 29 (SHIP-01/02). (3) The
+E2E-3 recovering-worker half is exercised through a mock attempt counter at a marked Phase 25 /
+FT-FR-06 seam, not a real Aegis retry — Phase 25 must replace the seam.
 
 **No blockers. 0 across all five ingest runs.** Everything below is a concern with an owning
 requirement.
@@ -788,16 +814,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 23 executed (12/12 plans, code review fixed, verification human_needed) — awaiting UAT in 23-UAT.md
+**Stopped at:** Phase 23 complete — UAT 80/80 passed (0 issues), canonical verification `passed`, security `threats_open: 0`, CF-01 … CF-05 complete; Phase 24 is ready to plan (no CONTEXT.md yet — discuss first).
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-04T04:23:24.734Z
-Resume file:
-
-/workspace/.planning/phases/23-control-flow-dynamic-routing-fan-out-subgraphs/23-UAT.md
+Last session: 2026-09-04T21:22:45.154Z
+Resume file: None
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**
@@ -858,4 +882,4 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- `/gsd-discuss-phase 24` — gather context for Phase 24 (no CONTEXT.md exists yet), then `/gsd-plan-phase 24`

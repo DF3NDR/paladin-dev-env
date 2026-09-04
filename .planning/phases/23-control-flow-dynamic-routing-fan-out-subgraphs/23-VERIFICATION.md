@@ -1,17 +1,20 @@
 ---
 phase: 23-control-flow-dynamic-routing-fan-out-subgraphs
 verified: 2026-09-04T05:15:00Z
-status: human_needed
+status: passed
 score: 5/5 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
 human_verification:
+
   - test: "Run the Postgres Tier-2 waypoint contract suite against a live server (muster_progress_round_trips, muster_progress_none_round_trips_as_none, checkpoint_ns_round_trips, checkpoint_ns_none_round_trips in crates/paladin-storage/src/waypoint/postgres.rs) via the postgres-integration CI job or `docker compose -f docker/docker-compose.test.yml up -d postgres-test`."
     expected: "All four Postgres-backed contract tests pass identically to the already-passing SQLite/in-memory runs, confirming the additive muster_progress and checkpoint_ns Waypoint columns round-trip correctly against a real Postgres server."
     why_human: "Docker is unavailable in this devcontainer; `cargo test -p paladin-storage --lib --all-features` compiles the Postgres test bodies but every one prints `SKIP: postgres-test not reachable` and returns early (verified directly: 0 assertions executed against a live server). This is the phase's own documented honest gap, not a fabricated one."
+
   - test: "Confirm the 5 prohibition clauses recorded as `verification: flagged-unverified` in PLAN frontmatter (23-01: no config/env/feature restores BUG-01's always-true behavior; 23-03 x2: LLM prompt/response/credential never interpolated into errors, and Semantic/LlmDecision unreachable without in-code configuration; 23-08: unmapped child Battlefield fields never leak to parent)."
     expected: "Each prohibition holds with no escape hatch."
     why_human: "This verifier independently re-derived positive evidence for all five (see Prohibitions Reviewed table below — grep for APP_ENGINE_* found no edge/LLM-routing toggle; `llm_error_class()` maps every LlmError to a fixed &'static str never the raw body; InputMappingError only ever carries a field NAME, never a resolved value; `unmapped_child_fields_stay_private` is a real, passing test). None were executor-self-certified as `test`-tier, so per the project's judgment-tier prohibition policy this is recorded as a non-authoritative LLM-judge verdict, not a silent pass — a human should sign off before this is treated as closed."
+
   - test: "Flip the stale CF-01/CF-05 checkboxes in .planning/REQUIREMENTS.md (lines 72, 94) and .planning/ROADMAP.md (lines 72, 94, 359, 363) from Pending/`[ ]` to Complete/`[x]`."
     expected: "Both tracking documents match what actually shipped."
     why_human: "No plan in this phase's wave sequence (23-01 through 23-12) ever edited these two rows for CF-01 or CF-05 — grep of the plan-history diff of REQUIREMENTS.md shows CF-02/03/04 each got a `mark X complete` commit; CF-01 and CF-05 never did, despite 23-12's own SUMMARY.md claiming `requirements-completed: [CF-01, CF-02, CF-03, CF-04, CF-05]`. This verifier independently confirmed CF-01 and CF-05 are fully implemented and tested in code (see Requirements Coverage below) — the gap is bookkeeping only, not functional, but it is real and will mislead the next phase's context load if left unfixed."
@@ -21,7 +24,7 @@ human_verification:
 
 **Phase Goal:** Nodes steer their own routing at runtime, dynamically fan out into map-reduce workers, nest Battalions as subgraphs, and optionally route by LLM evaluation — with the BUG-01 custom-edge-condition defect fixed fail-closed.
 **Verified:** 2026-09-04T05:15Z
-**Status:** human_needed
+**Status:** passed — human verification completed via 23-UAT.md (2026-09-04)
 **Re-verification:** No — initial verification
 
 ## Goal Achievement

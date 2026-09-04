@@ -109,6 +109,25 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 23 complete (2026-09-04)** — control-flow-dynamic-routing-fan-out-subgraphs, the v0.10.0
+milestone's second planned phase: BUG-01 fixed fail-closed on both `CampaignExecutionService` and
+`WarEngine` (RED `b2d05045` → GREEN `8d5ef333`; an unregistered `EdgeCondition::Custom` now fails
+graph validation before any node executes, through a registered async `EdgeConditionEvaluator` —
+M-B-01, the program's sole sanctioned behavioral break, with its worked example in `MIGRATION.md`
+§9.1), node-driven routing via `Directive`/`NextStep::{Edges, Goto, End, Muster, Parley}` with a
+per-node `DirectiveParser` defaulting to `PlainOutput`, Muster map-reduce fan-out (runtime-N
+workers in one superstep, `task_key`-ordered merge, payload isolation under the `muster.`
+namespace, `max_muster_tasks` carried by the new `EngineConfig` at `src/config/engine.rs`,
+mid-muster resume from intra-superstep progress Waypoints), `NodeSpec::Battalion` subgraph nesting
+(`StateMap` mapping, injective child `ThreadId`s, `checkpoint_ns`, resume-mid-child, recursion
+rejected at validation), LLM-evaluated routing (`LlmDecisionEvaluator` and Commander
+`StrategySelection::Semantic`, off by default, falling back to Heuristic with the cause recorded),
+and the graph fingerprint bumped `v2` → `v3`. 12/12 plans; verification 5/5; UAT 80/80 — 76
+deliverables covered by their own passing tests, 4 human sign-offs including the Postgres Tier-2
+contract suite proven on CI run 33901818056 (the devcontainer has no Docker). CF-01 … CF-05
+complete. Code review's CR-01 (empty-Vanguard panic at the recursion limit) and WR-01/WR-02 fixed
+in tree; security register verified with 0 open threats.
+
 **Phase 22.1 complete (2026-09-03)** — engine-readiness-defect-and-msrv-follow-up, the inserted
 follow-up that closed Phase 22's residuals plus one defect found while discussing it: BUG-03
 (cycle-bootstrap starvation — a starvation-release tier in `compute_next_vanguard`, a validate-time
@@ -547,11 +566,11 @@ while the code ships):
 as capability clusters over the `.project/v0.10.0/` PRD corpus (the PRDs remain the FR-level
 source of truth). Eight categories, mirroring the epic structure plus program-level gates:
 
-- [ ] **ENG-01 … ENG-08** — Battlefield typed state, superstep engine with cycles, Waypoint
+- [x] **ENG-01 … ENG-08** (✓ Phases 22 and 22.1, 2026-09-03) — Battlefield typed state, superstep engine with cycles, Waypoint
   checkpointing/resume, three storage backends, legacy string bridge, engine seams, and the
   program scaffolding (`MIGRATION.md` skeleton, semver + MSRV CI jobs) mandated for the first
   epic by X-10.5/X-11.1 (Doc 01)
-- [ ] **CF-01 … CF-05** — BUG-01 fail-closed custom edge conditions (the program's single
+- [x] **CF-01 … CF-05** (✓ Phase 23, 2026-09-04) — BUG-01 fail-closed custom edge conditions (the program's single
   sanctioned behavioral break), Directive routing, Muster fan-out, subgraphs, LLM routing (Doc 02)
 - [ ] **HITL-01 … HITL-05** — Parley pause, validated resume, Chronicle history/replay/fork,
   graceful shutdown, minimal thread HTTP endpoints (Doc 03)
@@ -1530,5 +1549,5 @@ requirements, 86 forward requirements across 16 phases, 60 variant entries acros
 69 warnings, 0 locked decisions, 0 blockers, 11 ADR candidates**)*
 
 ---
-*Last updated: 2026-09-03 after Phase 22.1 completion (v0.10.0 milestone; next: Phase 23
-control-flow — dynamic routing, fan-out and subgraphs).*
+*Last updated: 2026-09-04 after Phase 23 completion (v0.10.0 milestone; next: Phase 24
+pause/resume, history and graceful shutdown).*

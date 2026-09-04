@@ -69,7 +69,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
 
 ### Control Flow (Doc 02, epic `CF`)
 
-- [ ] **CF-01**: BUG-01 is fixed fail-closed and test-first: custom edge conditions resolve
+- [x] **CF-01**: BUG-01 is fixed fail-closed and test-first: custom edge conditions resolve
   through a registered-`EdgeConditionEvaluator` mechanism on both `CampaignExecutionService` and
   the WarEngine; validation fails with `BattalionError::InvalidGraph` naming every unregistered
   `Custom(name)` **before any node executes**; the warn-and-return-true branch is removed with no
@@ -91,7 +91,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   resume-mid-child, recursive-embedding rejection at validation, and legacy patterns embeddable
   (Formation-inside-Campaign integration test) (CF-FR-14…17)
 
-- [ ] **CF-05**: LLM-evaluated routing is available and off by default: an `LlmDecision` edge
+- [x] **CF-05**: LLM-evaluated routing is available and off by default: an `LlmDecision` edge
   evaluator (choice matching, `on_ambiguous` modes, application-layer registration) and
   `Commander` `StrategySelection::Semantic` that falls back to Heuristic on any LLM error with
   the fallback recorded — existing Commander tests pass unmodified (CF-FR-18, CF-FR-19)
@@ -356,11 +356,11 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ENG-06 | Phase 22 | Complete |
 | ENG-07 | Phase 22 | Complete |
 | ENG-08 | Phase 22 | Complete |
-| CF-01 | Phase 23 | Pending |
+| CF-01 | Phase 23 | Complete |
 | CF-02 | Phase 23 | Complete |
 | CF-03 | Phase 23 | Complete |
 | CF-04 | Phase 23 | Complete |
-| CF-05 | Phase 23 | Pending |
+| CF-05 | Phase 23 | Complete |
 | HITL-01 | Phase 24 | Pending |
 | HITL-02 | Phase 24 | Pending |
 | HITL-03 | Phase 24 | Pending |

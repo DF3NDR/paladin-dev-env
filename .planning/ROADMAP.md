@@ -196,7 +196,7 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 
 - [x] **Phase 22: Battlefield State & Superstep Engine** - Typed shared state, cyclic superstep execution, and automatic per-superstep checkpointing that resumes with zero re-execution after a crash (completed 2026-09-02)
 - [x] **Phase 22.1: Engine readiness defect and MSRV follow-up (INSERTED)** - Fix the BUG-03 cycle-bootstrap starvation and BUG-04 resume-frontier defects, complete the graph fingerprint, raise the MSRV floor to a measured 1.88, and seal G-22-1 on whole-run CI evidence (completed 2026-09-03)
-- [ ] **Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs** - Directive-based routing, Muster dynamic fan-out, nested Battalion subgraphs, LLM-evaluated routing, and the BUG-01 fail-closed fix
+- [x] **Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs** - Directive-based routing, Muster dynamic fan-out, nested Battalion subgraphs, LLM-evaluated routing, and the BUG-01 fail-closed fix (completed 2026-09-04)
 - [ ] **Phase 24: Pause/Resume, History & Graceful Shutdown** - Indefinite Parley pauses, typed resume validation, an inspectable/forkable Chronicle, graceful shutdown, and Thread endpoints over HTTP
 - [ ] **Phase 25: Node-Level Fault Tolerance** - Typed error transience, per-node Aegis retry, wall/idle timeouts, typed compensation handlers, provider fallback, and node result caching
 - [ ] **Phase 26: Agent Runtime Enhancements** - Execution middleware chain, context-window management, cross-session Vault memory, structured output, provider conformance close-out, and a one-line reasoning agent
@@ -482,7 +482,7 @@ Plans:
 | 18-21 | v0.9.0 | 25/25 | ✅ Shipped | 2026-09-01 |
 | 22. Battlefield State & Superstep Engine | v0.10.0 | 17/17 | Complete    | 2026-09-02 |
 | 22.1 Engine readiness defect and MSRV follow-up (INSERTED) | v0.10.0 | 7/7 | Complete    | 2026-09-03 |
-| 23. Control Flow — Dynamic Routing, Fan-Out & Subgraphs | v0.10.0 | 0/0 | Not started | - |
+| 23. Control Flow — Dynamic Routing, Fan-Out & Subgraphs | v0.10.0 | 12/12 | Complete    | 2026-09-04 |
 | 24. Pause/Resume, History & Graceful Shutdown | v0.10.0 | 0/0 | Not started | - |
 | 25. Node-Level Fault Tolerance | v0.10.0 | 0/0 | Not started | - |
 | 26. Agent Runtime Enhancements | v0.10.0 | 0/0 | Not started | - |

@@ -931,7 +931,28 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 Vec::new(),
                 WaypointStatus::Failed {
                     error: error.to_string(),
-                    failed_node: vanguard[0].clone(),
+                    // --- CR-01 (23-REVIEW.md): `vanguard` alone may be
+                    // empty on a muster-only round -- this phase's Muster
+                    // feature can re-enter this loop with `vanguard` empty
+                    // and `pending_muster` carrying the next dispatch
+                    // (`has_pending_muster` a few hundred lines below
+                    // stands in for "there is more work" in exactly this
+                    // situation). Mirrors the `Battlefield::merge` failure
+                    // fallback's `dispatch_entries.first()` pattern a few
+                    // hundred lines below, using `pending_muster` instead
+                    // since `dispatch_entries` is not built yet at this
+                    // point in the loop. The loop's own Completed-return
+                    // checks guarantee at least one of `vanguard`/
+                    // `pending_muster` is non-empty whenever this branch is
+                    // reached, so the final placeholder is unreachable by
+                    // construction -- but must not panic if that invariant
+                    // is ever violated (mirrors `MusterProgress::default`'s
+                    // own placeholder `NodeId::new(String::new())`).
+                    failed_node: vanguard
+                        .first()
+                        .cloned()
+                        .or_else(|| pending_muster.as_ref().map(|(node, _)| node.clone()))
+                        .unwrap_or_else(|| NodeId::new(String::new())),
                 },
                 visit_counts,
                 frontier.snapshot(graph),
@@ -5518,6 +5539,60 @@ mod tests {
         assert_eq!(failed.visit_counts.get(&NodeId::new("n0")), Some(&1));
         assert_eq!(failed.visit_counts.get(&NodeId::new("n1")), Some(&1));
         assert_eq!(failed.visit_counts.get(&NodeId::new("n2")), None);
+    }
+
+    #[tokio::test]
+    async fn muster_only_round_at_recursion_limit_fails_without_panicking() {
+        // CR-01 regression (23-REVIEW.md): a muster-only round (the
+        // mustering node's only arm is a worker template, which has no
+        // static incoming edge per D-12) leaves `vanguard` empty for the
+        // next superstep while `pending_muster` carries the dispatch
+        // forward. If `max_supersteps` is tight enough that the DISPATCH
+        // superstep itself trips the recursion limit, the
+        // `RecursionLimitExceeded` branch used to index `vanguard[0]`
+        // unconditionally and panic on the empty Vec. It must instead fail
+        // closed with a typed `EngineError`, never panic.
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(
+            s,
+            EngineLimits {
+                max_supersteps: 2,
+                ..EngineLimits::default()
+            },
+        );
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let worker_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(vec![muster_task(&worker, serde_json::json!("a"), "a")]),
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node.clone()));
+        graph.add_entry(planner.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("muster-only-recursion-limit").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        match outcome {
+            RunOutcome::Failed { error, waypoint } => {
+                assert!(matches!(
+                    error,
+                    EngineError::RecursionLimitExceeded { limit: 2, .. }
+                ));
+                assert!(waypoint.is_some());
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert_eq!(
+            worker_node.run_count(),
+            0,
+            "the muster dispatch superstep must never run -- the limit trips before dispatch"
+        );
     }
 
     #[tokio::test]

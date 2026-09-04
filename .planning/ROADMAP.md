@@ -369,7 +369,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 23-12-PLAN.md — mdBook control-flow page, §9.2 register closeout, CHANGELOG, program-gate evidence (CF-01…CF-05)
+- [x] 23-12-PLAN.md — mdBook control-flow page, §9.2 register closeout, CHANGELOG, program-gate evidence (CF-01…CF-05)
 
 ### Phase 24: Pause/Resume, History & Graceful Shutdown
 

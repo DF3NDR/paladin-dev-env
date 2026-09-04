@@ -1967,6 +1967,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            None,
         )
         .await
         .unwrap()
@@ -2004,6 +2005,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            None,
         )
         .await
         .unwrap()
@@ -2047,6 +2049,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            None,
         )
         .await
         .unwrap()
@@ -2788,6 +2791,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            None,
         )
         .await
         .unwrap();
@@ -3714,6 +3718,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            None,
         )
         .await;
 
@@ -3763,6 +3768,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            None,
         )
         .await
         .unwrap();
@@ -4343,6 +4349,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            None,
         )
         .await;
 
@@ -4375,6 +4382,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            None,
         )
         .await
         .unwrap();
@@ -4433,6 +4441,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            None,
         )
         .await
         .unwrap();
@@ -5845,6 +5854,736 @@ mod tests {
         assert_eq!(
             total_saves, ITERATIONS,
             "exactly one Waypoint save per single-superstep iteration"
+        );
+    }
+
+    // --- Plan 23-08: NodeSpec::Battalion (subgraph composition) ----------
+
+    /// Like `run_default`, but threading a REAL `Arc<W>` for the
+    /// `waypoint_port_arc` seam (CF-FR-16, D-21) so a `NodeSpec::Battalion`
+    /// node's child run can actually construct its `ChildEngineResources`
+    /// -- `run_default`'s own bare `&RecordingWaypointStore` has no owning
+    /// `Arc` to hand over. `store` drives both the borrowed and the
+    /// `Arc`-cloned parameter, so a Battalion child's own persisted
+    /// Waypoints land in the SAME store a test then inspects.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_with_children(
+        graph: &WarGraph,
+        thread: ThreadId,
+        initial: StateDelta,
+        store: &Arc<RecordingWaypointStore>,
+        port: &Arc<dyn PaladinPort>,
+        registry: &CustomDispatchResolver,
+        evaluators: &EdgeEvaluatorRegistry,
+        cancellation: &Option<CancellationToken>,
+    ) -> Result<RunOutcome, EngineError> {
+        run(
+            store.as_ref(),
+            WaypointDurability::Strict,
+            None,
+            registry,
+            evaluators,
+            graph,
+            thread,
+            Battlefield::initialize(graph.schema().clone(), &initial).unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            1,
+            port,
+            &no_trace(),
+            &no_interceptors(),
+            cancellation,
+            Some(Arc::clone(store)),
+        )
+        .await
+    }
+
+    fn child_thread_id(parent: &ThreadId, node: &str) -> ThreadId {
+        ThreadId::new(format!("{}::battalion::{node}", parent.as_str())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn battalion_node_runs_its_child_graph_to_completion() {
+        let child_result = field("child_result");
+        let child_schema = schema(vec![FieldSpec::new(
+            child_result.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut child = WarGraph::new(child_schema, EngineLimits::default());
+        let c1 = NodeId::new("c1");
+        let c2 = NodeId::new("c2");
+        let c1_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let c2_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let flag = Arc::clone(&c1_ran);
+            child.add_node(
+                c1.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    StateDelta::new()
+                })),
+            );
+        }
+        {
+            let flag = Arc::clone(&c2_ran);
+            let result_field = child_result.clone();
+            child.add_node(
+                c2.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let mut delta = StateDelta::new();
+                    delta.set_raw(result_field.clone(), serde_json::json!("done"));
+                    delta
+                })),
+            );
+        }
+        child.add_edge(EdgeSpec {
+            from: c1.clone(),
+            to: c2.clone(),
+            condition: Some(EdgeCondition::Always),
+        });
+        child.add_entry(c1);
+
+        let sub = NodeId::new("sub");
+        let mut parent = WarGraph::new(schema(vec![]), EngineLimits::default());
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
+        );
+        parent.add_entry(sub);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-basic").unwrap();
+        let outcome = run_with_children(
+            &parent,
+            thread,
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "expected Completed, got {outcome:?}"
+        );
+        assert!(
+            c1_ran.load(std::sync::atomic::Ordering::SeqCst),
+            "child entry node must have run"
+        );
+        assert!(
+            c2_ran.load(std::sync::atomic::Ordering::SeqCst),
+            "child second node must have run"
+        );
+    }
+
+    #[tokio::test]
+    async fn state_map_inputs_seed_the_child_schema() {
+        let parent_topic = field("parent_topic");
+        let observed = field("observed");
+        let child_topic = field("child_topic");
+        let child_out = field("child_out");
+
+        let child_schema = schema(vec![
+            FieldSpec::new(child_topic.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(child_out.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut child = WarGraph::new(child_schema, EngineLimits::default());
+        let reader = NodeId::new("reader");
+        {
+            let read_field = child_topic.clone();
+            let write_field = child_out.clone();
+            child.add_node(
+                reader.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, state| {
+                    let value: Option<String> = state.get(&read_field).unwrap();
+                    let mut delta = StateDelta::new();
+                    delta.set_raw(write_field.clone(), serde_json::json!(value));
+                    delta
+                })),
+            );
+        }
+        child.add_entry(reader);
+
+        let parent_schema = schema(vec![
+            FieldSpec::new(parent_topic.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(observed.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        let sub = NodeId::new("sub");
+        let state_map = StateMap::new()
+            .with_input(parent_topic.clone(), child_topic)
+            .with_output(child_out, observed.clone());
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-inputs").unwrap();
+        let mut initial = StateDelta::new();
+        initial.set(parent_topic, "rust").unwrap();
+
+        let outcome = run_with_children(
+            &parent,
+            thread,
+            initial,
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&observed).unwrap(),
+                    Some("rust".to_string())
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn state_map_outputs_return_as_the_parent_nodes_delta() {
+        let child_note = field("child_note");
+        let child_schema = schema(vec![FieldSpec::new(
+            child_note.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut child = WarGraph::new(child_schema, EngineLimits::default());
+        let writer = NodeId::new("writer");
+        child.add_node(
+            writer.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                child_note.clone(),
+                serde_json::json!("from-child"),
+            )),
+        );
+        child.add_entry(writer);
+
+        let notes = field("notes");
+        let parent_schema = schema(vec![FieldSpec::new(
+            notes.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        let sub = NodeId::new("sub");
+        let state_map = StateMap::new().with_output(child_note, notes.clone());
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-outputs-append").unwrap();
+        let mut initial = StateDelta::new();
+        initial
+            .set(notes.clone(), vec!["existing".to_string()])
+            .unwrap();
+
+        let outcome = run_with_children(
+            &parent,
+            thread,
+            initial,
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                let values: Vec<String> = final_state.get(&notes).unwrap().unwrap();
+                assert_eq!(
+                    values,
+                    vec!["existing".to_string(), "from-child".to_string()],
+                    "the child's output must merge through the PARENT's Append dispatch rule"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unmapped_child_fields_stay_private() {
+        let secret = field("secret");
+        let visible = field("visible");
+        let child_schema = schema(vec![
+            FieldSpec::new(secret.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(visible.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut child = WarGraph::new(child_schema, EngineLimits::default());
+        let writer = NodeId::new("writer");
+        child.add_node(
+            writer.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(|_run, _state| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(
+                    FieldName::new("secret").unwrap(),
+                    serde_json::json!("TOP_SECRET_VALUE"),
+                );
+                delta.set_raw(
+                    FieldName::new("visible").unwrap(),
+                    serde_json::json!("public"),
+                );
+                delta
+            })),
+        );
+        child.add_entry(writer);
+
+        let out = field("out");
+        let parent_schema = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        let sub = NodeId::new("sub");
+        let state_map = StateMap::new().with_output(visible, out);
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-privacy").unwrap();
+        let outcome = run_with_children(
+            &parent,
+            thread.clone(),
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        let final_state = match outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected Completed, got {other:?}"),
+        };
+        let serialized = serde_json::to_string(&final_state).unwrap();
+        assert!(
+            !serialized.contains("secret"),
+            "unmapped child field name must not appear in the parent Battlefield: {serialized}"
+        );
+        assert!(
+            !serialized.contains("TOP_SECRET_VALUE"),
+            "unmapped child field value must not appear in the parent Battlefield: {serialized}"
+        );
+
+        let saved = store.saved_waypoints(&thread).await;
+        assert!(!saved.is_empty());
+        for wp in &saved {
+            let wp_json = serde_json::to_string(&wp.battlefield).unwrap();
+            assert!(
+                !wp_json.contains("TOP_SECRET_VALUE"),
+                "unmapped child field value must not appear in any parent Waypoint payload: \
+                 {wp_json}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn one_parent_superstep_spans_the_whole_child_run() {
+        let child_out = field("child_out");
+        let child_schema = schema(vec![FieldSpec::new(
+            child_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut child = WarGraph::new(child_schema, EngineLimits::default());
+        let a = NodeId::new("a");
+        let b = NodeId::new("b");
+        let c = NodeId::new("c");
+        child.add_node(
+            a.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(|_r, _s| StateDelta::new())),
+        );
+        child.add_node(
+            b.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(|_r, _s| StateDelta::new())),
+        );
+        child.add_node(
+            c.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                child_out.clone(),
+                serde_json::json!("done"),
+            )),
+        );
+        child.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: b.clone(),
+            condition: Some(EdgeCondition::Always),
+        });
+        child.add_edge(EdgeSpec {
+            from: b.clone(),
+            to: c.clone(),
+            condition: Some(EdgeCondition::Always),
+        });
+        child.add_entry(a);
+
+        let parent_out = field("parent_out");
+        let parent_schema = schema(vec![FieldSpec::new(
+            parent_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        let sub = NodeId::new("sub");
+        let state_map = StateMap::new().with_output(child_out, parent_out);
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-one-superstep").unwrap();
+        let outcome = run_with_children(
+            &parent,
+            thread.clone(),
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let saved = store.saved_waypoints(&thread).await;
+        assert_eq!(
+            saved.len(),
+            1,
+            "exactly one parent Waypoint regardless of the child's own 3 supersteps"
+        );
+        assert_eq!(
+            saved[0].superstep, 1,
+            "the parent's superstep index must advance by exactly one"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_inherits_every_parent_engine_resource() {
+        let out_field = field("out");
+        let score_field = field("score");
+        let child_schema = schema(vec![
+            FieldSpec::new(out_field.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(
+                score_field.clone(),
+                DispatchRule::Custom("double".to_string()),
+                Some(serde_json::json!(0)),
+                false,
+            ),
+        ]);
+        let mut child = WarGraph::new(child_schema, EngineLimits::default());
+        let paladin_node = NodeId::new("child_paladin");
+        child.add_node(
+            paladin_node.clone(),
+            NodeSpec::paladin(
+                make_paladin("child_paladin"),
+                InputMapping::new("go"),
+                out_field.clone(),
+            ),
+        );
+        let scorer = NodeId::new("scorer");
+        child.add_node(
+            scorer.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                score_field.clone(),
+                serde_json::json!(21),
+            )),
+        );
+        child.add_entry(paladin_node);
+        child.add_entry(scorer);
+
+        let sub = NodeId::new("sub");
+        let parent_out = field("parent_out");
+        let parent_score = field("parent_score");
+        let parent_schema = schema(vec![
+            FieldSpec::new(parent_out.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(parent_score.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        let state_map = StateMap::new()
+            .with_output(out_field, parent_out.clone())
+            .with_output(score_field, parent_score.clone());
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output("child_paladin", "child output");
+        let port_dyn: Arc<dyn PaladinPort> = port.clone();
+        let mut registry = CustomDispatchResolver::new();
+        registry.insert(
+            "double".to_string(),
+            Arc::new(|_c: &serde_json::Value, d: &serde_json::Value| {
+                Ok(serde_json::json!(d.as_i64().unwrap_or(0) * 2))
+            }),
+        );
+
+        let thread = ThreadId::new("battalion-resources").unwrap();
+        let outcome = run_with_children(
+            &parent,
+            thread.clone(),
+            StateDelta::new(),
+            &store,
+            &port_dyn,
+            &registry,
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&parent_out).unwrap(),
+                    Some("child output".to_string())
+                );
+                // --- the dispatch resolver: `double` only exists on the
+                // PARENT's registry; a resolved score of 42 (21 * 2) proves
+                // the CHILD's own merge used it, not a default fallback.
+                assert_eq!(final_state.get::<i64>(&parent_score).unwrap(), Some(42));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        // --- the PaladinPort: the child's own Paladin executed through the
+        // PARENT's port instance.
+        assert_eq!(
+            port.call_log(),
+            vec![("child_paladin".to_string(), "go".to_string())]
+        );
+
+        // --- the WaypointPort: the child's own run persisted through the
+        // PARENT's store, under the deterministic child thread id.
+        let child_thread = child_thread_id(&thread, "sub");
+        let child_waypoints = store.saved_waypoints(&child_thread).await;
+        assert!(
+            !child_waypoints.is_empty(),
+            "child run must persist through the parent's WaypointPort"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_uses_its_own_engine_limits() {
+        let looper = NodeId::new("looper");
+        let mut child = WarGraph::new(
+            schema(vec![]),
+            EngineLimits {
+                max_supersteps: 2,
+                ..EngineLimits::default()
+            },
+        );
+        {
+            let looper = looper.clone();
+            child.add_node(
+                looper.clone(),
+                NodeSpec::Function(CountingFunctionNode::with_directive(move |_run, _state| {
+                    Directive {
+                        delta: StateDelta::new(),
+                        next: NextStep::Goto(vec![looper.clone()]),
+                    }
+                })),
+            );
+        }
+        child.add_entry(looper);
+
+        let mut parent = WarGraph::new(schema(vec![]), EngineLimits::default());
+        let sub = NodeId::new("sub");
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
+        );
+        parent.add_entry(sub);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-own-limits").unwrap();
+        let outcome = run_with_children(
+            &parent,
+            thread,
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RunOutcome::Failed { error, .. } => match error {
+                EngineError::BattalionChildFailed { source, .. } => {
+                    assert!(
+                        matches!(
+                            *source,
+                            EngineError::RecursionLimitExceeded { limit: 2, .. }
+                        ),
+                        "expected the CHILD's own max_supersteps (2) to trip, got {source:?}"
+                    );
+                }
+                other => panic!("expected BattalionChildFailed, got {other:?}"),
+            },
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn child_failure_surfaces_as_a_structured_node_error() {
+        let mut child = WarGraph::new(schema(vec![]), EngineLimits::default());
+        let failing = NodeId::new("failing");
+        child.add_node(
+            failing.clone(),
+            NodeSpec::Function(FailingFunctionNode::new("boom")),
+        );
+        child.add_entry(failing);
+
+        let mut parent = WarGraph::new(schema(vec![]), EngineLimits::default());
+        let sub = NodeId::new("sub");
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
+        );
+        parent.add_entry(sub.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-child-fails").unwrap();
+        let outcome = run_with_children(
+            &parent,
+            thread.clone(),
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RunOutcome::Failed { error, .. } => match error {
+                EngineError::BattalionChildFailed {
+                    node,
+                    child_thread,
+                    source,
+                } => {
+                    assert_eq!(node, sub);
+                    assert_eq!(child_thread, child_thread_id(&thread, "sub"));
+                    assert!(matches!(*source, EngineError::Node(_)));
+                }
+                other => panic!("expected BattalionChildFailed, got {other:?}"),
+            },
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_is_observed_at_the_child_superstep_boundary() {
+        let token = CancellationToken::new();
+
+        let child_a = NodeId::new("child_a");
+        let child_b = NodeId::new("child_b");
+        let mut child = WarGraph::new(schema(vec![]), EngineLimits::default());
+        {
+            let token = token.clone();
+            child.add_node(
+                child_a.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    // --- deterministically place cancellation mid-child-run:
+                    // observed only at the CHILD's own next superstep
+                    // boundary, before `child_b` ever runs.
+                    token.cancel();
+                    StateDelta::new()
+                })),
+            );
+        }
+        child.add_node(
+            child_b.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(|_run, _state| StateDelta::new())),
+        );
+        child.add_edge(EdgeSpec {
+            from: child_a.clone(),
+            to: child_b.clone(),
+            condition: Some(EdgeCondition::Always),
+        });
+        child.add_entry(child_a);
+
+        // The Battalion node has a static successor so the parent's run
+        // does NOT short-circuit through "vanguard empty -> Completed"
+        // before its own next top-of-loop cancellation check.
+        let sub = NodeId::new("sub");
+        let after = NodeId::new("after");
+        let mut parent = WarGraph::new(schema(vec![]), EngineLimits::default());
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
+        );
+        parent.add_node(
+            after.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(|_run, _state| StateDelta::new())),
+        );
+        parent.add_edge(EdgeSpec {
+            from: sub.clone(),
+            to: after,
+            condition: Some(EdgeCondition::Always),
+        });
+        parent.add_entry(sub.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-cancel").unwrap();
+        let outcome = run_with_children(
+            &parent,
+            thread.clone(),
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &Some(token),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(outcome, RunOutcome::Halted { .. }),
+            "expected the parent to halt at its own boundary, got {outcome:?}"
+        );
+
+        let child_thread = child_thread_id(&thread, "sub");
+        let child_waypoints = store.saved_waypoints(&child_thread).await;
+        let last = child_waypoints
+            .first()
+            .expect("child must have persisted at least one waypoint");
+        assert!(
+            matches!(last.status, WaypointStatus::Halted),
+            "expected the child's own latest waypoint to be Halted, got {:?}",
+            last.status
         );
     }
 }

@@ -62,8 +62,8 @@ pub enum NodeSpec {
     /// resolver, edge-evaluator registry, trace sink, interceptors and
     /// cancellation token -- while using its OWN graph's [`EngineLimits`].
     /// Pre-announced in this file's own rustdoc (line 31) on the
-    /// already-`#[non_exhaustive]` [`NodeSpec`] enum, so this addition
-    /// needs no X-10 register row.
+    /// already-open-ended [`NodeSpec`] enum, so this addition needs no
+    /// X-10 register row.
     Battalion {
         /// The embedded child graph.
         graph: Arc<WarGraph>,

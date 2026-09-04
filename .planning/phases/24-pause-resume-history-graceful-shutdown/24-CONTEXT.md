@@ -71,8 +71,9 @@ CONTEXT decisions state.
   they are enums. — **Reversibility:** one-way after v0.10.0 ships (the Waypoint payload is a
   stored contract); free now — the `MIGRATION.md` §9.2 `Waypoint` row already says "settle before
   first release, no compat needed".
-- **D-02: `WaypointStatus::AwaitingInput { parleys: Vec<ParleyRequest>, responses:
-  Vec<ParleyResponse> }`.** The Phase 22 single-`parley` field is replaced (the row above
+- **D-02: AwaitingInput carries every parley and every accepted response.** The status becomes
+  `WaypointStatus::AwaitingInput { parleys: Vec<ParleyRequest>, responses: Vec<ParleyResponse> }`;
+  the Phase 22 single-`parley` field is replaced (the row above
   sanctions it). `parleys` is every request raised in the suspending superstep; `responses` is the
   accepted subset so far, so "partially answered" is a property of the persisted Waypoint, not of
   process memory (HITL-FR-02's survive-termination rule applies to partial answers too). The
@@ -97,8 +98,9 @@ CONTEXT decisions state.
   parent-suspension-through-child now — a second lineage/resume protract with no FR behind it.
 
 ### Gate node & response delivery (HITL-FR-01, HITL-FR-04)
-- **D-05: `NodeSpec::Gate { request: GateRequestTemplate, output_field: Option<FieldName> }`** on
-  the already-`#[non_exhaustive]` enum. `GateRequestTemplate { kind, prompt_template: InputMapping,
+- **D-05: A first-class Gate node variant.** `NodeSpec::Gate { request: GateRequestTemplate,
+  output_field: Option<FieldName> }` on the already-`#[non_exhaustive]` enum.
+  `GateRequestTemplate { kind, prompt_template: InputMapping,
   payload_template: Option<InputMapping>, choices, expires_in: Option<Duration>, on_expire }` —
   `expires_at = now + expires_in` is stamped at raise time. `output_field` is **required** for
   `Approval`/`Choice`/`FreeText` and **must be `None`** for `StateEdit`; `WarGraph::validate`
@@ -113,8 +115,9 @@ CONTEXT decisions state.
   JSON `true`/`false` before delivery (HITL-FR-05: `true`/`false`, `"yes"/"no"/"approve"/"deny"`
   case-insensitive); when `output_field` is a `String` field the bool is written as `"true"`/
   `"false"`.
-- **D-07: Paladin nodes raise a parley through the `StructuredDirective` envelope, and receive the
-  answer through a `parley.` InputMapping namespace.** The 23 D-11 envelope gains `"next":
+- **D-07: Paladin parleys use the Directive envelope and a parley namespace.** Paladin nodes raise
+  a parley through the `StructuredDirective` envelope and receive the answer through a `parley.`
+  InputMapping namespace. The 23 D-11 envelope gains `"next":
   {"parley": {"kind": "...", "prompt": "...", "payload": {...}, "choices": [...],
   "expires_in_secs": N}}` (the parser fills `parley_id`, `node_id`, `created_at`). On the
   post-resume re-run, `InputMapping::render` resolves `{parley.value}`, `{parley.prompt}`,
@@ -170,15 +173,17 @@ CONTEXT decisions state.
   `latest_on_branch(thread, branch_root)` is a filter over `history`, and the tree is
   reconstructible from `WaypointSummary` alone — `WaypointSummary` gains `fork_of` (new type, no
   X-10 row). — **Reversibility:** one-way after release (stored payload).
-- **D-15: `latest(thread)` stays "most recently created across branches" — and that is now
-  load-bearing.** All three backends already order by `created_at DESC, superstep DESC`
+- **D-15: Latest stays newest-across-branches, and that is now load-bearing.** `latest(thread)`
+  keeps returning the most recently created Waypoint across branches. All three backends already
+  order by `created_at DESC, superstep DESC`
   (`in_memory.rs:71`, `postgres.rs:257`, SQLite likewise); add a contract-suite case asserting a
   fork's newest Waypoint wins over a later-superstep mainline Waypoint, on all three. Document on
   `WarEngine::resume` that resume-without-branch-qualifier resumes the newest branch (HITL-FR-11).
   Retention treats every branch's Waypoints as ordinary members of the thread (latest and
   `AwaitingInput` protected as today).
-- **D-16: `replay`/`fork` live on `WarEngine`; `ChronicleService` is a facade application
-  service.** `WarEngine::replay(graph, thread, from) -> Result<RunOutcome, EngineError>` and
+- **D-16: Replay and fork on the engine, Chronicle reads in the facade.** `replay`/`fork` live on
+  `WarEngine`; `ChronicleService` is a facade application service.
+  `WarEngine::replay(graph, thread, from) -> Result<RunOutcome, EngineError>` and
   `WarEngine::fork(graph, thread, from, edit: StateDelta)` re-enter `superstep::run` from
   `get(thread, from)` with `parent = from`, `fork_of = Some(from)`, superstep numbering continuing
   from `from.superstep + 1`, fingerprint checked (ENG-FR-14) and the edit merged through the
@@ -199,8 +204,9 @@ CONTEXT decisions state.
   Mainline runs keep `ThreadId::child` unchanged.
 
 ### Shutdown grace mechanics & process wiring (HITL-04, HITL-FR-13…15)
-- **D-19: Grace is enforced inside the superstep, at the point cancellation is first seen
-  mid-flight.** Today cancellation is observed only at the superstep boundary (`superstep.rs:893`).
+- **D-19: Grace is enforced inside the in-flight superstep.** Cancellation first seen mid-flight
+  starts the grace window at that moment. Today cancellation is observed only at the superstep
+  boundary (`superstep.rs:893`).
   Add a second observation: while awaiting the superstep's spawned node tasks, if the token fires,
   keep awaiting them until `cancel_observed_at + shutdown_grace`; tasks still running at the
   deadline are **aborted** (`JoinHandle::abort`), recorded `NodeOutcomeKind::Skipped { reason:
@@ -210,8 +216,9 @@ CONTEXT decisions state.
   `FrontierSnapshot` so resume re-executes them **exactly once** (acceptance 5). The existing
   boundary check is unchanged. `shutdown_grace = Duration::ZERO` aborts immediately. Mechanism
   inside `superstep.rs` is Claude's discretion; the contract above is locked.
-- **D-20: `WarEngine::with_shutdown_grace(Duration)` (default 30 s) is a runtime setting, not a
-  graph setting.** It is **not** part of `EngineLimits` and never hashed. `EngineConfig`
+- **D-20: Shutdown grace is a runtime setting, not a graph setting.**
+  `WarEngine::with_shutdown_grace(Duration)` (default 30 s) is the engine knob. It is **not** part
+  of `EngineLimits` and never hashed. `EngineConfig`
   (`src/config/engine.rs`, X-09) gains `shutdown_grace_secs: u64` (default `30`, env
   `APP_ENGINE_SHUTDOWN_GRACE_SECS`) and `graceful_shutdown: bool` (default `true`, env
   `APP_ENGINE_GRACEFUL_SHUTDOWN`) — the latter is the **M-B-02 disable switch** ("legacy-only
@@ -220,8 +227,9 @@ CONTEXT decisions state.
   following the Phase 22/23 precedent (`EngineConfig`/`WaypointRetentionConfig` are standalone,
   `src/config/mod.rs:46,52`). — **Reversibility:** costly — env names and defaults are
   operator-facing once documented in §9.5.
-- **D-21: `ShutdownCoordinator` + `RunGuard` live in `paladin-battalion::engine::shutdown`.** A
-  root `tokio_util::sync::CancellationToken`, an in-flight counter and a `Notify`; `register()`
+- **D-21: The shutdown coordinator lives in the battalion engine module.** `ShutdownCoordinator`
+  and `RunGuard` go in `paladin-battalion::engine::shutdown`. A root
+  `tokio_util::sync::CancellationToken`, an in-flight counter and a `Notify`; `register()`
   returns a child token + RAII guard; `cancel_and_wait(grace)` cancels the root and waits until
   idle or the deadline. Placed in battalion (not the facade) so embedded-library users and Phase
   27's worker pool reuse it. X-05 stress test with exact counts and a timeout guard.

@@ -360,8 +360,8 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 23-09-PLAN.md — injective child `ThreadId`, `checkpoint_ns`, resume-mid-child, Formation-inside-Campaign test (CF-04)
-- [ ] 23-10-PLAN.md — graph fingerprint `v2` → `v3` with the six new hashed properties and a re-pinned golden (CF-02/03/04)
+- [x] 23-09-PLAN.md — injective child `ThreadId`, `checkpoint_ns`, resume-mid-child, Formation-inside-Campaign test (CF-04)
+- [x] 23-10-PLAN.md — graph fingerprint `v2` → `v3` with the six new hashed properties and a re-pinned golden (CF-02/03/04)
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

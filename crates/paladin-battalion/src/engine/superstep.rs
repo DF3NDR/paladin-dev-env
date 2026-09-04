@@ -7569,4 +7569,191 @@ mod tests {
             assert_eq!(wp.thread_id, child_thread);
         }
     }
+
+    // --- X-05 stress test: a 50-task muster under real multi-thread
+    // contention (PRD 02 §4 item 8, `.project/v0.10.0/00-program-overview.md`
+    // X-05). Every muster property up to this point is proven at 3-5 tasks
+    // on the default (single-threaded, per-test) `#[tokio::test]` runtime --
+    // this is the ONE place in the phase that exercises the muster dispatch
+    // path under GENUINE OS-thread contention, following
+    // `src/application/services/orchestration/listener.rs`'s house pattern
+    // for exact-assertion, timeout-guarded, `multi_thread` concurrency
+    // coverage: `#[tokio::test(flavor = "multi_thread")]`, an explicit
+    // `tokio::time::timeout` around the run so a deadlock in the muster
+    // dispatch/semaphore path fails loudly instead of hanging the suite, and
+    // exact-count assertions rather than a lower bound (a dropped or
+    // duplicated task must fail the test, not silently pass a `>=` check).
+    //
+    // 50 sits comfortably inside `EngineLimits::max_muster_tasks`'s default
+    // of 100 (`engine::graph::EngineLimits`), so this exercises real
+    // concurrency, never the limit-rejection path Plan 23-05 already owns.
+    // Workers are lightweight `CountingFunctionNode`s, not mock-Paladin
+    // round trips -- this test module is the phase's per-task sampling
+    // command, so a slow test here would degrade the whole feedback loop.
+
+    /// Builds a fresh 50-task muster fixture: `planner` (Function, entry,
+    /// one-shot `Muster` of 50 tasks keyed `"000"`..`"049"`, already in
+    /// lexicographic order so a passing "aggregated order == sorted key
+    /// order" assertion cannot be satisfied by accident) `-> worker`
+    /// (Function worker template, appends its own `task_key` into
+    /// `results`) `-> aggregator` (Function, `defer: true`, asserted to run
+    /// exactly once). Returns the graph plus both nodes so the caller can
+    /// read `run_count()` after the run.
+    fn fifty_task_muster_graph() -> (
+        WarGraph,
+        Arc<CountingFunctionNode>,
+        Arc<CountingFunctionNode>,
+    ) {
+        const TASK_COUNT: usize = 50;
+        let results_field = field("results");
+        let s = schema(vec![FieldSpec::new(
+            results_field.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let aggregator = NodeId::new("aggregator");
+
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(
+                    (0..TASK_COUNT)
+                        .map(|i| muster_task(&worker, serde_json::json!(i), &format!("{i:03}")))
+                        .collect(),
+                ),
+            })
+        };
+        let worker_node = {
+            let results_field = results_field.clone();
+            CountingFunctionNode::with_context_directive(move |_run, _state, ctx| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(results_field.clone(), serde_json::json!(ctx.task_key()));
+                delta.into()
+            })
+        };
+        let aggregator_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node.clone()));
+        graph.add_deferred_node(
+            aggregator.clone(),
+            NodeSpec::Function(aggregator_node.clone()),
+        );
+        graph.add_edge(EdgeSpec {
+            from: worker,
+            to: aggregator,
+            condition: None,
+        });
+        graph.add_entry(planner);
+
+        (graph, worker_node, aggregator_node)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fifty_task_muster_runs_to_completion_under_multi_thread() {
+        const TASK_COUNT: usize = 50;
+        let (graph, worker_node, aggregator_node) = fifty_task_muster_graph();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("fifty-task-muster").unwrap();
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            run_default(&graph, thread, &store),
+        )
+        .await
+        .expect(
+            "a 50-task muster must complete inside the timeout -- a deadlock in the muster \
+             dispatch/semaphore path under real contention would hang here instead of failing",
+        );
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                let results = final_state
+                    .get::<Vec<String>>(&field("results"))
+                    .unwrap()
+                    .unwrap_or_default();
+                assert_eq!(
+                    results.len(),
+                    TASK_COUNT,
+                    "exactly 50 entries in the aggregated field, not a lower bound"
+                );
+                let expected: Vec<String> = (0..TASK_COUNT).map(|i| format!("{i:03}")).collect();
+                assert_eq!(
+                    results, expected,
+                    "the aggregated order must equal the sorted task_key order, proven under \
+                     real multi-thread contention"
+                );
+                let distinct: std::collections::HashSet<&String> = results.iter().collect();
+                assert_eq!(
+                    distinct.len(),
+                    TASK_COUNT,
+                    "all 50 task_keys must be distinct -- a duplicate would collapse this count"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        assert_eq!(
+            worker_node.run_count(),
+            TASK_COUNT,
+            "exactly 50 worker executions, no more, no fewer"
+        );
+        assert_eq!(
+            aggregator_node.run_count(),
+            1,
+            "the deferred aggregator must run exactly once"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fifty_task_muster_is_deterministic_across_repeats() {
+        const REPEATS: usize = 3;
+        let mut final_states = Vec::with_capacity(REPEATS);
+        for i in 0..REPEATS {
+            let (graph, worker_node, aggregator_node) = fifty_task_muster_graph();
+            let store = RecordingWaypointStore::new();
+            let thread = ThreadId::new(format!("fifty-task-muster-repeat-{i}")).unwrap();
+
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                run_default(&graph, thread, &store),
+            )
+            .await
+            .expect(
+                "a 50-task muster must complete inside the timeout on every repeat -- a \
+                 deadlock under real contention would hang here instead of failing",
+            );
+
+            match outcome {
+                RunOutcome::Completed { final_state, .. } => {
+                    assert_eq!(
+                        worker_node.run_count(),
+                        50,
+                        "repeat {i}: exactly 50 worker executions"
+                    );
+                    assert_eq!(
+                        aggregator_node.run_count(),
+                        1,
+                        "repeat {i}: the deferred aggregator must run exactly once"
+                    );
+                    final_states.push(final_state);
+                }
+                other => panic!("repeat {i}: expected Completed, got {other:?}"),
+            }
+        }
+
+        for (i, state) in final_states.iter().enumerate().skip(1) {
+            assert_eq!(
+                state, &final_states[0],
+                "repeat {i}: the final Battlefield must be byte-identical to repeat 0's -- a \
+                 merge-order defect under real thread interleaving would surface as a mismatch \
+                 here"
+            );
+        }
+    }
 }

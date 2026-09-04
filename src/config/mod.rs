@@ -6,6 +6,8 @@ pub mod arsenal;
 #[allow(missing_docs)]
 pub mod citadel;
 #[allow(missing_docs)]
+pub mod engine;
+#[allow(missing_docs)]
 pub mod env_utils;
 #[allow(missing_docs)]
 pub mod file_storage;
@@ -41,6 +43,7 @@ pub use crate::config::agents::{
 };
 pub use crate::config::arsenal::{ArsenalConfig, MCPServerConfig};
 pub use crate::config::citadel::CitadelConfig;
+pub use crate::config::engine::EngineConfig;
 pub use crate::config::file_storage::FileStorageConfig;
 #[cfg(feature = "notifications")]
 pub use crate::config::notifications::NotificationConfig;

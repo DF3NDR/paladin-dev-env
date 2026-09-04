@@ -553,6 +553,56 @@ pub enum EngineError {
         /// no longer a worker template.
         worker: NodeId,
     },
+
+    /// `WarGraph::validate` found one or more `NodeSpec::Battalion`
+    /// `StateMap` pairs naming a field absent from the relevant schema
+    /// (CF-FR-14, D-19): an `inputs` pair's `parent` field must exist in
+    /// the parent schema and `child` field in the child graph's schema; an
+    /// `outputs` pair's `child` field must exist in the child schema and
+    /// `parent` field in the parent schema. Carries EVERY offending field
+    /// in one error, mirroring [`EngineError::MusterPrefixSchemaField`]'s
+    /// "report the whole problem at once" discipline.
+    #[error("invalid battalion StateMap field(s): {reason}")]
+    BattalionStateMapUnknownField {
+        /// Every offending field, pre-formatted with its owning node,
+        /// direction (`input`/`output`) and side (`parent`/`child`).
+        fields: Vec<String>,
+        /// Explains the rule.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found a `NodeSpec::Battalion` node whose child
+    /// graph -- or a descendant of it -- has a fingerprint already present
+    /// on its own descent path (CF-FR-16, D-19): recursive embedding,
+    /// caught by a path-set walk over CHILD FINGERPRINTS rather than
+    /// pointer identity, before any node ever executes. This bounds
+    /// nesting depth by construction; a deep but genuinely ACYCLIC nesting
+    /// of distinct graphs still validates.
+    #[error("recursive battalion embedding: {reason}")]
+    RecursiveEmbedding {
+        /// The fingerprint path from the outermost graph down to the
+        /// re-encountered child.
+        path: Vec<GraphFingerprint>,
+        /// Explains the fixpoint rule and names the offending node.
+        reason: String,
+    },
+
+    /// A `NodeSpec::Battalion` node's child run failed (CF-FR-16, D-21):
+    /// the child's own `WarEngine`-equivalent superstep loop returned
+    /// `RunOutcome::Failed` or an outright `Err`. Named structurally --
+    /// the failing Battalion node and the child thread it ran under (X-06)
+    /// -- rather than folded into a bare interpolated `NodeError` string,
+    /// with the child's own typed error preserved as the source.
+    #[error("battalion node {node} child run failed on thread {child_thread}: {source}")]
+    BattalionChildFailed {
+        /// The Battalion node whose child run failed.
+        node: NodeId,
+        /// The child thread the failing run executed under.
+        child_thread: ThreadId,
+        /// The child engine's own error.
+        #[source]
+        source: Box<EngineError>,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -607,7 +657,14 @@ pub struct WarEngine<W: WaypointPort> {
     cancellation_token: Option<CancellationToken>,
 }
 
-impl<W: WaypointPort> WarEngine<W> {
+// --- CF-FR-16, D-21: `+ 'static` is required here (not on the struct
+// declaration above) because `start`/`resume_with_options` forward
+// `Arc<W>` into `superstep::run`, which in turn may capture it inside a
+// `tokio::spawn`'d task for a `NodeSpec::Battalion` node's child run --
+// every real `WaypointPort` implementor (`InMemoryWaypointStore`,
+// `sqlite`/`postgres` backends, `RecordingWaypointStore`) already
+// satisfies this trivially, since none carries a borrowed lifetime.
+impl<W: WaypointPort + 'static> WarEngine<W> {
     /// Construct a `WarEngine` over the given Paladin execution port and
     /// Waypoint persistence port, with `WaypointDurability::Strict`, no
     /// explicit parallelism cap, no custom dispatch rules registered, no
@@ -739,6 +796,7 @@ impl<W: WaypointPort> WarEngine<W> {
             &self.trace_dispatcher,
             &self.interceptors,
             &self.cancellation_token,
+            Some(Arc::clone(&self.waypoint_port)),
         )
         .await;
         self.trace_dispatcher
@@ -900,6 +958,7 @@ impl<W: WaypointPort> WarEngine<W> {
             &self.trace_dispatcher,
             &self.interceptors,
             &self.cancellation_token,
+            Some(Arc::clone(&self.waypoint_port)),
         )
         .await;
         self.trace_dispatcher

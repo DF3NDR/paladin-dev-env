@@ -86,7 +86,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   (repeat-tested), duplicate-key rejection, `max_muster_tasks` limit, and mid-muster resume that
   re-runs only unfinished tasks (CF-FR-09…13)
 
-- [ ] **CF-04**: Battalions nest — `NodeSpec::Battalion` embeds a child WarGraph with `StateMap`
+- [x] **CF-04**: Battalions nest — `NodeSpec::Battalion` embeds a child WarGraph with `StateMap`
   input/output mapping and private child fields, namespaced checkpoint inheritance with
   resume-mid-child, recursive-embedding rejection at validation, and legacy patterns embeddable
   (Formation-inside-Campaign integration test) (CF-FR-14…17)
@@ -359,7 +359,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CF-01 | Phase 23 | Pending |
 | CF-02 | Phase 23 | Complete |
 | CF-03 | Phase 23 | Pending |
-| CF-04 | Phase 23 | Pending |
+| CF-04 | Phase 23 | Complete |
 | CF-05 | Phase 23 | Pending |
 | HITL-01 | Phase 24 | Pending |
 | HITL-02 | Phase 24 | Pending |

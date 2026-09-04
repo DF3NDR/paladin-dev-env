@@ -105,7 +105,11 @@ pub enum EdgeEvaluatorError {
 /// collision class to reject here. Name lookup is exact `String` equality:
 /// no trimming, no case folding, no Unicode normalization -- `"isUrgent"`
 /// and `"isurgent"` are two distinct registrations.
-#[derive(Default)]
+/// `Clone` (CF-FR-16, D-21): a `NodeSpec::Battalion` node's child run
+/// inherits the PARENT's edge-evaluator registry wholesale (D-19), and
+/// forwarding it into a `tokio::spawn`'d dispatch task requires an owned,
+/// `'static` copy -- cheap, since every value clone is an `Arc::clone`.
+#[derive(Default, Clone)]
 pub struct EdgeEvaluatorRegistry {
     inner: HashMap<String, Arc<dyn EdgeConditionEvaluator>>,
 }

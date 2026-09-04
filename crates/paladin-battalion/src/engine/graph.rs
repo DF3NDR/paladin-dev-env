@@ -53,6 +53,94 @@ pub enum NodeSpec {
     },
     /// A pure, deterministic state -> delta node.
     Function(Arc<dyn StateNode>),
+    /// A child [`WarGraph`] embedded as a node (CF-FR-14, D-19): runs to
+    /// completion within ONE parent superstep regardless of how many
+    /// supersteps the child itself takes (CF-FR-16, D-21), seeded from and
+    /// returning only its [`StateMap`]-mapped fields under the PARENT's
+    /// dispatch rules, inheriting every parent engine resource -- the
+    /// `PaladinPort`, `WaypointPort`, durability, parallelism, dispatch
+    /// resolver, edge-evaluator registry, trace sink, interceptors and
+    /// cancellation token -- while using its OWN graph's [`EngineLimits`].
+    /// Pre-announced in this file's own rustdoc (line 31) on the
+    /// already-open-ended [`NodeSpec`] enum, so this addition needs no
+    /// X-10 register row.
+    Battalion {
+        /// The embedded child graph.
+        graph: Arc<WarGraph>,
+        /// The declared channel between the parent's and the child's
+        /// state -- the ONLY fields that cross the boundary in either
+        /// direction (CF-FR-14): everything else the child touches stays
+        /// private, never copied into the parent's Battlefield, this
+        /// node's own delta, or the parent thread's Waypoint payload.
+        state_map: StateMap,
+        /// Whether a resumed run restarts this node's child from scratch
+        /// rather than continuing a partially-completed child thread.
+        /// Declared here for Plan 23-09 (child thread identity /
+        /// `checkpoint_ns` / resume-mid-child), which owns interpreting
+        /// this flag -- this plan carries it and defaults it to `false`
+        /// via [`NodeSpec::battalion`], but does not itself act on it.
+        restart_on_resume: bool,
+    },
+}
+
+/// The declared channel between a [`NodeSpec::Battalion`] node's parent
+/// and child state (CF-FR-14, D-19) -- the COMPLETE contract for what
+/// crosses the composition boundary in either direction; a child field NOT
+/// named in `outputs` never leaves the child, and a parent field NOT named
+/// in `inputs` is never visible to the child.
+///
+/// `inputs` pairs are `(parent, child)`: read from the parent's superstep
+/// snapshot under the parent field name, written into the child's seeded
+/// initial state under the child field name. `outputs` pairs are `(child,
+/// parent)`: read from the child's final Battlefield under the child field
+/// name, returned as the Battalion node's own delta under the parent field
+/// name -- merged through the PARENT's dispatch rules like any other
+/// node's delta, exactly as `NodeSpec::Paladin`'s `output_field` is.
+///
+/// Two shapes the sources leave open (23-RESEARCH.md's spec-less probe
+/// returned one `unclassified` row for CF-04) are resolved here by
+/// decision, each pinned by a named test: mapping one child field to two
+/// DIFFERENT parent fields across two `outputs` pairs is ACCEPTED -- a
+/// fan-out of one value through two parent dispatch rules, with no
+/// ambiguity -- and an empty `inputs` list is ACCEPTED -- a child needing
+/// no seeded state is legitimate (a generator subgraph).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StateMap {
+    /// `(parent field, child field)` pairs seeding the child's initial
+    /// state from the parent's superstep snapshot.
+    pub inputs: Vec<(FieldName, FieldName)>,
+    /// `(child field, parent field)` pairs returning the child's final
+    /// state as this node's delta.
+    pub outputs: Vec<(FieldName, FieldName)>,
+}
+
+impl StateMap {
+    /// Construct an empty `StateMap` (no fields cross the boundary either
+    /// way).
+    pub fn new() -> Self {
+        Self {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        }
+    }
+
+    /// Add one `(parent, child)` input pair.
+    pub fn with_input(mut self, parent: FieldName, child: FieldName) -> Self {
+        self.inputs.push((parent, child));
+        self
+    }
+
+    /// Add one `(child, parent)` output pair.
+    pub fn with_output(mut self, child: FieldName, parent: FieldName) -> Self {
+        self.outputs.push((child, parent));
+        self
+    }
+}
+
+impl Default for StateMap {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl NodeSpec {
@@ -89,6 +177,18 @@ impl NodeSpec {
             directive_parser,
         }
     }
+
+    /// Construct a `NodeSpec::Battalion` embedding `graph`, defaulting
+    /// `restart_on_resume` to `false` (Claude's discretion, CONTEXT.md) --
+    /// every in-tree call site not otherwise concerned with Plan 23-09's
+    /// resume semantics uses this constructor.
+    pub fn battalion(graph: Arc<WarGraph>, state_map: StateMap) -> Self {
+        NodeSpec::Battalion {
+            graph,
+            state_map,
+            restart_on_resume: false,
+        }
+    }
 }
 
 impl std::fmt::Debug for NodeSpec {
@@ -104,6 +204,20 @@ impl std::fmt::Debug for NodeSpec {
                 .field("directive_parser", directive_parser)
                 .finish(),
             NodeSpec::Function(_) => f.debug_tuple("NodeSpec::Function").field(&"<fn>").finish(),
+            NodeSpec::Battalion {
+                graph,
+                state_map,
+                restart_on_resume,
+            } => f
+                .debug_struct("NodeSpec::Battalion")
+                // Never the child's whole graph -- only its fingerprint and
+                // the two map sizes (CF-FR-14's privacy boundary extends to
+                // debug output, not just runtime data flow).
+                .field("child_fingerprint", &graph.fingerprint().as_str())
+                .field("inputs_len", &state_map.inputs.len())
+                .field("outputs_len", &state_map.outputs.len())
+                .field("restart_on_resume", restart_on_resume)
+                .finish(),
         }
     }
 }
@@ -420,9 +534,132 @@ impl WarGraph {
         self.validate_muster_prefix_schema_fields()?;
         self.validate_edge_evaluators(edge_evaluators)?;
         self.validate_worker_templates()?;
+        self.validate_battalion_state_maps()?;
 
         self.validate_eligible_set()?;
-        self.validate_schedulable()
+        self.validate_schedulable()?;
+
+        // --- CF-FR-16, D-19: checked LAST -- the deepest, most expensive
+        // clause -- so every shallower structural error above is still
+        // what a caller sees first for a graph that has one of those too.
+        self.validate_battalion_children(custom_dispatch, edge_evaluators, &[self.fingerprint()])
+    }
+
+    /// CF-FR-14 / D-19's StateMap field-existence clause: for every
+    /// `NodeSpec::Battalion` node, checks that each `inputs` pair's
+    /// `parent` field exists in the PARENT schema and `child` field exists
+    /// in the CHILD graph's schema, and that each `outputs` pair's `child`
+    /// field exists in the CHILD schema and `parent` field exists in the
+    /// PARENT schema. Collects EVERY offender across every Battalion node
+    /// before returning, mirroring
+    /// [`WarGraph::validate_edge_evaluators`]'s "report the whole problem
+    /// at once" discipline -- never failing fast on the first.
+    fn validate_battalion_state_maps(&self) -> Result<(), EngineError> {
+        let mut offenders: Vec<String> = Vec::new();
+        for id in &self.node_order {
+            let Some(NodeSpec::Battalion {
+                graph: child,
+                state_map,
+                ..
+            }) = self.nodes.get(id)
+            else {
+                continue;
+            };
+            let child_schema = child.schema();
+            for (parent_field, child_field) in &state_map.inputs {
+                if self.schema.field_spec(parent_field).is_none() {
+                    offenders.push(format!(
+                        "{id}: input parent field '{}' not declared in the parent schema",
+                        parent_field.as_str()
+                    ));
+                }
+                if child_schema.field_spec(child_field).is_none() {
+                    offenders.push(format!(
+                        "{id}: input child field '{}' not declared in the child schema",
+                        child_field.as_str()
+                    ));
+                }
+            }
+            for (child_field, parent_field) in &state_map.outputs {
+                if child_schema.field_spec(child_field).is_none() {
+                    offenders.push(format!(
+                        "{id}: output child field '{}' not declared in the child schema",
+                        child_field.as_str()
+                    ));
+                }
+                if self.schema.field_spec(parent_field).is_none() {
+                    offenders.push(format!(
+                        "{id}: output parent field '{}' not declared in the parent schema",
+                        parent_field.as_str()
+                    ));
+                }
+            }
+        }
+        if offenders.is_empty() {
+            return Ok(());
+        }
+        offenders.sort();
+        Err(EngineError::BattalionStateMapUnknownField {
+            fields: offenders,
+            reason: "every StateMap-mapped field must exist in its declared schema (CF-FR-14) \
+                     -- rename the field or add it to the missing schema"
+                .to_string(),
+        })
+    }
+
+    /// CF-FR-16 / D-19's recursive-embedding + child-validation clause: for
+    /// every `NodeSpec::Battalion` node, walks a path-set of CHILD
+    /// FINGERPRINTS (never pointer identity -- an immutable `Arc<WarGraph>`
+    /// cannot literally self-contain, so this check is defensive against
+    /// two structurally identical graphs embedded in a cycle, and it
+    /// bounds nesting depth by construction) and rejects a repeated
+    /// fingerprint with `EngineError::RecursiveEmbedding`, naming the full
+    /// descent path. Otherwise validates the child recursively with the
+    /// SAME `custom_dispatch`/`edge_evaluators` registries the parent was
+    /// given (D-19) -- extending CF-01's fail-closed contract into
+    /// subgraphs, so a `Custom` dispatch rule or edge condition inside a
+    /// child fails closed exactly as it does in the parent -- before
+    /// descending into that child's OWN Battalion children.
+    fn validate_battalion_children(
+        &self,
+        custom_dispatch: &CustomDispatchResolver,
+        edge_evaluators: &EdgeEvaluatorRegistry,
+        ancestry: &[GraphFingerprint],
+    ) -> Result<(), EngineError> {
+        for id in &self.node_order {
+            let Some(NodeSpec::Battalion { graph: child, .. }) = self.nodes.get(id) else {
+                continue;
+            };
+            let child_fp = child.fingerprint();
+            if ancestry.contains(&child_fp) {
+                let mut path = ancestry.to_vec();
+                path.push(child_fp);
+                let rendered = path
+                    .iter()
+                    .map(GraphFingerprint::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" -> ");
+                return Err(EngineError::RecursiveEmbedding {
+                    path,
+                    reason: format!(
+                        "battalion node {id} embeds a child whose fingerprint already appears \
+                         on its own descent path: {rendered}"
+                    ),
+                });
+            }
+            // D-19: the child is validated recursively with the SAME
+            // registries, so an unregistered Custom dispatch/edge name
+            // inside it fails validation exactly as it would in the
+            // parent -- this is what extends CF-01's fail-closed contract
+            // into subgraphs, and it also runs the child's own
+            // eligible-set/schedulable checks, so a structurally broken
+            // child fails the PARENT's validate too.
+            child.validate(custom_dispatch, edge_evaluators)?;
+            let mut next_ancestry = ancestry.to_vec();
+            next_ancestry.push(child_fp);
+            child.validate_battalion_children(custom_dispatch, edge_evaluators, &next_ancestry)?;
+        }
+        Ok(())
     }
 
     /// CF-03 / D-15's namespace-reservation clause: a Battlefield schema
@@ -1666,6 +1903,7 @@ mod tests {
             &trace,
             &interceptors,
             &None,
+            None,
         )
         .await
         .unwrap()
@@ -2332,6 +2570,422 @@ mod tests {
         assert!(
             graph
                 .validate(&CustomDispatchResolver::new(), &evaluators)
+                .is_ok()
+        );
+    }
+
+    // --- Plan 23-08: StateMap and recursive-embedding validation ---------
+
+    fn trivial_graph_named(node_name: &str) -> WarGraph {
+        let mut g = WarGraph::new(one_field_schema(), EngineLimits::default());
+        g.add_node(
+            NodeId::new(node_name),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        g.add_entry(NodeId::new(node_name));
+        g
+    }
+
+    fn trivial_graph() -> WarGraph {
+        trivial_graph_named("only")
+    }
+
+    #[test]
+    fn state_map_input_naming_an_unknown_parent_field_fails_validation() {
+        let child = trivial_graph();
+        let mut parent = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let sub = NodeId::new("sub");
+        let state_map = StateMap::new().with_input(
+            FieldName::new("ghost_parent").unwrap(),
+            FieldName::new("result").unwrap(),
+        );
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        let err = parent
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        match err {
+            EngineError::BattalionStateMapUnknownField { fields, .. } => {
+                assert!(
+                    fields.iter().any(|f| f.contains("ghost_parent")),
+                    "fields: {fields:?}"
+                );
+            }
+            other => panic!("expected BattalionStateMapUnknownField, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn state_map_input_naming_an_unknown_child_field_fails_validation() {
+        let child = trivial_graph();
+        let mut parent = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let sub = NodeId::new("sub");
+        let state_map = StateMap::new().with_input(
+            FieldName::new("result").unwrap(),
+            FieldName::new("ghost_child").unwrap(),
+        );
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        let err = parent
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        match err {
+            EngineError::BattalionStateMapUnknownField { fields, .. } => {
+                assert!(
+                    fields.iter().any(|f| f.contains("ghost_child")),
+                    "fields: {fields:?}"
+                );
+            }
+            other => panic!("expected BattalionStateMapUnknownField, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn state_map_output_naming_an_unknown_child_field_fails_validation() {
+        let child = trivial_graph();
+        let mut parent = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let sub = NodeId::new("sub");
+        let state_map = StateMap::new().with_output(
+            FieldName::new("ghost_child").unwrap(),
+            FieldName::new("result").unwrap(),
+        );
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        let err = parent
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        match err {
+            EngineError::BattalionStateMapUnknownField { fields, .. } => {
+                assert!(
+                    fields.iter().any(|f| f.contains("ghost_child")),
+                    "fields: {fields:?}"
+                );
+            }
+            other => panic!("expected BattalionStateMapUnknownField, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn state_map_output_naming_an_unknown_parent_field_fails_validation() {
+        let child = trivial_graph();
+        let mut parent = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let sub = NodeId::new("sub");
+        let state_map = StateMap::new().with_output(
+            FieldName::new("result").unwrap(),
+            FieldName::new("ghost_parent").unwrap(),
+        );
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        let err = parent
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        match err {
+            EngineError::BattalionStateMapUnknownField { fields, .. } => {
+                assert!(
+                    fields.iter().any(|f| f.contains("ghost_parent")),
+                    "fields: {fields:?}"
+                );
+            }
+            other => panic!("expected BattalionStateMapUnknownField, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_offending_mapped_field_is_reported_not_just_the_first() {
+        let child = trivial_graph();
+        let mut parent = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let sub = NodeId::new("sub");
+        let state_map = StateMap::new()
+            .with_input(
+                FieldName::new("ghost_parent_1").unwrap(),
+                FieldName::new("result").unwrap(),
+            )
+            .with_input(
+                FieldName::new("result").unwrap(),
+                FieldName::new("ghost_child_1").unwrap(),
+            )
+            .with_output(
+                FieldName::new("ghost_child_2").unwrap(),
+                FieldName::new("result").unwrap(),
+            )
+            .with_output(
+                FieldName::new("result").unwrap(),
+                FieldName::new("ghost_parent_2").unwrap(),
+            );
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        let err = parent
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        match err {
+            EngineError::BattalionStateMapUnknownField { fields, .. } => {
+                assert_eq!(
+                    fields.len(),
+                    4,
+                    "all four offenders must be reported at once: {fields:?}"
+                );
+            }
+            other => panic!("expected BattalionStateMapUnknownField, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn child_graph_is_validated_with_the_parents_registries() {
+        let mut child = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let a = NodeId::new("a");
+        let b = NodeId::new("b");
+        child.add_node(a.clone(), NodeSpec::Function(StdArc::new(NoopNode)));
+        child.add_node(b.clone(), NodeSpec::Function(StdArc::new(NoopNode)));
+        child.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: b.clone(),
+            condition: Some(EdgeCondition::Custom("special".to_string())),
+        });
+        child.add_entry(a);
+
+        let mut parent = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let sub = NodeId::new("sub");
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
+        );
+        parent.add_entry(sub);
+
+        // Unregistered on either side: fails, because the child is
+        // validated with the SAME registry the parent was given (D-19).
+        let err = parent
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, EngineError::UnregisteredEdgeCondition { .. }),
+            "got {err:?}"
+        );
+
+        // Registered on the PARENT's own registry: the child validates too.
+        struct AlwaysTrue;
+        #[async_trait::async_trait]
+        impl crate::edge_evaluator::EdgeConditionEvaluator for AlwaysTrue {
+            async fn evaluate(
+                &self,
+                _output: &str,
+                _ctx: &crate::edge_evaluator::EdgeContext<'_>,
+            ) -> Result<bool, crate::edge_evaluator::EdgeEvaluatorError> {
+                Ok(true)
+            }
+        }
+        let mut registry = EdgeEvaluatorRegistry::new();
+        registry.register("special", StdArc::new(AlwaysTrue));
+        assert!(
+            parent
+                .validate(&CustomDispatchResolver::new(), &registry)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn child_graph_with_its_own_structural_defect_fails_the_parent_validate() {
+        let child_schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("special").unwrap(),
+            DispatchRule::Custom("missing".to_string()),
+            None,
+            false,
+        )]);
+        let mut child = WarGraph::new(child_schema, EngineLimits::default());
+        child.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        child.add_entry(NodeId::new("a"));
+
+        let mut parent = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let sub = NodeId::new("sub");
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
+        );
+        parent.add_entry(sub);
+
+        let err = parent
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                EngineError::Battlefield(BattlefieldError::CustomDispatchNotRegistered { .. })
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn directly_recursive_embedding_is_rejected() {
+        let inner = trivial_graph();
+        let mut outer = WarGraph::new(one_field_schema(), EngineLimits::default());
+        // `outer` is structurally identical to `inner` for fingerprinting
+        // purposes (same node id, same schema, same entry set) but embeds
+        // `inner` as a Battalion node under that SAME node id -- simulating
+        // self-containment, since an immutable Arc<WarGraph> cannot
+        // literally self-contain (D-19's own defensive rationale for a
+        // fingerprint path-set walk rather than pointer identity).
+        outer.add_node(
+            NodeId::new("only"),
+            NodeSpec::battalion(Arc::new(inner), StateMap::new()),
+        );
+        outer.add_entry(NodeId::new("only"));
+
+        let err = outer
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, EngineError::RecursiveEmbedding { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn transitively_recursive_embedding_is_rejected() {
+        // A embeds B embeds a structural copy of A.
+        let a_copy = trivial_graph_named("only");
+
+        let mut b = WarGraph::new(one_field_schema(), EngineLimits::default());
+        b.add_node(
+            NodeId::new("mid"),
+            NodeSpec::battalion(Arc::new(a_copy), StateMap::new()),
+        );
+        b.add_entry(NodeId::new("mid"));
+
+        let mut a = WarGraph::new(one_field_schema(), EngineLimits::default());
+        a.add_node(
+            NodeId::new("only"),
+            NodeSpec::battalion(Arc::new(b), StateMap::new()),
+        );
+        a.add_entry(NodeId::new("only"));
+
+        let err = a
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, EngineError::RecursiveEmbedding { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn deep_but_acyclic_nesting_validates() {
+        let level3 = trivial_graph_named("level3_leaf");
+        let mut level2 = WarGraph::new(one_field_schema(), EngineLimits::default());
+        level2.add_node(
+            NodeId::new("level2_node"),
+            NodeSpec::battalion(Arc::new(level3), StateMap::new()),
+        );
+        level2.add_entry(NodeId::new("level2_node"));
+
+        let mut level1 = WarGraph::new(one_field_schema(), EngineLimits::default());
+        level1.add_node(
+            NodeId::new("level1_node"),
+            NodeSpec::battalion(Arc::new(level2), StateMap::new()),
+        );
+        level1.add_entry(NodeId::new("level1_node"));
+
+        assert!(
+            level1
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn state_map_mapping_one_child_field_to_two_parent_fields_is_accepted() {
+        let child = trivial_graph();
+        let parent_schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                FieldName::new("result").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+            FieldSpec::new(
+                FieldName::new("result2").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+        ]);
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        let sub = NodeId::new("sub");
+        let state_map = StateMap::new()
+            .with_output(
+                FieldName::new("result").unwrap(),
+                FieldName::new("result").unwrap(),
+            )
+            .with_output(
+                FieldName::new("result").unwrap(),
+                FieldName::new("result2").unwrap(),
+            );
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        assert!(
+            parent
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn state_map_with_empty_inputs_is_accepted() {
+        let child = trivial_graph();
+        let mut parent = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let sub = NodeId::new("sub");
+        let state_map = StateMap::new().with_output(
+            FieldName::new("result").unwrap(),
+            FieldName::new("result").unwrap(),
+        );
+        assert!(state_map.inputs.is_empty());
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub);
+
+        assert!(
+            parent
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
                 .is_ok()
         );
     }

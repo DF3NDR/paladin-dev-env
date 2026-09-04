@@ -1102,6 +1102,7 @@ fn push_field(buf: &mut Vec<u8>, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::directive_parser::OnParseError;
     use paladin_core::platform::container::battlefield::{Battlefield, FieldSpec};
     use std::sync::Arc as StdArc;
 
@@ -1688,6 +1689,244 @@ mod tests {
             ..FingerprintFixtureSpec::default()
         });
         assert_eq!(base.fingerprint(), variant.fingerprint());
+    }
+
+    // --- D-18 (Plan 23-10): `v3` hashes three new scheduling-relevant
+    // sections -- the worker-template set, each Battalion node's child
+    // fingerprint/StateMap/restart_on_resume, and each Paladin node's
+    // DirectiveParser kind/on_parse_error -- each written through the
+    // existing `push_field` helper, never a delimiter join (22.1 CR-01).
+
+    /// A minimal one-node, one-entry child graph for `NodeSpec::Battalion`
+    /// fixtures below, parameterized only by its Function node's id so two
+    /// children can be made to differ structurally.
+    fn simple_child_graph(node_name: &str) -> Arc<WarGraph> {
+        let mut child = WarGraph::new(one_field_schema(), EngineLimits::default());
+        child.add_node(NodeId::new(node_name), NodeSpec::Function(StdArc::new(NoopNode)));
+        child.add_entry(NodeId::new(node_name));
+        StdArc::new(child)
+    }
+
+    #[test]
+    fn fingerprint_version_tag_is_v3() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("solo"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_entry(NodeId::new("solo"));
+
+        assert!(graph.fingerprint().as_str().starts_with("v3:"));
+    }
+
+    #[test]
+    fn fingerprint_differs_when_a_node_is_marked_a_worker_template() {
+        let schema = one_field_schema();
+
+        let mut plain = WarGraph::new(schema.clone(), EngineLimits::default());
+        plain.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        plain.add_node(
+            NodeId::new("worker"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        plain.add_entry(NodeId::new("entry"));
+
+        let mut templated = WarGraph::new(schema, EngineLimits::default());
+        templated.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        templated.add_worker_template(
+            NodeId::new("worker"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        templated.add_entry(NodeId::new("entry"));
+
+        assert_ne!(plain.fingerprint(), templated.fingerprint());
+    }
+
+    #[test]
+    fn worker_template_section_is_order_independent() {
+        let schema = one_field_schema();
+
+        let mut order_ab = WarGraph::new(schema.clone(), EngineLimits::default());
+        order_ab.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        order_ab.add_entry(NodeId::new("entry"));
+        order_ab.add_worker_template(
+            NodeId::new("worker_a"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        order_ab.add_worker_template(
+            NodeId::new("worker_b"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+
+        let mut order_ba = WarGraph::new(schema, EngineLimits::default());
+        order_ba.add_node(
+            NodeId::new("entry"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        order_ba.add_entry(NodeId::new("entry"));
+        order_ba.add_worker_template(
+            NodeId::new("worker_b"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        order_ba.add_worker_template(
+            NodeId::new("worker_a"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+
+        assert_eq!(order_ab.fingerprint(), order_ba.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_differs_when_an_embedded_child_graph_differs() {
+        let schema = one_field_schema();
+
+        let mut parent_a = WarGraph::new(schema.clone(), EngineLimits::default());
+        parent_a.add_node(
+            NodeId::new("sub"),
+            NodeSpec::battalion(simple_child_graph("child_a"), StateMap::new()),
+        );
+        parent_a.add_entry(NodeId::new("sub"));
+
+        let mut parent_b = WarGraph::new(schema, EngineLimits::default());
+        parent_b.add_node(
+            NodeId::new("sub"),
+            NodeSpec::battalion(simple_child_graph("child_b"), StateMap::new()),
+        );
+        parent_b.add_entry(NodeId::new("sub"));
+
+        assert_ne!(parent_a.fingerprint(), parent_b.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_differs_when_a_state_map_differs() {
+        let schema = one_field_schema();
+        let child = simple_child_graph("child");
+
+        let mut with_empty_map = WarGraph::new(schema.clone(), EngineLimits::default());
+        with_empty_map.add_node(
+            NodeId::new("sub"),
+            NodeSpec::battalion(StdArc::clone(&child), StateMap::new()),
+        );
+        with_empty_map.add_entry(NodeId::new("sub"));
+
+        let mut with_mapped = WarGraph::new(schema, EngineLimits::default());
+        with_mapped.add_node(
+            NodeId::new("sub"),
+            NodeSpec::battalion(
+                StdArc::clone(&child),
+                StateMap::new()
+                    .with_input(FieldName::new("result").unwrap(), FieldName::new("result").unwrap()),
+            ),
+        );
+        with_mapped.add_entry(NodeId::new("sub"));
+
+        assert_ne!(with_empty_map.fingerprint(), with_mapped.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_differs_when_restart_on_resume_differs() {
+        let schema = one_field_schema();
+        let child = simple_child_graph("child");
+
+        let mut no_restart = WarGraph::new(schema.clone(), EngineLimits::default());
+        no_restart.add_node(
+            NodeId::new("sub"),
+            NodeSpec::Battalion {
+                graph: StdArc::clone(&child),
+                state_map: StateMap::new(),
+                restart_on_resume: false,
+            },
+        );
+        no_restart.add_entry(NodeId::new("sub"));
+
+        let mut restart = WarGraph::new(schema, EngineLimits::default());
+        restart.add_node(
+            NodeId::new("sub"),
+            NodeSpec::Battalion {
+                graph: child,
+                state_map: StateMap::new(),
+                restart_on_resume: true,
+            },
+        );
+        restart.add_entry(NodeId::new("sub"));
+
+        assert_ne!(no_restart.fingerprint(), restart.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_differs_when_a_directive_parser_kind_differs() {
+        let schema = one_field_schema();
+
+        let mut plain = WarGraph::new(schema.clone(), EngineLimits::default());
+        plain.add_node(
+            NodeId::new("worker"),
+            NodeSpec::paladin(
+                make_fixture_paladin("worker", "prompt", "gpt-4"),
+                InputMapping::new("prompt"),
+                FieldName::new("result").unwrap(),
+            ),
+        );
+        plain.add_entry(NodeId::new("worker"));
+
+        let mut structured = WarGraph::new(schema, EngineLimits::default());
+        structured.add_node(
+            NodeId::new("worker"),
+            NodeSpec::paladin_with_directive_parser(
+                make_fixture_paladin("worker", "prompt", "gpt-4"),
+                InputMapping::new("prompt"),
+                FieldName::new("result").unwrap(),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        structured.add_entry(NodeId::new("worker"));
+
+        assert_ne!(plain.fingerprint(), structured.fingerprint());
+    }
+
+    #[test]
+    fn fingerprint_differs_when_on_parse_error_differs() {
+        let schema = one_field_schema();
+
+        let mut fail_run = WarGraph::new(schema.clone(), EngineLimits::default());
+        fail_run.add_node(
+            NodeId::new("worker"),
+            NodeSpec::paladin_with_directive_parser(
+                make_fixture_paladin("worker", "prompt", "gpt-4"),
+                InputMapping::new("prompt"),
+                FieldName::new("result").unwrap(),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        fail_run.add_entry(NodeId::new("worker"));
+
+        let mut fallback = WarGraph::new(schema, EngineLimits::default());
+        fallback.add_node(
+            NodeId::new("worker"),
+            NodeSpec::paladin_with_directive_parser(
+                make_fixture_paladin("worker", "prompt", "gpt-4"),
+                InputMapping::new("prompt"),
+                FieldName::new("result").unwrap(),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FallbackPlain,
+                },
+            ),
+        );
+        fallback.add_entry(NodeId::new("worker"));
+
+        assert_ne!(fail_run.fingerprint(), fallback.fingerprint());
     }
 
     #[test]

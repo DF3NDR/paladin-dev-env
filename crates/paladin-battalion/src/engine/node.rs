@@ -9,6 +9,7 @@ use thiserror::Error;
 
 use paladin_core::platform::container::battlefield::Battlefield;
 use paladin_core::platform::container::directive::{Directive, MusterContext};
+use paladin_core::platform::container::parley::ParleyResponse;
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 
 /// Error returned by a [`StateNode`]'s execution.
@@ -34,6 +35,15 @@ pub struct NodeContext {
     /// only through this field and its accessors, and through
     /// `{muster.payload}`/`{muster.task_key}` in an `InputMapping` template.
     pub muster: Option<MusterContext>,
+    /// The answer to this node's own outstanding `ParleyRequest`, populated
+    /// only on the post-resume re-run of a parleying node (HITL-01, D-07,
+    /// D-08): `Some` when `WarEngine::resume_with` seeded this superstep's
+    /// vanguard with a matching `ParleyResponse`, `None` for every ordinary
+    /// execution -- including a node's own FIRST run, the one that raises
+    /// the parley in the first place. Never merged into the Battlefield --
+    /// reachable only through this field and its accessor, and through the
+    /// `parley.` `InputMapping` namespace (a later plan).
+    pub parley_response: Option<ParleyResponse>,
 }
 
 impl NodeContext {
@@ -47,6 +57,12 @@ impl NodeContext {
     /// Muster worker-task dispatch.
     pub fn task_key(&self) -> Option<&str> {
         self.muster.as_ref().map(|m| m.task_key.as_str())
+    }
+
+    /// The answer to this node's own outstanding `ParleyRequest` (HITL-01,
+    /// D-07), or `None` outside a post-resume re-run of a parleying node.
+    pub fn parley_response(&self) -> Option<&ParleyResponse> {
+        self.parley_response.as_ref()
     }
 }
 

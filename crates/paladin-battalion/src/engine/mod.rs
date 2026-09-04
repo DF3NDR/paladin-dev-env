@@ -68,8 +68,9 @@ use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
 use paladin_core::platform::container::battlefield_error::BattlefieldError;
 #[cfg(test)]
 use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::parley::{ParleyId, ParleyRequest, ParleyResponse};
 use paladin_core::platform::container::waypoint::{
-    GraphFingerprint, NodeId, ParleyRequest, ThreadId, WaypointId, WaypointStatus,
+    GraphFingerprint, NodeId, ThreadId, WaypointId, WaypointStatus,
 };
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink};
@@ -109,10 +110,13 @@ pub enum RunOutcome {
         /// The waypoint written for the run's final superstep.
         waypoint: WaypointId,
     },
-    /// The run is paused awaiting external input (Doc 03).
+    /// The run is paused awaiting external input (HITL-01, D-02). Carries
+    /// only the STILL-UNANSWERED requests -- for the initial suspension
+    /// this phase produces, every request in the persisted `Waypoint`'s
+    /// `AwaitingInput.parleys` list.
     AwaitingInput {
-        /// The outstanding input request.
-        parley: ParleyRequest,
+        /// Every outstanding (unanswered) request.
+        parleys: Vec<ParleyRequest>,
         /// The waypoint recording the pause.
         waypoint: WaypointId,
     },
@@ -402,18 +406,78 @@ pub enum EngineError {
         to: NodeId,
     },
 
-    /// A `Directive`'s `NextStep::Parley` was returned (CF-02, D-10).
-    /// Suspension is Phase 24 (`HITL-01`)'s mechanism; this phase fails the
-    /// run loudly rather than coercing `Parley` to `Edges` or writing a
-    /// `WaypointStatus::AwaitingInput` checkpoint that no `resume` path yet
-    /// honours. Phase 24 replaces this arm with real suspension -- its
-    /// removal there is expected, not a regression.
+    /// **Superseded (Phase 24, HITL-01):** a `Directive`'s `NextStep::Parley`
+    /// no longer fails the run -- it suspends it, persisting a
+    /// `WaypointStatus::AwaitingInput` checkpoint and returning
+    /// `RunOutcome::AwaitingInput` (see `superstep`'s Parley arm). This
+    /// variant is retained, unconstructed, because X-03 forbids removing a
+    /// public `EngineError` variant before v0.11.0 -- it is no longer
+    /// reachable from any production code path in this engine.
     #[error(
         "node {node} returned NextStep::Parley, which this phase does not support (Phase 24 lands suspension)"
     )]
     ParleyNotSupported {
         /// The node whose `Directive` returned `Parley`.
         node: NodeId,
+    },
+
+    /// `WarEngine::resume_with` loaded a thread whose latest `Waypoint`
+    /// status is NOT `AwaitingInput` (HITL-02, D-10): only a suspended
+    /// thread can be advanced by delivering parley responses.
+    #[error("thread {thread} is not awaiting input (status: {status})")]
+    ThreadNotAwaitingInput {
+        /// The thread `resume_with` was called against.
+        thread: ThreadId,
+        /// The loaded Waypoint's actual status, `Debug`-formatted.
+        status: String,
+    },
+
+    /// `WarEngine::resume_with` was given a response whose `parley_id` does
+    /// not match any request on the loaded `AwaitingInput` Waypoint
+    /// (HITL-02, D-10, T-24-01): checked against the loaded Waypoint's OWN
+    /// `parleys` list for the requested thread only -- never a global
+    /// parley-id lookup across threads.
+    #[error("unknown parley id: {parley_id}")]
+    UnknownParleyId {
+        /// The response's `parley_id`, absent from the loaded thread's
+        /// outstanding parleys.
+        parley_id: ParleyId,
+    },
+
+    /// A plain `WarEngine::resume`/`resume_with_options` call loaded a
+    /// thread whose latest `Waypoint` status is `AwaitingInput` (HITL-01,
+    /// D-11): only `WarEngine::resume_with` may advance a suspended thread.
+    /// Returned BEFORE the generic vanguard-restore fallthrough that
+    /// `resume_with_options` otherwise uses -- without this guard, that
+    /// fallthrough would silently re-run the parleying node(s) as ordinary
+    /// vanguard entries, discarding the pending suspension (RESEARCH.md
+    /// Pitfall 2). No Waypoint is written.
+    #[error("thread {thread} is awaiting input and cannot be resumed with plain `resume`")]
+    ThreadAwaitingInput {
+        /// The thread a plain `resume`/`resume_with_options` was called
+        /// against.
+        thread: ThreadId,
+        /// Every outstanding (unanswered) request from the loaded
+        /// `AwaitingInput` Waypoint.
+        parleys: Vec<ParleyRequest>,
+    },
+
+    /// A `NodeSpec::Battalion` node's child run suspended awaiting a Parley
+    /// (HITL-01, D-04): not supported this phase. PRD 03 is silent on
+    /// suspension propagating through a nested Battalion; propagating a
+    /// child's parley to the parent is a deferred idea for a later phase to
+    /// promote, not a design this phase attempts. Raise the parley in the
+    /// PARENT graph instead, today.
+    #[error(
+        "battalion node {node} (child thread {child_thread}): child run paused awaiting input, \
+         which this phase does not support -- raise the parley in the parent graph instead; \
+         propagating a child's parley to the parent is a deferred idea for a later phase"
+    )]
+    ParleyInChildUnsupported {
+        /// The Battalion node whose child run suspended.
+        node: NodeId,
+        /// The child thread that suspended.
+        child_thread: ThreadId,
     },
 
     /// A `NodeSpec::Paladin` node's `DirectiveParser::StructuredDirective`
@@ -899,6 +963,22 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             });
         }
 
+        // --- HITL-01, D-11, RESEARCH.md Pitfall 2: an explicit
+        // `AwaitingInput` arm, BEFORE the generic vanguard-restore
+        // fallthrough below. `AwaitingInput` did not exist as a real,
+        // reachable status before this phase (`ParleyNotSupported`
+        // prevented it from ever being written) -- so this fallthrough was
+        // never wrong until now. Only `WarEngine::resume_with` may advance
+        // a suspended thread; a plain `resume`/`resume_with_options` fails
+        // closed here, writing no Waypoint, rather than silently re-running
+        // the parleying node(s) as ordinary vanguard entries.
+        if let WaypointStatus::AwaitingInput { parleys, .. } = &latest.status {
+            return Err(EngineError::ThreadAwaitingInput {
+                thread: thread.clone(),
+                parleys: parleys.clone(),
+            });
+        }
+
         for node in &latest.vanguard {
             if graph.node(node).is_none() {
                 return Err(EngineError::VanguardNodeMissing { node: node.clone() });
@@ -965,17 +1045,138 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             .emit(TraceEvent::RunFinished { thread_id: thread });
         outcome
     }
+
+    /// Resume `thread` from an `AwaitingInput` Waypoint, delivering
+    /// `responses` to the paused node(s)' continuation (HITL-02, D-08).
+    ///
+    /// Loads `latest(thread)` (absent -> `ThreadNotFound`), compares
+    /// `graph_fingerprint` against `graph.fingerprint()` (mismatch ->
+    /// `GraphMismatch`, ENG-FR-14, mirroring `resume`), and requires the
+    /// loaded status to be `AwaitingInput` (else
+    /// `EngineError::ThreadNotAwaitingInput { thread, status }`) -- only
+    /// `resume_with` may advance a suspended thread (D-11). Every submitted
+    /// response's `parley_id` is checked against the loaded Waypoint's own
+    /// `parleys` list (`EngineError::UnknownParleyId` if absent, T-24-01:
+    /// never a global parley-id lookup across threads). This task
+    /// implements the happy-path guards only -- the richer per-`ParleyKind`
+    /// validation matrix (`ParleyAlreadyAnswered`, `ResponseShapeInvalid`,
+    /// `ParleyExpired`) lands in a later plan.
+    ///
+    /// Seeds superstep `latest.superstep + 1` with `vanguard` = every
+    /// parleying node named on the loaded `AwaitingInput` status (D-08):
+    /// exactly the persisted Waypoint's own `vanguard`, discarding nothing.
+    /// Each dispatched node's `NodeContext.parley_response` is populated
+    /// with its matching response (looked up by the node's own `NodeId`,
+    /// via the request that named it) -- from there this is an ordinary
+    /// superstep: deltas merge, edges resolve, one Waypoint per superstep
+    /// (ENG-FR-11 holds with no clarification).
+    pub async fn resume_with(
+        &self,
+        graph: &WarGraph,
+        thread: ThreadId,
+        responses: Vec<ParleyResponse>,
+    ) -> Result<RunOutcome, EngineError> {
+        let latest = self
+            .waypoint_port
+            .latest(&thread)
+            .await
+            .map_err(|source| EngineError::WaypointRead { source })?
+            .ok_or_else(|| EngineError::ThreadNotFound(thread.clone()))?;
+
+        let expected = graph.fingerprint();
+        if latest.graph_fingerprint != expected {
+            return Err(EngineError::GraphMismatch {
+                expected,
+                got: latest.graph_fingerprint,
+            });
+        }
+
+        let parleys = match &latest.status {
+            WaypointStatus::AwaitingInput { parleys, .. } => parleys.clone(),
+            other => {
+                return Err(EngineError::ThreadNotAwaitingInput {
+                    thread: thread.clone(),
+                    status: format!("{other:?}"),
+                });
+            }
+        };
+
+        // --- HITL-02, D-10 happy path: every submitted response must name
+        // a parley this thread actually has outstanding. Checked BEFORE
+        // any state change -- an unknown id leaves the thread suspended
+        // with no Waypoint written.
+        for response in &responses {
+            if !parleys.iter().any(|p| p.parley_id == response.parley_id) {
+                return Err(EngineError::UnknownParleyId {
+                    parley_id: response.parley_id,
+                });
+            }
+        }
+
+        // --- D-08: `NodeContext.parley_response` is looked up by the
+        // executing node's own `NodeId`, never by `parley_id` -- so
+        // responses are re-keyed here, through the matching request, once.
+        let mut responses_by_node: BTreeMap<NodeId, ParleyResponse> = BTreeMap::new();
+        for response in responses {
+            if let Some(request) = parleys.iter().find(|p| p.parley_id == response.parley_id) {
+                responses_by_node.insert(request.node_id.clone(), response);
+            }
+        }
+
+        let registry = self.dispatch_registry.resolver();
+        graph.validate(registry, &self.edge_evaluators)?;
+
+        self.trace_dispatcher.emit(TraceEvent::RunStarted {
+            thread_id: thread.clone(),
+        });
+        // --- D-08: the persisted `AwaitingInput` Waypoint's OWN `vanguard`
+        // is exactly the parleying nodes -- passed through unchanged as
+        // this call's forced vanguard, never recomputed. `run_with_namespace`
+        // is called directly (bypassing the public `run` wrapper) since
+        // only THIS call site ever has a real parley-responses map to pass
+        // -- `run`'s own signature stays unchanged by this plan.
+        let outcome = superstep::run_with_namespace(
+            self.waypoint_port.as_ref(),
+            self.durability,
+            self.parallelism,
+            registry,
+            &self.edge_evaluators,
+            graph,
+            thread.clone(),
+            latest.battlefield,
+            latest.vanguard,
+            latest.visit_counts,
+            Some(latest.frontier),
+            None,
+            Some(latest.waypoint_id),
+            latest.superstep + 1,
+            &self.paladin_port,
+            &self.trace_dispatcher,
+            &self.interceptors,
+            &self.cancellation_token,
+            Some(Arc::clone(&self.waypoint_port)),
+            None,
+            Some(responses_by_node),
+        )
+        .await;
+        self.trace_dispatcher
+            .emit(TraceEvent::RunFinished { thread_id: thread });
+        outcome
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use chrono::Utc;
     use paladin_core::platform::container::battalion::campaign::EdgeCondition;
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
     };
+    use paladin_core::platform::container::directive::{Directive, NextStep};
     use paladin_core::platform::container::paladin_error::PaladinError;
+    use paladin_core::platform::container::parley::{OnExpire, ParleyKind};
     use paladin_core::platform::container::waypoint::{NodeOutcomeKind, Waypoint};
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream};
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
@@ -3126,5 +3327,272 @@ mod tests {
             }
             other => panic!("expected EdgeEvaluatorFailed, got {other:?}"),
         }
+    }
+
+    // --- HITL-01, HITL-02, D-08, D-11: Parley suspend/resume, typed guards
+    // (Phase 24 Plan 01) ------------------------------------------------
+
+    fn sample_parley_request(node_id: NodeId, parley_id: ParleyId) -> ParleyRequest {
+        ParleyRequest {
+            parley_id,
+            node_id,
+            kind: ParleyKind::Approval,
+            prompt: "proceed?".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
+        }
+    }
+
+    /// Test 4 (Task 2): after suspension, `WarEngine::resume_with(&graph,
+    /// &thread, vec![response])` delivers the response to the paused
+    /// node's continuation via `NodeContext.parley_response()` and the run
+    /// reaches `RunOutcome::Completed`.
+    #[tokio::test]
+    async fn parley_suspends_and_resumes_end_to_end() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let node = {
+            let node_id_for_request = node_id.clone();
+            CountingFunctionNode::with_context_directive(move |run, _state, ctx| {
+                if run == 0 {
+                    Directive {
+                        delta: StateDelta::new(),
+                        next: NextStep::Parley(sample_parley_request(
+                            node_id_for_request.clone(),
+                            parley_id,
+                        )),
+                    }
+                } else {
+                    let value = ctx
+                        .parley_response()
+                        .expect("parley_response must be populated on resume")
+                        .value
+                        .clone();
+                    let mut delta = StateDelta::new();
+                    delta.set_raw(FieldName::new("result").unwrap(), value);
+                    delta.into()
+                }
+            })
+        };
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("parley-e2e").unwrap();
+
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        match suspended {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                assert_eq!(parleys[0].parley_id, parley_id);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+
+        let response = ParleyResponse {
+            parley_id,
+            value: serde_json::json!("approved"),
+            responded_by: Some("tester".to_string()),
+            responded_at: Utc::now(),
+            defaulted: false,
+        };
+
+        let resumed = engine
+            .resume_with(&graph, thread, vec![response])
+            .await
+            .unwrap();
+        match resumed {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state
+                        .get::<String>(&FieldName::new("result").unwrap())
+                        .unwrap(),
+                    Some("approved".to_string())
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// `resume_with` rejects a response naming a `parley_id` this thread
+    /// has no outstanding request for (D-10 happy-path guard), writing no
+    /// Waypoint.
+    #[tokio::test]
+    async fn resume_with_unknown_parley_id_fails_and_writes_no_waypoint() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let node = CountingFunctionNode::with_directive(move |_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(sample_parley_request(NodeId::new(""), parley_id)),
+        });
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("parley-unknown-id").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let save_count_before = store.save_call_count();
+
+        let wrong_response = ParleyResponse {
+            parley_id: ParleyId::new(),
+            value: serde_json::json!(true),
+            responded_by: None,
+            responded_at: Utc::now(),
+            defaulted: false,
+        };
+        let err = engine
+            .resume_with(&graph, thread, vec![wrong_response])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::UnknownParleyId { .. }));
+        assert_eq!(
+            store.save_call_count(),
+            save_count_before,
+            "an invalid resume_with call must write no Waypoint"
+        );
+    }
+
+    /// Task 3, Test 1: `WarEngine::resume` on a thread whose latest
+    /// Waypoint is `AwaitingInput` returns `Err(EngineError::
+    /// ThreadAwaitingInput { thread, parleys })`, the parleys list matches
+    /// the persisted requests, and no additional Waypoint is written.
+    #[tokio::test]
+    async fn plain_resume_refuses_awaiting_input_thread() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let node = CountingFunctionNode::with_directive(move |_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(sample_parley_request(NodeId::new(""), parley_id)),
+        });
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("plain-resume-awaiting").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let save_count_before = store.save_call_count();
+
+        let err = engine.resume(&graph, thread).await.unwrap_err();
+        match err {
+            EngineError::ThreadAwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                assert_eq!(parleys[0].node_id, node_id);
+            }
+            other => panic!("expected ThreadAwaitingInput, got {other:?}"),
+        }
+        assert_eq!(
+            store.save_call_count(),
+            save_count_before,
+            "plain resume against an AwaitingInput thread must write no Waypoint"
+        );
+    }
+
+    /// Task 3, Test 2: `WarEngine::resume` on a `Halted` thread still runs
+    /// through the generic fallthrough and makes progress (regression
+    /// guard on Pitfall 2's "Halted is harmless" claim -- the literal test
+    /// name the plan's `<verify>` command runs; the fuller scenario is
+    /// `resume_continues_a_halted_thread_to_normal_completion` above).
+    #[tokio::test]
+    async fn plain_resume_still_continues_a_halted_thread() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("solo");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("done"),
+            )),
+        );
+        graph.add_entry(node_id);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+            .with_cancellation_token(token);
+        let thread = ThreadId::new("plain-resume-halted").unwrap();
+        let halted = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(halted, RunOutcome::Halted { .. }));
+
+        let resume_engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let resumed = resume_engine.resume(&graph, thread).await.unwrap();
+        assert!(matches!(resumed, RunOutcome::Completed { .. }));
+    }
+
+    /// Task 3, Test 3: a nested `NodeSpec::Battalion` child that suspends
+    /// fails the parent with `EngineError::ParleyInChildUnsupported { node,
+    /// child_thread }`, and no `AwaitingInput` Waypoint is written on the
+    /// parent thread.
+    #[tokio::test]
+    async fn parley_in_battalion_child_is_typed_error() {
+        let child_schema = one_field_schema();
+        let mut child_graph = WarGraph::new(child_schema, EngineLimits::default());
+        let child_node_id = NodeId::new("child-asker");
+        let parley_id = ParleyId::new();
+        let child_node = CountingFunctionNode::with_directive(move |_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(sample_parley_request(NodeId::new(""), parley_id)),
+        });
+        child_graph.add_node(child_node_id.clone(), NodeSpec::Function(child_node));
+        child_graph.add_entry(child_node_id);
+
+        let mut parent_graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let battalion_node_id = NodeId::new("battalion");
+        parent_graph.add_node(
+            battalion_node_id.clone(),
+            NodeSpec::Battalion {
+                graph: Arc::new(child_graph),
+                state_map: crate::engine::graph::StateMap::default(),
+                restart_on_resume: false,
+            },
+        );
+        parent_graph.add_entry(battalion_node_id.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("parley-in-child").unwrap();
+        let outcome = engine
+            .start(&parent_graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Failed {
+                error: EngineError::ParleyInChildUnsupported { node, .. },
+                ..
+            } => {
+                assert_eq!(node, battalion_node_id);
+            }
+            other => panic!("expected Failed(ParleyInChildUnsupported), got {other:?}"),
+        }
+
+        let saved = store.saved_waypoints(&thread).await;
+        assert!(
+            !saved
+                .iter()
+                .any(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. })),
+            "no AwaitingInput waypoint may be written on the parent thread"
+        );
     }
 }

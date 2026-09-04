@@ -240,6 +240,7 @@ mod tests {
             thread_id: ThreadId::new("t").unwrap(),
             superstep: 1,
             muster: None,
+            parley_response: None,
         }
     }
 

@@ -64,6 +64,14 @@ pub enum NodeSpec {
     /// Pre-announced in this file's own rustdoc (line 31) on the
     /// already-open-ended [`NodeSpec`] enum, so this addition needs no
     /// X-10 register row.
+    ///
+    /// **Limit (HITL-01, D-04):** a child run that suspends awaiting a
+    /// Parley (`RunOutcome::AwaitingInput`) is NOT supported this phase --
+    /// the parent's own dispatch of this node fails with
+    /// `EngineError::ParleyInChildUnsupported`, naming the node and the
+    /// child thread. Raise the parley in the PARENT graph instead, today;
+    /// propagating a child's parley to the parent is a deferred idea a
+    /// later phase may promote.
     Battalion {
         /// The embedded child graph.
         graph: Arc<WarGraph>,

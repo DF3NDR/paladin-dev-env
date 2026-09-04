@@ -20,7 +20,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. See [`MIGRATION.md` §9.3](MIGRATION.md#93-toolchain--dependencies) for the full dependency
   chain and the two rejected alternatives.
 
+- **Custom edge conditions now fail closed instead of always-routing (M-B-01, BUG-01 fix).**
+  `EdgeCondition::Custom(name)` previously evaluated to `true` on every run when no evaluator was
+  registered — the edge silently always fired regardless of what the source Paladin actually
+  produced. Both consumers (`CampaignExecutionService` and the `WarEngine`) now reject an
+  unregistered `Custom` name at validation time, before any node executes, naming every offender.
+  Register an evaluator via `CampaignExecutionService::with_evaluator` /
+  `WarEngine::with_edge_evaluator`, or replace the condition with `Contains`/`Regex`/`Always`. See
+  [`MIGRATION.md` §9.1, M-B-01](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes)
+  for the worked before/after example.
+
 ### Added
+
+- **Node-driven `Directive` routing (CF-02).** A `StateNode::run` now returns a `Directive` — its
+  `StateDelta` plus a `NextStep` (`Edges`, `Goto`, `Muster`, `End`, or the not-yet-implemented
+  `Parley`) — letting a node author its own routing instead of relying solely on static graph
+  edges. `NextStep::Edges` is the default and reproduces pre-CF-02 behavior exactly.
+  `NodeSpec::Paladin` nodes opt in via the new `DirectiveParser` (`PlainOutput` default,
+  `StructuredDirective` for a documented JSON envelope). See the
+  [Control Flow guide](docs/src/user-guides/control-flow.md).
+- **Muster: dynamic worker fan-out (CF-03).** `NextStep::Muster` dispatches N worker tasks to a
+  node registered via the new `WarGraph::add_worker_template`, each with an isolated payload
+  (never merged into the Battlefield) addressed through the new `{muster.payload}` /
+  `{muster.task_key}` template namespace. Bounded by the new `EngineLimits::max_muster_tasks`
+  (default 100, configurable via `EngineConfig`/`APP_ENGINE_MAX_MUSTER_TASKS`).
+- **Subgraph composition via `NodeSpec::Battalion` (CF-04).** A child `WarGraph` can be embedded
+  as a single parent node, running to completion within one parent superstep and exchanging state
+  only through the new `StateMap`'s declared `inputs`/`outputs` field pairs — everything else the
+  child touches stays private.
+- **LLM-evaluated edge routing and Commander Semantic strategy selection (CF-05).** The new
+  `LlmDecisionEvaluator` resolves an `EdgeCondition::Custom` edge from a live model's answer
+  against a closed, author-declared choice list, asking once per decision per superstep. Commander
+  gained `StrategySelection::Semantic`, which prompts a model to name a Battalion strategy and
+  falls back to the existing heuristic deterministically on any error or unrecognized answer. Both
+  are off by default and reached only by constructing one in code — no environment variable or
+  config field enables either.
+- **`EngineConfig` (`src/config/engine.rs`).** Configures the `WarEngine`'s `EngineLimits` and
+  `WaypointDurability`: `max_supersteps`, `max_node_visits`, `run_timeout_secs`,
+  `waypoint_durability`, and `max_muster_tasks`, each with an `APP_ENGINE_*` environment override.
+  `EngineConfig::default()` converts to exactly today's `EngineLimits::default()` and
+  `WaypointDurability::Strict`, so a v0.9 configuration file boots v0.10 with identical behavior.
 
 - **Waypoint retention is a public application-layer service.** `WaypointRetentionService`
   (`application::services::waypoint_retention`) owns the single definition of a protected

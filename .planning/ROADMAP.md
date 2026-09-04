@@ -384,7 +384,21 @@ Plans:
   4. Graceful shutdown finishes the in-flight superstep within `shutdown_grace` (default 30s), records over-grace nodes `Skipped` and re-lists them in the vanguard, `resume` continues a `Halted` thread, and SIGTERM/SIGINT are wired to all in-flight runs with `k8s/` manifests and docs updated and a documented disable switch (HITL-04)
   5. `GET /threads/{id}/state`, `POST /threads/{id}/resume` (with 409/400/404 semantics), and `GET /threads/{id}/history` (paginated) are reachable over HTTP following existing utoipa + error-envelope conventions, with `openapi.json` regenerated (HITL-05)
 
-**Plans**: TBD
+**Plans**: 12 plans
+
+Plans:
+- [ ] 24-01-PLAN.md — Parley value types and the suspension/resume spine (tracer)
+- [ ] 24-02-PLAN.md — `Gate` node, graph validation, edge routing, fingerprint `v4`
+- [ ] 24-03-PLAN.md — Directive parley envelope and the `parley.` InputMapping namespace
+- [ ] 24-04-PLAN.md — `resume_with` validation matrix, partial answers, expiry
+- [ ] 24-05-PLAN.md — E2E-2, multi-parley, cross-process and 10-thread stress tests
+- [ ] 24-06-PLAN.md — `fork_of` lineage, `child_on_branch`, three-backend contract cases
+- [ ] 24-07-PLAN.md — `replay`/`fork`, `ChronicleService`, immutability and subgraph-fork
+- [ ] 24-08-PLAN.md — Shutdown grace race, `ShutdownCoordinator`, `EngineConfig` fields
+- [ ] 24-09-PLAN.md — Process wiring, k8s manifests, deployment docs, M-B-02 example
+- [ ] 24-10-PLAN.md — `ParleyPort`, facade adapter, `GraphRegistry`, `WaypointStoreConfig`
+- [ ] 24-11-PLAN.md — Thread routes, DTOs, `openapi.json`, server composition
+- [ ] 24-12-PLAN.md — mdBook page, MIGRATION/CHANGELOG/traceability, gate evidence
 
 ### Phase 25: Node-Level Fault Tolerance
 

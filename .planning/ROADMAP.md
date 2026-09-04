@@ -389,7 +389,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 24-01-PLAN.md — Parley value types and the suspension/resume spine (tracer)
+- [x] 24-01-PLAN.md — Parley value types and the suspension/resume spine (tracer)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

@@ -937,11 +937,61 @@ mod tests {
     #[test]
     fn parley_request_round_trips() {
         let parley = ParleyRequest {
+            parley_id: ParleyId::new(),
+            node_id: NodeId::new("asker"),
+            kind: ParleyKind::FreeText,
             prompt: "please confirm".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
         };
         let json = serde_json::to_string(&parley).unwrap();
         let restored: ParleyRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parley, restored);
+    }
+
+    /// Test 5 (Phase 24 Plan 01): the reshaped `AwaitingInput` status --
+    /// `{ parleys: Vec<ParleyRequest>, responses: Vec<ParleyResponse> }`
+    /// (D-02) -- serialises and deserialises with both fields preserved,
+    /// including a non-empty `responses` list (a partially-answered
+    /// suspension).
+    #[test]
+    fn awaiting_input_status_round_trips_through_serde() {
+        let request = ParleyRequest {
+            parley_id: ParleyId::new(),
+            node_id: NodeId::new("asker"),
+            kind: ParleyKind::Approval,
+            prompt: "proceed?".to_string(),
+            payload: serde_json::json!({"amount": 42}),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
+        };
+        let response = ParleyResponse {
+            parley_id: request.parley_id,
+            value: serde_json::json!(true),
+            responded_by: Some("alice".to_string()),
+            responded_at: Utc::now(),
+            defaulted: false,
+        };
+        let status = WaypointStatus::AwaitingInput {
+            parleys: vec![request.clone()],
+            responses: vec![response.clone()],
+        };
+
+        let json = serde_json::to_string(&status).unwrap();
+        let restored: WaypointStatus = serde_json::from_str(&json).unwrap();
+
+        match restored {
+            WaypointStatus::AwaitingInput { parleys, responses } => {
+                assert_eq!(parleys, vec![request]);
+                assert_eq!(responses, vec![response]);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
     }
 
     // --- BUG-04 / ENG-FR-12a: FrontierSnapshot ------------------------------

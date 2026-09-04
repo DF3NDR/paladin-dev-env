@@ -2433,7 +2433,8 @@ mod tests {
     };
     use paladin_core::platform::container::battlefield_error::BattlefieldError;
     use paladin_core::platform::container::paladin::Paladin;
-    use paladin_core::platform::container::waypoint::{ParleyRequest, ThreadId};
+    use paladin_core::platform::container::parley::{OnExpire, ParleyId, ParleyKind};
+    use paladin_core::platform::container::waypoint::ThreadId;
     use std::sync::Mutex;
 
     use crate::engine::directive_parser::{DirectiveParser, OnParseError};
@@ -3370,46 +3371,233 @@ mod tests {
         assert_eq!(record.outcome, NodeOutcomeKind::Ended);
     }
 
+    // --- HITL-01, D-01/D-02/D-03: Parley suspension (Phase 24 Plan 01) ---
+
+    /// Test 1: a `StateNode` returning `NextStep::Parley` suspends the run
+    /// instead of failing it -- exactly one `AwaitingInput` Waypoint is
+    /// persisted, `parleys.len() == 1`, `responses.is_empty()`, and the
+    /// run returns `RunOutcome::AwaitingInput` (not `Failed`).
     #[tokio::test]
-    async fn parley_returned_this_phase_fails_the_run() {
+    async fn parley_suspends_run_and_persists_awaiting_input() {
         let s = schema(vec![]);
         let mut graph = WarGraph::new(s, EngineLimits::default());
         let asker = NodeId::new("asker");
         let asker_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
             delta: StateDelta::new(),
             next: NextStep::Parley(ParleyRequest {
+                parley_id: ParleyId::new(),
+                node_id: NodeId::new("wrong-on-purpose"),
+                kind: ParleyKind::Approval,
                 prompt: "need input".to_string(),
+                payload: serde_json::json!({}),
+                choices: None,
+                expires_at: None,
+                created_at: Utc::now(),
+                on_expire: OnExpire::FailRun,
             }),
         });
         graph.add_node(asker.clone(), NodeSpec::Function(asker_node));
         graph.add_entry(asker.clone());
 
         let store = RecordingWaypointStore::new();
-        let thread = ThreadId::new("parley-unsupported").unwrap();
+        let thread = ThreadId::new("parley-suspends").unwrap();
         let outcome = run_default(&graph, thread.clone(), &store).await;
-        match outcome {
-            RunOutcome::Failed {
-                error: EngineError::ParleyNotSupported { node },
-                ..
-            } => {
-                assert_eq!(node, asker);
+
+        match &outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                // The engine stamps the real raising node's id, overriding
+                // whatever the node itself supplied.
+                assert_eq!(parleys[0].node_id, asker);
             }
-            other => panic!("expected Failed(ParleyNotSupported), got {other:?}"),
+            other => panic!("expected AwaitingInput, got {other:?}"),
         }
 
         let saved = store.saved_waypoints(&thread).await;
-        assert!(
-            saved
-                .iter()
-                .all(|w| !matches!(w.status, WaypointStatus::AwaitingInput { .. })),
-            "no AwaitingInput waypoint may be written for an unsupported Parley"
+        let awaiting: Vec<&Waypoint> = saved
+            .iter()
+            .filter(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. }))
+            .collect();
+        assert_eq!(
+            awaiting.len(),
+            1,
+            "exactly one AwaitingInput waypoint must be persisted"
         );
+        match &awaiting[0].status {
+            WaypointStatus::AwaitingInput { parleys, responses } => {
+                assert_eq!(parleys.len(), 1);
+                assert!(responses.is_empty());
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
         assert!(
             !saved
                 .iter()
                 .any(|w| matches!(w.status, WaypointStatus::Completed)),
             "the run must not report Completed"
         );
+        assert!(
+            !saved
+                .iter()
+                .any(|w| matches!(w.status, WaypointStatus::Failed { .. })),
+            "the run must not fail"
+        );
+    }
+
+    /// Test 2: a superstep with one parleying node and one ordinary peer
+    /// node records `NodeOutcomeKind::Parleyed` for the parleying node,
+    /// `Succeeded` for the peer, and the merged Battlefield carries both
+    /// nodes' deltas.
+    #[tokio::test]
+    async fn parley_waypoint_records_parleyed_outcome_and_merges_peer_deltas() {
+        let s = schema(vec![
+            FieldSpec::new(
+                FieldName::new("asker_field").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+            FieldSpec::new(
+                FieldName::new("peer_field").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let asker = NodeId::new("asker");
+        let peer = NodeId::new("peer");
+        let asker_field = FieldName::new("asker_field").unwrap();
+        let peer_field = FieldName::new("peer_field").unwrap();
+        let asker_node = {
+            let asker_field = asker_field.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(asker_field.clone(), serde_json::json!("asked"));
+                Directive {
+                    delta,
+                    next: NextStep::Parley(ParleyRequest {
+                        parley_id: ParleyId::new(),
+                        node_id: NodeId::new(""),
+                        kind: ParleyKind::Approval,
+                        prompt: "need input".to_string(),
+                        payload: serde_json::json!({}),
+                        choices: None,
+                        expires_at: None,
+                        created_at: Utc::now(),
+                        on_expire: OnExpire::FailRun,
+                    }),
+                }
+            })
+        };
+        let peer_node = CountingFunctionNode::fixed(peer_field.clone(), serde_json::json!("ran"));
+        graph.add_node(asker.clone(), NodeSpec::Function(asker_node));
+        graph.add_node(peer.clone(), NodeSpec::Function(peer_node));
+        graph.add_entry(asker.clone());
+        graph.add_entry(peer.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("parley-peer-merge").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(matches!(outcome, RunOutcome::AwaitingInput { .. }));
+
+        let saved = store.saved_waypoints(&thread).await;
+        let awaiting = saved
+            .iter()
+            .find(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. }))
+            .expect("an AwaitingInput waypoint must exist");
+
+        let asker_record = awaiting
+            .completed
+            .iter()
+            .find(|r| r.node_id == asker)
+            .expect("asker's execution record");
+        assert_eq!(asker_record.outcome, NodeOutcomeKind::Parleyed);
+        let peer_record = awaiting
+            .completed
+            .iter()
+            .find(|r| r.node_id == peer)
+            .expect("peer's execution record");
+        assert_eq!(peer_record.outcome, NodeOutcomeKind::Succeeded);
+
+        assert_eq!(
+            awaiting.battlefield.get::<String>(&asker_field).unwrap(),
+            Some("asked".to_string()),
+            "the parleying node's own delta merges at raise time (D-03)"
+        );
+        assert_eq!(
+            awaiting.battlefield.get::<String>(&peer_field).unwrap(),
+            Some("ran".to_string()),
+            "the peer's delta merges normally"
+        );
+    }
+
+    /// Test 3: the persisted Waypoint's `vanguard` equals the set of
+    /// parleying node ids -- with two parleys raised by different nodes in
+    /// the same superstep, the persisted list carries both, in `node_id`
+    /// order (D-02).
+    #[tokio::test]
+    async fn awaiting_input_vanguard_is_exactly_the_parleying_nodes() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let asker_b = NodeId::new("b-asker");
+        let asker_a = NodeId::new("a-asker");
+        let node_b = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(ParleyRequest {
+                parley_id: ParleyId::new(),
+                node_id: NodeId::new(""),
+                kind: ParleyKind::Approval,
+                prompt: "b?".to_string(),
+                payload: serde_json::json!({}),
+                choices: None,
+                expires_at: None,
+                created_at: Utc::now(),
+                on_expire: OnExpire::FailRun,
+            }),
+        });
+        let node_a = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(ParleyRequest {
+                parley_id: ParleyId::new(),
+                node_id: NodeId::new(""),
+                kind: ParleyKind::Approval,
+                prompt: "a?".to_string(),
+                payload: serde_json::json!({}),
+                choices: None,
+                expires_at: None,
+                created_at: Utc::now(),
+                on_expire: OnExpire::FailRun,
+            }),
+        });
+        graph.add_node(asker_b.clone(), NodeSpec::Function(node_b));
+        graph.add_node(asker_a.clone(), NodeSpec::Function(node_a));
+        graph.add_entry(asker_b.clone());
+        graph.add_entry(asker_a.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("parley-two-nodes").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        match outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 2);
+                let ids: Vec<NodeId> = parleys.iter().map(|p| p.node_id.clone()).collect();
+                assert_eq!(
+                    ids,
+                    vec![asker_a.clone(), asker_b.clone()],
+                    "parleys must be ordered by node_id"
+                );
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+
+        let saved = store.saved_waypoints(&thread).await;
+        let awaiting = saved
+            .iter()
+            .find(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. }))
+            .expect("an AwaitingInput waypoint must exist");
+        assert_eq!(awaiting.vanguard, vec![asker_a, asker_b]);
     }
 
     // --- CF-03: Muster dynamic fan-out (Plan 23-05).

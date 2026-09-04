@@ -5,12 +5,12 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 24
 current_phase_name: Pause/Resume, History & Graceful Shutdown
 status: planning
-stopped_at: Phase 23 complete (UAT 80/80, verification passed, CF-01…CF-05 complete) — ready to plan Phase 24
-last_updated: "2026-09-04T21:19:44.201Z"
+stopped_at: Phase 24 context gathered
+last_updated: "2026-09-04T21:45:55.675Z"
 last_activity: 2026-09-04
 last_activity_desc: Phase 23 complete, transitioned to Phase 24
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
   total_plans: 36
   completed_plans: 36
@@ -129,14 +129,19 @@ phases must honor:**
 - D-05/D-06: BUG-01 fixed fail-closed in one RED-then-GREEN commit pair through a registered
   `EdgeConditionEvaluator`; M-B-01 is the program's sole sanctioned behavioral break (worked
   example in `MIGRATION.md` §9.1).
+
 - D-07: `StateNode::run` returns `Result<Directive, NodeError>`; `From<StateDelta>` keeps
   plain-delta nodes source-compatible.
+
 - D-14: mid-muster resume rides intra-superstep progress Waypoints — `MusterProgress` is a stored
   payload contract from v0.10.0 onward, so any shape change needs a data migration.
+
 - D-18: `GRAPH_FINGERPRINT_VERSION` is `v3`; every `EngineLimits` field (including
   `max_muster_tasks`) stays excluded from the hash.
+
 - D-20/D-21: child subgraph checkpoints run under an injective `ThreadId::child`; the child
   inherits the parent engine wholesale but uses its own graph's limits.
+
 - D-26: LLM-evaluated routing and `StrategySelection::Semantic` are code-configured only — no env
   var, cargo feature or config field may switch them on.
 
@@ -814,14 +819,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 23 complete — UAT 80/80 passed (0 issues), canonical verification `passed`, security `threats_open: 0`, CF-01 … CF-05 complete; Phase 24 is ready to plan (no CONTEXT.md yet — discuss first).
+**Stopped at:** Phase 24 context gathered
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-04T21:22:45.154Z
-Resume file: None
+Last session: 2026-09-04T21:45:55.634Z
+Resume file: .planning/phases/24-pause-resume-history-graceful-shutdown/24-CONTEXT.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

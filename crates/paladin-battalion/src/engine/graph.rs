@@ -986,6 +986,33 @@ impl WarGraph {
     /// tuning a prompt to let a resumed run continue is a legitimate
     /// operator action and must not trip `EngineError::GraphMismatch`.
     ///
+    /// **`v3` (Phase 23, D-18)** adds three more sections, hashed for the
+    /// same reason as everything above: each changes scheduling or merge
+    /// semantics, so a resumed run over a graph that changed one of them
+    /// without a fingerprint move would silently execute a materially
+    /// different graph than the one that was checkpointed.
+    ///
+    /// - `self.worker_templates` (CF-03): the sorted worker-template node
+    ///   id set.
+    /// - Per `NodeSpec::Battalion` node, walked in `node_order` (not
+    ///   sorted -- `node_order` is already `HashMap`-independent): the node
+    ///   id, the child graph's own [`WarGraph::fingerprint`] string (hashing
+    ///   the child's fingerprint rather than walking its structure inline
+    ///   keeps this compositional and bounded), the `StateMap`'s `inputs`
+    ///   and `outputs` pairs in their declared order (semantic, not sorted
+    ///   -- a `StateMap` is a list of mappings), and `restart_on_resume`.
+    /// - Per `NodeSpec::Paladin` node, also walked in `node_order`: its
+    ///   `DirectiveParser` (hashed through its serde-canonical
+    ///   representation, matching the existing `EdgeCondition`/
+    ///   `DispatchRule` precedent below -- this captures both the parser
+    ///   kind and, where `StructuredDirective` carries one, its
+    ///   `on_parse_error` in a single field).
+    ///
+    /// Still deliberately NOT covered: every `EngineLimits` field including
+    /// `max_muster_tasks` (RESEARCH.md Pitfall 5) -- raising an operator
+    /// limit to let a resumed run continue must not trip `GraphMismatch`
+    /// any more under `v3` than it did under `v2`.
+    ///
     /// The edge condition and dispatch rule are hashed through their serde
     /// representation (`serde_json::to_string`), never through `Debug`: a
     /// `#[derive(Debug)]` change on either type would otherwise silently
@@ -1016,6 +1043,18 @@ impl WarGraph {
     /// recognized as a version-tag mismatch on `resume` rather than
     /// silently reinterpreted under the new one.
     ///
+    /// The three `v3` sections above follow the exact same discipline: every
+    /// variable-length field goes through [`push_field`], and the two
+    /// variable-length `StateMap` lists are each preceded by their own
+    /// element COUNT as a fixed-width 8-byte little-endian integer (written
+    /// directly, matching the "has output field" tag byte's existing
+    /// fixed-width-marker precedent) before their length-prefixed pairs --
+    /// without an explicit count, a pair could be shifted from `outputs`
+    /// into `inputs` (or vice versa) without changing the concatenated
+    /// bytes, reintroducing exactly the split-ambiguity class CR-01 fixed.
+    /// `restart_on_resume` is written as a single fixed-width tag byte for
+    /// the same reason the "has output field" marker is.
+    ///
     /// A golden hex test pins the exact output of a fixture exercising
     /// every hashed property (`engine::graph::tests::
     /// fingerprint_golden_hex_pins_canonical_bytes`); changing this
@@ -1042,6 +1081,9 @@ impl WarGraph {
 
         let mut dynamic_target_ids: Vec<&NodeId> = self.dynamic_targets.iter().collect();
         dynamic_target_ids.sort();
+
+        let mut worker_template_ids: Vec<&NodeId> = self.worker_templates.iter().collect();
+        worker_template_ids.sort();
 
         let mut buf = Vec::new();
         buf.extend_from_slice(b"nodes:");
@@ -1081,6 +1123,49 @@ impl WarGraph {
         buf.extend_from_slice(b";dynamic_targets:");
         for id in &dynamic_target_ids {
             push_field(&mut buf, id.as_str().as_bytes());
+        }
+        // --- v3 (Phase 23, D-18): three new scheduling/merge-relevant
+        // sections, see `fingerprint`'s rustdoc above for the collision
+        // analysis behind the StateMap element-count prefixes.
+        buf.extend_from_slice(b";worker_templates:");
+        for id in &worker_template_ids {
+            push_field(&mut buf, id.as_str().as_bytes());
+        }
+        buf.extend_from_slice(b";battalion:");
+        for id in &self.node_order {
+            let Some(NodeSpec::Battalion {
+                graph: child,
+                state_map,
+                restart_on_resume,
+            }) = self.nodes.get(id)
+            else {
+                continue;
+            };
+            push_field(&mut buf, id.as_str().as_bytes());
+            push_field(&mut buf, child.fingerprint().as_str().as_bytes());
+            buf.extend_from_slice(&(state_map.inputs.len() as u64).to_le_bytes());
+            for (parent_field, child_field) in &state_map.inputs {
+                push_field(&mut buf, parent_field.as_str().as_bytes());
+                push_field(&mut buf, child_field.as_str().as_bytes());
+            }
+            buf.extend_from_slice(&(state_map.outputs.len() as u64).to_le_bytes());
+            for (child_field, parent_field) in &state_map.outputs {
+                push_field(&mut buf, child_field.as_str().as_bytes());
+                push_field(&mut buf, parent_field.as_str().as_bytes());
+            }
+            buf.push(if *restart_on_resume { 1 } else { 0 });
+        }
+        buf.extend_from_slice(b";directive_parsers:");
+        for id in &self.node_order {
+            let Some(NodeSpec::Paladin {
+                directive_parser, ..
+            }) = self.nodes.get(id)
+            else {
+                continue;
+            };
+            push_field(&mut buf, id.as_str().as_bytes());
+            let parser_json = serde_json::to_string(directive_parser).unwrap_or_default();
+            push_field(&mut buf, parser_json.as_bytes());
         }
 
         GraphFingerprint::from_canonical_bytes(&buf)
@@ -1367,12 +1452,15 @@ mod tests {
         // declares "solo" as entry, and the entry set is now part of the
         // hashed bytes; the length-prefixed `v2` re-encoding (CR-01 fix)
         // also changes the literal independently of any property change.
+        // Re-pinned again for Phase 23 D-18's `v3` bump (Plan 23-10): the
+        // version tag alone moves the literal even though this fixture has
+        // no worker templates, Battalion nodes, or Paladin nodes.
         // `fingerprint_golden_hex_pins_canonical_bytes` (Task 2) is the
         // dedicated golden test guarding future canonicalization changes;
         // this assertion only re-confirms same-input determinism.
         assert_eq!(
             a.as_str(),
-            "v2:9c4b3ff495ed7f1872420455f7691b991a58707e902a3211a5c19c1da8613520"
+            "v3:64e5f08db24bd94d05b337fe56105b3cc4c7ef2f2ee06d94fc9f1f523db1f798"
         );
     }
 
@@ -1532,12 +1620,20 @@ mod tests {
     /// (see `fingerprint_distinguishes_length_prefix_collision_*` below for
     /// the collision the prior `v1` delimiter-based encoding was vulnerable
     /// to).
+    ///
+    /// Re-pinned again for Phase 23 D-18's `v3` bump (Plan 23-10): the
+    /// reference graph's construction (`golden_fingerprint_fixture`,
+    /// `FingerprintFixtureSpec::default()`) is UNCHANGED -- no worker
+    /// templates or Battalion nodes are added to it -- only the version tag
+    /// and the (empty) new section markers move the literal, plus the
+    /// fixture's existing "worker" Paladin node now contributes a
+    /// `directive_parsers:` record for its default `DirectiveParser::PlainOutput`.
     #[test]
     fn fingerprint_golden_hex_pins_canonical_bytes() {
         let graph = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
         assert_eq!(
             graph.fingerprint().as_str(),
-            "v2:8eaa709a9ed7356799747694382d508608f1b76f3ec9e2bdae079868f2f60711",
+            "v3:a67a12f2947ce17d60d9357fea366ad4539cdeaa174a3a19a4841182725f20e2",
             "canonicalization changed -- this invalidates every stored Waypoint's \
              fingerprint; only update this literal together with a deliberate \
              format-version bump"
@@ -1702,7 +1798,10 @@ mod tests {
     /// children can be made to differ structurally.
     fn simple_child_graph(node_name: &str) -> Arc<WarGraph> {
         let mut child = WarGraph::new(one_field_schema(), EngineLimits::default());
-        child.add_node(NodeId::new(node_name), NodeSpec::Function(StdArc::new(NoopNode)));
+        child.add_node(
+            NodeId::new(node_name),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
         child.add_entry(NodeId::new(node_name));
         StdArc::new(child)
     }
@@ -1823,8 +1922,10 @@ mod tests {
             NodeId::new("sub"),
             NodeSpec::battalion(
                 StdArc::clone(&child),
-                StateMap::new()
-                    .with_input(FieldName::new("result").unwrap(), FieldName::new("result").unwrap()),
+                StateMap::new().with_input(
+                    FieldName::new("result").unwrap(),
+                    FieldName::new("result").unwrap(),
+                ),
             ),
         );
         with_mapped.add_entry(NodeId::new("sub"));
@@ -3079,26 +3180,53 @@ mod tests {
         );
     }
 
+    // NOTE (Plan 23-10, D-18): `v3`'s new `battalion:` section correctly
+    // distinguishes a `NodeSpec::Battalion` node from a `NodeSpec::Function`
+    // node -- v2 taken alone did not (both got the same "no output field"
+    // tag byte), which is exactly the coincidental blindness that let the
+    // two tests below previously fake self-containment by embedding a
+    // structurally-"identical" (under v2's blind spot) leaf graph and
+    // relying on it hashing the same as its Battalion-wrapping parent.
+    // Under `v3`'s now depth-sensitive, Merkle-style encoding (each
+    // Battalion node hashes its child's OWN fingerprint string), a
+    // descendant's fingerprint can never algebraically equal an ancestor's
+    // via honest finite construction: the ancestor's hash is partly
+    // DEFINED BY the descendant's hash through the wrapping chain, so
+    // requiring equality asks for a hash fixed point, which a
+    // collision-resistant hash function does not yield except by
+    // astronomically unlikely accident. That is a genuine correctness
+    // improvement (RecursiveEmbedding can no longer misfire OR be
+    // legitimately reachable through an encoding blind spot), but it means
+    // these two tests must now exercise `validate_battalion_children`'s
+    // ancestry-collision check directly, seeding a hand-built ancestry
+    // list, rather than manufacturing an impossible hash coincidence
+    // end-to-end through the public `validate` entry point.
+
     #[test]
     fn directly_recursive_embedding_is_rejected() {
-        let inner = trivial_graph();
-        let mut outer = WarGraph::new(one_field_schema(), EngineLimits::default());
-        // `outer` is structurally identical to `inner` for fingerprinting
-        // purposes (same node id, same schema, same entry set) but embeds
-        // `inner` as a Battalion node under that SAME node id -- simulating
-        // self-containment, since an immutable Arc<WarGraph> cannot
+        // Simulates self-containment -- an immutable Arc<WarGraph> cannot
         // literally self-contain (D-19's own defensive rationale for a
-        // fingerprint path-set walk rather than pointer identity).
+        // fingerprint path-set walk rather than pointer identity) -- by
+        // calling the private ancestry-walk helper with a starting ancestry
+        // that already contains the embedded child's own fingerprint, as if
+        // an outer caller had already visited a graph with that exact
+        // fingerprint. The collision fires on the FIRST node checked (no
+        // recursion needed), matching "direct" self-reference.
+        let child = trivial_graph_named("child");
+        let child_fp = child.fingerprint();
+
+        let mut outer = WarGraph::new(one_field_schema(), EngineLimits::default());
         outer.add_node(
             NodeId::new("only"),
-            NodeSpec::battalion(Arc::new(inner), StateMap::new()),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
         );
         outer.add_entry(NodeId::new("only"));
 
         let err = outer
-            .validate(
+            .validate_battalion_children(
                 &CustomDispatchResolver::new(),
                 &EdgeEvaluatorRegistry::new(),
+                &[child_fp],
             )
             .unwrap_err();
         assert!(
@@ -3109,13 +3237,21 @@ mod tests {
 
     #[test]
     fn transitively_recursive_embedding_is_rejected() {
-        // A embeds B embeds a structural copy of A.
-        let a_copy = trivial_graph_named("only");
+        // A -> B -> collision: the starting ancestry is seeded with the
+        // GRANDCHILD's fingerprint (simulating a third level up the real
+        // descent chain), so the collision is only discovered after
+        // `validate_battalion_children` has recursed one level down from A
+        // into B -- exercising the same multi-level `next_ancestry`
+        // accumulation a genuine multi-level embedding would use, without
+        // an impossible self-referential fingerprint coincidence (see
+        // `directly_recursive_embedding_is_rejected`'s comment above).
+        let grandchild = trivial_graph_named("grandchild");
+        let grandchild_fp = grandchild.fingerprint();
 
         let mut b = WarGraph::new(one_field_schema(), EngineLimits::default());
         b.add_node(
             NodeId::new("mid"),
-            NodeSpec::battalion(Arc::new(a_copy), StateMap::new()),
+            NodeSpec::battalion(Arc::new(grandchild), StateMap::new()),
         );
         b.add_entry(NodeId::new("mid"));
 
@@ -3127,9 +3263,10 @@ mod tests {
         a.add_entry(NodeId::new("only"));
 
         let err = a
-            .validate(
+            .validate_battalion_children(
                 &CustomDispatchResolver::new(),
                 &EdgeEvaluatorRegistry::new(),
+                &[grandchild_fp],
             )
             .unwrap_err();
         assert!(

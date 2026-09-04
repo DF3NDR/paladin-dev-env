@@ -167,13 +167,24 @@ impl std::fmt::Display for NodeId {
 /// separator bytes. `v2` uses a length-prefixed encoding with no delimiter
 /// collision; every `v1`-tagged fingerprint is now recognised as stale
 /// rather than silently reinterpreted.
+///
+/// Bumped to `v3` (Phase 23, D-18): three new scheduling/merge-relevant
+/// sections were added to `WarGraph::fingerprint`'s hashed bytes -- the
+/// worker-template set (CF-03), each `NodeSpec::Battalion` node's child
+/// fingerprint plus `StateMap` plus `restart_on_resume` (CF-04), and each
+/// `NodeSpec::Paladin` node's `DirectiveParser` kind plus `on_parse_error`
+/// (CF-02) -- each written through the same length-prefixed `push_field`
+/// helper `v2` established, never a delimiter join. Every `v2`-tagged
+/// fingerprint is now recognised as stale on `resume` rather than silently
+/// reinterpreted under the new layout.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct GraphFingerprint(String);
 
 /// Fingerprint algorithm/encoding version tag (Task 1 decision, option-b;
-/// bumped to `v2` by Phase 22.1 CR-01 / D-17's collision-free re-encoding).
-pub const GRAPH_FINGERPRINT_VERSION: &str = "v2";
+/// bumped to `v2` by Phase 22.1 CR-01 / D-17's collision-free re-encoding;
+/// bumped to `v3` by Phase 23 D-18's three new hashed sections).
+pub const GRAPH_FINGERPRINT_VERSION: &str = "v3";
 
 impl GraphFingerprint {
     /// Compute a `GraphFingerprint` over a caller-supplied canonical byte
@@ -184,7 +195,7 @@ impl GraphFingerprint {
         Self(format!("{GRAPH_FINGERPRINT_VERSION}:{}", hash.to_hex()))
     }
 
-    /// Borrow the encoded fingerprint string (`"v2:{hex}"`).
+    /// Borrow the encoded fingerprint string (`"v3:{hex}"`).
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -654,7 +665,7 @@ mod tests {
         let a = GraphFingerprint::from_canonical_bytes(b"node:a|edge:none|schema:result");
         let b = GraphFingerprint::from_canonical_bytes(b"node:a|edge:none|schema:result");
         assert_eq!(a, b);
-        assert!(a.as_str().starts_with("v2:"));
+        assert!(a.as_str().starts_with("v3:"));
     }
 
     #[test]

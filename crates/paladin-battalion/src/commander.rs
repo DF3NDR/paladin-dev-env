@@ -4,6 +4,7 @@
 //! Supports both manual strategy selection and Auto mode with rule-based heuristics.
 
 use log::{debug, info, warn};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
@@ -15,6 +16,7 @@ use crate::council_service::CouncilExecutionService;
 use crate::formation_service::FormationExecutionService;
 use crate::grove_service::GroveExecutionService;
 use crate::in_memory_registry::HashMapPaladinRegistry;
+use crate::llm_decision::llm_error_class;
 use crate::maneuver::service::ManeuverExecutionService;
 use crate::phalanx_service::PhalanxExecutionService;
 use paladin_core::platform::container::battalion::{
@@ -22,8 +24,62 @@ use paladin_core::platform::container::battalion::{
 };
 use paladin_core::platform::container::herald::Herald;
 use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::paladin_registry::PaladinRegistry;
+
+/// How [`Commander`] resolves `BattalionStrategy::Auto` (CF-05, D-25).
+///
+/// Off by default: a `Commander` built without calling
+/// [`CommanderBuilder::strategy_selection`] uses [`StrategySelection::Heuristic`]
+/// -- today's keyword-based [`Commander::analyze_and_select`], unchanged. No
+/// `APP_*` environment variable, cargo feature, or config-struct field can
+/// reach [`StrategySelection::Semantic`] (D-26); a workflow author reaches it
+/// only by constructing one in code.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_battalion::commander::StrategySelection;
+///
+/// assert!(matches!(StrategySelection::default(), StrategySelection::Heuristic));
+/// ```
+#[derive(Clone, Default)]
+pub enum StrategySelection {
+    /// Today's keyword-based heuristic ([`Commander::analyze_and_select`]),
+    /// unchanged. The default.
+    #[default]
+    Heuristic,
+    /// Prompt `llm` with the strategy catalog and the run's input, parse the
+    /// answer as a strategy name (exact-after-trim, case-insensitive). Any
+    /// LLM error, or an answer that names no catalog strategy, falls back to
+    /// [`StrategySelection::Heuristic`] deterministically, recording the
+    /// fallback and its cause in `BattalionResult::strategy_selection_reasoning`.
+    Semantic {
+        /// The provider to prompt for a strategy name.
+        llm: Arc<dyn LlmPort>,
+        /// The model identifier to request.
+        model: String,
+    },
+}
+
+// `Arc<dyn LlmPort>` is not `Debug`, so this impl is manual -- and
+// deliberately prints the variant name and model string only, never the
+// port itself (T-23-10: no credential the port may hold can leak through a
+// `{:?}` log line).
+impl std::fmt::Debug for StrategySelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StrategySelection::Heuristic => f.write_str("Heuristic"),
+            StrategySelection::Semantic { model, .. } => f
+                .debug_struct("Semantic")
+                .field("llm", &"<dyn LlmPort>")
+                .field("model", model)
+                .finish(),
+        }
+    }
+}
 
 /// Commander for routing Battalion execution to appropriate strategies.
 ///
@@ -176,6 +232,12 @@ pub struct Commander {
 
     /// Optional Herald for formatting Battalion results
     herald: Option<Arc<dyn Herald>>,
+
+    /// How `BattalionStrategy::Auto` is resolved (CF-05, D-25). Private --
+    /// not part of the public constructor signature; set only through
+    /// [`CommanderBuilder::strategy_selection`]. Defaults to
+    /// [`StrategySelection::Heuristic`].
+    strategy_selection: StrategySelection,
 }
 
 impl std::fmt::Debug for Commander {
@@ -197,6 +259,7 @@ impl std::fmt::Debug for Commander {
                     .map(|_| "<dyn Herald>")
                     .unwrap_or("None"),
             )
+            .field("strategy_selection", &self.strategy_selection)
             .finish()
     }
 }
@@ -240,6 +303,7 @@ impl Commander {
             maneuver_config: None,
             paladin_port,
             herald: None,
+            strategy_selection: StrategySelection::default(),
         }
     }
 
@@ -425,10 +489,11 @@ impl Commander {
         let start_time = std::time::Instant::now();
         let started_at = chrono::Utc::now();
 
-        // Resolve strategy (Auto mode uses heuristics)
+        // Resolve strategy (Auto mode uses the configured StrategySelection --
+        // today's Heuristic by default, or Semantic if the builder set one).
         let (effective_strategy, selection_reason) = match &self.strategy {
             BattalionStrategy::Auto => {
-                let (selected, reason) = self.analyze_and_select(input);
+                let (selected, reason) = self.select_strategy(input).await;
                 info!(
                     "Commander {} Auto mode selected {:?}: {}",
                     self.id, selected, reason
@@ -968,6 +1033,118 @@ impl Commander {
         }
     }
 
+    /// Resolve `BattalionStrategy::Auto` per the configured
+    /// [`StrategySelection`] (CF-05, D-25): today's heuristic, or -- if
+    /// `Semantic` is configured -- a model-named strategy with a
+    /// deterministic fallback to the heuristic on any failure.
+    async fn select_strategy(&self, input: &str) -> (BattalionStrategy, String) {
+        match &self.strategy_selection {
+            StrategySelection::Heuristic => self.analyze_and_select(input),
+            StrategySelection::Semantic { llm, model } => {
+                self.select_strategy_semantic(llm, model, input).await
+            }
+        }
+    }
+
+    /// The catalog of strategies [`StrategySelection::Semantic`] may name --
+    /// exactly the strategies [`Commander::analyze_and_select`] can return.
+    /// `Maneuver` is deliberately excluded: it is explicit-only, never
+    /// selected by Auto mode (see `analyze_and_select`'s own note).
+    const SEMANTIC_STRATEGY_CATALOG: &'static [&'static str] = &[
+        "Formation",
+        "Phalanx",
+        "Campaign",
+        "ChainOfCommand",
+        "Conclave",
+        "Council",
+        "Grove",
+    ];
+
+    /// Match a model's answer against [`Self::SEMANTIC_STRATEGY_CATALOG`],
+    /// exact-after-trim, case-insensitive (D-25).
+    fn strategy_from_name(name: &str) -> Option<BattalionStrategy> {
+        let trimmed = name.trim();
+        Self::SEMANTIC_STRATEGY_CATALOG
+            .iter()
+            .find(|catalog_name| catalog_name.eq_ignore_ascii_case(trimmed))
+            .map(|catalog_name| match *catalog_name {
+                "Formation" => BattalionStrategy::Formation,
+                "Phalanx" => BattalionStrategy::Phalanx,
+                "Campaign" => BattalionStrategy::Campaign,
+                "ChainOfCommand" => BattalionStrategy::ChainOfCommand,
+                "Conclave" => BattalionStrategy::Conclave,
+                "Council" => BattalionStrategy::Council,
+                "Grove" => BattalionStrategy::Grove,
+                _ => unreachable!("catalog name not covered by this match"),
+            })
+    }
+
+    /// Prompt `llm` with the strategy catalog and `input`, parse the answer
+    /// as a strategy name. Any [`paladin_ports::output::llm_port::LlmError`]
+    /// or an answer naming no catalog strategy falls back to
+    /// [`Self::analyze_and_select`] deterministically -- the fallback and its
+    /// cause class are recorded in the returned reasoning string, never the
+    /// model's raw answer or a provider's raw error text (the privacy
+    /// prohibition: this reasoning string is echoed back to callers via
+    /// `BattalionResult::strategy_selection_reasoning`).
+    async fn select_strategy_semantic(
+        &self,
+        llm: &Arc<dyn LlmPort>,
+        model: &str,
+        input: &str,
+    ) -> (BattalionStrategy, String) {
+        let catalog = Self::SEMANTIC_STRATEGY_CATALOG.join(", ");
+        let prompt_text = format!(
+            "Choose exactly one Battalion orchestration strategy for the following task, from \
+             this catalog: {catalog}. Reply with only the strategy name, nothing else.\n\nTask: {input}"
+        );
+
+        let prompt = match PromptItem::new(PromptType::User(UserPrompt {
+            query: prompt_text,
+            context: None,
+        })) {
+            Ok(p) => p,
+            Err(_) => return self.fall_back_to_heuristic(input, "prompt construction failed"),
+        };
+
+        let request = LlmRequest {
+            id: Uuid::new_v4(),
+            model: model.to_string(),
+            prompt,
+            attachments: vec![],
+            stream: false,
+            metadata: HashMap::new(),
+        };
+
+        let response = match llm.generate(request).await {
+            Ok(response) => response,
+            Err(e) => return self.fall_back_to_heuristic(input, llm_error_class(&e)),
+        };
+
+        match Self::strategy_from_name(&response.content) {
+            Some(strategy) => {
+                let reason = format!(
+                    "Semantic strategy selection: model chose {strategy:?} from the strategy catalog"
+                );
+                (strategy, reason)
+            }
+            None => self.fall_back_to_heuristic(input, "model answer matched no catalog strategy"),
+        }
+    }
+
+    /// Fall back to [`Self::analyze_and_select`], recording both the fact of
+    /// the fallback and `cause` (a short, fixed class -- never the model's
+    /// raw answer or a provider's raw error text) in the reasoning string.
+    fn fall_back_to_heuristic(&self, input: &str, cause: &str) -> (BattalionStrategy, String) {
+        let (strategy, heuristic_reason) = self.analyze_and_select(input);
+        (
+            strategy,
+            format!(
+                "Semantic strategy selection fell back to the heuristic ({cause}): {heuristic_reason}"
+            ),
+        )
+    }
+
     /// Analyze input and Paladins to select optimal strategy
     ///
     /// Applies rule-based heuristics to determine the best orchestration
@@ -1333,6 +1510,7 @@ pub struct CommanderBuilder {
     flow_expression: Option<String>,
     maneuver_config: Option<crate::maneuver::ManeuverConfig>,
     paladin_port: Arc<dyn PaladinPort>,
+    strategy_selection: Option<StrategySelection>,
 }
 
 impl CommanderBuilder {
@@ -1356,7 +1534,25 @@ impl CommanderBuilder {
             flow_expression: None,
             maneuver_config: None,
             paladin_port,
+            strategy_selection: None,
         }
+    }
+
+    /// Configure how `BattalionStrategy::Auto` resolves (CF-05, D-25).
+    ///
+    /// Additive: omitting this call leaves [`StrategySelection::Heuristic`]
+    /// in effect, today's unchanged keyword heuristic. `Commander::new`'s
+    /// signature is unaffected -- this is the only way to reach
+    /// [`StrategySelection::Semantic`].
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// builder.strategy_selection(StrategySelection::Semantic { llm, model })
+    /// ```
+    pub fn strategy_selection(mut self, selection: StrategySelection) -> Self {
+        self.strategy_selection = Some(selection);
+        self
     }
 
     /// Set the orchestration strategy
@@ -1605,6 +1801,9 @@ impl CommanderBuilder {
         // Set optional Maneuver fields
         commander.flow_expression = self.flow_expression;
         commander.maneuver_config = self.maneuver_config;
+        if let Some(selection) = self.strategy_selection {
+            commander.strategy_selection = selection;
+        }
 
         Ok(commander)
     }
@@ -1620,6 +1819,8 @@ mod tests {
     };
     use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
     use paladin_core::platform::container::paladin_error::PaladinError;
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_ports::output::llm_port::LlmError;
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream, StopReason};
 
     /// Mock PaladinPort for testing
@@ -1998,6 +2199,131 @@ mod tests {
         let (strategy, reason) = commander.analyze_and_select("Analyze this data");
         assert_eq!(strategy, BattalionStrategy::Formation);
         assert!(reason.contains("defaulting"));
+    }
+
+    // -----------------------------------------------------------------
+    // StrategySelection::Semantic (CF-05, D-25)
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn default_strategy_selection_is_heuristic_and_unchanged() {
+        let paladin_port = Arc::new(MockPaladinPort);
+        let paladins = vec![create_test_paladin(), create_test_paladin()];
+        let config = create_test_config();
+
+        let commander = CommanderBuilder::new(paladin_port)
+            .strategy(BattalionStrategy::Auto)
+            .paladins(paladins)
+            .config(config)
+            .build()
+            .unwrap();
+
+        let input = "Process this step by step";
+        let (heuristic_strategy, heuristic_reason) = commander.analyze_and_select(input);
+        let (selected_strategy, selected_reason) = commander.select_strategy(input).await;
+
+        assert_eq!(selected_strategy, heuristic_strategy);
+        assert_eq!(selected_reason, heuristic_reason);
+    }
+
+    #[tokio::test]
+    async fn semantic_mode_selects_the_strategy_the_model_names() {
+        let paladin_port = Arc::new(MockPaladinPort);
+        let paladins = vec![create_test_paladin()];
+        let config = create_test_config();
+        let llm: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_response("Phalanx"));
+
+        let commander = CommanderBuilder::new(paladin_port)
+            .strategy(BattalionStrategy::Auto)
+            .paladins(paladins)
+            .config(config)
+            .strategy_selection(StrategySelection::Semantic {
+                llm,
+                model: "mock-model".to_string(),
+            })
+            .build()
+            .unwrap();
+
+        let (strategy, reason) = commander.select_strategy("irrelevant input").await;
+        assert_eq!(strategy, BattalionStrategy::Phalanx);
+        assert!(reason.contains("Phalanx"));
+    }
+
+    #[tokio::test]
+    async fn semantic_matching_is_exact_after_trim_and_case_insensitive() {
+        let paladin_port = Arc::new(MockPaladinPort);
+        let paladins = vec![create_test_paladin()];
+        let config = create_test_config();
+        let llm: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_response("  Formation \n"));
+
+        let commander = CommanderBuilder::new(paladin_port)
+            .strategy(BattalionStrategy::Auto)
+            .paladins(paladins)
+            .config(config)
+            .strategy_selection(StrategySelection::Semantic {
+                llm,
+                model: "mock-model".to_string(),
+            })
+            .build()
+            .unwrap();
+
+        let (strategy, _) = commander.select_strategy("irrelevant input").await;
+        assert_eq!(strategy, BattalionStrategy::Formation);
+    }
+
+    #[tokio::test]
+    async fn semantic_falls_back_to_heuristic_on_llm_error() {
+        let paladin_port = Arc::new(MockPaladinPort);
+        let paladins = vec![create_test_paladin(), create_test_paladin()];
+        let config = create_test_config();
+        let llm: Arc<dyn LlmPort> =
+            Arc::new(MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded));
+
+        let commander = CommanderBuilder::new(paladin_port)
+            .strategy(BattalionStrategy::Auto)
+            .paladins(paladins)
+            .config(config)
+            .strategy_selection(StrategySelection::Semantic {
+                llm,
+                model: "mock-model".to_string(),
+            })
+            .build()
+            .unwrap();
+
+        let input = "Process this step by step";
+        let (heuristic_strategy, _) = commander.analyze_and_select(input);
+        let (strategy, reason) = commander.select_strategy(input).await;
+
+        assert_eq!(strategy, heuristic_strategy);
+        assert!(reason.contains("fell back"));
+        assert!(reason.contains("rate limit exceeded"));
+    }
+
+    #[tokio::test]
+    async fn semantic_falls_back_to_heuristic_on_unrecognized_answer() {
+        let paladin_port = Arc::new(MockPaladinPort);
+        let paladins = vec![create_test_paladin(), create_test_paladin()];
+        let config = create_test_config();
+        let llm: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_response("Battalion"));
+
+        let commander = CommanderBuilder::new(paladin_port)
+            .strategy(BattalionStrategy::Auto)
+            .paladins(paladins)
+            .config(config)
+            .strategy_selection(StrategySelection::Semantic {
+                llm,
+                model: "mock-model".to_string(),
+            })
+            .build()
+            .unwrap();
+
+        let input = "Process this step by step";
+        let (heuristic_strategy, _) = commander.analyze_and_select(input);
+        let (strategy, reason) = commander.select_strategy(input).await;
+
+        assert_eq!(strategy, heuristic_strategy);
+        assert!(reason.contains("fell back"));
+        assert!(!reason.contains("Battalion"));
     }
 
     #[test]

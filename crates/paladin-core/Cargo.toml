@@ -2,6 +2,7 @@
 name = "paladin-ai-core"
 version = "0.9.0"
 edition = "2024"
+rust-version.workspace = true
 authors = ["Am0rfu5"]
 license = "MIT OR Apache-2.0"
 description = "Pure domain types for the Paladin framework — zero infrastructure dependencies"
@@ -29,3 +30,11 @@ murmur3 = "0.5.2"
 url = { version = "2.5.2", features = ["serde"] }
 regex = "1.11.1"
 futures = "0.3.31"
+
+[dev-dependencies]
+# Test-only: seeded shuffling for Battlefield::merge's ENG-FR-08 determinism
+# test (20 shuffled-input iterations must produce byte-identical output).
+# Never a production dependency — paladin-core stays dependency-pure at
+# runtime; `rand` is already a vetted workspace dependency used elsewhere
+# (paladin-battalion, paladin-llm).
+rand = { workspace = true }

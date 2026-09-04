@@ -2,6 +2,7 @@
 name = "paladin-content"
 version = "0.9.0"
 edition = "2024"
+rust-version.workspace = true
 authors = ["Am0rfu5"]
 description = "Content processing adapters and use-case services for the Paladin framework"
 readme = "README.md"

@@ -109,6 +109,28 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 22.1 complete (2026-09-03)** — engine-readiness-defect-and-msrv-follow-up, the inserted
+follow-up that closed Phase 22's residuals plus one defect found while discussing it: BUG-03
+(cycle-bootstrap starvation — a starvation-release tier in `compute_next_vanguard`, a validate-time
+guard and a run-end truthful-outcome check, test-first), the MSRV floor raised to a measured 1.88
+(one `workspace.package.rust-version`, all crates inheriting, `resolver = "3"`, the 22-17 lockfile
+pin-backs reverted so RUSTSEC-2026-0009 cleared without an exception), CR-01 (the fingerprint now
+hashes entry set, defer flags, dynamic targets, dispatch rules and output fields with serde-canonical
+bytes, pinned by a golden test), BUG-04 (resume now restores a `FrontierSnapshot` persisted on the
+Waypoint instead of rebuilding the Frontier from scratch — promoted into scope by developer decision
+at the 22.1-05 checkpoint), and G-22-1's closing evidence as whole-run-success CI runs 33706948313
+and 33758221386 (declared 26 → 28 Postgres contract tests). 7/7 plans, verification 18/18. Advisory
+code review left one pre-release fingerprint-encoding finding (delimiter collisions) and two warnings
+in `22.1-REVIEW.md` for a follow-up.
+
+**Phase 22 complete (2026-09-02)** — battlefield-state-superstep-engine, the v0.10.0 milestone's
+first phase: typed Battlefield state, the superstep WarEngine with checkpoint/resume over three
+WaypointPort backends (the Postgres Tier 2 contract suite now provably executes in CI — run
+33688238662), eligible-set reachability validation (BUG-02 closed), and crash-safe retention on
+the prune_thread primitive. 17/17 plans, all three UAT gaps closed. Residuals routed to inserted
+Phase 22.1: the frontier readiness defect, the MSRV-1.85 vs rmcp-pinned process-wrap decision,
+and CR-01 (fingerprint omits defer_flags).
+
 **Shipped: v0.9.0 "Security Tooling" (2026-09-01)** — Phases 18-21, 25 plans, 20/20 requirements
 (SAST-01…04, PUB-01…05, PUBOPS-01…05, ARTIFACT-01…06). Audit status `tech_debt`, no blockers:
 `.planning/milestones/v0.9.0-MILESTONE-AUDIT.md`.
@@ -148,12 +170,52 @@ What v0.9.0 settled, in one paragraph each:
   proven end-to-end on `v0.8.1-rc.5`, the first fully-green release run in this project's
   history, with every declared human check closed by recorded UAT.
 
-## Next Milestone Goals
+## Current Milestone: v0.10.0 Durable Agent Execution Runtime
 
-**Not yet defined** — start with `/gsd-new-milestone` (questioning → research → requirements →
-roadmap). New phases start at Phase 22; `.planning/REQUIREMENTS.md` is opened fresh at that point.
+**Goal:** Evolve Paladin from a pattern-oriented orchestration framework into a durable agent
+execution runtime — typed shared state, automatic per-superstep checkpointing with crash-resume,
+human-in-the-loop pause/resume, dynamic control flow, per-node fault tolerance, a background-run
+platform API, and standardized trace observability.
 
-Carried-in open items for the next planning pass:
+**Source of truth:** the approved design corpus in `.project/v0.10.0/` — program overview (00),
+seven epic PRDs (01-07, epic prefixes `ENG`, `CF`, `HITL`, `FT`, `RT`, `PLAT`, `OBS`), and a
+gap-analysis traceability matrix (08). The PRDs carry FR-level behavior (~135 FRs) and remain the
+behavior source of truth; `.planning/REQUIREMENTS.md` scopes them as capability clusters with
+explicit FR-range traceability. Cross-cutting rules X-01…X-11 (hexagonal boundaries, TDD with the
+82% coverage floor, X-03 backward compatibility, X-10 semver hygiene via `cargo semver-checks`,
+X-11 MSRV 1.85 discipline) apply to every epic, and a root-level `MIGRATION.md` (overview §9) is
+a program-level living deliverable created in the first epic.
+
+**Implementation order (overview §2):** 01 → 02 → 03 ∥ 04 → 05 (parallelizable with 03/04)
+→ 06 → 07, with standalone items schedulable earlier. New phases start at Phase 22.
+
+**Target features:**
+- Battlefield typed state + superstep engine: cycles with bounded iteration, deterministic merge,
+  automatic Waypoint checkpointing, resume with zero re-execution (Doc 01, keystone)
+- Dynamic control flow: BUG-01 fail-closed fix, Directive node-driven routing, Muster fan-out,
+  subgraph composition, LLM-evaluated routing (Doc 02)
+- Parley pause/resume, Chronicle history/replay/fork, graceful shutdown (Doc 03)
+- Aegis per-node fault tolerance: transience taxonomy, retry/timeout/typed error handlers, model
+  fallback, node caching (Doc 04)
+- Agent runtime: execution middleware chain, context-window management, Vault long-term memory,
+  structured output, provider-conformance close-out (Doc 05)
+- Platform API: background runs on a durable queue, threads over HTTP, versioned assistants,
+  cron schedules, signed webhooks with SSRF guard (Doc 06)
+- Observability: TraceSink event stream, OTel export, graph/execution visualization,
+  `paladin-eval` harness (Doc 07)
+- Program gates: `MIGRATION.md` complete per §9, semver + MSRV CI jobs, three E2E acceptance
+  scenarios (crash-resume, approval gate, dynamic map-reduce), v0.10.0 release readiness
+
+**Known PRD-vs-tree conflict (precedence: shipped tree outranks PRD):** PRD 05 §1/§2.5 assumes
+provider coverage is "OpenAI/Anthropic/DeepSeek only" and specifies an OpenAI-compatible generic
+adapter (RT-FR-20), a Gemini adapter (RT-FR-21) and an Ollama recipe (RT-FR-22) as new work — all
+three shipped in v0.8.0 (PROV-01…04; `crates/paladin-llm/src/{openai_compatible,gemini,ollama}`,
+facade features `llm-openai-compatible`/`llm-gemini`/`llm-ollama` live at `Cargo.toml:307-309`).
+RT-06 scopes these as verify-against-the-PRD's-conformance-bar and close gaps (shared conformance
+suite, FT-FR-01 transience mapping, documented Ollama recipe), not as greenfield builds.
+
+Carried-in open items (unchanged from the v0.9.0 close; tracked, not this milestone's scope
+unless a phase adopts them):
 
 - The user-owned local coverage-reproduction walkthrough (STATE.md *Deferred Items*, unchanged
   since the v0.8.0 close).
@@ -162,10 +224,6 @@ Carried-in open items for the next planning pass:
   re-probe trigger condition, the untested `workflow_dispatch` publish path, two pre-existing
   Phase 20 review findings (`workflow_dispatch` triggering, `make publish-dry-run`), and the dead
   `upload_url` output in `scripts/create-or-reuse-release.sh`.
-- ~~The manifests still read `0.8.0` while eleven crates are published at `0.8.1-rc.x`
-  prereleases~~ — **resolved 2026-09-01**: v0.9.0 released for real (see Current State above);
-  manifests, tag, changelogs and crates.io all agree at `0.9.0`, and the pipeline had its first
-  live stable run.
 
 ## Requirements
 
@@ -485,9 +543,27 @@ while the code ships):
 
 ### Active
 
-**None.** v0.9.0 shipped 2026-09-01 and its 20 requirements moved to Validated above; no next
-milestone is defined yet. Requirements for the next milestone are minted by `/gsd-new-milestone`
-(new phases start at Phase 22, with a fresh `.planning/REQUIREMENTS.md`).
+**Milestone v0.10.0 "Durable Agent Execution Runtime"** — scoped in `.planning/REQUIREMENTS.md`
+as capability clusters over the `.project/v0.10.0/` PRD corpus (the PRDs remain the FR-level
+source of truth). Eight categories, mirroring the epic structure plus program-level gates:
+
+- [ ] **ENG-01 … ENG-08** — Battlefield typed state, superstep engine with cycles, Waypoint
+  checkpointing/resume, three storage backends, legacy string bridge, engine seams, and the
+  program scaffolding (`MIGRATION.md` skeleton, semver + MSRV CI jobs) mandated for the first
+  epic by X-10.5/X-11.1 (Doc 01)
+- [ ] **CF-01 … CF-05** — BUG-01 fail-closed custom edge conditions (the program's single
+  sanctioned behavioral break), Directive routing, Muster fan-out, subgraphs, LLM routing (Doc 02)
+- [ ] **HITL-01 … HITL-05** — Parley pause, validated resume, Chronicle history/replay/fork,
+  graceful shutdown, minimal thread HTTP endpoints (Doc 03)
+- [ ] **FT-01 … FT-06** — Transience taxonomy + structured NodeError, Aegis retry/timeout/error
+  handlers, model fallback, node caching (Doc 04)
+- [ ] **RT-01 … RT-06** — Middleware chain + built-ins, context management, Vault, structured
+  output, provider-conformance close-out (Doc 05)
+- [ ] **PLAT-01 … PLAT-06** — Background runs, worker pool + queue, parley/streaming integration,
+  versioned assistants, schedules + webhooks, API cross-cutting + generated-client gate (Doc 06)
+- [ ] **OBS-01 … OBS-04** — Trace event model + sinks, visualization export, eval harness (Doc 07)
+- [ ] **SHIP-01 … SHIP-04** — `MIGRATION.md` complete, compat proofs (v0.9-config boot test,
+  `openapi.json` golden diff), program acceptance audit, v0.10.0 release readiness (overview §5, §9)
 
 *(The long-form forward-scope listing that previously lived here — the 90 ingest-derived
 requirements across Phases 5-16 plus Phase 17's `PROV-*` additions — shipped with v0.8.0 and is
@@ -1284,6 +1360,16 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-09-01 after **milestone v0.10.0 "Durable Agent Execution Runtime" started** —
+scope taken from the approved design corpus in `.project/v0.10.0/` (program overview, seven epic
+PRDs `ENG`/`CF`/`HITL`/`FT`/`RT`/`PLAT`/`OBS` carrying ~135 FRs, traceability matrix). 44 active
+requirements minted across eight categories in a fresh `.planning/REQUIREMENTS.md`; new phases
+start at Phase 22. Domain research skipped by recorded decision: the PRD corpus is itself the
+design/research artifact, complete with test plans, acceptance criteria and a gap-analysis
+traceability matrix. One PRD-vs-tree conflict recorded at scope time (RT-FR-20…22 provider
+adapters already shipped in v0.8.0 — scoped as conformance close-out, not greenfield).*
+
+---
 *Last updated: 2026-09-01 after the **v0.9.0 "Security Tooling" milestone close** (Phases 18-21,
 25 plans, 20/20 requirements, 240 commits `48ac11a5..3957d701`, 2026-08-24 → 2026-09-01). Audit
 `tech_debt`, 0 blockers, 5 debt items with owners; every declared human-verification backstop
@@ -1444,5 +1530,5 @@ requirements, 86 forward requirements across 16 phases, 60 variant entries acros
 69 warnings, 0 locked decisions, 0 blockers, 11 ADR candidates**)*
 
 ---
-*Last updated: 2026-08-24 after the v0.8.0 milestone close (14 phases, 149 plans,
-65/65 requirements). v0.9.0 Security Tooling is open with Phase 18.*
+*Last updated: 2026-09-03 after Phase 22.1 completion (v0.10.0 milestone; next: Phase 23
+control-flow — dynamic routing, fan-out and subgraphs).*

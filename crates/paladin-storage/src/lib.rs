@@ -18,6 +18,11 @@
 #![warn(missing_docs)]
 #![allow(rustdoc::broken_intra_doc_links)]
 
+/// `WaypointPort` storage adapters. The in-memory backend is always
+/// available (D-01, no feature gate); durable backends are added by later
+/// plans behind their own feature flags.
+pub mod waypoint;
+
 /// SQLite implementation of `ContentRepository`, `ContentListRepository`,
 /// `MigrationManager`, and `SqlStore`.
 #[cfg(feature = "sqlite")]

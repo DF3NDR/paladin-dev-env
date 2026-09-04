@@ -6,6 +6,8 @@ pub mod arsenal;
 #[allow(missing_docs)]
 pub mod citadel;
 #[allow(missing_docs)]
+pub mod engine;
+#[allow(missing_docs)]
 pub mod env_utils;
 #[allow(missing_docs)]
 pub mod file_storage;
@@ -24,6 +26,8 @@ pub mod setup;
 #[allow(missing_docs)]
 pub mod user_config;
 #[allow(missing_docs)]
+pub mod waypoint_retention;
+#[allow(missing_docs)]
 pub mod web_server;
 
 // ── Re-exports ─────────────────────────────────────────────────────────────────
@@ -39,11 +43,13 @@ pub use crate::config::agents::{
 };
 pub use crate::config::arsenal::{ArsenalConfig, MCPServerConfig};
 pub use crate::config::citadel::CitadelConfig;
+pub use crate::config::engine::EngineConfig;
 pub use crate::config::file_storage::FileStorageConfig;
 #[cfg(feature = "notifications")]
 pub use crate::config::notifications::NotificationConfig;
 pub use crate::config::queue::QueueConfig;
 pub use crate::config::scheduler::SchedulerConfig;
+pub use crate::config::waypoint_retention::WaypointRetentionConfig;
 pub use crate::config::web_server::{MessageServiceSettings, ServerConfig, SourceConfig};
 pub use paladin_llm::config::vision::{VisionConfig, VisionProviderConfig, VisionRetryConfig};
 // Garrison, Sanctum, RAG and MemoryExtraction config types live in the paladin-memory crate (Task 6.0)

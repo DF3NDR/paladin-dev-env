@@ -2,6 +2,7 @@
 name = "paladin-web"
 version = "0.9.0"
 edition = "2024"
+rust-version.workspace = true
 authors = ["Am0rfu5"]
 description = "Web server adapters for the Paladin AI orchestration framework (axum)"
 readme = "README.md"

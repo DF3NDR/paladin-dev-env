@@ -231,6 +231,173 @@ jobs:
           echo "  3. Update the baseline: ./scripts/extract-public-api.sh .project/current-exports.txt"
           echo "  4. Commit the updated baseline"
 
+  # MSRV verification (X-11.2, D-07). Dedicated job pinned to the workspace's
+  # declared `workspace.package.rust-version = "1.88"` (single source, all ten
+  # crate manifests inherit it via `rust-version.workspace = true`, see
+  # MIGRATION.md §9.3), independent of and parallel with every other job --
+  # no `needs:` edge, so it cannot gate or be gated by anything else. The
+  # pinned dev toolchain (rust-toolchain.toml, 1.97.1) would otherwise
+  # override whatever this job installs; RUSTUP_TOOLCHAIN is the same
+  # documented opt-out the `test` job below already uses for its stable/beta
+  # matrix. `--all-features --all-targets` builds the full workspace,
+  # including every optional adapter, at the floor version -- not just the
+  # default feature set -- so a feature-gated dependency that silently needs
+  # a newer compiler cannot hide behind `default-features`. 1.88 is the
+  # measured floor: `rmcp`'s exact `=2.1.0` pin's `transport-child-process`
+  # feature reaches `process-wrap ^9.0` (needs rustc >= 1.87), and
+  # RUSTSEC-2026-0009's fix (`time` >= 0.3.47) needs rustc >= 1.88 -- the
+  # higher of the two sets the floor, clearing the advisory with no new
+  # security exception (D-06/D-07).
+  msrv:
+    name: MSRV (Rust 1.88)
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: "1.88"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust 1.88 toolchain
+        uses: dtolnay/rust-toolchain@1.88
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.88
+
+      - name: Check workspace at MSRV (all features, all targets)
+        run: cargo check --workspace --all-features --all-targets
+
+  # cargo-semver-checks (X-10.5, D-06). Guards every pre-existing public Rust
+  # API against the PUBLISHED v0.9.0 baseline on crates.io. Two things the
+  # tool's own defaults get wrong for this repo, both overridden explicitly
+  # below (RESEARCH.md Pitfalls 1-2):
+  #   - Baseline: the tool defaults to "latest published", not a fixed
+  #     version. `--baseline-version 0.9.0` pins the comparison so an
+  #     out-of-band crates.io patch release cannot silently move it.
+  #   - Package identity: this workspace's `crates/*` directory names differ
+  #     from their published crates.io package names -- `crates/paladin-core`
+  #     publishes as `paladin-ai-core`. Every publishable crate below is
+  #     addressed by its PUBLISHED name, not its directory name; a
+  #     directory-named `--package` flag would match zero packages and report
+  #     a silent, meaningless pass (the exact failure mode this job exists to
+  #     prevent, T-22-12).
+  # `--default-features` (verified locally against every one of the 11
+  # packages before landing this job): without it, cargo-semver-checks's own
+  # "enable everything except unstable/nightly" heuristic pulls in every
+  # optional feature combination at once, which trips a PRE-EXISTING,
+  # unrelated compile break -- `paladin-memory`'s `qdrant` adapter fails to
+  # build rustdoc against the `qdrant-client` 1.18.0 resolved today (pinned
+  # `^1.14`), because that version added a required `memory` field to
+  # `VectorParams`. That defect belongs to whichever phase next touches the
+  # Sanctum/Qdrant adapter, not this one (deferred:
+  # .planning/phases/22-battlefield-state-superstep-engine/22-deferred-items.md)
+  # -- Phase 22 does not touch `paladin-memory`'s qdrant module at all.
+  # Checking under each crate's own default features is also arguably the
+  # more correct semver-gate scope: it is the build a crates.io consumer gets
+  # by just adding the dependency, and it is what every one of the 11
+  # packages was verified to pass cleanly against the 0.9.0 baseline with.
+  # No `needs:` edge; the job writes no baseline/artifact file into the
+  # working tree, so re-running it on an unchanged commit reaches an
+  # identical verdict every time.
+  semver:
+    name: Semver Checks (vs v0.9.0)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: semver-checks
+
+      # Pinned to a tagged release rather than a moving branch ref
+      # (RESEARCH.md Standard Stack note; T-22-SC).
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks@0.50.0
+
+      # Every publishable crate, addressed by its crates.io PACKAGE name (see
+      # the job comment above) -- never a `crates/` directory path.
+      - name: Check semver against the published v0.9.0 baseline
+        run: |
+          set -euo pipefail
+          PACKAGES=(
+            paladin-ai
+            paladin-ai-core
+            paladin-ports
+            paladin-battalion
+            paladin-herald
+            paladin-llm
+            paladin-memory
+            paladin-storage
+            paladin-notifications
+            paladin-content
+            paladin-web
+          )
+          for pkg in "${PACKAGES[@]}"; do
+            echo "::group::cargo semver-checks -- ${pkg} vs 0.9.0"
+            cargo semver-checks check-release --package "${pkg}" --default-features --baseline-version 0.9.0
+            echo "::endgroup::"
+          done
+
+      # X-10.5 set-equality gate: every allowlist entry in
+      # .cargo/semver-checks-allowlist.toml must correspond to a MIGRATION.md
+      # §9.2 row marked deliberate-breaking (`Y`), and every such row must
+      # have a matching allowlist entry. Reads both files directly -- a
+      # missing file fails this step rather than silently treating either
+      # side as an empty set.
+      - name: Verify allowlist is set-equal to the MIGRATION.md §9.2 register
+        run: |
+          set -euo pipefail
+          test -f .cargo/semver-checks-allowlist.toml
+          test -f MIGRATION.md
+
+          # Deliberate-breaking §9.2 rows: the "Deliberate-breaking?" column
+          # (6th pipe-delimited field) starting with "Y". Scoped to the §9.2
+          # section only, so a "Y" elsewhere in the document can't leak in.
+          # Trimming happens inside awk (no sed backreferences) to keep this
+          # script shellcheck-clean.
+          # Both greps below tolerate exit 1 (no matches: an empty register or
+          # an empty allowlist is a legal state — both empty is the set-equal
+          # baseline this check shipped with) while still failing on exit 2
+          # (a real error). Under `set -euo pipefail` a bare no-match grep
+          # kills the step before it prints anything, which is exactly how
+          # this step failed on its first-ever run.
+          awk '/^## 9\.2 /{flag=1; next} /^## 9\.3 /{flag=0} flag' MIGRATION.md \
+            | { grep -E '^\|' || test $? -eq 1; } \
+            | awk -F'|' '{
+                crate=$2; gsub(/^[ \t`]+|[ \t`]+$/, "", crate);
+                deliberate=$6; gsub(/^[ \t]+|[ \t]+$/, "", deliberate);
+                if (deliberate ~ /^Y/) print crate
+              }' \
+            | sort -u > /tmp/migration-deliberate-crates.txt
+
+          # Allowlist entries: each [[entry]] carries a `crate = "..."` key.
+          # Extracted via awk field-splitting on the quote character rather
+          # than a sed backreference, for the same shellcheck-cleanliness reason.
+          { grep -E '^\s*crate\s*=' .cargo/semver-checks-allowlist.toml || test $? -eq 1; } \
+            | awk -F'"' '{print $2}' \
+            | sort -u > /tmp/allowlist-crates.txt
+
+          echo "MIGRATION.md §9.2 deliberate-breaking crates:"
+          cat /tmp/migration-deliberate-crates.txt
+          echo "Allowlist crates:"
+          cat /tmp/allowlist-crates.txt
+
+          if ! diff -u /tmp/migration-deliberate-crates.txt /tmp/allowlist-crates.txt; then
+            echo "::error::Allowlist and MIGRATION.md §9.2 deliberate-breaking rows are not set-equal (see diff above)."
+            exit 1
+          fi
+          echo "Allowlist is set-equal to the MIGRATION.md §9.2 deliberate-breaking register."
+
   # Unit tests
   test:
     name: Unit Tests
@@ -630,6 +797,95 @@ jobs:
       - name: Collect logs on failure
         if: failure()
         run: docker compose -f docker/docker-compose.test.yml logs ollama-test ollama-test-init
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker/docker-compose.test.yml down -v
+
+  # Postgres live-server integration (G-22-1, ENG-05). The PostgresWaypointStore
+  # Tier 2 contract suite is env-gated on WAYPOINT_POSTGRES_TEST_URL and returns
+  # early -- and therefore passes -- when no server is reachable. Nothing in
+  # this repository sets that variable except `make test-integration-docker`,
+  # which needs a local Docker daemon no development environment here has, so
+  # before this job the suite executed in no environment at all while every CI
+  # run reported green -- the same failure shape Phase 17 found and fixed for
+  # the Ollama suite above.
+  #
+  # The reachability assertion (`pg_isready`), the early-return detection step
+  # and the selected-count assertion below are what give this job its meaning
+  # -- do not remove them.
+  postgres-integration:
+    name: Postgres Waypoint Contract Suite (live server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: postgres-integration
+
+      - name: Start postgres-test and wait for healthy
+        run: |
+          docker compose -f docker/docker-compose.test.yml up -d postgres-test
+          echo "Waiting for postgres-test to report healthy..."
+          # Matches the house style used by ollama-integration above: pipe into
+          # grep rather than command-substituting inside single quotes
+          # (shellcheck SC2016). -x is load-bearing: a plain `grep -q healthy`
+          # also matches "unhealthy".
+          timeout 180 sh -c 'until docker inspect paladin-postgres-test --format="{{.State.Health.Status}}" 2>/dev/null | grep -qx healthy; do sleep 3; done'
+
+      - name: Assert the live server accepts connections
+        run: docker exec paladin-postgres-test pg_isready -U paladin -d paladin_waypoint_test
+
+      - name: Run PostgresWaypointStore contract suite
+        run: |
+          set -o pipefail
+          # --nocapture: store_or_skip() announces its early-return path on
+          # stdout, which cargo swallows without it -- the detection step below
+          # would have nothing to read. --test-threads=1: this module's tests
+          # share one database (unlike the SQLite suite's per-test in-memory
+          # database), and
+          # list_threads_empty_then_three_threads_newest_activity_first asserts
+          # a literally empty store; under default parallelism a peer test's
+          # writes land inside that assertion's window and the job goes red for
+          # a reason that is not a real contract violation.
+          WAYPOINT_POSTGRES_TEST_URL=postgres://paladin:paladin@localhost:5433/paladin_waypoint_test \
+            cargo test -p paladin-storage --features postgres --lib waypoint::postgres \
+            -- --test-threads=1 --nocapture 2>&1 | tee /tmp/postgres-waypoint-test.log
+
+      - name: Fail if the suite took the SKIP path
+        run: |
+          if grep -q 'SKIP:' /tmp/postgres-waypoint-test.log; then
+            echo "::error::waypoint::postgres took the SKIP path — the live server was NOT exercised."
+            grep 'SKIP:' /tmp/postgres-waypoint-test.log
+            exit 1
+          fi
+          echo "All waypoint::postgres tests exercised the live server."
+
+      - name: Fail if the suite selected fewer tests than it declares
+        run: |
+          set -o pipefail
+          # Anchored to attribute position (leading whitespace then the attr):
+          # an unanchored count also matches the literal inside comments — the
+          # module's own "One #[tokio::test] per shared contract function"
+          # comment inflated the declared count to 27 vs 26 real tests and
+          # failed a run in which every selected test passed.
+          EXPECTED=$(grep -cE '^\s*#\[tokio::test\]' crates/paladin-storage/src/waypoint/postgres.rs)
+          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/postgres-waypoint-test.log | tail -1)
+          echo "Declared tests: $EXPECTED, passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then
+            echo "::error::waypoint::postgres selected fewer tests (${ACTUAL:-0}) than the module declares ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
+            exit 1
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.test.yml logs postgres-test
 
       - name: Stop services
         if: always()

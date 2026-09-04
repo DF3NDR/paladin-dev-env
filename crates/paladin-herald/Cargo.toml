@@ -2,6 +2,7 @@
 name = "paladin-herald"
 version = "0.9.0"
 edition = "2024"
+rust-version.workspace = true
 authors = ["Am0rfu5"]
 license = "MIT OR Apache-2.0"
 description = "Herald output-formatter adapters for the Paladin framework (JSON, Markdown, Table)"

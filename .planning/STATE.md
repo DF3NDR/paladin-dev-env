@@ -1,31 +1,31 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.9.0
-milestone_name: Security Tooling
-status: Awaiting next milestone
-stopped_at: Phase 21 complete (UAT 2/2 passed, security threat-secure, verification passed) — v0.9.0 all 4 phases done; ready for /gsd-complete-milestone
-last_updated: "2026-09-01T13:18:37.211Z"
-last_activity: 2026-09-01
-last_activity_desc: Milestone v0.9.0 completed and archived
+milestone: v0.10.0
+milestone_name: Durable Agent Execution Runtime
+current_phase: 23
+current_phase_name: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
+status: executing
+stopped_at: Phase 23 executed (12/12 plans, code review fixed, verification human_needed) — awaiting UAT in 23-UAT.md
+last_updated: "2026-09-04T04:23:24.779Z"
+last_activity: 2026-09-03
+last_activity_desc: Phase 23 execution started
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 25
-  completed_plans: 25
-current_phase: 21
-current_phase_name: release-artifacts-curated-release-notes-and-attached-distrib
+  total_phases: 3
+  completed_phases: 3
+  total_plans: 36
+  completed_plans: 36
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-01 after the v0.9.0 milestone close)
+See: .planning/PROJECT.md (updated 2026-09-03 after Phase 22.1)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Planning next milestone (`/gsd-new-milestone` — new phases start at Phase 22;
+**Current focus:** Phase 23 — Control Flow — Dynamic Routing, Fan-Out & Subgraphs
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
 **Progress:** [██████████] 100% — v0.9.0 shipped
@@ -51,16 +51,16 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: Milestone v0.9.0 complete
-Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-09-01 — Milestone v0.9.0 completed and archived
+Phase: 23 (Control Flow — Dynamic Routing, Fan-Out & Subgraphs) — EXECUTING
+Plan: 1 of 12
+Status: Executing Phase 23
+Last activity: 2026-09-03 — Phase 23 execution started
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 187
+- Total plans completed: 211
 - Average duration: —
 - Total execution time: —
 
@@ -87,6 +87,8 @@ Last activity: 2026-09-01 — Milestone v0.9.0 completed and archived
 | 19 | 5 | - | - |
 | 20 | 7 | - | - |
 | 21 | 6 | - | - |
+| 22 | 17 | - | - |
+| 22.1 | 7 | - | - |
 
 *Updated after each plan completion*
 
@@ -691,6 +693,8 @@ requirement.
 - Phase 19 added: crates.io Trusted Publishing — replace the long-lived CARGO_REGISTRY_TOKEN with OIDC-issued ephemeral tokens; PUB-01..PUB-05 minted at roadmap time
 - Phase 20 added: Release Pipeline Recovery — idempotent re-runs on the same tag, a pre-publish gate over tag/manifest/changelog/CI agreement, and a stuck-halfway runbook with a yank policy; PUBOPS-01..PUBOPS-05 minted at roadmap time
 - Phase 21 added: Release Artifacts — Curated Release Notes and Attached Distributables (v0.9.0; ARTIFACT-01..06 minted, twenty-second prefix)
+- Phase 22.1 inserted after Phase 22: Engine readiness defect and MSRV follow-up (readiness defect from 22-16 audit; MSRV 1.85 vs rmcp-pinned process-wrap decision; green postgres-integration run confirmation) (URGENT)
+- Phase ? changed: Phase 22.1 scope grew on 2026-09-03: BUG-04 (resume rebuilds the Frontier from scratch, losing pre-crash edge resolutions) promoted from CONTEXT.md deferred ideas into the phase at the 22.1-05 checkpoint by developer decision; ENG-04 re-opened for the phase; CI evidence to be re-captured on the final head.
 
 ## Deferred Items
 
@@ -784,16 +788,16 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 21 complete (UAT 2/2 passed, security threat-secure, verification passed) — v0.9.0 all 4 phases done; ready for /gsd-complete-milestone
+**Stopped at:** Phase 23 executed (12/12 plans, code review fixed, verification human_needed) — awaiting UAT in 23-UAT.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-01T13:06:14.469Z
+Last session: 2026-09-04T04:23:24.734Z
 Resume file:
 
-Prior session: 2026-07-31T19:27:35.303Z
+/workspace/.planning/phases/23-control-flow-dynamic-routing-fan-out-subgraphs/23-UAT.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

@@ -25,7 +25,7 @@ We are committed to providing a welcoming and inclusive environment. Please be r
 
 ### Prerequisites
 
-- **Rust**: 1.85 or later (MSRV; install via [rustup](https://rustup.rs/))
+- **Rust**: 1.88 or later (MSRV; install via [rustup](https://rustup.rs/))
 - **Docker**: For running integration tests with Redis, MinIO, MySQL
 - **Git**: For version control
 

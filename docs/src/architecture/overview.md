@@ -237,7 +237,7 @@ document processing, CLI usage, YAML configuration, security, and Battalion inte
 
 | Component | Technology |
 |-----------|-----------|
-| Language | Rust (edition 2024, MSRV 1.85) |
+| Language | Rust (edition 2024, MSRV 1.88) |
 | Async runtime | Tokio |
 | HTTP client | reqwest |
 | Serialization | serde / serde_json / serde_yaml |

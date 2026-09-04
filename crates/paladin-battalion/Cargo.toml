@@ -2,6 +2,7 @@
 name = "paladin-battalion"
 version = "0.9.0"
 edition = "2024"
+rust-version.workspace = true
 authors = ["Am0rfu5"]
 license = "MIT OR Apache-2.0"
 description = "Multi-agent orchestration runtime for the Paladin framework — Formation, Phalanx, Campaign, Chain of Command, Conclave, Council, Grove, Maneuver, Commander"
@@ -30,6 +31,14 @@ regex         = "1.11.1"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
+# In-memory WaypointPort fixture for the engine module's own unit tests
+# (Phase 22 Plan 01). No cycle: paladin-storage depends on paladin-core +
+# paladin-ports only, never on paladin-battalion.
+paladin-storage = { version = "0.9.0", path = "../paladin-storage" }
+# MockLlmAdapter for LlmDecisionEvaluator / Commander StrategySelection::Semantic
+# tests (CF-05, Phase 23 Plan 03). No cycle: it depends only on paladin-core +
+# paladin-ports, never on paladin-battalion.
+paladin-llm = { version = "0.9.0", path = "../paladin-llm" }
 
 [[bench]]
 name = "battalion_benchmarks"

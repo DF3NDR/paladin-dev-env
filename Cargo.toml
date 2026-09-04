@@ -7,12 +7,20 @@ members = [".", "crates/*"]
 # defence in depth on top of both, keeping the fixture out of every
 # workspace build, lint and coverage run.
 exclude = ["fixtures/codeql-probe"]
-resolver = "2"
+resolver = "3"
+
+[workspace.package]
+# Single source of the workspace MSRV floor (D-10, X-11.2). Measured, not
+# declared: `time` >= 0.3.47 (the RUSTSEC-2026-0009 fix) requires rustc 1.88,
+# one release above the 1.87 that rmcp's `=2.1.0`-pinned `transport-child-process`
+# feature forces via `process-wrap ^9.0`. See MIGRATION.md §9.3 for the full
+# chain and the two rejected alternatives.
+rust-version = "1.88"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
-uuid = { version = "1.8.0", features = ["v4", "serde"] }
+uuid = { version = "1.8.0", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4.38", features = ["serde"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
@@ -33,13 +41,14 @@ paladin-storage = { version = "0.9.0", path = "crates/paladin-storage" }
 paladin-notifications = { version = "0.9.0", path = "crates/paladin-notifications" }
 paladin-content = { version = "0.9.0", path = "crates/paladin-content" }
 paladin-web = { version = "0.9.0", path = "crates/paladin-web" }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "json", "migrate"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "json", "migrate", "macros"] }
 qdrant-client = { version = "1.14" }
 
 [package]
 name = "paladin-ai"
 version = "0.9.0"
 edition = "2024"
+rust-version.workspace = true
 authors = ["Am0rfu5"]
 description = "Enterprise AI orchestration framework with multi-agent coordination patterns"
 readme = "README.md"
@@ -243,6 +252,30 @@ name = "ollama_docker"
 path = "tests/integration/ollama_docker_test.rs"
 required-features = ["integration-tests", "llm-ollama"]
 
+[[test]]
+name = "war_engine_tracer"
+path = "tests/integration/war_engine_tracer_test.rs"
+
+[[test]]
+name = "e2e_crash_resume"
+path = "tests/integration/e2e_crash_resume_test.rs"
+
+[[test]]
+name = "waypoint_retention_fault_injection"
+path = "tests/integration/waypoint_retention_fault_injection_test.rs"
+
+[[test]]
+name = "golden_bridge_equivalence"
+path = "tests/integration/golden_bridge_equivalence_test.rs"
+
+[[test]]
+name = "subgraph_formation_in_campaign"
+path = "tests/integration/subgraph_formation_in_campaign_test.rs"
+
+[[test]]
+name = "e2e_muster_defer_order"
+path = "tests/integration/e2e_muster_defer_order_test.rs"
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"
@@ -280,6 +313,10 @@ required-features = ["web-server"]
 
 [[bench]]
 name = "config_benchmarks"
+harness = false
+
+[[bench]]
+name = "engine_benchmarks"
 harness = false
 
 [features]
@@ -320,7 +357,11 @@ notifications = ["dep:paladin-notifications", "paladin-notifications/email", "pa
 # SQLite repositories are always available: `paladin-storage` is a non-optional
 # dependency with its `sqlite` feature enabled (see [dependencies]).
 storage-mysql = ["paladin-storage/mysql"]
-storage = ["storage-mysql"]
+# PostgreSQL `WaypointPort` adapter (ENG-05, D-01). Deliberately NOT part of
+# `default` or `full`'s implicit set beyond this explicit passthrough -- see
+# X-11.4: the default `paladin-ai` build must gain no Postgres driver.
+storage-postgres = ["paladin-storage/postgres"]
+storage = ["storage-mysql", "storage-postgres"]
 
 # CLI (binary and test tooling only — not compiled into the library)
 cli = ["dep:clap", "dep:dialoguer", "dep:indicatif", "dep:console", "dep:serde_yaml", "dep:colored", "dep:comfy-table", "paladin-herald/table", "paladin-herald/color"]

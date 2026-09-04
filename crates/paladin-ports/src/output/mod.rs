@@ -27,8 +27,13 @@ pub mod scheduler_port;
 pub mod search_engine_port;
 /// Streaming counterpart to `paladin_executor_port` (SSE / token streaming).
 pub mod streaming_executor_port;
+/// Trace event stream port (ENG-FR-21): standardized execution
+/// observability the superstep engine emits, with no consumer yet.
+pub mod trace_sink_port;
 /// User persistence repository port.
 pub mod user_repository_port;
+/// Waypoint (superstep checkpoint) persistence port.
+pub mod waypoint_port;
 /// Workflow persistence repository port.
 pub mod workflow_repository_port;
 // Vision ports are unconditional in paladin-ports; the root `paladin` crate

@@ -32,12 +32,27 @@ pub mod chain_of_command_service;
 pub mod commander;
 pub mod conclave_execution_service;
 pub mod council_service;
+/// Registered evaluators for `EdgeCondition::Custom` (BUG-01, CF-01), shared
+/// by `campaign_service` and `engine`.
+pub mod edge_evaluator;
+/// Superstep execution engine over typed `Battlefield` state (Phase 22).
+pub mod engine;
 pub mod error_aggregation;
 pub mod formation_service;
 pub mod grove_service;
+/// `LlmDecisionEvaluator`: LLM-evaluated edge routing (CF-05), registered
+/// through `edge_evaluator`'s registry like any other evaluator. Off by
+/// default -- reachable only when a workflow author constructs and
+/// registers one in code.
+pub mod llm_decision;
 pub mod maneuver;
 pub mod phalanx_service;
 pub mod retry;
 
 /// In-memory `PaladinRegistry` implementation (also used by the application facade).
 pub mod in_memory_registry;
+
+pub use edge_evaluator::{
+    EdgeConditionEvaluator, EdgeContext, EdgeEvaluatorError, EdgeEvaluatorRegistry,
+};
+pub use llm_decision::{LlmDecisionEvaluator, OnAmbiguous};

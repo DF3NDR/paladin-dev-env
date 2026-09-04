@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-09-03 00:54:32 UTC
+# Public API Surface - Generated 2026-09-04 03:20:49 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -1970,11 +1970,43 @@ impl core::marker::Unpin for paladin::config::citadel::CitadelConfig
 impl core::marker::UnsafeUnpin for paladin::config::citadel::CitadelConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::citadel::CitadelConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::citadel::CitadelConfig
+pub mod paladin::config::engine
+pub struct paladin::config::engine::EngineConfig
+pub paladin::config::engine::EngineConfig::max_muster_tasks: u32
+pub paladin::config::engine::EngineConfig::max_node_visits: u32
+pub paladin::config::engine::EngineConfig::max_supersteps: u64
+pub paladin::config::engine::EngineConfig::run_timeout_secs: core::option::Option<u64>
+pub paladin::config::engine::EngineConfig::waypoint_durability: paladin_battalion::engine::WaypointDurability
+impl paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::clone(&self) -> paladin::config::engine::EngineConfig
+impl core::convert::From<paladin::config::engine::EngineConfig> for paladin_battalion::engine::graph::EngineLimits
+pub fn paladin_battalion::engine::graph::EngineLimits::from(paladin::config::engine::EngineConfig) -> Self
+impl core::default::Default for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin::config::env_utils::EnvOverridable for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::apply_env_overrides(&mut self)
+impl serde_core::ser::Serialize for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::engine::EngineConfig
+impl core::marker::Send for paladin::config::engine::EngineConfig
+impl core::marker::Sync for paladin::config::engine::EngineConfig
+impl core::marker::Unpin for paladin::config::engine::EngineConfig
+impl core::marker::UnsafeUnpin for paladin::config::engine::EngineConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::engine::EngineConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::engine::EngineConfig
 pub mod paladin::config::env_utils
 pub trait paladin::config::env_utils::EnvOverridable
 pub fn paladin::config::env_utils::EnvOverridable::apply_env_overrides(&mut self)
 impl paladin::config::env_utils::EnvOverridable for paladin::config::citadel::CitadelConfig
 pub fn paladin::config::citadel::CitadelConfig::apply_env_overrides(&mut self)
+impl paladin::config::env_utils::EnvOverridable for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::apply_env_overrides(&mut self)
 impl paladin::config::env_utils::EnvOverridable for paladin::config::file_storage::FileStorageConfig
 pub fn paladin::config::file_storage::FileStorageConfig::apply_env_overrides(&mut self)
 impl paladin::config::env_utils::EnvOverridable for paladin::config::herald::HeraldConfig
@@ -2548,6 +2580,35 @@ impl core::marker::Unpin for paladin::config::agents::DocsConfig
 impl core::marker::UnsafeUnpin for paladin::config::agents::DocsConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::agents::DocsConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::agents::DocsConfig
+pub struct paladin::config::EngineConfig
+pub paladin::config::EngineConfig::max_muster_tasks: u32
+pub paladin::config::EngineConfig::max_node_visits: u32
+pub paladin::config::EngineConfig::max_supersteps: u64
+pub paladin::config::EngineConfig::run_timeout_secs: core::option::Option<u64>
+pub paladin::config::EngineConfig::waypoint_durability: paladin_battalion::engine::WaypointDurability
+impl paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::clone(&self) -> paladin::config::engine::EngineConfig
+impl core::convert::From<paladin::config::engine::EngineConfig> for paladin_battalion::engine::graph::EngineLimits
+pub fn paladin_battalion::engine::graph::EngineLimits::from(paladin::config::engine::EngineConfig) -> Self
+impl core::default::Default for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin::config::env_utils::EnvOverridable for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::apply_env_overrides(&mut self)
+impl serde_core::ser::Serialize for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::engine::EngineConfig
+pub fn paladin::config::engine::EngineConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::engine::EngineConfig
+impl core::marker::Send for paladin::config::engine::EngineConfig
+impl core::marker::Sync for paladin::config::engine::EngineConfig
+impl core::marker::Unpin for paladin::config::engine::EngineConfig
+impl core::marker::UnsafeUnpin for paladin::config::engine::EngineConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::engine::EngineConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::engine::EngineConfig
 pub struct paladin::config::FileStorageConfig
 pub paladin::config::FileStorageConfig::allowed_extensions: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub paladin::config::FileStorageConfig::connection_timeout: core::option::Option<u64>
@@ -3613,4 +3674,4 @@ impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services
 impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::paladin::paladin_builder::PaladinBuilder
 
 ## Summary
-Total public items: 2000
+Total public items: 2030

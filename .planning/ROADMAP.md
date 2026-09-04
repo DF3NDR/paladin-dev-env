@@ -356,7 +356,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 23-08-PLAN.md — `NodeSpec::Battalion` + `StateMap` subgraph composition, engine inheritance, recursion rejection (CF-04)
+- [x] 23-08-PLAN.md — `NodeSpec::Battalion` + `StateMap` subgraph composition, engine inheritance, recursion rejection (CF-04)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

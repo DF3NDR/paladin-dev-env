@@ -351,8 +351,8 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 23-06-PLAN.md — mid-muster progress Waypoints, resume running only unfinished tasks, contract-suite coverage, ENG-FR-11 note (CF-03)
-- [ ] 23-07-PLAN.md — `EngineConfig` at `src/config/engine.rs` with `APP_ENGINE_*` overrides; closes MIGRATION §9.5 (CF-03)
+- [x] 23-06-PLAN.md — mid-muster progress Waypoints, resume running only unfinished tasks, contract-suite coverage, ENG-FR-11 note (CF-03)
+- [x] 23-07-PLAN.md — `EngineConfig` at `src/config/engine.rs` with `APP_ENGINE_*` overrides; closes MIGRATION §9.5 (CF-03)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

@@ -490,6 +490,42 @@ impl WarGraph {
         custom_dispatch: &CustomDispatchResolver,
         edge_evaluators: &EdgeEvaluatorRegistry,
     ) -> Result<(), EngineError> {
+        self.validate_non_recursive(custom_dispatch, edge_evaluators)?;
+
+        // --- CF-FR-16, D-19: checked LAST -- the deepest, most expensive
+        // clause -- so every shallower structural error above is still
+        // what a caller sees first for a graph that has one of those too.
+        //
+        // WR-01 (23-REVIEW.md): the sole recursive descent into a
+        // `NodeSpec::Battalion` child's OWN Battalion children happens
+        // inside `validate_battalion_children` below, which validates each
+        // child's non-recursive structural rules via
+        // `child.validate_non_recursive` (never `child.validate`, which
+        // would re-enter this same `validate_battalion_children` walk a
+        // second time with a truncated single-fingerprint ancestry that
+        // can never itself detect anything the explicit, full-ancestry
+        // call here does not already catch) -- avoiding the redundant,
+        // compounding-per-level re-validation that made a deeply nested,
+        // acyclic `Battalion` chain's `validate()` cost exponential in
+        // nesting depth rather than linear.
+        self.validate_battalion_children(custom_dispatch, edge_evaluators, &[self.fingerprint()])
+    }
+
+    /// Every structural check `validate` performs EXCEPT the recursive
+    /// descent into `NodeSpec::Battalion` children's own children
+    /// (`validate_battalion_children`'s job). Split out so
+    /// `validate_battalion_children` can validate a child's own rules
+    /// exactly once per child (via this method) while still driving the
+    /// recursive-embedding walk itself with the correct, full-ancestry
+    /// vector -- see `validate`'s own rustdoc note (WR-01, 23-REVIEW.md)
+    /// for why calling `child.validate()` there instead would be
+    /// redundant, compounding, exponential-in-depth work for a chain of
+    /// nested `Battalion` nodes.
+    fn validate_non_recursive(
+        &self,
+        custom_dispatch: &CustomDispatchResolver,
+        edge_evaluators: &EdgeEvaluatorRegistry,
+    ) -> Result<(), EngineError> {
         if self.limits.max_supersteps == 0 {
             return Err(EngineError::InvalidLimits {
                 reason: "max_supersteps must be at least 1".to_string(),
@@ -537,12 +573,7 @@ impl WarGraph {
         self.validate_battalion_state_maps()?;
 
         self.validate_eligible_set()?;
-        self.validate_schedulable()?;
-
-        // --- CF-FR-16, D-19: checked LAST -- the deepest, most expensive
-        // clause -- so every shallower structural error above is still
-        // what a caller sees first for a graph that has one of those too.
-        self.validate_battalion_children(custom_dispatch, edge_evaluators, &[self.fingerprint()])
+        self.validate_schedulable()
     }
 
     /// CF-FR-14 / D-19's StateMap field-existence clause: for every
@@ -647,14 +678,25 @@ impl WarGraph {
                     ),
                 });
             }
-            // D-19: the child is validated recursively with the SAME
-            // registries, so an unregistered Custom dispatch/edge name
-            // inside it fails validation exactly as it would in the
-            // parent -- this is what extends CF-01's fail-closed contract
-            // into subgraphs, and it also runs the child's own
-            // eligible-set/schedulable checks, so a structurally broken
-            // child fails the PARENT's validate too.
-            child.validate(custom_dispatch, edge_evaluators)?;
+            // D-19: the child is validated with the SAME registries, so an
+            // unregistered Custom dispatch/edge name inside it fails
+            // validation exactly as it would in the parent -- this is what
+            // extends CF-01's fail-closed contract into subgraphs, and it
+            // also runs the child's own eligible-set/schedulable checks, so
+            // a structurally broken child fails the PARENT's validate too.
+            //
+            // WR-01 (23-REVIEW.md): calls `validate_non_recursive`, NOT
+            // `validate` -- `validate` would re-enter this same
+            // `validate_battalion_children` walk a second time, seeded with
+            // a freshly-truncated single-fingerprint ancestry that can
+            // never itself detect a cycle spanning more than the immediate
+            // child, making that inner traversal pure redundant work. Only
+            // the explicit call below, carrying the correct full-depth
+            // `next_ancestry`, can ever find a recursive embedding. Doing
+            // both (the old behavior) compounded level over level into
+            // O(2^N) total validate() calls for a chain of N nested
+            // Battalion nodes rather than O(N).
+            child.validate_non_recursive(custom_dispatch, edge_evaluators)?;
             let mut next_ancestry = ancestry.to_vec();
             next_ancestry.push(child_fp);
             child.validate_battalion_children(custom_dispatch, edge_evaluators, &next_ancestry)?;

@@ -272,6 +272,10 @@ path = "tests/integration/golden_bridge_equivalence_test.rs"
 name = "subgraph_formation_in_campaign"
 path = "tests/integration/subgraph_formation_in_campaign_test.rs"
 
+[[test]]
+name = "e2e_muster_defer_order"
+path = "tests/integration/e2e_muster_defer_order_test.rs"
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"

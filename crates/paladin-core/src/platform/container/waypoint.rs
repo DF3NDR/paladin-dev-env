@@ -106,10 +106,10 @@ impl ThreadId {
     /// the two segments. This is deliberately NOT a bare delimiter join
     /// (`format!("{parent}/{node}")`-style): [`NodeId::new`] validates
     /// nothing beyond non-emptiness, so a bare join is collidable by
-    /// construction -- e.g. parent `"t"` + node `"a/b"` and parent `"t/a"`
-    /// + node `"b"` would join to the identical string. This is the exact
-    /// defect class Phase 22.1's CR-01 found and fixed once already, in
-    /// `WarGraph::fingerprint()`'s canonical byte encoding
+    /// construction: parent `"t"` paired with node `"a/b"`, and parent
+    /// `"t/a"` paired with node `"b"`, would join to the identical string.
+    /// This is the exact defect class Phase 22.1's CR-01 found and fixed
+    /// once already, in `WarGraph::fingerprint()`'s canonical byte encoding
     /// (`paladin-battalion/src/engine/graph.rs`); this method deliberately
     /// reuses that fix's length-prefixed approach rather than reintroducing
     /// the same hazard in a second place.

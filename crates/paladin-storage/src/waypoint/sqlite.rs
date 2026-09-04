@@ -676,6 +676,18 @@ mod tests {
         contract_tests::muster_progress_none_round_trips_as_none(&fresh_store().await).await;
     }
 
+    // ── CF-FR-15 / D-20: checkpoint_ns (Plan 23-09) ───────────────────────
+
+    #[tokio::test]
+    async fn checkpoint_ns_round_trips() {
+        contract_tests::checkpoint_ns_round_trips(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn checkpoint_ns_none_round_trips() {
+        contract_tests::checkpoint_ns_none_round_trips(&fresh_store().await).await;
+    }
+
     // ── Backend-specific tests (T-22-17, T-22-18) ───────────────────────
 
     #[tokio::test]

@@ -324,21 +324,21 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     }
                 };
 
-                if let Some(latest) = &existing_latest {
-                    if matches!(latest.status, WaypointStatus::Completed) {
-                        // --- the child already finished in a prior attempt
-                        // (e.g. the crash landed between the child's own
-                        // completion and this node's own delta reaching the
-                        // PARENT's next Waypoint) -- map its recorded final
-                        // state straight through, never re-running it.
-                        let mut delta = StateDelta::new();
-                        for (child_field, parent_field) in &state_map.outputs {
-                            if let Some(value) = latest.battlefield.get_raw(child_field) {
-                                delta.set_raw(parent_field.clone(), value.clone());
-                            }
+                if let Some(latest) = &existing_latest
+                    && matches!(latest.status, WaypointStatus::Completed)
+                {
+                    // --- the child already finished in a prior attempt
+                    // (e.g. the crash landed between the child's own
+                    // completion and this node's own delta reaching the
+                    // PARENT's next Waypoint) -- map its recorded final
+                    // state straight through, never re-running it.
+                    let mut delta = StateDelta::new();
+                    for (child_field, parent_field) in &state_map.outputs {
+                        if let Some(value) = latest.battlefield.get_raw(child_field) {
+                            delta.set_raw(parent_field.clone(), value.clone());
                         }
-                        return (None, 0, Ok(delta.into()));
                     }
+                    return (None, 0, Ok(delta.into()));
                 }
 
                 let (
@@ -2318,7 +2318,6 @@ async fn evaluate_edge_condition(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 fn build_waypoint(
     thread: &ThreadId,

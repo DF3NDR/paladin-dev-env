@@ -365,7 +365,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 23-11-PLAN.md — E2E-3 muster/defer/order integration test + 50-task multi-thread stress test (CF-03)
+- [x] 23-11-PLAN.md — E2E-3 muster/defer/order integration test + 50-task multi-thread stress test (CF-03)
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

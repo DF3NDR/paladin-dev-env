@@ -169,12 +169,31 @@ mod tests {
     use crate::waypoint::in_memory::InMemoryWaypointStore;
     use async_trait::async_trait;
     use chrono::{DateTime, Duration};
-    use paladin_core::platform::container::waypoint::{ParleyRequest, Waypoint, WaypointStatus};
+    use paladin_core::platform::container::waypoint::{
+        NodeId, OnExpire, ParleyId, ParleyKind, ParleyRequest, Waypoint, WaypointStatus,
+    };
     use paladin_ports::output::waypoint_port::ThreadSummary;
     use std::sync::Mutex;
 
     fn thread(name: &str) -> ThreadId {
         ThreadId::new(name).unwrap()
+    }
+
+    /// A minimal, fully-populated `ParleyRequest` (D-01/D-02 shape) for
+    /// tests that only care that an `AwaitingInput` Waypoint exists, not
+    /// what it is asking about.
+    fn sample_parley_request() -> ParleyRequest {
+        ParleyRequest {
+            parley_id: ParleyId::new(),
+            node_id: NodeId::new("asker"),
+            kind: ParleyKind::FreeText,
+            prompt: "confirm?".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
+        }
     }
 
     /// The same shape of protected-set definition the real
@@ -424,9 +443,8 @@ mod tests {
         // both bounds.
         let mut awaiting = sample_waypoint_at(&t, 0, now - Duration::days(365));
         awaiting.status = WaypointStatus::AwaitingInput {
-            parley: ParleyRequest {
-                prompt: "confirm?".to_string(),
-            },
+            parleys: vec![sample_parley_request()],
+            responses: Vec::new(),
         };
         store.save(&awaiting).await.unwrap();
 
@@ -519,9 +537,8 @@ mod tests {
 
         let mut awaiting = sample_waypoint_at(&t, 0, now - Duration::days(365));
         awaiting.status = WaypointStatus::AwaitingInput {
-            parley: ParleyRequest {
-                prompt: "confirm?".to_string(),
-            },
+            parleys: vec![sample_parley_request()],
+            responses: Vec::new(),
         };
         store.save(&awaiting).await.unwrap();
 

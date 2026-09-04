@@ -18,6 +18,9 @@ use crate::platform::container::battlefield::{
     BATTLEFIELD_SCHEMA_VERSION, Battlefield, StateDelta,
 };
 use crate::platform::container::directive::MusterTask;
+pub use crate::platform::container::parley::{
+    OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
+};
 
 /// Maximum length, in bytes, of a [`ThreadId`].
 ///
@@ -421,6 +424,14 @@ pub enum NodeOutcomeKind {
     /// persisted `Waypoint`'s `completed` records without re-running the
     /// graph (D-09).
     Ended,
+    /// The node ran and its `Directive.next` was `NextStep::Parley`
+    /// (HITL-01, D-03): its own `StateDelta` merged normally (it emitted
+    /// it), and its return also suspended the run after this superstep.
+    /// Distinguishes the parleying node from an ordinary `Succeeded` node
+    /// so which node(s) raised the pause is observable from a persisted
+    /// `Waypoint`'s `completed` records without re-running the graph,
+    /// mirroring `Ended`'s precedent.
+    Parleyed,
 }
 
 /// A record of one node's execution within the superstep that produced a
@@ -444,16 +455,6 @@ pub struct NodeExecutionRecord {
     pub attempt: u32,
 }
 
-/// Stub type for a paused run's outstanding input request.
-///
-/// Fully defined by Doc 03 (parley/resume-with-payload); this phase only
-/// lands the stub so `WaypointStatus::AwaitingInput` has somewhere to point.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct ParleyRequest {
-    /// Free-form prompt describing what input is being awaited.
-    pub prompt: String,
-}
-
 /// The status of a run as of a given `Waypoint`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -469,10 +470,21 @@ pub enum WaypointStatus {
         /// The node whose execution caused the failure.
         failed_node: NodeId,
     },
-    /// The run is paused awaiting external input (Doc 03).
+    /// The run is paused awaiting external input (HITL-01, D-02): every
+    /// `ParleyRequest` raised in the suspending superstep, plus every
+    /// `ParleyResponse` accepted so far -- so "partially answered" is a
+    /// property of this persisted `Waypoint`, not of process memory
+    /// (HITL-FR-02's survive-termination rule applies to partial answers
+    /// too). Never persisted with an empty `parleys` list.
     AwaitingInput {
-        /// The outstanding input request.
-        parley: ParleyRequest,
+        /// Every parley request raised in the suspending superstep, ordered
+        /// by `node_id` (mirrors `completed`'s own `node_id` sort).
+        parleys: Vec<ParleyRequest>,
+        /// The accepted subset of responses so far -- empty on the initial
+        /// suspension, growing as partial answers are accepted (a later
+        /// plan; this phase's `resume_with` only accepts a response set
+        /// that answers the happy path).
+        responses: Vec<ParleyResponse>,
     },
     /// The run was gracefully halted (Doc 03 cancellation).
     Halted,

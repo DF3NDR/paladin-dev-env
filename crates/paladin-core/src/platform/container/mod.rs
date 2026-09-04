@@ -23,6 +23,7 @@ pub mod orchestration_context;
 pub mod paladin;
 pub mod paladin_config;
 pub mod paladin_error;
+pub mod parley;
 pub mod planning;
 pub mod prompt;
 pub mod queue_config;

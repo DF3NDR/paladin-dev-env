@@ -102,12 +102,31 @@ impl WaypointRetentionService {
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
-    use paladin_core::platform::container::waypoint::{ParleyRequest, Waypoint};
+    use paladin_core::platform::container::waypoint::{
+        NodeId, OnExpire, ParleyId, ParleyKind, ParleyRequest, Waypoint,
+    };
     use paladin_storage::waypoint::contract_tests::sample_waypoint_at;
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
     fn thread(name: &str) -> ThreadId {
         ThreadId::new(name).unwrap()
+    }
+
+    /// A minimal, fully-populated `ParleyRequest` (D-01/D-02 shape) for
+    /// tests that only care that an `AwaitingInput` Waypoint exists, not
+    /// what it is asking about.
+    fn sample_parley_request() -> ParleyRequest {
+        ParleyRequest {
+            parley_id: ParleyId::new(),
+            node_id: NodeId::new("asker"),
+            kind: ParleyKind::FreeText,
+            prompt: "confirm?".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
+        }
     }
 
     /// Build a `WaypointSummary` directly from a `Waypoint`, without going
@@ -136,9 +155,8 @@ mod tests {
 
         let mut awaiting_not_latest = sample_waypoint_at(&t, 0, now - Duration::days(1));
         awaiting_not_latest.status = WaypointStatus::AwaitingInput {
-            parley: ParleyRequest {
-                prompt: "confirm?".to_string(),
-            },
+            parleys: vec![sample_parley_request()],
+            responses: Vec::new(),
         };
 
         let plain_middle = sample_waypoint_at(&t, 1, now - Duration::minutes(30));
@@ -173,9 +191,8 @@ mod tests {
         let t = thread("protected-set-both-latest-and-awaiting");
         let mut wp = sample_waypoint_at(&t, 0, Utc::now());
         wp.status = WaypointStatus::AwaitingInput {
-            parley: ParleyRequest {
-                prompt: "confirm?".to_string(),
-            },
+            parleys: vec![sample_parley_request()],
+            responses: Vec::new(),
         };
         let history = vec![to_summary(&wp)];
 

@@ -40,6 +40,7 @@ use paladin_core::platform::container::directive::{
     Directive, MusterContext, MusterTask, NextStep,
 };
 use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::parley::{ParleyRequest, ParleyResponse};
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, MusterProgress, NodeExecutionRecord, NodeId,
     NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
@@ -445,6 +446,12 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     &resources.cancellation,
                     Some(Arc::clone(&resources.waypoint_port)),
                     child_checkpoint_ns,
+                    // --- D-04: a child run never inherits the parent's
+                    // resume-time parley responses -- those are keyed to
+                    // the PARENT thread's own vanguard, and a suspended
+                    // child is unsupported this phase (see the
+                    // `RunOutcome::AwaitingInput` arm below).
+                    None,
                 ));
                 let outcome = child_fut.await;
 
@@ -475,11 +482,12 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     Ok(RunOutcome::AwaitingInput { .. }) => (
                         None,
                         0,
-                        Err(NodeFailure::Node(NodeError(format!(
-                            "battalion node {}: child run paused awaiting input, which this phase \
-                         does not support",
-                            ctx.node_id
-                        )))),
+                        Err(NodeFailure::Battalion(
+                            EngineError::ParleyInChildUnsupported {
+                                node: ctx.node_id.clone(),
+                                child_thread,
+                            },
+                        )),
                     ),
                     Ok(RunOutcome::Failed { error, .. }) => (
                         None,
@@ -709,20 +717,30 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         cancellation,
         waypoint_port_arc,
         None,
+        // --- HITL-01, D-08: a top-level `start`/`resume_with_options` call
+        // never carries a resume-superstep's parley responses -- only
+        // `WarEngine::resume_with` does, and it calls `run_with_namespace`
+        // directly (bypassing this wrapper) so this function's SIGNATURE
+        // stays unchanged by this plan, exactly like `checkpoint_ns` above.
+        None,
     )
     .await
 }
 
 /// [`run`]'s real implementation (CF-FR-15, D-20): identical to [`run`] in
-/// every respect except the trailing `checkpoint_ns` parameter, which
-/// [`run`] always passes as `None` and [`execute_vanguard_node`]'s
-/// `NodeSpec::Battalion` dispatch arm passes as `Some(namespace)` when
-/// recursing into a child run. Kept as a SEPARATE function (rather than
-/// adding the parameter to [`run`] directly) so `run`'s own public
-/// signature -- called from `engine::mod` and from `engine::graph`'s own
-/// tests -- stays unchanged by this plan.
+/// every respect except the trailing `checkpoint_ns` and
+/// `initial_parley_responses` parameters, which [`run`] always passes as
+/// `None` and [`execute_vanguard_node`]'s `NodeSpec::Battalion` dispatch arm
+/// passes as `Some(namespace)`/`None` respectively when recursing into a
+/// child run. Kept as a SEPARATE function (rather than adding the
+/// parameters to [`run`] directly) so `run`'s own public signature --
+/// called from `engine::mod` and from `engine::graph`'s own tests -- stays
+/// unchanged by this plan. `pub(crate)` (rather than private) so
+/// `WarEngine::resume_with` (`engine::mod`, HITL-02) can call it directly --
+/// the ONE caller that ever has a real `Some` `initial_parley_responses` to
+/// pass.
 #[allow(clippy::too_many_arguments)]
-async fn run_with_namespace<W: WaypointPort + 'static>(
+pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     waypoint_port: &W,
     durability: WaypointDurability,
     parallelism: Option<usize>,
@@ -753,6 +771,17 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
     // mutated mid-run); a nested Battalion dispatch below derives the NEXT
     // level's namespace from it via `ChildEngineResources::checkpoint_ns`.
     checkpoint_ns: Option<String>,
+    // --- HITL-01, D-08: `Some(responses_by_node)` ONLY on a
+    // `WarEngine::resume_with` re-entry, keyed by the PARLEYING node's own
+    // `NodeId` (never a `parley_id`, since `NodeContext.parley_response`
+    // must be looked up by the executing node, not the request that raised
+    // it). Consumed EXACTLY ONCE -- on the very first iteration of the loop
+    // below, via `.take()` -- so a resumed run's second superstep (and
+    // every ordinary `start`/`resume_with_options` call, which always
+    // passes `None`) never re-delivers a stale response to a node that
+    // re-enters the vanguard later in the same run (e.g. a Goto/cycle
+    // revisit).
+    initial_parley_responses: Option<BTreeMap<NodeId, ParleyResponse>>,
 ) -> Result<RunOutcome, EngineError> {
     // --- CF-FR-16, D-21: gathered ONCE per `run()` call, never per
     // dispatch -- see `ChildEngineResources`'s own rustdoc for why a
@@ -787,6 +816,11 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
         .map(|progress| (progress.node.clone(), progress.tasks.clone()));
     let mut muster_carryover: Option<BTreeMap<String, StateDelta>> =
         initial_muster_progress.map(|progress| progress.completed);
+
+    // --- HITL-01, D-08: `Some` ONLY on a `WarEngine::resume_with`
+    // re-entry's very first iteration below (`.take()`n there so it can
+    // never re-apply to a later superstep of the same run).
+    let mut initial_parley_responses = initial_parley_responses;
 
     // The entry-vanguard-empty case: nothing to run, ever. Persist exactly
     // one Waypoint and return immediately (ENG-FR-01 step 7's "Vanguard
@@ -1043,6 +1077,12 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
             };
         let muster_carryover_this_round: BTreeMap<String, StateDelta> =
             muster_carryover.take().unwrap_or_default();
+        // --- HITL-01, D-08: taken exactly once, on the round that
+        // dispatches a `WarEngine::resume_with` re-entry's forced vanguard
+        // (every ordinary superstep, and every later round of the SAME
+        // resumed run, sees `None` here).
+        let parley_responses_this_round: BTreeMap<NodeId, ParleyResponse> =
+            initial_parley_responses.take().unwrap_or_default();
         // --- WR-02 (23-REVIEW.md): reuses `MusterProgress::unfinished_tasks`
         // -- the method the module's own rustdoc says resume relies on --
         // instead of hand-rolling an equivalent `task_key` filter a second
@@ -1144,6 +1184,7 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 thread_id: thread.clone(),
                 superstep: superstep_number,
                 muster: muster_ctx.clone(),
+                parley_response: parley_responses_this_round.get(node_id).cloned(),
             };
             let nid = node_id.clone();
             handles.push(tokio::spawn(async move {
@@ -1246,15 +1287,19 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
         // this superstep to return `NextStep::End` (D-09); `mustered` is a
         // validated `NextStep::Muster` task list (CF-03, D-13), threaded
         // into `pending_muster` for the NEXT superstep's dispatch below. A
-        // Goto target validation failure, an invalid Muster, or a returned
-        // Parley all fail the run before any of this bookkeeping is acted
-        // on further (checked together with `node_failure`, before the
-        // merge).
+        // Goto target validation failure or an invalid Muster fails the
+        // run before any of this bookkeeping is acted on further (checked
+        // together with `node_failure`, before the merge). `parley_requests`
+        // (HITL-01, D-02, D-03) is NOT a failure path: every `ParleyRequest`
+        // raised anywhere this superstep is collected here and, after the
+        // merge below, suspends the whole run (checked ahead of
+        // `end_requested`).
         let mut goto_targets: Vec<NodeId> = Vec::new();
         let mut notfiring_nodes: HashSet<NodeId> = HashSet::new();
         let mut end_requested: Option<NodeId> = None;
         let mut routing_failure: Option<(NodeId, EngineError)> = None;
         let mut mustered: Option<(NodeId, Vec<MusterTask>)> = None;
+        let mut parley_requests: Vec<ParleyRequest> = Vec::new();
         for (entry, handle) in dispatch_entries.iter().zip(handles) {
             let (_entry_node_id, entry_muster_ctx) = entry;
             let is_muster_task = entry_muster_ctx.is_some();
@@ -1318,21 +1363,24 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                             }
                             NodeOutcomeKind::Ended
                         }
-                        NextStep::Parley(_) => {
-                            // D-10: never coerced to `Edges`; still marked
-                            // NotFiring per D-08c even though the run is
-                            // about to fail, for the same "no NextStep
-                            // variant leaves an edge Pending" uniformity.
+                        NextStep::Parley(request) => {
+                            // HITL-01, D-02, D-03: never coerced to `Edges`
+                            // -- this node's static outgoing edges resolve
+                            // NotFiring for this superstep, exactly like
+                            // Goto/Muster/End (D-08c uniformity: no
+                            // `NextStep` variant ever leaves an edge
+                            // Pending). Its own `StateDelta` still merges
+                            // normally below (`deltas.push` a few lines
+                            // down, unconditional on `next`) -- it already
+                            // emitted it. `node_id` is stamped onto the
+                            // request regardless of what the raising code
+                            // supplied, so the persisted `parleys` list is
+                            // always accurate.
                             notfiring_nodes.insert(node_id.clone());
-                            if routing_failure.is_none() {
-                                routing_failure = Some((
-                                    node_id.clone(),
-                                    EngineError::ParleyNotSupported {
-                                        node: node_id.clone(),
-                                    },
-                                ));
-                            }
-                            NodeOutcomeKind::Succeeded
+                            let mut request = request.clone();
+                            request.node_id = node_id.clone();
+                            parley_requests.push(request);
+                            NodeOutcomeKind::Parleyed
                         }
                     };
                     completed_records.push(NodeExecutionRecord {
@@ -1597,6 +1645,50 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                     next_vanguard.push(target);
                 }
             }
+        }
+
+        // --- HITL-01, D-02, D-03, D-08: a `NextStep::Parley` raised
+        // anywhere this superstep suspends the WHOLE run -- checked before
+        // `end_requested` (a human's answer takes precedence over any
+        // conflicting same-superstep `End`). Every peer already merged
+        // normally above; the persisted `Waypoint`'s `vanguard` is
+        // deliberately overridden to be EXACTLY the parleying nodes
+        // (D-02), discarding whatever `compute_next_vanguard`/the `Goto`
+        // union just produced -- `resume_with` alone re-seeds from this
+        // exact list (D-08), so a downstream node made ready by a peer's
+        // delta this superstep is picked up on the FIRST post-resume
+        // superstep's own `compute_next_vanguard` call instead, once the
+        // parleying node(s) have re-run. This bypasses
+        // `StarvedNodeAtCompletion` entirely, mirroring `End`'s own
+        // rationale just below: a pending Parley is deliberate, observable
+        // suspension (recorded via `NodeOutcomeKind::Parleyed` above),
+        // never a scheduler silently walking away from ready work.
+        if !parley_requests.is_empty() {
+            parley_requests.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+            let parleying_nodes: Vec<NodeId> =
+                parley_requests.iter().map(|r| r.node_id.clone()).collect();
+            let waypoint = build_waypoint(
+                &thread,
+                parent_waypoint_id,
+                superstep_number,
+                graph,
+                &battlefield,
+                parleying_nodes,
+                completed_records,
+                WaypointStatus::AwaitingInput {
+                    parleys: parley_requests.clone(),
+                    responses: Vec::new(),
+                },
+                visit_counts.clone(),
+                frontier.snapshot(graph),
+                None,
+                checkpoint_ns.clone(),
+            );
+            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+            return Ok(RunOutcome::AwaitingInput {
+                parleys: parley_requests,
+                waypoint: waypoint.waypoint_id,
+            });
         }
 
         // --- CF-03, D-13: a validated Muster accepted this superstep

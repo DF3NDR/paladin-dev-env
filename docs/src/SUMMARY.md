@@ -20,6 +20,7 @@
 - [Sanctum Vector Memory](user-guides/sanctum-vector-memory.md)
 - [Herald Output](user-guides/herald-output.md)
 - [Maneuver Flow DSL](user-guides/maneuver-flow-dsl.md)
+- [Control Flow: Dynamic Routing & Subgraphs](user-guides/control-flow.md)
 - [Paladin Configuration](user-guides/paladin-configuration.md)
 - [Memory Management](user-guides/memory-management.md)
 - [Tool Integration](user-guides/tool-integration.md)

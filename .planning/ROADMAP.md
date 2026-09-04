@@ -387,17 +387,46 @@ Plans:
 **Plans**: 12 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 24-01-PLAN.md — Parley value types and the suspension/resume spine (tracer)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 24-02-PLAN.md — `Gate` node, graph validation, edge routing, fingerprint `v4`
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 24-03-PLAN.md — Directive parley envelope and the `parley.` InputMapping namespace
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 24-04-PLAN.md — `resume_with` validation matrix, partial answers, expiry
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 24-05-PLAN.md — E2E-2, multi-parley, cross-process and 10-thread stress tests
 - [ ] 24-06-PLAN.md — `fork_of` lineage, `child_on_branch`, three-backend contract cases
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 24-07-PLAN.md — `replay`/`fork`, `ChronicleService`, immutability and subgraph-fork
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 24-08-PLAN.md — Shutdown grace race, `ShutdownCoordinator`, `EngineConfig` fields
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [ ] 24-09-PLAN.md — Process wiring, k8s manifests, deployment docs, M-B-02 example
 - [ ] 24-10-PLAN.md — `ParleyPort`, facade adapter, `GraphRegistry`, `WaypointStoreConfig`
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
 - [ ] 24-11-PLAN.md — Thread routes, DTOs, `openapi.json`, server composition
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
 - [ ] 24-12-PLAN.md — mdBook page, MIGRATION/CHANGELOG/traceability, gate evidence
 
 ### Phase 25: Node-Level Fault Tolerance

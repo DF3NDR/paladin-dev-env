@@ -79,6 +79,12 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     trace: Arc<TraceDispatcher>,
     interceptors: Vec<Arc<dyn NodeInterceptor>>,
     cancellation: Option<CancellationToken>,
+    /// THIS run's own `checkpoint_ns` (CF-FR-15, D-20) -- captured once
+    /// here so a NESTED `NodeSpec::Battalion` dispatch (a grandchild, from
+    /// this run's own perspective) can derive the next namespace segment
+    /// as `"{this}{grandchild_node_id}/"` without threading an extra
+    /// parameter through the whole dispatch/execute call chain.
+    checkpoint_ns: Option<String>,
 }
 
 /// What one vanguard node resolves to for this superstep's execution: either
@@ -113,6 +119,11 @@ enum NodeDispatch<W: WaypointPort + 'static> {
         /// Every parent engine resource this child run inherits (D-21),
         /// gathered once per outer [`run`] call.
         resources: Arc<ChildEngineResources<W>>,
+        /// Whether a resumed run restarts this node's child from scratch
+        /// (CF-FR-15, D-20) rather than resuming it from
+        /// `latest(child_thread)` -- see the dispatch arm's own rustdoc for
+        /// the abandon-vs-overwrite policy this implements.
+        restart_on_resume: bool,
     },
 }
 
@@ -224,6 +235,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                 graph: child_graph,
                 state_map,
                 resources,
+                restart_on_resume,
             } => {
                 // --- CF-FR-14, D-19: seed the child's initial state from
                 // `state_map.inputs`, read from the PARENT's superstep
@@ -240,61 +252,165 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     }
                 }
 
-                // --- CF-FR-16: a single, clearly-marked seam for the child's
-                // thread id (Plan 23-09 replaces this with real child thread
-                // identity / `checkpoint_ns`) -- never spread across call
-                // sites.
-                let child_thread = match ThreadId::new(format!(
-                    "{}::battalion::{}",
-                    ctx.thread_id.as_str(),
-                    ctx.node_id.as_str()
-                )) {
+                // --- CF-FR-15, D-20: the child's thread id is a derived,
+                // PROVABLY INJECTIVE encoding of (this run's thread, this
+                // node's id) -- `ThreadId::child`, length-prefixed exactly
+                // like `graph.rs`'s `push_field` (22.1 CR-01's lesson: a
+                // bare delimiter join of `NodeId`s, which accept any
+                // non-empty string, is collidable by construction). Fails
+                // typed (never silently truncates) if the derived id would
+                // itself exceed `ThreadId`'s own limits.
+                let child_thread = match ThreadId::child(&ctx.thread_id, &ctx.node_id) {
                     Ok(id) => id,
                     Err(e) => {
                         return (
                             None,
                             0,
                             Err(NodeFailure::Node(NodeError(format!(
-                                "battalion node {}: failed to construct child thread id: {e}",
+                                "battalion node {}: failed to derive child thread id: {e}",
                                 ctx.node_id
                             )))),
                         );
                     }
                 };
 
-                let child_battlefield = match Battlefield::initialize(
-                    child_graph.schema().clone(),
-                    &initial,
-                ) {
-                    Ok(bf) => bf,
-                    Err(e) => {
-                        return (
-                            None,
-                            0,
-                            Err(NodeFailure::Node(NodeError(format!(
-                                "battalion node {}: failed to initialize child battlefield: {e}",
-                                ctx.node_id
-                            )))),
-                        );
+                // --- CF-FR-15, D-20: `checkpoint_ns` is a RECORD of the
+                // namespace path for observability/debugging ONLY -- never
+                // the isolation mechanism (RESEARCH.md Pitfall 6). Isolation
+                // comes entirely from `child_thread` above being a distinct
+                // `ThreadId`. Nested paths concatenate: a grandchild's
+                // namespace is `"{this child's namespace}{grandchild_node}/"`.
+                let child_checkpoint_ns = Some(format!(
+                    "{}{}/",
+                    resources.checkpoint_ns.as_deref().unwrap_or(""),
+                    ctx.node_id.as_str()
+                ));
+
+                // --- CF-FR-15, D-20: resume-mid-child. Unless
+                // `restart_on_resume` opts out, look up the child thread's
+                // own latest Waypoint through the SAME `WaypointPort` this
+                // child run addresses (no `WaypointPort` method change) --
+                // if one exists and the child has not yet `Completed`, this
+                // dispatch RESUMES the child from exactly where it stopped
+                // rather than re-seeding it from `state_map.inputs`, so a
+                // parent resumed mid-child never repeats the child's already
+                // -completed work. A `Completed` prior child is mapped
+                // straight to this node's output delta without re-invoking
+                // `run()` at all (idempotent re-dispatch, no redundant
+                // Waypoint write). `restart_on_resume: true` -- or no prior
+                // history at all -- falls through to a fresh child run,
+                // exactly as before this plan: the OLD child chain (if any)
+                // is deliberately ABANDONED, never deleted -- its own latest
+                // Waypoint stays in the store and stays protected by
+                // retention's existing per-thread rule exactly as any other
+                // thread's would (D-20; `WaypointRetentionService` itself is
+                // unchanged), it is simply no longer this thread's `latest`
+                // once the fresh run below persists its own first Waypoint.
+                let existing_latest = if restart_on_resume {
+                    None
+                } else {
+                    match resources.waypoint_port.latest(&child_thread).await {
+                        Ok(w) => w,
+                        Err(e) => {
+                            return (
+                                None,
+                                0,
+                                Err(NodeFailure::Node(NodeError(format!(
+                                    "battalion node {}: failed to read child thread history: {e}",
+                                    ctx.node_id
+                                )))),
+                            );
+                        }
                     }
                 };
-                if let Err(e) = child_battlefield.validate_required() {
-                    return (
-                        None,
-                        0,
-                        Err(NodeFailure::Node(NodeError(format!(
-                            "battalion node {}: child battlefield missing required field(s): {e}",
-                            ctx.node_id
-                        )))),
-                    );
+
+                if let Some(latest) = &existing_latest
+                    && matches!(latest.status, WaypointStatus::Completed)
+                {
+                    // --- the child already finished in a prior attempt
+                    // (e.g. the crash landed between the child's own
+                    // completion and this node's own delta reaching the
+                    // PARENT's next Waypoint) -- map its recorded final
+                    // state straight through, never re-running it.
+                    let mut delta = StateDelta::new();
+                    for (child_field, parent_field) in &state_map.outputs {
+                        if let Some(value) = latest.battlefield.get_raw(child_field) {
+                            delta.set_raw(parent_field.clone(), value.clone());
+                        }
+                    }
+                    return (None, 0, Ok(delta.into()));
                 }
+
+                let (
+                    child_battlefield,
+                    child_vanguard,
+                    child_visit_counts,
+                    child_frontier_snapshot,
+                    child_muster_progress,
+                    child_parent_waypoint_id,
+                    child_superstep_number,
+                ) = match existing_latest {
+                    Some(latest) => {
+                        let resume_superstep = if latest.muster_progress.is_some() {
+                            latest.superstep
+                        } else {
+                            latest.superstep + 1
+                        };
+                        (
+                            latest.battlefield,
+                            latest.vanguard,
+                            latest.visit_counts,
+                            Some(latest.frontier),
+                            latest.muster_progress,
+                            Some(latest.waypoint_id),
+                            resume_superstep,
+                        )
+                    }
+                    None => {
+                        let fresh_battlefield =
+                            match Battlefield::initialize(child_graph.schema().clone(), &initial) {
+                                Ok(bf) => bf,
+                                Err(e) => {
+                                    return (
+                                        None,
+                                        0,
+                                        Err(NodeFailure::Node(NodeError(format!(
+                                            "battalion node {}: failed to initialize child \
+                                         battlefield: {e}",
+                                            ctx.node_id
+                                        )))),
+                                    );
+                                }
+                            };
+                        if let Err(e) = fresh_battlefield.validate_required() {
+                            return (
+                                None,
+                                0,
+                                Err(NodeFailure::Node(NodeError(format!(
+                                    "battalion node {}: child battlefield missing required \
+                                     field(s): {e}",
+                                    ctx.node_id
+                                )))),
+                            );
+                        }
+                        (
+                            fresh_battlefield,
+                            child_graph.entry().to_vec(),
+                            BTreeMap::new(),
+                            None,
+                            None,
+                            None,
+                            1,
+                        )
+                    }
+                };
 
                 // --- CF-FR-16, D-21: one parent superstep spans the whole
                 // child run, however many supersteps the child itself takes,
                 // because this whole recursive call is awaited INLINE within
                 // this single dispatch entry's own `tokio::spawn`'d task --
                 // never spawned as a separate sibling task. Recursion into the
-                // SAME `run` requires boxing (Rust cannot size a directly
+                // SAME `run_with_namespace` requires boxing (Rust cannot size a directly
                 // self-referential async fn) -- and explicit `dyn Future +
                 // Send` erasure specifically (not merely `Box::pin` over the
                 // concrete opaque type), because a self-recursive async fn's
@@ -308,7 +424,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             + Send
                             + '_,
                     >,
-                > = Box::pin(run(
+                > = Box::pin(run_with_namespace(
                     resources.waypoint_port.as_ref(),
                     resources.durability,
                     resources.parallelism,
@@ -317,17 +433,18 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     child_graph.as_ref(),
                     child_thread.clone(),
                     child_battlefield,
-                    child_graph.entry().to_vec(),
-                    BTreeMap::new(),
-                    None,
-                    None,
-                    None,
-                    1,
+                    child_vanguard,
+                    child_visit_counts,
+                    child_frontier_snapshot,
+                    child_muster_progress,
+                    child_parent_waypoint_id,
+                    child_superstep_number,
                     paladin_port,
                     &resources.trace,
                     &resources.interceptors,
                     &resources.cancellation,
                     Some(Arc::clone(&resources.waypoint_port)),
+                    child_checkpoint_ns,
                 ));
                 let outcome = child_fut.await;
 
@@ -547,6 +664,72 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     evaluators: &EdgeEvaluatorRegistry,
     graph: &WarGraph,
     thread: ThreadId,
+    battlefield: Battlefield,
+    vanguard: Vec<NodeId>,
+    visit_counts: BTreeMap<NodeId, u32>,
+    frontier_snapshot: Option<FrontierSnapshot>,
+    initial_muster_progress: Option<MusterProgress>,
+    parent_waypoint_id: Option<WaypointId>,
+    superstep_number: u64,
+    paladin_port: &Arc<dyn PaladinPort>,
+    trace: &Arc<TraceDispatcher>,
+    interceptors: &[Arc<dyn NodeInterceptor>],
+    cancellation: &Option<CancellationToken>,
+    waypoint_port_arc: Option<Arc<W>>,
+) -> Result<RunOutcome, EngineError> {
+    // --- CF-FR-15, D-20: a top-level call through this public entry point
+    // (`WarEngine::start`/`resume_with_options`, and every existing test
+    // call site predating this plan) is never itself a Battalion child, so
+    // its own Waypoints carry no namespace. This function's SIGNATURE is
+    // deliberately left unchanged by this plan -- it is called from outside
+    // this module (`engine::mod`, and `engine::graph`'s own tests) -- and
+    // instead forwards, unconditionally, to [`run_with_namespace`], the
+    // real implementation, with `checkpoint_ns: None`. A `NodeSpec::Battalion`
+    // dispatch (`execute_vanguard_node`, below) calls
+    // [`run_with_namespace`] directly instead of this wrapper, since ONLY
+    // that call site ever has a `Some` namespace to pass.
+    run_with_namespace(
+        waypoint_port,
+        durability,
+        parallelism,
+        registry,
+        evaluators,
+        graph,
+        thread,
+        battlefield,
+        vanguard,
+        visit_counts,
+        frontier_snapshot,
+        initial_muster_progress,
+        parent_waypoint_id,
+        superstep_number,
+        paladin_port,
+        trace,
+        interceptors,
+        cancellation,
+        waypoint_port_arc,
+        None,
+    )
+    .await
+}
+
+/// [`run`]'s real implementation (CF-FR-15, D-20): identical to [`run`] in
+/// every respect except the trailing `checkpoint_ns` parameter, which
+/// [`run`] always passes as `None` and [`execute_vanguard_node`]'s
+/// `NodeSpec::Battalion` dispatch arm passes as `Some(namespace)` when
+/// recursing into a child run. Kept as a SEPARATE function (rather than
+/// adding the parameter to [`run`] directly) so `run`'s own public
+/// signature -- called from `engine::mod` and from `engine::graph`'s own
+/// tests -- stays unchanged by this plan.
+#[allow(clippy::too_many_arguments)]
+async fn run_with_namespace<W: WaypointPort + 'static>(
+    waypoint_port: &W,
+    durability: WaypointDurability,
+    parallelism: Option<usize>,
+    registry: &CustomDispatchResolver,
+    evaluators: &EdgeEvaluatorRegistry,
+    graph: &WarGraph,
+    thread: ThreadId,
     mut battlefield: Battlefield,
     mut vanguard: Vec<NodeId>,
     mut visit_counts: BTreeMap<NodeId, u32>,
@@ -559,6 +742,17 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     interceptors: &[Arc<dyn NodeInterceptor>],
     cancellation: &Option<CancellationToken>,
     waypoint_port_arc: Option<Arc<W>>,
+    // --- CF-FR-15, D-20: the namespace path THIS run's own Waypoints are
+    // stamped with (`Waypoint.checkpoint_ns`) -- `None` for a top-level
+    // run (`WarEngine::start`/`resume_with_options`), `Some(ns)` for a
+    // `NodeSpec::Battalion` node's child run, where `ns` was computed by
+    // the PARENT dispatch (this run's own caller) as
+    // `"{parent's checkpoint_ns}{battalion_node_id}/"` -- concatenating
+    // one more namespace segment per nesting level. Stamped, verbatim,
+    // onto every Waypoint [`build_waypoint`] produces in this call (never
+    // mutated mid-run); a nested Battalion dispatch below derives the NEXT
+    // level's namespace from it via `ChildEngineResources::checkpoint_ns`.
+    checkpoint_ns: Option<String>,
 ) -> Result<RunOutcome, EngineError> {
     // --- CF-FR-16, D-21: gathered ONCE per `run()` call, never per
     // dispatch -- see `ChildEngineResources`'s own rustdoc for why a
@@ -578,6 +772,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                 trace: Arc::clone(trace),
                 interceptors: interceptors.to_vec(),
                 cancellation: cancellation.clone(),
+                checkpoint_ns: checkpoint_ns.clone(),
             })
         });
 
@@ -641,6 +836,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                 visit_counts,
                 entry_frontier.snapshot(graph),
                 None,
+                checkpoint_ns.clone(),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -661,6 +857,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
             visit_counts,
             entry_frontier.snapshot(graph),
             None,
+            checkpoint_ns.clone(),
         );
         persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
         return Ok(RunOutcome::Completed {
@@ -709,6 +906,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                 visit_counts,
                 frontier.snapshot(graph),
                 None,
+                checkpoint_ns.clone(),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Halted {
@@ -738,6 +936,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                 visit_counts,
                 frontier.snapshot(graph),
                 None,
+                checkpoint_ns.clone(),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -778,6 +977,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                 visit_counts,
                 frontier.snapshot(graph),
                 None,
+                checkpoint_ns.clone(),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -880,7 +1080,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                 NodeSpec::Battalion {
                     graph: child_graph,
                     state_map,
-                    ..
+                    restart_on_resume,
                 } => {
                     // --- CF-FR-16, D-21: fails this one node closed
                     // (never silently skips the child) when this `run()`
@@ -896,6 +1096,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                         graph: Arc::clone(child_graph),
                         state_map: state_map.clone(),
                         resources,
+                        restart_on_resume: *restart_on_resume,
                     }
                 }
             };
@@ -1149,6 +1350,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                                 visit_counts.clone(),
                                 frontier.snapshot(graph),
                                 Some(progress),
+                                checkpoint_ns.clone(),
                             );
                             persist_waypoint(waypoint_port, durability, &progress_waypoint, trace)
                                 .await?;
@@ -1219,6 +1421,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                 visit_counts,
                 frontier.snapshot(graph),
                 None,
+                checkpoint_ns.clone(),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -1249,6 +1452,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                 visit_counts,
                 frontier.snapshot(graph),
                 None,
+                checkpoint_ns.clone(),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -1311,6 +1515,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                     visit_counts,
                     frontier.snapshot(graph),
                     None,
+                    checkpoint_ns.clone(),
                 );
                 persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
                 return Ok(RunOutcome::Failed {
@@ -1398,6 +1603,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                 visit_counts.clone(),
                 frontier.snapshot(graph),
                 None,
+                checkpoint_ns.clone(),
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Completed {
@@ -1450,6 +1656,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
                     visit_counts.clone(),
                     frontier.snapshot(graph),
                     None,
+                    checkpoint_ns.clone(),
                 );
                 persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
                 return Ok(RunOutcome::Failed {
@@ -1477,6 +1684,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
             visit_counts.clone(),
             frontier.snapshot(graph),
             None,
+            checkpoint_ns.clone(),
         );
         persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
 
@@ -2123,6 +2331,14 @@ fn build_waypoint(
     visit_counts: BTreeMap<NodeId, u32>,
     frontier: FrontierSnapshot,
     muster_progress: Option<MusterProgress>,
+    // --- CF-FR-15, D-20: the namespace path this `run()` call's OWN
+    // Waypoints are stamped with -- `None` for every top-level (non-child)
+    // run, `Some("parent_node_id/")` (nested paths concatenating) for a
+    // Battalion node's child run. A RECORD for observability only; carries
+    // no isolation meaning (RESEARCH.md Pitfall 6) -- isolation comes
+    // entirely from `thread` already being the child's own derived
+    // `ThreadId` by the time this function is called.
+    checkpoint_ns: Option<String>,
 ) -> Waypoint {
     Waypoint {
         thread_id: thread.clone(),
@@ -2139,6 +2355,7 @@ fn build_waypoint(
         visit_counts,
         frontier,
         muster_progress,
+        checkpoint_ns,
     }
 }
 
@@ -6183,8 +6400,13 @@ mod tests {
         .await
     }
 
+    /// The SAME injective, length-prefixed derivation `execute_vanguard_node`'s
+    /// `NodeSpec::Battalion` arm uses in production (`ThreadId::child`), so
+    /// every test asserting on a child's derived thread id exercises the
+    /// real derivation rather than a parallel test-only encoding that could
+    /// silently drift from it.
     fn child_thread_id(parent: &ThreadId, node: &str) -> ThreadId {
-        ThreadId::new(format!("{}::battalion::{node}", parent.as_str())).unwrap()
+        ThreadId::child(parent, &NodeId::new(node)).unwrap()
     }
 
     #[tokio::test]
@@ -6867,5 +7089,484 @@ mod tests {
             "expected the child's own latest waypoint to be Halted, got {:?}",
             last.status
         );
+    }
+
+    // --- Plan 23-09: child ThreadId identity, checkpoint_ns, resume-mid-child ---
+
+    /// A two-node sequential child (`c1 -> c2`, `Always`) whose entry node
+    /// (`c1`) contributes no delta and whose second node (`c2`) writes
+    /// `child_out`. Each node's call count is tracked via the caller-owned
+    /// `Arc<AtomicUsize>` counters, so a test can assert on exactly which
+    /// nodes re-executed (or did not) across a resume without needing a
+    /// `PaladinPort` execution log.
+    fn build_two_node_child(
+        child_out: FieldName,
+        c1_calls: Arc<std::sync::atomic::AtomicUsize>,
+        c2_calls: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> (WarGraph, NodeId, NodeId) {
+        let child_schema = schema(vec![FieldSpec::new(
+            child_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut child = WarGraph::new(child_schema, EngineLimits::default());
+        let c1 = NodeId::new("c1");
+        let c2 = NodeId::new("c2");
+        {
+            let counter = Arc::clone(&c1_calls);
+            child.add_node(
+                c1.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    StateDelta::new()
+                })),
+            );
+        }
+        {
+            let counter = Arc::clone(&c2_calls);
+            let out = child_out.clone();
+            child.add_node(
+                c2.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let mut delta = StateDelta::new();
+                    delta.set_raw(out.clone(), serde_json::json!("child-done"));
+                    delta
+                })),
+            );
+        }
+        child.add_edge(EdgeSpec {
+            from: c1.clone(),
+            to: c2.clone(),
+            condition: Some(EdgeCondition::Always),
+        });
+        child.add_entry(c1.clone());
+        (child, c1, c2)
+    }
+
+    #[tokio::test]
+    async fn latest_on_the_child_thread_returns_the_childs_own_waypoint() {
+        let child_out = field("child_out");
+        let (child, _c1, _c2) = build_two_node_child(
+            child_out.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        );
+        let sub = NodeId::new("sub");
+        let parent_out = field("parent_out");
+        let parent_schema = schema(vec![FieldSpec::new(
+            parent_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let state_map = StateMap::new().with_output(child_out.clone(), parent_out.clone());
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let parent_thread = ThreadId::new("battalion-latest-isolation").unwrap();
+        let outcome = run_with_children(
+            &parent,
+            parent_thread.clone(),
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let child_thread = child_thread_id(&parent_thread, "sub");
+        let parent_latest = store
+            .latest(&parent_thread)
+            .await
+            .unwrap()
+            .expect("parent has a latest waypoint");
+        let child_latest = store
+            .latest(&child_thread)
+            .await
+            .unwrap()
+            .expect("child has a latest waypoint");
+
+        assert_ne!(parent_latest.thread_id, child_latest.thread_id);
+        assert_ne!(parent_latest.waypoint_id, child_latest.waypoint_id);
+        assert!(matches!(parent_latest.status, WaypointStatus::Completed));
+        assert!(matches!(child_latest.status, WaypointStatus::Completed));
+    }
+
+    #[tokio::test]
+    async fn resume_of_a_parent_mid_child_resumes_the_child_where_it_stopped() {
+        let child_out = field("child_out");
+
+        // --- Step 1: produce a REAL first-superstep child Waypoint by
+        // running the child graph directly (not embedded in a parent), then
+        // keep only its superstep-1 Waypoint -- the same "seed from a real
+        // run" technique `e2e_crash_resume_test.rs` uses, so the seeded
+        // Waypoint's `frontier`/`vanguard` are exactly what production
+        // would have produced, rather than hand-constructed and possibly
+        // wrong.
+        let seed_c1_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seed_c2_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (seed_child, _, _) =
+            build_two_node_child(child_out.clone(), seed_c1_calls, seed_c2_calls);
+        let seed_store = RecordingWaypointStore::new();
+        let seed_thread = ThreadId::new("scratch-seed-child").unwrap();
+        let _ = run_default(&seed_child, seed_thread.clone(), &seed_store).await;
+        let seed_waypoints = seed_store.saved_waypoints(&seed_thread).await;
+        let first_superstep_waypoint = seed_waypoints
+            .iter()
+            .find(|w| w.superstep == 1)
+            .expect("child's first superstep waypoint must exist")
+            .clone();
+        assert!(
+            matches!(first_superstep_waypoint.status, WaypointStatus::Running),
+            "sanity: the child's first superstep must still be Running (c2 not yet reached)"
+        );
+
+        // --- Step 2: the REAL parent+child this test asserts against, with
+        // FRESH call counters (the seed run's counters, above, are
+        // discarded).
+        let c1_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c2_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (child, _c1, _c2) = build_two_node_child(
+            child_out.clone(),
+            Arc::clone(&c1_calls),
+            Arc::clone(&c2_calls),
+        );
+
+        let sub = NodeId::new("sub");
+        let parent_out = field("parent_out");
+        let parent_schema = schema(vec![FieldSpec::new(
+            parent_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let state_map = StateMap::new().with_output(child_out.clone(), parent_out.clone());
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub.clone());
+
+        let parent_thread = ThreadId::new("battalion-resume-mid-child").unwrap();
+        let child_thread = child_thread_id(&parent_thread, "sub");
+
+        // --- Step 3: seed a FRESH store (the one the resumed run actually
+        // uses) with ONLY the child's real first-superstep Waypoint,
+        // re-addressed under the PRODUCTION-derived child thread id. The
+        // PARENT thread has NO seeded Waypoint at all -- simulating a crash
+        // that landed right after the child's own first superstep
+        // persisted but before the recursive Battalion dispatch (still
+        // awaiting `c2`) ever returned to the parent's own superstep loop,
+        // so the parent's own Waypoint for this superstep was never
+        // written. A "resume" here is driven entirely by the Battalion
+        // dispatch's own `latest(child_thread)` check, not by
+        // `WarEngine::resume`.
+        let mut seeded = first_superstep_waypoint;
+        seeded.thread_id = child_thread.clone();
+        let resumed_store = Arc::new(RecordingWaypointStore::new());
+        resumed_store.save(&seeded).await.unwrap();
+
+        let outcome = run_with_children(
+            &parent,
+            parent_thread.clone(),
+            StateDelta::new(),
+            &resumed_store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            c1_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "c1 must NOT re-execute: its completion is already recorded in the seeded child \
+             Waypoint"
+        );
+        assert_eq!(
+            c2_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "c2 must execute exactly once to finish the resumed child"
+        );
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&parent_out).unwrap(),
+                    Some("child-done".to_string())
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_on_resume_true_runs_the_child_fresh() {
+        let child_out = field("child_out");
+
+        // Seed a "prior" child Waypoint exactly as
+        // `resume_of_a_parent_mid_child_resumes_the_child_where_it_stopped`
+        // does -- `restart_on_resume: true` must ignore it entirely.
+        let seed_c1_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seed_c2_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (seed_child, _, _) =
+            build_two_node_child(child_out.clone(), seed_c1_calls, seed_c2_calls);
+        let seed_store = RecordingWaypointStore::new();
+        let seed_thread = ThreadId::new("scratch-seed-child-restart").unwrap();
+        let _ = run_default(&seed_child, seed_thread.clone(), &seed_store).await;
+        let seed_waypoints = seed_store.saved_waypoints(&seed_thread).await;
+        let first_superstep_waypoint = seed_waypoints
+            .iter()
+            .find(|w| w.superstep == 1)
+            .expect("child's first superstep waypoint must exist")
+            .clone();
+
+        let c1_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c2_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (child, _c1, _c2) = build_two_node_child(
+            child_out.clone(),
+            Arc::clone(&c1_calls),
+            Arc::clone(&c2_calls),
+        );
+
+        let sub = NodeId::new("sub");
+        let parent_out = field("parent_out");
+        let parent_schema = schema(vec![FieldSpec::new(
+            parent_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let state_map = StateMap::new().with_output(child_out.clone(), parent_out.clone());
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        // `NodeSpec::Battalion` constructed directly (rather than through
+        // `NodeSpec::battalion`, which always defaults `restart_on_resume`
+        // to `false`) -- allowed from within this crate despite
+        // `#[non_exhaustive]`, which restricts only OTHER crates.
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::Battalion {
+                graph: Arc::new(child),
+                state_map,
+                restart_on_resume: true,
+            },
+        );
+        parent.add_entry(sub.clone());
+
+        let parent_thread = ThreadId::new("battalion-restart-on-resume").unwrap();
+        let child_thread = child_thread_id(&parent_thread, "sub");
+
+        let mut seeded = first_superstep_waypoint;
+        seeded.thread_id = child_thread.clone();
+        let resumed_store = Arc::new(RecordingWaypointStore::new());
+        resumed_store.save(&seeded).await.unwrap();
+
+        let outcome = run_with_children(
+            &parent,
+            parent_thread.clone(),
+            StateDelta::new(),
+            &resumed_store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            c1_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "restart_on_resume: true must run the child's entry node fresh, ignoring the \
+             seeded prior Waypoint"
+        );
+        assert_eq!(c2_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&parent_out).unwrap(),
+                    Some("child-done".to_string())
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_ns_records_the_namespace_path() {
+        // Innermost grandchild: one Function node.
+        let grand_out = field("grand_out");
+        let grand_schema = schema(vec![FieldSpec::new(
+            grand_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut grandchild = WarGraph::new(grand_schema, EngineLimits::default());
+        let g1 = NodeId::new("g1");
+        grandchild.add_node(
+            g1.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                grand_out.clone(),
+                serde_json::json!("grand-done"),
+            )),
+        );
+        grandchild.add_entry(g1);
+
+        // Middle child: a single Battalion node wrapping the grandchild.
+        let child_out = field("child_out");
+        let child_schema = schema(vec![FieldSpec::new(
+            child_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let inner_sub = NodeId::new("inner");
+        let mut child = WarGraph::new(child_schema, EngineLimits::default());
+        let inner_state_map = StateMap::new().with_output(grand_out.clone(), child_out.clone());
+        child.add_node(
+            inner_sub.clone(),
+            NodeSpec::battalion(Arc::new(grandchild), inner_state_map),
+        );
+        child.add_entry(inner_sub.clone());
+
+        // Outer parent: a single Battalion node wrapping the child.
+        let outer_sub = NodeId::new("outer");
+        let parent_out = field("parent_out");
+        let parent_schema = schema(vec![FieldSpec::new(
+            parent_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let outer_state_map = StateMap::new().with_output(child_out.clone(), parent_out.clone());
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        parent.add_node(
+            outer_sub.clone(),
+            NodeSpec::battalion(Arc::new(child), outer_state_map),
+        );
+        parent.add_entry(outer_sub.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let parent_thread = ThreadId::new("battalion-checkpoint-ns-nesting").unwrap();
+        let outcome = run_with_children(
+            &parent,
+            parent_thread.clone(),
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let child_thread = child_thread_id(&parent_thread, "outer");
+        let grandchild_thread = child_thread_id(&child_thread, "inner");
+
+        let child_latest = store
+            .latest(&child_thread)
+            .await
+            .unwrap()
+            .expect("child waypoint");
+        let grandchild_latest = store
+            .latest(&grandchild_thread)
+            .await
+            .unwrap()
+            .expect("grandchild waypoint");
+
+        assert_eq!(child_latest.checkpoint_ns, Some("outer/".to_string()));
+        assert_eq!(
+            grandchild_latest.checkpoint_ns,
+            Some("outer/inner/".to_string())
+        );
+
+        // The parent's own Waypoints carry no namespace at all.
+        let parent_latest = store
+            .latest(&parent_thread)
+            .await
+            .unwrap()
+            .expect("parent waypoint");
+        assert_eq!(parent_latest.checkpoint_ns, None);
+    }
+
+    #[tokio::test]
+    async fn child_threads_are_ordinary_threads_for_retention() {
+        let child_out = field("child_out");
+        let (child, _c1, _c2) = build_two_node_child(
+            child_out.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        );
+        let sub = NodeId::new("sub");
+        let parent_out = field("parent_out");
+        let parent_schema = schema(vec![FieldSpec::new(
+            parent_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let state_map = StateMap::new().with_output(child_out.clone(), parent_out.clone());
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        parent.add_node(sub.clone(), NodeSpec::battalion(Arc::new(child), state_map));
+        parent.add_entry(sub.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let parent_thread = ThreadId::new("battalion-retention-ordinary").unwrap();
+        run_with_children(
+            &parent,
+            parent_thread.clone(),
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            &None,
+        )
+        .await
+        .unwrap();
+
+        let child_thread = child_thread_id(&parent_thread, "sub");
+
+        // A child thread shows up in `list_threads` exactly like any other
+        // thread -- the SAME `WaypointPort` API `WaypointRetentionService`
+        // drives its pruning decisions through (D-20: no change to that
+        // service, proven here by construction rather than by inspection).
+        let threads = store.list_threads(None, None).await.unwrap();
+        let ids: std::collections::HashSet<_> =
+            threads.iter().map(|t| t.thread_id.clone()).collect();
+        assert!(
+            ids.contains(&parent_thread),
+            "parent thread must be visible via list_threads"
+        );
+        assert!(
+            ids.contains(&child_thread),
+            "child thread must be visible via list_threads exactly like an ordinary thread"
+        );
+
+        // `history` on the child thread returns only the child's OWN
+        // Waypoints -- the same per-thread scoping retention relies on for
+        // every thread.
+        let child_history = store.history(&child_thread, None, None).await.unwrap();
+        assert!(!child_history.is_empty());
+        for summary in &child_history {
+            let wp = store
+                .get(&child_thread, &summary.waypoint_id)
+                .await
+                .unwrap()
+                .expect("summary's own waypoint must exist");
+            assert_eq!(wp.thread_id, child_thread);
+        }
     }
 }

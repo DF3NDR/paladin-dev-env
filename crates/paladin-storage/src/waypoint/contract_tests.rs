@@ -54,6 +54,7 @@ pub fn sample_waypoint_at(
         visit_counts: std::collections::BTreeMap::new(),
         frontier: FrontierSnapshot::default(),
         muster_progress: None,
+        checkpoint_ns: None,
     }
 }
 
@@ -705,6 +706,50 @@ pub async fn muster_progress_none_round_trips_as_none(port: &dyn WaypointPort) {
     assert_eq!(loaded, wp);
 }
 
+/// A `Waypoint` whose `checkpoint_ns` is `Some`, carrying a multi-segment
+/// nested namespace path, round-trips through `save` -> `latest` -> `get`,
+/// byte-identical after a serde round trip and equal field-for-field
+/// (CF-FR-15, D-20).
+pub async fn checkpoint_ns_round_trips(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-checkpoint-ns-round-trip").unwrap();
+    let mut wp = sample_waypoint(&thread, 1);
+    wp.status = WaypointStatus::Running;
+    wp.checkpoint_ns = Some("outer_node/inner_node/".to_string());
+    port.save(&wp).await.unwrap();
+
+    let expected_json = serde_json::to_string(&wp).unwrap();
+
+    let latest = port.latest(&thread).await.unwrap().unwrap();
+    let latest_json = serde_json::to_string(&latest).unwrap();
+    assert_eq!(latest_json, expected_json);
+    assert_eq!(latest.checkpoint_ns, wp.checkpoint_ns);
+
+    let fetched = port.get(&thread, &wp.waypoint_id).await.unwrap().unwrap();
+    let fetched_json = serde_json::to_string(&fetched).unwrap();
+    assert_eq!(fetched_json, expected_json);
+    assert_eq!(fetched.checkpoint_ns, wp.checkpoint_ns);
+
+    let history = port.history(&thread, None, None).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].waypoint_id, wp.waypoint_id);
+}
+
+/// A `Waypoint` whose `checkpoint_ns` is `None` (the ordinary, non-child
+/// case, unchanged by this field's addition) round-trips as `None`
+/// (CF-FR-15, D-20) -- the additive-field precedent
+/// [`muster_progress_none_round_trips_as_none`] established, applied here
+/// to `checkpoint_ns`.
+pub async fn checkpoint_ns_none_round_trips(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-checkpoint-ns-none").unwrap();
+    let wp = sample_waypoint(&thread, 0);
+    assert_eq!(wp.checkpoint_ns, None);
+    port.save(&wp).await.unwrap();
+
+    let loaded = port.latest(&thread).await.unwrap().unwrap();
+    assert_eq!(loaded.checkpoint_ns, None);
+    assert_eq!(loaded, wp);
+}
+
 /// Runs every contract function above against `port`.
 ///
 /// **Requires a freshly constructed, still-empty `port`** — call this once,
@@ -744,4 +789,6 @@ pub async fn run_all(port: &dyn WaypointPort) {
     pre_bug_04_payload_without_frontier_loads_with_an_empty_snapshot(port).await;
     muster_progress_round_trips(port).await;
     muster_progress_none_round_trips_as_none(port).await;
+    checkpoint_ns_round_trips(port).await;
+    checkpoint_ns_none_round_trips(port).await;
 }

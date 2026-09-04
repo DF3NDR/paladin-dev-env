@@ -268,6 +268,10 @@ path = "tests/integration/waypoint_retention_fault_injection_test.rs"
 name = "golden_bridge_equivalence"
 path = "tests/integration/golden_bridge_equivalence_test.rs"
 
+[[test]]
+name = "subgraph_formation_in_campaign"
+path = "tests/integration/subgraph_formation_in_campaign_test.rs"
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"

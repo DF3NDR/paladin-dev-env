@@ -406,4 +406,16 @@ mod tests {
         contract_tests::muster_progress_none_round_trips_as_none(&InMemoryWaypointStore::new())
             .await;
     }
+
+    // ── CF-FR-15 / D-20: checkpoint_ns (Plan 23-09) ───────────────────────
+
+    #[tokio::test]
+    async fn checkpoint_ns_round_trips() {
+        contract_tests::checkpoint_ns_round_trips(&InMemoryWaypointStore::new()).await;
+    }
+
+    #[tokio::test]
+    async fn checkpoint_ns_none_round_trips() {
+        contract_tests::checkpoint_ns_none_round_trips(&InMemoryWaypointStore::new()).await;
+    }
 }

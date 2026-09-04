@@ -81,7 +81,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   and a configurable `DirectiveParser` for Paladin nodes (`PlainOutput` backward-compatible
   default; `StructuredDirective` JSON envelope with `on_parse_error` modes) (CF-FR-05…08)
 
-- [ ] **CF-03**: Muster dynamic fan-out works as map-reduce: a Directive spawns runtime-N worker
+- [x] **CF-03**: Muster dynamic fan-out works as map-reduce: a Directive spawns runtime-N worker
   tasks in one superstep with payload isolation, deterministic `task_key`-ordered aggregation
   (repeat-tested), duplicate-key rejection, `max_muster_tasks` limit, and mid-muster resume that
   re-runs only unfinished tasks (CF-FR-09…13)
@@ -358,7 +358,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ENG-08 | Phase 22 | Complete |
 | CF-01 | Phase 23 | Pending |
 | CF-02 | Phase 23 | Complete |
-| CF-03 | Phase 23 | Pending |
+| CF-03 | Phase 23 | Complete |
 | CF-04 | Phase 23 | Complete |
 | CF-05 | Phase 23 | Pending |
 | HITL-01 | Phase 24 | Pending |

@@ -471,7 +471,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 25-08-PLAN.md — FallbackLlmAdapter chain with streaming first-chunk rule, FallbackHop trace, PaladinResult.served_by
+- [x] 25-08-PLAN.md — FallbackLlmAdapter chain with streaming first-chunk rule, FallbackHop trace, PaladinResult.served_by
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

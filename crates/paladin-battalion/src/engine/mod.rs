@@ -4191,4 +4191,61 @@ mod tests {
 
         assert_eq!(captured.lock().unwrap().as_deref(), Some("true"));
     }
+
+    // --- Plan 24-03, Task 2: the structured directive envelope's
+    // `next.parley` key (HITL-01, D-07) -- a Paladin node raising a parley
+    // through its own raw output, not a declarative `NodeSpec::Gate`.
+
+    #[tokio::test]
+    async fn paladin_node_parley_round_trips_to_awaiting_input() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("approved").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!(false)),
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("approver");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("approver"),
+                InputMapping::new("decide"),
+                FieldName::new("approved").unwrap(),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        graph.add_entry(node_id.clone());
+
+        let port = Arc::new(crate::engine::test_support::RecordingPaladinPort::new());
+        port.set_output(
+            "approver",
+            r#"{"delta": {}, "next": {"parley": {"kind": "Approval", "prompt": "Approve this?"}}}"#,
+        );
+        let engine = engine_with_port(port);
+
+        let thread = ThreadId::new("paladin-parley-round-trip").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                let request = &parleys[0];
+                // The engine's own suspension arm re-stamps `node_id` from
+                // the DISPATCHING node regardless of the directive parser's
+                // placeholder (24-01) -- proving the round trip actually
+                // reached the real suspension path, not a hand-built value.
+                assert_eq!(request.node_id, node_id);
+                assert_eq!(request.kind, ParleyKind::Approval);
+                assert_eq!(request.prompt, "Approve this?");
+                assert_eq!(request.on_expire, OnExpire::FailRun);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+    }
 }

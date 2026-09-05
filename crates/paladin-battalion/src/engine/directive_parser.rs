@@ -12,7 +12,7 @@
 //! performs no implicit `output_field` write. The envelope shape:
 //!
 //! ```json
-//! {"delta": {"<field>": <json>, "..."}, "next": "edges" | {"goto": ["node_id"]} | "end" | {"muster": [{"worker": "w", "payload": {}, "task_key": "1"}]}}
+//! {"delta": {"<field>": <json>, "..."}, "next": "edges" | {"goto": ["node_id"]} | "end" | {"muster": [{"worker": "w", "payload": {}, "task_key": "1"}]} | {"parley": {"kind": "Approval", "prompt": "...", "payload": {}, "choices": null, "expires_in_secs": null, "on_expire": "FailRun"}}}
 //! ```
 //!
 //! Extraction follows exactly one order, locked by D-11, checked in this
@@ -29,12 +29,35 @@
 //! a field name the schema does not declare fails the run as
 //! `BattlefieldError::UnknownField` exactly as any other node's delta would
 //! (T-23-14); this module performs no separate allowlist check of its own.
+//!
+//! `next.parley` (HITL-01, D-07) lets an LLM-backed Paladin node raise a
+//! parley the same way a declarative [`crate::engine::graph::NodeSpec::Gate`]
+//! does: `kind`/`prompt` are required, `payload`/`choices`/`expires_in_secs`/
+//! `on_expire` are optional (defaulting to `{}`/`None`/`None`/
+//! [`OnExpire::FailRun`]). The parser supplies `parley_id` (a fresh
+//! [`ParleyId`]), a placeholder `node_id` (re-stamped onto the real
+//! dispatching node by the superstep engine's suspension arm regardless,
+//! `paladin-battalion::engine::superstep`, 24-01) and `created_at`
+//! (`Utc::now()`), and computes `expires_at` from `expires_in_secs`. An
+//! `on_expire: ResumeWithDefault` value is validated against its own `kind`
+//! at RAISE time, through the SAME
+//! [`crate::engine::graph::validate_parley_value_for_kind`] a
+//! [`crate::engine::graph::NodeSpec::Gate`]'s own `on_expire` default is
+//! checked against at graph-validate time (T-24-06) — never a second,
+//! weaker check. This validation failure is a hard [`DirectiveParseError`],
+//! returned directly from [`DirectiveParser::parse`] regardless of
+//! [`OnParseError`] (which governs only a failure to EXTRACT a valid
+//! envelope, not a semantically invalid one that extracted successfully).
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
 use paladin_core::platform::container::directive::{Directive, MusterTask, NextStep};
+use paladin_core::platform::container::parley::{OnExpire, ParleyId, ParleyKind, ParleyRequest};
 use paladin_core::platform::container::waypoint::NodeId;
+
+use crate::engine::graph::validate_parley_value_for_kind;
 
 /// How a `NodeSpec::Paladin` node's raw string output is turned into a
 /// routing [`Directive`] (CF-FR-06, D-11).
@@ -100,7 +123,7 @@ struct Envelope {
 /// [`NextStep`] restricted to the variants an envelope may name, matching
 /// serde's default externally-tagged representation for a unit variant
 /// (`"edges"`, `"end"`) versus a single-field tuple variant
-/// (`{"goto": [...]}`, `{"muster": [...]}`).
+/// (`{"goto": [...]}`, `{"muster": [...]}`, `{"parley": {...}}`).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum EnvelopeNextStep {
@@ -114,17 +137,103 @@ enum EnvelopeNextStep {
     /// The dispatch mechanism for this variant lands in a later plan
     /// (CF-03); this module only parses the shape.
     Muster(Vec<MusterTask>),
+    /// `{"parley": {"kind": ..., "prompt": ..., ...}}` (HITL-01, D-07) --
+    /// see the module-level rustdoc for the full field shape and the
+    /// engine-supplied `parley_id`/`node_id`/`created_at`/`expires_at`
+    /// stamps this module's own conversion adds.
+    // RED-STATE MARKER (Task 2, 24-03): renamed so no envelope actually
+    // deserializes into this variant yet -- restored (`"parley"`) in the
+    // GREEN commit. See PLAN Task 2.
+    #[serde(rename = "not_yet_wired_parley")]
+    Parley(EnvelopeParleyRequest),
 }
 
-impl From<EnvelopeNextStep> for NextStep {
-    fn from(next: EnvelopeNextStep) -> Self {
-        match next {
-            EnvelopeNextStep::Edges => NextStep::Edges,
-            EnvelopeNextStep::Goto(targets) => NextStep::Goto(targets),
-            EnvelopeNextStep::End => NextStep::End,
-            EnvelopeNextStep::Muster(tasks) => NextStep::Muster(tasks),
-        }
+/// The envelope's `next.parley` entry shape (HITL-01, D-07): everything an
+/// author supplies. `parley_id`, `node_id` and `created_at` are NOT part of
+/// this shape -- they are engine-supplied at conversion time
+/// ([`build_parley_request`]), never authored.
+#[derive(Debug, Deserialize)]
+struct EnvelopeParleyRequest {
+    /// The shape of input awaited.
+    kind: ParleyKind,
+    /// Free-form prompt describing what input is being awaited.
+    prompt: String,
+    /// Author-supplied context rendered alongside `prompt`.
+    #[serde(default)]
+    payload: serde_json::Value,
+    /// Valid choices, populated for [`ParleyKind::Choice`]; absent
+    /// otherwise.
+    #[serde(default)]
+    choices: Option<Vec<String>>,
+    /// Seconds from `created_at` until this request expires; absent means
+    /// it never expires.
+    #[serde(default)]
+    expires_in_secs: Option<u64>,
+    /// What happens if this request expires unanswered; absent defaults to
+    /// [`OnExpire::FailRun`] (via [`OnExpire`]'s own `#[derive(Default)]`).
+    #[serde(default)]
+    on_expire: OnExpire,
+}
+
+/// Fold the envelope's `next` shape into a real [`NextStep`], fallibly --
+/// unlike every other `EnvelopeNextStep` variant, `Parley` needs
+/// engine-supplied stamps ([`build_parley_request`]) and a raise-time
+/// validation check (T-24-06) that can fail, so this is a free function
+/// rather than an infallible `From` impl.
+fn envelope_next_step_to_next_step(next: EnvelopeNextStep) -> Result<NextStep, DirectiveParseError> {
+    Ok(match next {
+        EnvelopeNextStep::Edges => NextStep::Edges,
+        EnvelopeNextStep::Goto(targets) => NextStep::Goto(targets),
+        EnvelopeNextStep::End => NextStep::End,
+        EnvelopeNextStep::Muster(tasks) => NextStep::Muster(tasks),
+        EnvelopeNextStep::Parley(entry) => NextStep::Parley(build_parley_request(entry)?),
+    })
+}
+
+/// Build a real [`ParleyRequest`] from an [`EnvelopeParleyRequest`] (HITL-01,
+/// D-07): stamps `parley_id` (fresh), `node_id` (a placeholder -- the
+/// superstep engine's suspension arm re-stamps it onto the real dispatching
+/// node's id regardless of what is supplied here, `engine::superstep`,
+/// 24-01) and `created_at` (`Utc::now()`); computes `expires_at` from
+/// `expires_in_secs`. When `on_expire` is `ResumeWithDefault(value)`,
+/// validates `value` against `kind` through the SAME
+/// [`validate_parley_value_for_kind`] a `NodeSpec::Gate`'s own `on_expire`
+/// default is checked against at graph-validate time (T-24-06) -- a value
+/// that fails this check is a hard [`DirectiveParseError`], never silently
+/// accepted.
+fn build_parley_request(entry: EnvelopeParleyRequest) -> Result<ParleyRequest, DirectiveParseError> {
+    if let OnExpire::ResumeWithDefault(value) = &entry.on_expire
+        && let Err(reason) =
+            validate_parley_value_for_kind(&entry.kind, entry.choices.as_deref(), value)
+    {
+        return Err(DirectiveParseError {
+            reason: format!(
+                "parley on_expire: ResumeWithDefault value is invalid for kind {:?}: {reason}",
+                entry.kind
+            ),
+        });
     }
+
+    let created_at = Utc::now();
+    let expires_at = entry
+        .expires_in_secs
+        .map(|secs| created_at + chrono::Duration::seconds(secs as i64));
+
+    Ok(ParleyRequest {
+        parley_id: ParleyId::new(),
+        // Placeholder -- re-stamped onto the request regardless by the
+        // engine's suspension arm (plan 24-01), so this value is never
+        // observed. Never `NodeId::new("")`'s empty-string special case;
+        // just an ordinary, harmless placeholder string.
+        node_id: NodeId::new("__directive_parser_placeholder__"),
+        kind: entry.kind,
+        prompt: entry.prompt,
+        payload: entry.payload,
+        choices: entry.choices,
+        expires_at,
+        created_at,
+        on_expire: entry.on_expire,
+    })
 }
 
 impl DirectiveParser {
@@ -161,7 +270,17 @@ impl DirectiveParser {
             DirectiveParser::PlainOutput => Ok(plain_output_directive(output, output_field)),
             DirectiveParser::StructuredDirective { on_parse_error } => {
                 match extract_envelope(output) {
-                    Some(envelope) => Ok(envelope_to_directive(envelope)),
+                    // --- HITL-01, D-07: a successfully-EXTRACTED envelope
+                    // whose `next.parley` carries a semantically invalid
+                    // `on_expire: ResumeWithDefault` value fails HERE,
+                    // directly -- `on_parse_error` governs only a failure to
+                    // extract a valid envelope shape in the first place
+                    // (below), never a value that extracted fine but is
+                    // unsafe to accept (T-24-06). Falling back to
+                    // `OnParseError::FallbackPlain` here would silently
+                    // accept an unvalidated default, exactly the bypass
+                    // T-24-06 exists to prevent.
+                    Some(envelope) => envelope_to_directive(envelope),
                     None => match on_parse_error {
                         OnParseError::FailRun => Err(DirectiveParseError {
                             reason: format!(
@@ -195,7 +314,9 @@ fn plain_output_directive(output: &str, output_field: &FieldName) -> Directive {
 
 /// Fold a successfully-extracted [`Envelope`] into a [`Directive`], applying
 /// ONLY the envelope's `delta` — no implicit `output_field` write (D-11).
-fn envelope_to_directive(envelope: Envelope) -> Directive {
+/// Fallible ONLY because of `next.parley`'s raise-time validation (T-24-06,
+/// HITL-01, D-07) — every other `next` shape is infallible.
+fn envelope_to_directive(envelope: Envelope) -> Result<Directive, DirectiveParseError> {
     let mut delta = StateDelta::new();
     for (field, value) in envelope.delta {
         // A `FieldName` rejects only the empty string; no Battlefield
@@ -206,10 +327,10 @@ fn envelope_to_directive(envelope: Envelope) -> Directive {
             delta.set_raw(field_name, value);
         }
     }
-    Directive {
+    Ok(Directive {
         delta,
-        next: envelope.next.into(),
-    }
+        next: envelope_next_step_to_next_step(envelope.next)?,
+    })
 }
 
 /// D-11's locked extraction order: (i) the trimmed whole output, if it
@@ -381,5 +502,126 @@ mod tests {
         let output = r#"{"delta": {}, "next": "end"}"#;
         let directive = parser.parse(output, &field("out")).unwrap();
         assert_eq!(directive.next, NextStep::End);
+    }
+
+    // --- HITL-01, D-07: the envelope's `next.parley` key (Plan 24-03, Task 2).
+
+    #[test]
+    fn envelope_parley_key_parses_to_next_step_parley() {
+        let parser = DirectiveParser::StructuredDirective {
+            on_parse_error: OnParseError::FailRun,
+        };
+        let output = r#"{"delta": {}, "next": {"parley": {
+            "kind": "Approval",
+            "prompt": "Proceed with the deploy?",
+            "payload": {"amount": 100},
+            "choices": null,
+            "expires_in_secs": null
+        }}}"#;
+        let directive = parser.parse(output, &field("out")).unwrap();
+        match directive.next {
+            NextStep::Parley(request) => {
+                assert_eq!(request.kind, ParleyKind::Approval);
+                assert_eq!(request.prompt, "Proceed with the deploy?");
+                assert_eq!(request.payload, serde_json::json!({"amount": 100}));
+                assert_eq!(request.choices, None);
+                assert_eq!(request.on_expire, OnExpire::FailRun);
+            }
+            other => panic!("expected NextStep::Parley, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn envelope_parley_stamps_expires_at_from_expires_in_secs() {
+        let parser = DirectiveParser::StructuredDirective {
+            on_parse_error: OnParseError::FailRun,
+        };
+
+        let before = Utc::now();
+        let output =
+            r#"{"delta": {}, "next": {"parley": {"kind": "FreeText", "prompt": "?", "expires_in_secs": 60}}}"#;
+        let directive = parser.parse(output, &field("out")).unwrap();
+        match directive.next {
+            NextStep::Parley(request) => {
+                let expires_at = request.expires_at.expect("expected Some(expires_at)");
+                assert!(expires_at >= before + chrono::Duration::seconds(60));
+                assert!(expires_at <= Utc::now() + chrono::Duration::seconds(60));
+            }
+            other => panic!("expected NextStep::Parley, got {other:?}"),
+        }
+
+        let output_no_expiry = r#"{"delta": {}, "next": {"parley": {"kind": "FreeText", "prompt": "?"}}}"#;
+        let directive = parser.parse(output_no_expiry, &field("out")).unwrap();
+        match directive.next {
+            NextStep::Parley(request) => assert_eq!(request.expires_at, None),
+            other => panic!("expected NextStep::Parley, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn envelope_parley_defaults_on_expire_to_fail_run() {
+        let parser = DirectiveParser::StructuredDirective {
+            on_parse_error: OnParseError::FailRun,
+        };
+        let output = r#"{"delta": {}, "next": {"parley": {"kind": "FreeText", "prompt": "?"}}}"#;
+        let directive = parser.parse(output, &field("out")).unwrap();
+        match directive.next {
+            NextStep::Parley(request) => assert_eq!(request.on_expire, OnExpire::FailRun),
+            other => panic!("expected NextStep::Parley, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn envelope_parley_resume_with_default_is_validated_at_raise_time() {
+        // "maybe" is not a valid Approval value (only
+        // true/false/yes/no/approve/deny, case-insensitive).
+        let output = r#"{"delta": {}, "next": {"parley": {
+            "kind": "Approval",
+            "prompt": "?",
+            "on_expire": {"ResumeWithDefault": "maybe"}
+        }}}"#;
+
+        let fail_run = DirectiveParser::StructuredDirective {
+            on_parse_error: OnParseError::FailRun,
+        };
+        let err = fail_run.parse(output, &field("out")).unwrap_err();
+        assert!(!err.reason.is_empty());
+
+        // The validation failure is NOT an extraction failure -- it must
+        // propagate regardless of `on_parse_error` (T-24-06): a
+        // `FallbackPlain` policy governs only a failure to extract a valid
+        // envelope shape, never a value that extracted fine but is unsafe
+        // to accept.
+        let fallback = DirectiveParser::StructuredDirective {
+            on_parse_error: OnParseError::FallbackPlain,
+        };
+        let err = fallback.parse(output, &field("out")).unwrap_err();
+        assert!(!err.reason.is_empty());
+    }
+
+    #[test]
+    fn envelope_parley_malformed_shape_uses_on_parse_error_policy() {
+        // Missing the required `prompt` field -- extraction itself fails
+        // (this is a shape failure, not the raise-time validation failure
+        // the previous test exercises).
+        let output = r#"{"delta": {}, "next": {"parley": {"kind": "Approval"}}}"#;
+
+        let fail_run = DirectiveParser::StructuredDirective {
+            on_parse_error: OnParseError::FailRun,
+        };
+        assert!(fail_run.parse(output, &field("out")).is_err());
+
+        let fallback = DirectiveParser::StructuredDirective {
+            on_parse_error: OnParseError::FallbackPlain,
+        };
+        let directive = fallback.parse(output, &field("out")).unwrap();
+        assert_eq!(
+            directive.next, NextStep::Edges,
+            "a malformed parley entry must never be coerced into NextStep::Parley"
+        );
+        assert_eq!(
+            directive.delta.values.get(&field("out")),
+            Some(&serde_json::json!(output))
+        );
     }
 }

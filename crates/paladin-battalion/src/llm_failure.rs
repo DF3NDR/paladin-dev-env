@@ -79,7 +79,40 @@ use paladin_ports::output::llm_port::LlmError;
 /// }
 /// ```
 pub fn to_paladin_error(err: &LlmError) -> PaladinError {
-    PaladinError::LlmError(err.to_string())
+    let (status, provider) = typed_origin(err);
+    PaladinError::LlmFailure {
+        transience: err.transience(),
+        status,
+        provider,
+        // The source's own rendering: `LlmFailure` displays as
+        // `LLM error: {message}`, byte-identical to what the legacy
+        // `PaladinError::LlmError(err.to_string())` rendered (X-03).
+        message: err.to_string(),
+    }
+}
+
+/// Read the HTTP status and provider name from the variants that carry them
+/// as typed fields; `(None, None)` for every other variant.
+///
+/// Only `ProviderError` carries a status, so every other variant converts
+/// with `status: None` -- never a sentinel such as `0`, and never a value
+/// parsed out of the rendered message (T-25-24). `UsageLimitExceeded` names
+/// its provider by value without a status. A fallback chain reports whatever
+/// its last attempt carried, matching how its `transience()` delegates to
+/// `last` (FT-FR-16).
+///
+/// `LlmError` is `#[non_exhaustive]` from this crate's point of view (D-04),
+/// so the wildcard arm is compiler-required; a future variant that gains a
+/// typed status or provider must add its own arm here to have it cross.
+fn typed_origin(err: &LlmError) -> (Option<u16>, Option<String>) {
+    match err {
+        LlmError::ProviderError {
+            provider, status, ..
+        } => (Some(*status), Some(provider.clone())),
+        LlmError::UsageLimitExceeded { provider, .. } => (None, Some(provider.clone())),
+        LlmError::AllProvidersFailed { last, .. } => typed_origin(last),
+        _ => (None, None),
+    }
 }
 
 #[cfg(test)]
@@ -119,9 +152,7 @@ mod tests {
                     ("openai".to_string(), "HTTP 503".to_string()),
                     ("deepseek".to_string(), "invalid API key".to_string()),
                 ],
-                last: Box::new(LlmError::AuthenticationError(
-                    "invalid API key".to_string(),
-                )),
+                last: Box::new(LlmError::AuthenticationError("invalid API key".to_string())),
             },
         ]
     }
@@ -160,7 +191,11 @@ mod tests {
     fn conversion_carries_transience_from_the_source() {
         for err in every_variant() {
             let (transience, ..) = expect_failure(to_paladin_error(&err));
-            assert_eq!(transience, err.transience(), "transience drifted for {err:?}");
+            assert_eq!(
+                transience,
+                err.transience(),
+                "transience drifted for {err:?}"
+            );
         }
     }
 

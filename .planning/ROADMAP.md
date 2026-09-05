@@ -459,9 +459,9 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 25-02-PLAN.md — X-10 error taxonomy gate: transience() on both enums, LlmFailure/ProviderError/AllProvidersFailed/BattalionError::Node, three enums non-exhaustive, §9.2 rows
-- [ ] 25-03-PLAN.md — Aegis validation: EngineRegistries, fail-closed predicate/handler registries, node-kind matrix, fingerprint v4 → v5
-- [ ] 25-04-PLAN.md — Node cache port, CachedDelta, InMemory + Redis adapters under one contract suite, redis-cache feature, NodeCacheConfig
+- [x] 25-02-PLAN.md — X-10 error taxonomy gate: transience() on both enums, LlmFailure/ProviderError/AllProvidersFailed/BattalionError::Node, three enums non-exhaustive, §9.2 rows
+- [x] 25-03-PLAN.md — Aegis validation: EngineRegistries, fail-closed predicate/handler registries, node-kind matrix, fingerprint v4 → v5
+- [x] 25-04-PLAN.md — Node cache port, CachedDelta, InMemory + Redis adapters under one contract suite, redis-cache feature, NodeCacheConfig
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

@@ -393,7 +393,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 24-02-PLAN.md — `Gate` node, graph validation, edge routing, fingerprint `v4`
+- [x] 24-02-PLAN.md — `Gate` node, graph validation, edge routing, fingerprint `v4`
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

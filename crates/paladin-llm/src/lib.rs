@@ -20,6 +20,7 @@
 //! | `openai-compatible` | Any OpenAI-compatible endpoint (operator-configured) | [`openai_compatible::OpenAiCompatibleAdapter`], [`openai_compatible::OpenAiCompatibleConfig`] |
 //! | `gemini` | Google Gemini (text-only, bespoke protocol) | [`gemini::GeminiAdapter`], [`gemini::GeminiConfig`] |
 //! | `mock` (default) | Testing | [`mock::MockLlmAdapter`], [`mock::MultiStepMockLlmPort`] |
+//! | *(none — always compiled)* | Model fallback chain over any of the above | [`fallback::FallbackLlmAdapter`] |
 //! | `openai-embeddings` | OpenAI Embeddings | [`openai::OpenAIEmbeddingAdapter`] |
 //! | `vision` | Vision (multimodal) | Extends OpenAI and Anthropic adapters |
 //!
@@ -53,6 +54,10 @@ pub mod config;
 /// Error types returned by provider adapters.
 #[allow(missing_docs)]
 pub mod error;
+/// Model fallback (FT-FR-16/17): [`fallback::FallbackLlmAdapter`] composes an
+/// ordered chain of plain `LlmPort`s and hops on Transient/Unknown errors
+/// only. Not feature-gated (ADR-0046) — it needs no provider adapter itself.
+pub mod fallback;
 /// The one shared HTTP-status-to-`LlmError` mapping every provider adapter
 /// routes its non-2xx branch through (FT-FR-01, D-03) — redacts before it
 /// bounds, and emits a typed `ProviderError { status }` for every status

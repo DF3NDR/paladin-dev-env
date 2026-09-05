@@ -546,6 +546,7 @@ impl PaladinPort for RecordingPaladinPort {
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
+            served_by: None,
         })
     }
 

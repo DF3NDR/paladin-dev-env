@@ -68,6 +68,7 @@ use crate::infrastructure::adapters::arsenal::tool_result_formatter::ToolResultF
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use log::{debug, error, info, warn};
 use paladin_battalion::llm_failure::to_paladin_error;
+use paladin_llm::fallback::SERVED_BY_METADATA_KEY;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
 use paladin_ports::output::llm_port::{FunctionCall, LlmPort, LlmRequest};
@@ -666,6 +667,11 @@ impl PaladinExecutionService {
         let mut _memories_retrieved_count = 0usize;
         let mut _extraction_triggered = false;
         let mut handoff_history = Vec::new();
+        // FT-FR-17 (D-26): the provider that served the latest loop, copied
+        // from the `paladin.served_by` metadata key a `FallbackLlmAdapter`
+        // stamps on its response. A plain adapter stamps nothing, so this
+        // stays `None` and the serialised result is byte-identical to before.
+        let mut served_by: Option<String> = None;
 
         // =======================================================================
         // LAYER 1: Autonomous Planning & Prompt Generation (Optional, Pre-Exec)
@@ -791,6 +797,9 @@ impl PaladinExecutionService {
             // Update accumulated output and token count
             accumulated_output = response.content.clone();
             total_tokens += response.usage.total_tokens;
+            if let Some(provider) = response.metadata.get(SERVED_BY_METADATA_KEY) {
+                served_by = Some(provider.clone());
+            }
 
             // =======================================================================
             // LAYER 3: Handoff Detection & Execution (Optional, Post-LLM)
@@ -920,6 +929,7 @@ impl PaladinExecutionService {
                     stop_reason: StopReason::MaxLoops,
                     plan: task_plan, // Layer 1 metadata
                     handoff_history, // Layer 3 metadata
+                    served_by,       // FT-FR-17: serving provider (fallback chains only)
                 });
             }
         }
@@ -946,6 +956,7 @@ impl PaladinExecutionService {
             stop_reason: StopReason::Completed,
             plan: task_plan, // Layer 1 metadata
             handoff_history, // Layer 3 metadata
+            served_by,       // FT-FR-17: serving provider (fallback chains only)
         })
     }
 

@@ -647,3 +647,90 @@ async fn test_mixed_autonomous_features() {
     assert!(!paladin_result.output.is_empty(), "Core execution works");
     assert!(paladin_result.plan.is_none(), "Planning not enabled");
 }
+
+// ---------------------------------------------------------------------------
+// Phase 25 Plan 08 (FT-FR-17, D-26): the serving provider on PaladinResult
+// ---------------------------------------------------------------------------
+
+mod served_by {
+    use super::*;
+    use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
+    use paladin_llm::fallback::FallbackLlmAdapter;
+    use paladin_llm::mock::MockLlmAdapter;
+
+    fn service(llm_port: Arc<dyn LlmPort>) -> PaladinExecutionService {
+        let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
+        PaladinExecutionService::new(llm_port, circuit_breaker, None, None)
+    }
+
+    async fn run(llm_port: Arc<dyn LlmPort>) -> PaladinResult {
+        let paladin = PaladinBuilder::new(llm_port.clone())
+            .system_prompt("You are a helpful assistant")
+            .name("ServedByPaladin")
+            .max_loops(1)
+            .build()
+            .await
+            .expect("Failed to build paladin");
+        service(llm_port)
+            .execute(&paladin, "Test input")
+            .await
+            .expect("execution should succeed")
+    }
+
+    /// Test 4: a service driven by a FallbackLlmAdapter whose first provider
+    /// fails transiently reports the SECOND provider's name.
+    #[tokio::test]
+    async fn fallback_served_result_records_the_serving_provider() {
+        let primary = MockLlmAdapter::new()
+            .with_provider_name("openai")
+            .with_error(LlmError::ProviderError {
+                provider: "openai".to_string(),
+                status: 503,
+                message: "upstream unavailable".to_string(),
+            });
+        let backup = MockLlmAdapter::new()
+            .with_provider_name("anthropic")
+            .with_response("served by the backup");
+        let chain = FallbackLlmAdapter::new(vec![
+            Arc::new(primary) as Arc<dyn LlmPort>,
+            Arc::new(backup) as Arc<dyn LlmPort>,
+        ])
+        .expect("two-element chain");
+
+        let result = run(Arc::new(chain)).await;
+
+        assert_eq!(result.output, "served by the backup");
+        assert_eq!(result.served_by.as_deref(), Some("anthropic"));
+    }
+
+    /// Test 5: a plain single adapter stamps nothing, so `served_by` stays
+    /// `None` and the JSON is byte-identical to today's.
+    #[tokio::test]
+    async fn a_non_fallback_result_leaves_served_by_none() {
+        let single = MockLlmAdapter::new()
+            .with_provider_name("openai")
+            .with_response("served directly");
+
+        let result = run(Arc::new(single)).await;
+
+        assert_eq!(result.output, "served directly");
+        assert!(result.served_by.is_none());
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("served_by"), "{json}");
+    }
+
+    /// Test 6: a CROSS-CRATE functional-update construction compiles, which
+    /// is only possible because `PaladinResult` is not `#[non_exhaustive]`
+    /// (D-26, X-10.3 option (b)).
+    #[test]
+    fn paladin_result_is_not_marked_non_exhaustive() {
+        let result = PaladinResult {
+            output: "constructed across a crate boundary".to_string(),
+            stop_reason: StopReason::Completed,
+            ..Default::default()
+        };
+
+        assert!(result.served_by.is_none());
+        assert_eq!(result.loop_count, 0);
+    }
+}

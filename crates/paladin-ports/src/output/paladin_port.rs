@@ -308,8 +308,7 @@
 //!             execution_time_ms: 500,
 //!             loop_count: 1,
 //!             stop_reason: StopReason::Completed,
-//!             plan: None,
-//!             handoff_history: Vec::new(),
+//!             ..Default::default()
 //!         })
 //!     }
 //!
@@ -501,8 +500,7 @@ pub type PaladinStream = mpsc::Receiver<Result<PaladinStreamChunk, PaladinError>
 ///             execution_time_ms: start_time.elapsed().as_millis() as u64,
 ///             loop_count,
 ///             stop_reason: StopReason::Completed,
-///             plan: None,
-///             handoff_history: Vec::new(),
+///             ..Default::default()
 ///         })
 ///     }
 ///
@@ -824,6 +822,7 @@ mod tests {
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
+            served_by: None,
         };
 
         assert_eq!(result.output, "Test output");
@@ -897,6 +896,7 @@ mod tests {
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
+            served_by: None,
         };
 
         let json = serde_json::to_string(&result).expect("Failed to serialize");
@@ -943,6 +943,7 @@ mod tests {
             stop_reason: StopReason::Completed,
             plan: Some(plan.clone()),
             handoff_history: Vec::new(),
+            served_by: None,
         };
 
         assert!(result.has_plan());
@@ -978,6 +979,7 @@ mod tests {
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: vec![record1, record2],
+            served_by: None,
         };
 
         assert!(!result.has_plan());
@@ -1020,6 +1022,7 @@ mod tests {
             stop_reason: StopReason::Completed,
             plan: Some(plan),
             handoff_history: vec![record],
+            served_by: None,
         };
 
         // Serialize

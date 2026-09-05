@@ -34,11 +34,28 @@
 //!   [`InputMappingError::UndeclaredField`], never a silent Battlefield
 //!   read. Graph validation independently rejects any schema field named
 //!   with the `muster.` prefix, so this namespace can never be shadowed.
+//! - A placeholder in the `parley.` namespace (`{parley.value}`,
+//!   `{parley.prompt}`, `{parley.kind}`, `{parley.responded_by}`, HITL-01,
+//!   D-07) resolves ONLY from the executing node's own outstanding
+//!   [`ParleyResponse`](paladin_core::platform::container::parley::ParleyResponse)
+//!   — passed to [`InputMapping::render`] separately, `Some` only on the
+//!   post-resume re-run of a parleying node — never from the Battlefield.
+//!   `kind`/`prompt` are stamped onto the response by `WarEngine::resume_with`
+//!   from the matching `ParleyRequest`, so all four keys resolve from this
+//!   one type; `responded_by` renders as an empty string for a D-12
+//!   `OnExpire::ResumeWithDefault` substitution (`responded_by: None`),
+//!   never a panic. With no parley context present, or an unrecognized key
+//!   under the prefix, such a placeholder is a typed
+//!   [`InputMappingError::UndeclaredField`], never a silent Battlefield
+//!   read. Graph validation independently rejects any schema field named
+//!   with the `parley.` prefix (23 D-15's precedent, extended), so this
+//!   namespace can never be shadowed either (T-24-09).
 
 use thiserror::Error;
 
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName};
 use paladin_core::platform::container::directive::MusterContext;
+use paladin_core::platform::container::parley::ParleyResponse;
 
 /// Error returned by [`InputMapping::render`].
 ///
@@ -90,7 +107,15 @@ impl InputMapping {
     /// for a worker-template dispatch, in which case a `{muster.payload}`/
     /// `{muster.task_key}` placeholder resolves from it; `None` for every
     /// ordinary execution, in which case such a placeholder is a typed
-    /// error rather than a silent Battlefield read.
+    /// error rather than a silent Battlefield read. `parley` is the
+    /// executing node's own outstanding `ParleyResponse` (HITL-01, D-07) --
+    /// `Some` only on the post-resume re-run of a parleying node, in which
+    /// case a `{parley.value}`/`{parley.prompt}`/`{parley.kind}`/
+    /// `{parley.responded_by}` placeholder resolves from it; `None` for
+    /// every other execution (including a parleying node's OWN first
+    /// visit, which raises the parley rather than answers it), in which
+    /// case such a placeholder is a typed error rather than a silent
+    /// Battlefield read.
     ///
     /// # Examples
     ///
@@ -109,12 +134,17 @@ impl InputMapping {
     /// let battlefield = Battlefield::new(schema);
     ///
     /// let mapping = InputMapping::new("research {topic}");
-    /// assert_eq!(mapping.render(&battlefield, None).unwrap(), "research rust");
+    /// assert_eq!(
+    ///     mapping.render(&battlefield, None, None).unwrap(),
+    ///     "research rust"
+    /// );
     /// ```
     pub fn render(
         &self,
         state: &Battlefield,
         muster: Option<&MusterContext>,
+        // RED-STATE MARKER (Task 1, 24-03): this parameter is temporarily
+        // absent -- restored in the GREEN commit. See PLAN Task 1.
     ) -> Result<String, InputMappingError> {
         let mut rendered = String::with_capacity(self.template.len());
         let mut rest = self.template.as_str();
@@ -139,7 +169,7 @@ impl InputMapping {
     }
 
     /// Resolve one `{field}` placeholder's text against `state`, or against
-    /// `muster` for a `muster.`-prefixed placeholder (CF-03, D-15).
+    /// `muster` for a `muster.`-prefixed placeholder (CF-03/D-15).
     fn resolve(
         placeholder: &str,
         state: &Battlefield,
@@ -200,6 +230,47 @@ impl InputMapping {
             }),
         }
     }
+
+    /// Resolve a `parley.`-namespaced placeholder (`name` is the text after
+    /// the `parley.` prefix) from `parley`, never from the Battlefield
+    /// (HITL-01, D-07, T-24-09). Absent context, or an unrecognized name,
+    /// is [`InputMappingError::UndeclaredField`] naming the FULL placeholder
+    /// (including the `parley.` prefix) -- never a silent Battlefield
+    /// fallback.
+    ///
+    /// Supported keys, all sourced from this ONE [`ParleyResponse`] (`kind`
+    /// and `prompt` are stamped onto it by `WarEngine::resume_with` from
+    /// the matching `ParleyRequest`, never supplied meaningfully by an
+    /// external caller):
+    /// - `value`: the response's JSON value, rendered per the module-level
+    ///   string/other-JSON-type rule.
+    /// - `prompt`: the originating request's prompt, verbatim.
+    /// - `kind`: the `ParleyKind` discriminant's `Debug` name (`"Approval"`,
+    ///   `"Choice"`, `"FreeText"`, `"StateEdit"`).
+    /// - `responded_by`: the responder, or an empty string for a D-12
+    ///   `OnExpire::ResumeWithDefault` substitution (`responded_by: None`)
+    ///   -- a documented, defined rendering, never a panic.
+    fn resolve_parley(
+        name: &str,
+        placeholder: &str,
+        parley: Option<&ParleyResponse>,
+    ) -> Result<String, InputMappingError> {
+        let response = parley.ok_or_else(|| InputMappingError::UndeclaredField {
+            field: placeholder.to_string(),
+        })?;
+        match name {
+            "value" => Ok(match &response.value {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            }),
+            "prompt" => Ok(response.prompt.clone()),
+            "kind" => Ok(format!("{:?}", response.kind)),
+            "responded_by" => Ok(response.responded_by.clone().unwrap_or_default()),
+            _ => Err(InputMappingError::UndeclaredField {
+                field: placeholder.to_string(),
+            }),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -242,7 +313,10 @@ mod tests {
         let battlefield = battlefield_with_value(schema, "name", serde_json::json!("world"));
 
         let mapping = InputMapping::new("hello {name}!");
-        assert_eq!(mapping.render(&battlefield, None).unwrap(), "hello world!");
+        assert_eq!(
+            mapping.render(&battlefield, None, None).unwrap(),
+            "hello world!"
+        );
     }
 
     #[test]
@@ -252,7 +326,7 @@ mod tests {
             battlefield_with_value(schema, "payload", serde_json::json!({"a": 1, "b": "x"}));
 
         let mapping = InputMapping::new("data={payload}");
-        let rendered = mapping.render(&battlefield, None).unwrap();
+        let rendered = mapping.render(&battlefield, None, None).unwrap();
         assert_eq!(rendered, r#"data={"a":1,"b":"x"}"#);
     }
 
@@ -262,7 +336,10 @@ mod tests {
         let battlefield = battlefield_with_value(schema, "count", serde_json::json!(42));
 
         let mapping = InputMapping::new("count={count}");
-        assert_eq!(mapping.render(&battlefield, None).unwrap(), "count=42");
+        assert_eq!(
+            mapping.render(&battlefield, None, None).unwrap(),
+            "count=42"
+        );
     }
 
     #[test]
@@ -284,7 +361,7 @@ mod tests {
             .unwrap();
 
         let mapping = InputMapping::new("{first}-{second}");
-        assert_eq!(mapping.render(&battlefield, None).unwrap(), "a-b");
+        assert_eq!(mapping.render(&battlefield, None, None).unwrap(), "a-b");
     }
 
     #[test]
@@ -293,7 +370,7 @@ mod tests {
         let battlefield = Battlefield::new(schema);
 
         let mapping = InputMapping::new("value={missing}");
-        let err = mapping.render(&battlefield, None).unwrap_err();
+        let err = mapping.render(&battlefield, None, None).unwrap_err();
         assert_eq!(
             err,
             InputMappingError::UndeclaredField {
@@ -312,7 +389,10 @@ mod tests {
         let battlefield = Battlefield::new(schema);
 
         let mapping = InputMapping::new("about {topic}");
-        assert_eq!(mapping.render(&battlefield, None).unwrap(), "about rust");
+        assert_eq!(
+            mapping.render(&battlefield, None, None).unwrap(),
+            "about rust"
+        );
     }
 
     #[test]
@@ -321,7 +401,7 @@ mod tests {
         let battlefield = Battlefield::new(schema);
 
         let mapping = InputMapping::new("about {topic}");
-        let err = mapping.render(&battlefield, None).unwrap_err();
+        let err = mapping.render(&battlefield, None, None).unwrap_err();
         assert_eq!(
             err,
             InputMappingError::NoValueOrDefault {
@@ -337,7 +417,7 @@ mod tests {
 
         let mapping = InputMapping::new("no placeholders here");
         assert_eq!(
-            mapping.render(&battlefield, None).unwrap(),
+            mapping.render(&battlefield, None, None).unwrap(),
             "no placeholders here"
         );
     }
@@ -349,7 +429,7 @@ mod tests {
 
         let mapping = InputMapping::new("dangling {brace");
         assert_eq!(
-            mapping.render(&battlefield, None).unwrap(),
+            mapping.render(&battlefield, None, None).unwrap(),
             "dangling {brace"
         );
     }
@@ -367,7 +447,7 @@ mod tests {
 
         let mapping = InputMapping::new("process {muster.payload}");
         assert_eq!(
-            mapping.render(&battlefield, Some(&ctx)).unwrap(),
+            mapping.render(&battlefield, Some(&ctx), None).unwrap(),
             "process widget-42"
         );
     }
@@ -383,7 +463,7 @@ mod tests {
 
         let mapping = InputMapping::new("key={muster.task_key}");
         assert_eq!(
-            mapping.render(&battlefield, Some(&ctx)).unwrap(),
+            mapping.render(&battlefield, Some(&ctx), None).unwrap(),
             "key=task-7"
         );
     }
@@ -403,7 +483,7 @@ mod tests {
         let battlefield = Battlefield::new(schema);
 
         let mapping = InputMapping::new("{muster.payload}");
-        let err = mapping.render(&battlefield, None).unwrap_err();
+        let err = mapping.render(&battlefield, None, None).unwrap_err();
         assert_eq!(
             err,
             InputMappingError::UndeclaredField {
@@ -422,12 +502,114 @@ mod tests {
         };
 
         let mapping = InputMapping::new("{muster.nonexistent}");
-        let err = mapping.render(&battlefield, Some(&ctx)).unwrap_err();
+        let err = mapping.render(&battlefield, Some(&ctx), None).unwrap_err();
         assert_eq!(
             err,
             InputMappingError::UndeclaredField {
                 field: "muster.nonexistent".to_string()
             }
+        );
+    }
+
+    // --- HITL-01, D-07: the `parley.` namespace (Plan 24-03, Task 1).
+
+    use paladin_core::platform::container::parley::{ParleyId, ParleyKind};
+
+    fn sample_parley_response(responded_by: Option<&str>, defaulted: bool) -> ParleyResponse {
+        ParleyResponse {
+            parley_id: ParleyId::new(),
+            kind: ParleyKind::Approval,
+            prompt: "Proceed with the deploy?".to_string(),
+            value: serde_json::json!(true),
+            responded_by: responded_by.map(str::to_string),
+            responded_at: chrono::Utc::now(),
+            defaulted,
+        }
+    }
+
+    #[test]
+    fn parley_namespace_resolves_from_node_context() {
+        let schema = schema_with(vec![]);
+        let battlefield = Battlefield::new(schema);
+        let response = sample_parley_response(Some("ops@example.com"), false);
+
+        let mapping = InputMapping::new(
+            "value={parley.value} prompt={parley.prompt} kind={parley.kind} by={parley.responded_by}",
+        );
+        assert_eq!(
+            mapping.render(&battlefield, None, Some(&response)).unwrap(),
+            "value=true prompt=Proceed with the deploy? kind=Approval by=ops@example.com"
+        );
+    }
+
+    #[test]
+    fn parley_namespace_never_reads_battlefield() {
+        // A Battlefield field literally named "parley.value" (graph
+        // validation rejects declaring this in a real WarGraph schema, but
+        // this unit test exercises InputMapping::render in isolation) must
+        // NOT be read -- the placeholder still resolves from the NodeContext
+        // parley response, never falling through to state.get_raw.
+        let schema = schema_with(vec![field(
+            "parley.value",
+            DispatchRule::LastWrite,
+            Some(serde_json::json!("battlefield-value")),
+        )]);
+        let battlefield = Battlefield::new(schema);
+        let response = sample_parley_response(Some("alice"), false);
+
+        let mapping = InputMapping::new("{parley.value}");
+        assert_eq!(
+            mapping.render(&battlefield, None, Some(&response)).unwrap(),
+            "true"
+        );
+    }
+
+    #[test]
+    fn parley_namespace_without_context_is_typed_error() {
+        let schema = schema_with(vec![]);
+        let battlefield = Battlefield::new(schema);
+
+        let mapping = InputMapping::new("{parley.value}");
+        let err = mapping.render(&battlefield, None, None).unwrap_err();
+        assert_eq!(
+            err,
+            InputMappingError::UndeclaredField {
+                field: "parley.value".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parley_namespace_unknown_key_is_typed_error() {
+        let schema = schema_with(vec![]);
+        let battlefield = Battlefield::new(schema);
+        let response = sample_parley_response(Some("alice"), false);
+
+        let mapping = InputMapping::new("{parley.nonexistent}");
+        let err = mapping
+            .render(&battlefield, None, Some(&response))
+            .unwrap_err();
+        assert_eq!(
+            err,
+            InputMappingError::UndeclaredField {
+                field: "parley.nonexistent".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn responded_by_none_renders_empty_for_defaulted_response() {
+        // D-12: a ResumeWithDefault expiry substitution carries
+        // `responded_by: None` -- `{parley.responded_by}` must render a
+        // defined, documented empty string rather than panicking.
+        let schema = schema_with(vec![]);
+        let battlefield = Battlefield::new(schema);
+        let response = sample_parley_response(None, true);
+
+        let mapping = InputMapping::new("by=[{parley.responded_by}]");
+        assert_eq!(
+            mapping.render(&battlefield, None, Some(&response)).unwrap(),
+            "by=[]"
         );
     }
 }

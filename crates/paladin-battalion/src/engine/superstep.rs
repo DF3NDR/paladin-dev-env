@@ -185,15 +185,21 @@ impl StateNode for GateDispatchNode {
             // beyond an empty delta -- a Gate's own contribution to the
             // Battlefield happens only on the post-resume visit below.
             None => {
+                // --- HITL-01, D-07: this is the RAISING visit -- no parley
+                // context is in scope yet (that only exists on the
+                // post-resume visit below), so both templates render with
+                // `parley: None`, exactly like every other first-visit
+                // render call site (Task 1's own call-site audit,
+                // 24-03-SUMMARY.md).
                 let prompt = self
                     .request
                     .prompt_template
-                    .render(state, ctx.muster.as_ref())
+                    .render(state, ctx.muster.as_ref(), None)
                     .map_err(|e| NodeError(format!("gate {}: {e}", ctx.node_id)))?;
                 let payload = match &self.request.payload_template {
                     Some(template) => {
                         let rendered = template
-                            .render(state, ctx.muster.as_ref())
+                            .render(state, ctx.muster.as_ref(), None)
                             .map_err(|e| NodeError(format!("gate {}: {e}", ctx.node_id)))?;
                         // A payload template commonly renders a JSON shape
                         // (e.g. `{"amount": {amount}}`) through ordinary
@@ -336,8 +342,20 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                 // --- CF-03, D-15: the executing task's Muster context (`Some`
                 // only for a worker-template dispatch), so `{muster.payload}`/
                 // `{muster.task_key}` resolve from it, never from the
-                // Battlefield.
-                let rendered = match input_template.render(snapshot, ctx.muster.as_ref()) {
+                // Battlefield. --- HITL-01, D-07: `ctx.parley_response()` is
+                // `Some` ONLY on the post-resume re-run of a parleying
+                // Paladin node, so `{parley.value}`/`{parley.prompt}`/
+                // `{parley.kind}`/`{parley.responded_by}` resolve from it on
+                // that re-run (Task 1's own call-site audit,
+                // 24-03-SUMMARY.md: this is the ONE call site that threads a
+                // real parley response, since it is the same dispatch path a
+                // Paladin node's first-raising visit AND its post-resume
+                // re-run both go through).
+                let rendered = match input_template.render(
+                    snapshot,
+                    ctx.muster.as_ref(),
+                    ctx.parley_response(),
+                ) {
                     Ok(rendered) => rendered,
                     Err(e) => {
                         return (

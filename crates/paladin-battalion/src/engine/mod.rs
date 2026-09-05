@@ -56,6 +56,9 @@ pub mod graph;
 pub mod hooks;
 pub mod input_mapping;
 pub mod node;
+/// `EngineRegistries`: the one bundle `WarGraph::validate` and `WarEngine`
+/// carry every named-registration registry through (D-13, D-30).
+pub mod registries;
 pub mod retry;
 pub mod shutdown;
 mod superstep;
@@ -69,7 +72,9 @@ use chrono::Utc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::edge_evaluator::{EdgeConditionEvaluator, EdgeEvaluatorRegistry};
+use crate::edge_evaluator::EdgeConditionEvaluator;
+use crate::error_handler::ErrorHandler;
+use crate::retry_predicate::RetryPredicateEvaluator;
 #[cfg(test)]
 use paladin_core::platform::container::battlefield::CustomDispatchResolver;
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
@@ -93,6 +98,7 @@ pub use graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
 pub use hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 pub use input_mapping::{InputMapping, InputMappingError};
 pub use node::{NodeContext, StateNode, StateNodeError};
+pub use registries::EngineRegistries;
 
 /// Whether a `WaypointPort::save` failure fails the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -851,6 +857,90 @@ pub enum EngineError {
         /// The unknown starting `WaypointId`.
         waypoint: WaypointId,
     },
+
+    /// `WarGraph::validate` found one or more `RetryPredicate::Custom(name)`
+    /// values (D-13, CF-01 precedent, FT-FR-13) reachable from any node's
+    /// resolved `Aegis` with no evaluator registered via
+    /// [`WarEngine::with_retry_predicate`]. Checked before any node
+    /// executes; never silently degraded to "do not retry" at runtime.
+    /// Carries EVERY offending name, sorted and deduplicated, mirroring
+    /// [`EngineError::UnregisteredEdgeCondition`]'s discipline.
+    #[error("unregistered custom retry predicate(s): {}", names.join(", "))]
+    UnregisteredRetryPredicate {
+        /// Every unregistered `RetryPredicate::Custom` name, sorted and
+        /// deduplicated.
+        names: Vec<String>,
+    },
+
+    /// `WarGraph::validate` found one or more `ErrorHandlerSpec::Custom(name)`
+    /// values (D-13, CF-01 precedent, FT-FR-13) reachable from any node's
+    /// resolved `Aegis` with no handler registered via
+    /// [`WarEngine::with_error_handler`]. Checked before any node executes;
+    /// never silently degraded to a default at runtime. Carries EVERY
+    /// offending name, sorted and deduplicated, mirroring
+    /// [`EngineError::UnregisteredEdgeCondition`]'s discipline.
+    #[error("unregistered custom error handler(s): {}", names.join(", "))]
+    UnregisteredErrorHandler {
+        /// Every unregistered `ErrorHandlerSpec::Custom` name, sorted and
+        /// deduplicated.
+        names: Vec<String>,
+    },
+
+    /// `WarGraph::validate` found one or more node ids registered via
+    /// [`graph::WarGraph::set_aegis`] that are not declared nodes (D-10,
+    /// plan 25-03) -- the node was never added, or was renamed/removed
+    /// after `set_aegis` was called. Carries EVERY offending node id, in
+    /// sorted order, mirroring [`EngineError::UnreachableNode`]'s "report
+    /// the whole problem at once" discipline.
+    #[error("aegis set on undeclared node(s): {reason}")]
+    AegisOnUndeclaredNode {
+        /// Every offending node id, sorted.
+        nodes: Vec<NodeId>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found an `Aegis` policy attached to a node whose
+    /// kind does not support it (D-12, plan 25-03): a `NodeSpec::Battalion`
+    /// node rejects `retry`/`cache` (its child's Waypoints are durable
+    /// state, and attempt isolation / cache replay would need per-attempt
+    /// child-thread namespacing this phase does not build); a
+    /// `NodeSpec::Gate` node rejects any `Aegis` at all (no attempt to
+    /// retry, time or cache; expiry is `on_expire`'s job). Carries EVERY
+    /// offending (node, policy, reason) triple, pre-formatted, mirroring
+    /// [`EngineError::BattalionStateMapUnknownField`]'s discipline.
+    #[error("aegis unsupported for node kind: {reason}")]
+    AegisUnsupportedForNodeKind {
+        /// Every offending node/policy pairing, pre-formatted with its
+        /// reason.
+        offenders: Vec<String>,
+        /// Explains the rule.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found a resolved `Aegis`'s `RetryPolicy` with
+    /// `max_attempts == 0` (D-09, plan 25-03) -- never interpreted as
+    /// unlimited retries, and never silently treated as a single attempt.
+    #[error("invalid retry policy for node {node}: {reason}")]
+    RetryPolicyInvalid {
+        /// The offending node.
+        node: NodeId,
+        /// Why the policy was rejected.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found a resolved `Aegis`'s `TimeoutPolicy` with
+    /// `Some(Duration::ZERO)` on `run_timeout` or `idle_timeout` (D-09, plan
+    /// 25-03) -- never interpreted as an immediate-kill timeout. A
+    /// `TimeoutPolicy` with both fields `None` is a valid no-op and never
+    /// reaches this error.
+    #[error("invalid timeout policy for node {node}: {reason}")]
+    TimeoutPolicyInvalid {
+        /// The offending node.
+        node: NodeId,
+        /// Why the policy was rejected.
+        reason: String,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -884,12 +974,14 @@ pub struct WarEngine<W: WaypointPort> {
     /// `WarGraph::validate` and `Battlefield::merge` as a
     /// `CustomDispatchResolver` at `start`.
     dispatch_registry: DispatchRegistry,
-    /// Registered `EdgeCondition::Custom` evaluators (BUG-01, CF-01). Empty
-    /// by default: a v0.9 configuration with no `Custom` edges boots
-    /// identically (D-26). Never referenced from `paladin-core` (X-01) --
-    /// handed to `WarGraph::validate` and `superstep::run` as an
-    /// `EdgeEvaluatorRegistry` at `start`/`resume`.
-    edge_evaluators: EdgeEvaluatorRegistry,
+    /// The bundle of every named-registration registry (`EdgeCondition::
+    /// Custom` evaluators BUG-01/CF-01; `RetryPredicate::Custom` and
+    /// `ErrorHandlerSpec::Custom` D-13, plan 25-03). Empty by default: a
+    /// v0.9 configuration with no `Custom` names anywhere boots identically
+    /// (D-26). Never referenced from `paladin-core` (X-01) -- handed to
+    /// `WarGraph::validate` and `superstep::run` (its `edge_evaluators`
+    /// field only, for now) at `start`/`resume` as an `&EngineRegistries`.
+    registries: EngineRegistries,
     /// The bounded, drop-oldest `TraceSink` forwarder (ENG-FR-21). Always
     /// present -- constructed with no sink (`TraceDispatcher::new(None)`) by
     /// default, in which case `emit` is a no-op and no channel is
@@ -930,7 +1022,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             durability: WaypointDurability::Strict,
             parallelism: None,
             dispatch_registry: DispatchRegistry::new(),
-            edge_evaluators: EdgeEvaluatorRegistry::new(),
+            registries: EngineRegistries::new(),
             trace_dispatcher: Arc::new(TraceDispatcher::new(None)),
             interceptors: Vec::new(),
             cancellation_token: None,
@@ -979,7 +1071,38 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         name: impl Into<String>,
         evaluator: Arc<dyn EdgeConditionEvaluator>,
     ) -> Self {
-        self.edge_evaluators.register(name, evaluator);
+        self.registries.edge_evaluators.register(name, evaluator);
+        self
+    }
+
+    /// Register a named evaluator for `RetryPredicate::Custom(name)`
+    /// policies (D-13, plan 25-03), shaped like [`WarEngine::with_edge_evaluator`]:
+    /// no reserved-name failure mode, infallible. An unregistered `Custom`
+    /// name still fails [`WarGraph::validate`] (and therefore
+    /// [`WarEngine::start`]/[`WarEngine::resume`]) before any node executes;
+    /// it is never silently treated as "do not retry" at runtime.
+    pub fn with_retry_predicate(
+        mut self,
+        name: impl Into<String>,
+        evaluator: Arc<dyn RetryPredicateEvaluator>,
+    ) -> Self {
+        self.registries.retry_predicates.register(name, evaluator);
+        self
+    }
+
+    /// Register a named handler for `ErrorHandlerSpec::Custom(name)` policies
+    /// (D-13, plan 25-03), shaped like [`WarEngine::with_edge_evaluator`]: no
+    /// reserved-name failure mode, infallible. An unregistered `Custom` name
+    /// still fails [`WarGraph::validate`] (and therefore
+    /// [`WarEngine::start`]/[`WarEngine::resume`]) before any node executes.
+    /// Dispatching a resolved handler at run time is plan 25-10/11's job --
+    /// this plan owns registration and validation only.
+    pub fn with_error_handler(
+        mut self,
+        name: impl Into<String>,
+        handler: Arc<dyn ErrorHandler>,
+    ) -> Self {
+        self.registries.error_handlers.register(name, handler);
         self
     }
 
@@ -1074,7 +1197,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         initial: StateDelta,
     ) -> Result<RunOutcome, EngineError> {
         let registry = self.dispatch_registry.resolver();
-        graph.validate(registry, &self.edge_evaluators)?;
+        graph.validate(registry, &self.registries)?;
 
         let battlefield = Battlefield::initialize(graph.schema().clone(), &initial)?;
         battlefield.validate_required()?;
@@ -1087,7 +1210,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.durability,
             self.parallelism,
             registry,
-            &self.edge_evaluators,
+            &self.registries.edge_evaluators,
             graph,
             thread.clone(),
             battlefield,
@@ -1263,7 +1386,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         }
 
         let registry = self.dispatch_registry.resolver();
-        graph.validate(registry, &self.edge_evaluators)?;
+        graph.validate(registry, &self.registries)?;
 
         self.trace_dispatcher.emit(TraceEvent::RunStarted {
             thread_id: thread.clone(),
@@ -1283,7 +1406,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.durability,
             self.parallelism,
             registry,
-            &self.edge_evaluators,
+            &self.registries.edge_evaluators,
             graph,
             thread.clone(),
             latest.battlefield,
@@ -1387,7 +1510,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         };
 
         let registry = self.dispatch_registry.resolver();
-        graph.validate(registry, &self.edge_evaluators)?;
+        graph.validate(registry, &self.registries)?;
 
         let now = Utc::now();
         let already_answered: BTreeSet<ParleyId> =
@@ -1602,7 +1725,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.durability,
             self.parallelism,
             registry,
-            &self.edge_evaluators,
+            &self.registries.edge_evaluators,
             graph,
             thread.clone(),
             latest.battlefield,
@@ -1715,7 +1838,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         }
 
         let registry = self.dispatch_registry.resolver();
-        graph.validate(registry, &self.edge_evaluators)?;
+        graph.validate(registry, &self.registries)?;
 
         // --- HITL-03, D-16: `fork`'s edit is merged through the schema's
         // OWN dispatch rules -- an undeclared field is `EngineError::Battlefield`
@@ -1746,7 +1869,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.durability,
             self.parallelism,
             registry,
-            &self.edge_evaluators,
+            &self.registries.edge_evaluators,
             graph,
             thread.clone(),
             battlefield,

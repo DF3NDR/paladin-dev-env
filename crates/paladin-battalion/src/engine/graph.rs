@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use paladin_core::platform::container::aegis::Aegis;
+use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec, RetryPredicate};
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
     BattlefieldSchema, CustomDispatchResolver, DispatchRule, FieldName, FieldSpec,
@@ -29,6 +29,7 @@ use crate::engine::EngineError;
 use crate::engine::directive_parser::DirectiveParser;
 use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::StateNode;
+use crate::engine::registries::EngineRegistries;
 
 /// One node in a [`WarGraph`].
 ///
@@ -695,9 +696,9 @@ impl WarGraph {
     pub fn validate(
         &self,
         custom_dispatch: &CustomDispatchResolver,
-        edge_evaluators: &EdgeEvaluatorRegistry,
+        registries: &EngineRegistries,
     ) -> Result<(), EngineError> {
-        self.validate_non_recursive(custom_dispatch, edge_evaluators)?;
+        self.validate_non_recursive(custom_dispatch, registries)?;
 
         // --- CF-FR-16, D-19: checked LAST -- the deepest, most expensive
         // clause -- so every shallower structural error above is still
@@ -715,7 +716,14 @@ impl WarGraph {
         // compounding-per-level re-validation that made a deeply nested,
         // acyclic `Battalion` chain's `validate()` cost exponential in
         // nesting depth rather than linear.
-        self.validate_battalion_children(custom_dispatch, edge_evaluators, &[self.fingerprint()])
+        //
+        // `registries` (plan 25-03, D-13) travels down this SAME recursive
+        // call exactly like `custom_dispatch` always has: a child inherits
+        // the parent's `EngineRegistries` bundle WHOLESALE (Phase 23 D-21),
+        // so a `Custom` retry predicate or error handler registered once on
+        // the parent `WarEngine` resolves inside every nested child graph
+        // with no re-registration.
+        self.validate_battalion_children(custom_dispatch, registries, &[self.fingerprint()])
     }
 
     /// Every structural check `validate` performs EXCEPT the recursive
@@ -731,7 +739,7 @@ impl WarGraph {
     fn validate_non_recursive(
         &self,
         custom_dispatch: &CustomDispatchResolver,
-        edge_evaluators: &EdgeEvaluatorRegistry,
+        registries: &EngineRegistries,
     ) -> Result<(), EngineError> {
         if self.limits.max_supersteps == 0 {
             return Err(EngineError::InvalidLimits {
@@ -777,9 +785,22 @@ impl WarGraph {
         self.validate_muster_prefix_schema_fields()?;
         self.validate_parley_prefix_schema_fields()?;
         self.validate_gates()?;
-        self.validate_edge_evaluators(edge_evaluators)?;
+        self.validate_edge_evaluators(&registries.edge_evaluators)?;
         self.validate_worker_templates()?;
         self.validate_battalion_state_maps()?;
+        // --- plan 25-03, D-13: the Aegis sidecar's own well-formedness --
+        // ordered shallowest-structural-error-first, matching this
+        // function's existing discipline: an aegis on a node that does not
+        // exist (structural, like `UnknownNode`) before a node-kind/policy
+        // mismatch (more specific than plain existence) before a field-level
+        // self-validation (retry/timeout) before an unregistered `Custom`
+        // name (the deepest, most specific check -- mirrors
+        // `validate_edge_evaluators`'s own position relative to the
+        // structural checks above it).
+        self.validate_aegis_undeclared_nodes()?;
+        self.validate_aegis_node_kind_matrix()?;
+        self.validate_aegis_policy_values()?;
+        self.validate_aegis_custom_registrations(registries)?;
 
         self.validate_eligible_set()?;
         self.validate_schedulable()
@@ -847,6 +868,190 @@ impl WarGraph {
         })
     }
 
+    /// D-10's aegis-sidecar existence clause (plan 25-03): every node id
+    /// registered via [`WarGraph::set_aegis`] must be a DECLARED node --
+    /// `set_aegis` itself does not check this (see its own rustdoc), so an
+    /// annotation on a node that was never added, renamed, or removed
+    /// surfaces here, before any node executes. Collects EVERY offender,
+    /// mirroring [`WarGraph::validate_edge_evaluators`]'s "report the whole
+    /// problem at once" discipline.
+    fn validate_aegis_undeclared_nodes(&self) -> Result<(), EngineError> {
+        let mut offenders: Vec<NodeId> = self
+            .aegis
+            .keys()
+            .filter(|id| !self.nodes.contains_key(*id))
+            .cloned()
+            .collect();
+        if offenders.is_empty() {
+            return Ok(());
+        }
+        offenders.sort();
+        let names = offenders
+            .iter()
+            .map(NodeId::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(EngineError::AegisOnUndeclaredNode {
+            nodes: offenders,
+            reason: format!(
+                "Aegis set via WarGraph::set_aegis on undeclared node(s): {names} -- the node \
+                 was never added, or was renamed/removed after set_aegis was called"
+            ),
+        })
+    }
+
+    /// D-12's node-kind support matrix (plan 25-03): a [`NodeSpec::Paladin`]
+    /// or [`NodeSpec::Function`] node accepts the full [`Aegis`]; a
+    /// [`NodeSpec::Battalion`] node accepts only `timeout`/`on_error` --
+    /// `retry` and `cache` are rejected, because a Battalion child's
+    /// Waypoints are DURABLE state and attempt isolation / cache replay
+    /// would need per-attempt child-thread namespacing this phase does not
+    /// build (see the Deferred Ideas this checkpoint's `overturn-d12` option
+    /// named); a [`NodeSpec::Gate`] node rejects ANY `Aegis` -- a Gate has no
+    /// attempt to retry, time or cache, and its own expiry is `on_expire`'s
+    /// job, not a second competing mechanism. Only nodes with a RESOLVED
+    /// effective Aegis (`WarGraph::aegis_for`: own entry or `default_aegis`)
+    /// are checked; an undeclared-node offender from
+    /// [`WarGraph::validate_aegis_undeclared_nodes`] is skipped here rather
+    /// than double-reported. Collects EVERY offender, mirroring
+    /// [`WarGraph::validate_edge_evaluators`]'s discipline.
+    fn validate_aegis_node_kind_matrix(&self) -> Result<(), EngineError> {
+        let mut offenders: Vec<String> = Vec::new();
+        for id in &self.node_order {
+            let Some(aegis) = self.aegis_for(id) else {
+                continue;
+            };
+            let Some(spec) = self.nodes.get(id) else {
+                continue;
+            };
+            match spec {
+                NodeSpec::Paladin { .. } | NodeSpec::Function(_) => {}
+                NodeSpec::Battalion { .. } => {
+                    if aegis.retry.is_some() {
+                        offenders.push(format!(
+                            "{id}: retry is not supported on a Battalion node -- its child's \
+                             Waypoints are durable state, and attempt isolation would need \
+                             per-attempt child-thread namespacing"
+                        ));
+                    }
+                    if aegis.cache.is_some() {
+                        offenders.push(format!(
+                            "{id}: cache is not supported on a Battalion node -- its child's \
+                             Waypoints are durable state, and cache replay would need \
+                             per-attempt child-thread namespacing"
+                        ));
+                    }
+                }
+                NodeSpec::Gate { .. } => {
+                    offenders.push(format!(
+                        "{id}: no Aegis policy is supported on a Gate node -- a Gate has no \
+                         attempt to retry, time or cache, and expiry is on_expire's job"
+                    ));
+                }
+            }
+        }
+        if offenders.is_empty() {
+            return Ok(());
+        }
+        offenders.sort();
+        Err(EngineError::AegisUnsupportedForNodeKind {
+            reason: format!(
+                "Aegis polic(y/ies) unsupported for their node kind: {}",
+                offenders.join("; ")
+            ),
+            offenders,
+        })
+    }
+
+    /// D-09's Aegis self-validation clause (plan 25-03): `RetryPolicy.
+    /// max_attempts == 0`, and a `TimeoutPolicy` with `Some(Duration::ZERO)`
+    /// on either `run_timeout` or `idle_timeout`, are typed validation
+    /// errors before any node executes -- never interpreted as unlimited
+    /// retries or an immediate-kill timeout. A `TimeoutPolicy` with BOTH
+    /// fields `None` is a valid no-op.
+    ///
+    /// Checked one node at a time, returning the FIRST violation found --
+    /// like [`WarGraph::validate_gates`], several distinct per-node rules
+    /// here produce distinctly-shaped errors that do not collapse into one
+    /// `Vec<String>`.
+    fn validate_aegis_policy_values(&self) -> Result<(), EngineError> {
+        for id in &self.node_order {
+            let Some(aegis) = self.aegis_for(id) else {
+                continue;
+            };
+            if let Some(retry) = &aegis.retry
+                && retry.max_attempts == 0
+            {
+                return Err(EngineError::RetryPolicyInvalid {
+                    node: id.clone(),
+                    reason: "RetryPolicy.max_attempts must be at least 1, got 0".to_string(),
+                });
+            }
+            if let Some(timeout) = &aegis.timeout {
+                if timeout.run_timeout == Some(Duration::ZERO) {
+                    return Err(EngineError::TimeoutPolicyInvalid {
+                        node: id.clone(),
+                        reason: "TimeoutPolicy.run_timeout must not be Duration::ZERO".to_string(),
+                    });
+                }
+                if timeout.idle_timeout == Some(Duration::ZERO) {
+                    return Err(EngineError::TimeoutPolicyInvalid {
+                        node: id.clone(),
+                        reason: "TimeoutPolicy.idle_timeout must not be Duration::ZERO".to_string(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// D-13's fail-closed clause for `RetryPredicate::Custom`/
+    /// `ErrorHandlerSpec::Custom` names (CF-01 precedent, FT-FR-13): every
+    /// name reachable from any node's RESOLVED Aegis (own entry or
+    /// `default_aegis`) must resolve in the corresponding `registries`
+    /// registry, checked before any node executes -- an unregistered name
+    /// never degrades to a default at runtime. Collects EVERY offender
+    /// PER CATEGORY, mirroring [`WarGraph::validate_edge_evaluators`]'s
+    /// discipline; the retry-predicate category is checked first (shallower
+    /// section of the same `Aegis`, matching `retry` preceding `on_error` in
+    /// declaration order).
+    fn validate_aegis_custom_registrations(
+        &self,
+        registries: &EngineRegistries,
+    ) -> Result<(), EngineError> {
+        let mut retry_names: Vec<String> = Vec::new();
+        let mut handler_names: Vec<String> = Vec::new();
+        for id in &self.node_order {
+            let Some(aegis) = self.aegis_for(id) else {
+                continue;
+            };
+            if let Some(retry) = &aegis.retry
+                && let RetryPredicate::Custom(name) = &retry.retry_on
+                && !registries.retry_predicates.contains(name)
+            {
+                retry_names.push(name.clone());
+            }
+            if let Some(ErrorHandlerSpec::Custom(name)) = &aegis.on_error
+                && !registries.error_handlers.contains(name)
+            {
+                handler_names.push(name.clone());
+            }
+        }
+        retry_names.sort_unstable();
+        retry_names.dedup();
+        if !retry_names.is_empty() {
+            return Err(EngineError::UnregisteredRetryPredicate { names: retry_names });
+        }
+        handler_names.sort_unstable();
+        handler_names.dedup();
+        if !handler_names.is_empty() {
+            return Err(EngineError::UnregisteredErrorHandler {
+                names: handler_names,
+            });
+        }
+        Ok(())
+    }
+
     /// CF-FR-16 / D-19's recursive-embedding + child-validation clause: for
     /// every `NodeSpec::Battalion` node, walks a path-set of CHILD
     /// FINGERPRINTS (never pointer identity -- an immutable `Arc<WarGraph>`
@@ -863,7 +1068,7 @@ impl WarGraph {
     fn validate_battalion_children(
         &self,
         custom_dispatch: &CustomDispatchResolver,
-        edge_evaluators: &EdgeEvaluatorRegistry,
+        registries: &EngineRegistries,
         ancestry: &[GraphFingerprint],
     ) -> Result<(), EngineError> {
         for id in &self.node_order {
@@ -905,10 +1110,10 @@ impl WarGraph {
             // both (the old behavior) compounded level over level into
             // O(2^N) total validate() calls for a chain of N nested
             // Battalion nodes rather than O(N).
-            child.validate_non_recursive(custom_dispatch, edge_evaluators)?;
+            child.validate_non_recursive(custom_dispatch, registries)?;
             let mut next_ancestry = ancestry.to_vec();
             next_ancestry.push(child_fp);
-            child.validate_battalion_children(custom_dispatch, edge_evaluators, &next_ancestry)?;
+            child.validate_battalion_children(custom_dispatch, registries, &next_ancestry)?;
         }
         Ok(())
     }
@@ -1435,10 +1640,36 @@ impl WarGraph {
     ///
     /// A golden hex test pins the exact output of a fixture exercising
     /// every hashed property (`engine::graph::tests::
-    /// fingerprint_golden_hex_v4`); changing this
+    /// fingerprint_golden_hex_v5`); changing this
     /// function's byte layout invalidates every stored Waypoint's
     /// fingerprint and must not be done without a deliberate format-version
     /// bump (D-17).
+    ///
+    /// **`v5` (Phase 25, D-11) adds one more section for each node's
+    /// resolved [`Aegis`] (plan 25-03) -- and the split it draws is a RULE,
+    /// not a list, so the next phase adding a policy field knows which side
+    /// it belongs on without re-deriving the rationale:** a field is hashed
+    /// here if and only if changing it changes ROUTING or MERGE semantics --
+    /// which node runs next, or what a node's own delta looks like once
+    /// applied. `on_error` picks a different node/delta/routing outcome on
+    /// failure, so it is hashed; `cache` decides whether a node's delta is
+    /// served from a prior result rather than recomputed, so it is hashed
+    /// too. `retry` and `timeout` are pure TUNING -- how many times an
+    /// attempt is retried and how long it is allowed to run before either
+    /// still converges on THE SAME delta and THE SAME routing outcome -- so
+    /// neither contributes one byte, exactly like every [`EngineLimits`]
+    /// field (Phase 23 D-18). Both `on_error` and `cache` are read from each
+    /// node's OWN [`WarGraph::set_aegis`] sidecar entry ONLY -- never the
+    /// [`WarGraph::aegis_for`]-RESOLVED value -- sorted by node id and
+    /// written through [`push_field`] exactly like every other section; the
+    /// graph's own `default_aegis` is hashed SEPARATELY, as its own
+    /// length-prefixed sub-section. Reading the raw sidecar rather than the
+    /// resolved value is deliberate: it is what makes a graph that sets a
+    /// `default_aegis` policy distinguishable from a graph that sets the
+    /// IDENTICAL policy on every node individually via `set_aegis` -- the
+    /// two would hash identically under the resolved value, silently
+    /// erasing a real authoring difference the fingerprint exists to
+    /// capture.
     pub fn fingerprint(&self) -> GraphFingerprint {
         let mut node_ids: Vec<&NodeId> = self.nodes.keys().collect();
         node_ids.sort();
@@ -1579,8 +1810,64 @@ impl WarGraph {
             }
             push_field(&mut buf, on_expire_kind_tag(&request.on_expire).as_bytes());
         }
+        // --- v5 (Phase 25, D-11): one more scheduling/merge-relevant
+        // section for each node's OWN `set_aegis` sidecar entry -- see
+        // `fingerprint`'s rustdoc above for the hash/exclude rule. ONLY
+        // `on_error` and `cache` contribute; `retry` and `timeout` never
+        // write a single byte. Walks `self.aegis` (the raw sidecar), NEVER
+        // `aegis_for`'s resolved value -- see the rustdoc note on why.
+        buf.extend_from_slice(b";aegis:");
+        let mut aegis_ids: Vec<&NodeId> = self.aegis.keys().collect();
+        aegis_ids.sort();
+        for id in &aegis_ids {
+            let Some(aegis) = self.aegis.get(*id) else {
+                continue;
+            };
+            push_field(&mut buf, id.as_str().as_bytes());
+            push_aegis_hashed_fields(&mut buf, aegis);
+        }
+        // The graph-wide `default_aegis` fallback, hashed as its OWN
+        // length-prefixed sub-section -- distinct from the per-node
+        // `;aegis:` section above, so a graph that sets a default policy
+        // never collides with one that sets the identical policy on every
+        // node individually via `set_aegis`.
+        buf.extend_from_slice(b";default_aegis:");
+        match &self.default_aegis {
+            Some(default_aegis) => {
+                buf.push(1); // "has default_aegis" tag
+                push_aegis_hashed_fields(&mut buf, default_aegis);
+            }
+            None => buf.push(0), // "no default_aegis" tag
+        }
 
         GraphFingerprint::from_canonical_bytes(&buf)
+    }
+}
+
+/// Write ONLY `aegis`'s routing- and merge-affecting fields -- `on_error`
+/// and `cache` -- to `buf`, length-prefixed through [`push_field`] exactly
+/// like every other [`WarGraph::fingerprint`] section (Phase 25, D-11).
+/// `retry` and `timeout` are deliberately never read here: they are tuning,
+/// like every [`EngineLimits`] field (Phase 23 D-18), and must never
+/// contribute a byte. Used by both the per-node `;aegis:` section and the
+/// `;default_aegis:` sub-section so the two encode their `Aegis` payload
+/// identically.
+fn push_aegis_hashed_fields(buf: &mut Vec<u8>, aegis: &Aegis) {
+    match &aegis.on_error {
+        Some(on_error) => {
+            buf.push(1); // "has on_error" tag
+            let json = serde_json::to_string(on_error).unwrap_or_default();
+            push_field(buf, json.as_bytes());
+        }
+        None => buf.push(0), // "no on_error" tag
+    }
+    match &aegis.cache {
+        Some(cache) => {
+            buf.push(1); // "has cache" tag
+            let json = serde_json::to_string(cache).unwrap_or_default();
+            push_field(buf, json.as_bytes());
+        }
+        None => buf.push(0), // "no cache" tag
     }
 }
 
@@ -1748,6 +2035,9 @@ pub(crate) fn validate_parley_value_for_kind(
 mod tests {
     use super::*;
     use crate::engine::directive_parser::OnParseError;
+    use paladin_core::platform::container::aegis::{
+        CacheKeySpec, CachePolicy, RetryPolicy, TimeoutPolicy,
+    };
     use paladin_core::platform::container::battlefield::{Battlefield, FieldSpec};
     use std::sync::Arc as StdArc;
 
@@ -1797,10 +2087,7 @@ mod tests {
 
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
         );
     }
@@ -1832,10 +2119,7 @@ mod tests {
 
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
         );
     }
@@ -1850,10 +2134,7 @@ mod tests {
             },
         );
         assert!(matches!(
-            graph.validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new()
-            ),
+            graph.validate(&CustomDispatchResolver::new(), &EngineRegistries::default()),
             Err(EngineError::InvalidLimits { .. })
         ));
     }
@@ -1868,10 +2149,7 @@ mod tests {
             },
         );
         assert!(matches!(
-            graph.validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new()
-            ),
+            graph.validate(&CustomDispatchResolver::new(), &EngineRegistries::default()),
             Err(EngineError::InvalidLimits { .. })
         ));
     }
@@ -1887,10 +2165,7 @@ mod tests {
         );
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
         );
     }
@@ -1905,10 +2180,7 @@ mod tests {
             condition: None,
         });
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(matches!(err, EngineError::UnknownNode(id) if id == NodeId::new("ghost")));
     }
@@ -1923,10 +2195,7 @@ mod tests {
             condition: None,
         });
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(matches!(err, EngineError::UnknownNode(id) if id == NodeId::new("ghost")));
     }
@@ -1937,10 +2206,7 @@ mod tests {
         graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
         graph.add_entry(NodeId::new("ghost"));
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(matches!(err, EngineError::UnknownNode(id) if id == NodeId::new("ghost")));
     }
@@ -1958,10 +2224,7 @@ mod tests {
         graph.add_entry(NodeId::new("a"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::Battlefield(BattlefieldError::CustomDispatchNotRegistered { name }) => {
@@ -1991,7 +2254,7 @@ mod tests {
 
         assert!(
             graph
-                .validate(&registry, &EdgeEvaluatorRegistry::new())
+                .validate(&registry, &EngineRegistries::default())
                 .is_ok()
         );
     }
@@ -2023,10 +2286,7 @@ mod tests {
             graph.add_entry(NodeId::new("gate"));
 
             let err = graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new(),
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .unwrap_err();
             assert!(
                 matches!(
@@ -2056,10 +2316,7 @@ mod tests {
         graph.add_entry(NodeId::new("gate"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(matches!(
             err,
@@ -2081,10 +2338,7 @@ mod tests {
         graph.add_entry(NodeId::new("gate"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(matches!(
             err,
@@ -2123,10 +2377,8 @@ mod tests {
             );
             graph.add_entry(NodeId::new("gate"));
 
-            let result = graph.validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            );
+            let result =
+                graph.validate(&CustomDispatchResolver::new(), &EngineRegistries::default());
             if *expect_ok {
                 assert!(
                     result.is_ok(),
@@ -2161,10 +2413,7 @@ mod tests {
         graph.add_entry(NodeId::new("gate"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(matches!(
             err,
@@ -2214,10 +2463,7 @@ mod tests {
 
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
         );
     }
@@ -2244,12 +2490,15 @@ mod tests {
         // Re-pinned again for Phase 24 D-09's `v4` bump (Plan 24-02): same
         // reason -- the version tag alone moves the literal even though
         // this fixture has no Gate nodes either.
-        // `fingerprint_golden_hex_v4` (originally `fingerprint_golden_hex_pins_canonical_bytes`, Task 2 of Plan 22-01) is the
+        // Re-pinned again for Phase 25 D-11's `v5` bump (plan 25-03): same
+        // reason -- the version tag alone moves the literal even though
+        // this fixture has no Aegis sidecar entries either.
+        // `fingerprint_golden_hex_v5` (originally `fingerprint_golden_hex_pins_canonical_bytes`, Task 2 of Plan 22-01) is the
         // dedicated golden test guarding future canonicalization changes;
         // this assertion only re-confirms same-input determinism.
         assert_eq!(
             a.as_str(),
-            "v4:971f6eceeb58d5c1c764b04c19a6c8dd6ea72d41aebd41c5086c757b40ef55ba"
+            "v5:1ba3965ddeac27b3babc40353b93929ed15d8e90e2f9e37a00dbe43e0b9c3589"
         );
     }
 
@@ -2422,14 +2671,21 @@ mod tests {
     /// reason again -- the reference graph has no Gate nodes, so only the
     /// version tag and the (empty) new `;gates:` section marker move the
     /// literal. Renamed from `fingerprint_golden_hex_pins_canonical_bytes`
-    /// to `fingerprint_golden_hex_v4` (Task 4's own naming) -- same test,
-    /// same one-way-after-release hazard it has guarded since Phase 22.
+    /// to the version-tagged name that plan's own Task 4 established --
+    /// same test, same one-way-after-release hazard it has guarded since
+    /// Phase 22.
+    ///
+    /// Re-pinned again for Phase 25 D-11's `v5` bump (plan 25-03): same
+    /// reason again -- the reference graph has no `Aegis` sidecar entries,
+    /// so only the version tag and the (empty) new `;aegis:`/
+    /// `;default_aegis:` section markers move the literal. Renamed to
+    /// `fingerprint_golden_hex_v5`.
     #[test]
-    fn fingerprint_golden_hex_v4() {
+    fn fingerprint_golden_hex_v5() {
         let graph = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
         assert_eq!(
             graph.fingerprint().as_str(),
-            "v4:abe252b5178a64932597e33d95e6c7ca125c8d3b0d00100aa81175a8c1aaecb5",
+            "v5:a26b00e514c5adf137fadd279c644555ac5848897bae13b178431d3110138850",
             "canonicalization changed -- this invalidates every stored Waypoint's \
              fingerprint; only update this literal together with a deliberate \
              format-version bump"
@@ -2602,10 +2858,10 @@ mod tests {
         StdArc::new(child)
     }
 
-    /// Test 1 (Task 4): the version tag is `v4` and appears in the hashed
-    /// preamble (D-09).
+    /// Test 1 (plan 25-03): the version tag is `v5` and appears in the
+    /// hashed preamble (D-11).
     #[test]
-    fn fingerprint_version_is_v4() {
+    fn fingerprint_version_is_v5() {
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
         graph.add_node(
             NodeId::new("solo"),
@@ -2613,10 +2869,10 @@ mod tests {
         );
         graph.add_entry(NodeId::new("solo"));
 
-        assert!(graph.fingerprint().as_str().starts_with("v4:"));
+        assert!(graph.fingerprint().as_str().starts_with("v5:"));
         assert_eq!(
             paladin_core::platform::container::waypoint::GRAPH_FINGERPRINT_VERSION,
-            "v4"
+            "v5"
         );
     }
 
@@ -3023,6 +3279,261 @@ mod tests {
         assert_eq!(base.fingerprint(), variant.fingerprint());
     }
 
+    // --- Plan 25-03, Task 3: fingerprint v5 -- on_error/cache are hashed,
+    // retry/timeout are excluded -------------------------------------------
+
+    #[test]
+    fn changing_on_error_changes_the_fingerprint() {
+        let mut base = WarGraph::new(one_field_schema(), EngineLimits::default());
+        base.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        base.add_entry(NodeId::new("a"));
+        base.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                on_error: Some(ErrorHandlerSpec::Custom("handler-a".to_string())),
+                ..Aegis::default()
+            },
+        );
+
+        let mut variant = WarGraph::new(one_field_schema(), EngineLimits::default());
+        variant.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        variant.add_entry(NodeId::new("a"));
+        variant.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                on_error: Some(ErrorHandlerSpec::Custom("handler-b".to_string())),
+                ..Aegis::default()
+            },
+        );
+
+        assert_ne!(
+            base.fingerprint(),
+            variant.fingerprint(),
+            "changing a node's on_error must change the fingerprint (D-11)"
+        );
+    }
+
+    #[test]
+    fn changing_cache_policy_changes_the_fingerprint() {
+        let mut base = WarGraph::new(one_field_schema(), EngineLimits::default());
+        base.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        base.add_entry(NodeId::new("a"));
+        base.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                cache: Some(CachePolicy {
+                    ttl: Duration::from_secs(30),
+                    key: CacheKeySpec::Default,
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        let mut variant = WarGraph::new(one_field_schema(), EngineLimits::default());
+        variant.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        variant.add_entry(NodeId::new("a"));
+        variant.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                cache: Some(CachePolicy {
+                    ttl: Duration::from_secs(60),
+                    key: CacheKeySpec::Default,
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        assert_ne!(
+            base.fingerprint(),
+            variant.fingerprint(),
+            "changing a node's cache policy must change the fingerprint (D-11)"
+        );
+    }
+
+    #[test]
+    fn tuning_retry_does_not_change_the_fingerprint() {
+        let base_aegis = Aegis {
+            retry: Some(RetryPolicy::default()),
+            ..Aegis::default()
+        };
+        let base = {
+            let mut g = WarGraph::new(one_field_schema(), EngineLimits::default());
+            g.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+            g.add_entry(NodeId::new("a"));
+            g.set_aegis(NodeId::new("a"), base_aegis.clone());
+            g
+        };
+
+        // Every RetryPolicy field, tuned one at a time.
+        let variants = vec![
+            RetryPolicy {
+                max_attempts: 99,
+                ..RetryPolicy::default()
+            },
+            RetryPolicy {
+                initial_interval: Duration::from_millis(1),
+                ..RetryPolicy::default()
+            },
+            RetryPolicy {
+                backoff_factor: 9.9,
+                ..RetryPolicy::default()
+            },
+            RetryPolicy {
+                max_interval: Duration::from_secs(1),
+                ..RetryPolicy::default()
+            },
+            RetryPolicy {
+                jitter: false,
+                ..RetryPolicy::default()
+            },
+        ];
+        for retry in variants {
+            let mut variant = WarGraph::new(one_field_schema(), EngineLimits::default());
+            variant.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+            variant.add_entry(NodeId::new("a"));
+            variant.set_aegis(
+                NodeId::new("a"),
+                Aegis {
+                    retry: Some(retry.clone()),
+                    ..Aegis::default()
+                },
+            );
+            assert_eq!(
+                base.fingerprint(),
+                variant.fingerprint(),
+                "tuning a RetryPolicy field must never change the fingerprint (D-11, Phase 23 \
+                 D-18); offending retry: {retry:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tuning_timeout_does_not_change_the_fingerprint() {
+        let base = {
+            let mut g = WarGraph::new(one_field_schema(), EngineLimits::default());
+            g.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+            g.add_entry(NodeId::new("a"));
+            g.set_aegis(
+                NodeId::new("a"),
+                Aegis {
+                    timeout: Some(TimeoutPolicy {
+                        run_timeout: Some(Duration::from_secs(30)),
+                        idle_timeout: Some(Duration::from_secs(5)),
+                    }),
+                    ..Aegis::default()
+                },
+            );
+            g
+        };
+
+        let mut variant = WarGraph::new(one_field_schema(), EngineLimits::default());
+        variant.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        variant.add_entry(NodeId::new("a"));
+        variant.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(Duration::from_secs(1)),
+                    idle_timeout: Some(Duration::from_millis(1)),
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        assert_eq!(
+            base.fingerprint(),
+            variant.fingerprint(),
+            "tuning run_timeout/idle_timeout must never change the fingerprint (D-11, Phase 23 \
+             D-18)"
+        );
+    }
+
+    #[test]
+    fn aegis_hashing_is_sorted_by_node_id() {
+        let handler = || Aegis {
+            on_error: Some(ErrorHandlerSpec::Custom("h".to_string())),
+            ..Aegis::default()
+        };
+
+        let mut registered_a_then_b = WarGraph::new(one_field_schema(), EngineLimits::default());
+        registered_a_then_b.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        registered_a_then_b.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
+        registered_a_then_b.set_aegis(NodeId::new("a"), handler());
+        registered_a_then_b.set_aegis(NodeId::new("b"), handler());
+        registered_a_then_b.add_entry(NodeId::new("a"));
+
+        let mut registered_b_then_a = WarGraph::new(one_field_schema(), EngineLimits::default());
+        registered_b_then_a.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        registered_b_then_a.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
+        registered_b_then_a.set_aegis(NodeId::new("b"), handler());
+        registered_b_then_a.set_aegis(NodeId::new("a"), handler());
+        registered_b_then_a.add_entry(NodeId::new("a"));
+
+        assert_eq!(
+            registered_a_then_b.fingerprint(),
+            registered_b_then_a.fingerprint(),
+            "aegis registration order must never affect the fingerprint -- the section is \
+             sorted by node id"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_still_matches_after_a_retry_tuning_edit() {
+        let mut graph1 = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph1.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph1.add_entry(NodeId::new("a"));
+        graph1.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                retry: Some(RetryPolicy {
+                    max_attempts: 3,
+                    ..RetryPolicy::default()
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        let store = StdArc::new(crate::engine::test_support::RecordingWaypointStore::new());
+        let engine = crate::engine::WarEngine::new(
+            StdArc::new(crate::engine::test_support::RecordingPaladinPort::new()),
+            StdArc::clone(&store),
+        );
+        let thread =
+            paladin_core::platform::container::waypoint::ThreadId::new("retry-tuning-resume")
+                .unwrap();
+        let outcome = engine
+            .start(
+                &graph1,
+                thread.clone(),
+                paladin_core::platform::container::battlefield::StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        // Tighten the retry policy -- the exact field the fingerprint must
+        // exclude -- on an otherwise byte-identical graph.
+        let mut graph2 = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph2.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph2.add_entry(NodeId::new("a"));
+        graph2.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                retry: Some(RetryPolicy {
+                    max_attempts: 10,
+                    ..RetryPolicy::default()
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        let outcome2 = engine.resume(&graph2, thread).await;
+        assert!(
+            matches!(outcome2, Ok(RunOutcome::Completed { .. })),
+            "a retry-tuning edit must never trip GraphMismatch on resume; got {outcome2:?}"
+        );
+    }
+
     /// Test 5 (Task 4): two Gate configurations whose concatenated field
     /// bytes would collide under delimiter joining produce different
     /// digests -- the length-prefixed `push_field` discipline (22.1 CR-01)
@@ -3087,10 +3598,7 @@ mod tests {
             },
         );
         assert!(matches!(
-            graph.validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new()
-            ),
+            graph.validate(&CustomDispatchResolver::new(), &EngineRegistries::default()),
             Err(EngineError::InvalidLimits { .. })
         ));
     }
@@ -3115,10 +3623,7 @@ mod tests {
 
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
         );
         assert!(graph.is_worker_template(&NodeId::new("worker")));
@@ -3134,10 +3639,7 @@ mod tests {
         graph.add_entry(NodeId::new("worker"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(matches!(err, EngineError::WorkerTemplateIsEntry { .. }));
     }
@@ -3161,10 +3663,7 @@ mod tests {
         graph.add_entry(NodeId::new("planner"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(matches!(
             err,
@@ -3198,10 +3697,7 @@ mod tests {
 
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
         );
     }
@@ -3219,10 +3715,7 @@ mod tests {
         graph.add_entry(NodeId::new("a"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::MusterPrefixSchemaField { fields, .. } => {
@@ -3245,10 +3738,7 @@ mod tests {
         graph.add_entry(NodeId::new("a"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::ParleyPrefixSchemaField { fields, .. } => {
@@ -3330,10 +3820,7 @@ mod tests {
         graph.add_entry(NodeId::new("entry"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::UnreachableNode { nodes, reason } => {
@@ -3367,10 +3854,7 @@ mod tests {
         graph.add_entry(NodeId::new("entry"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::UnreachableNode { nodes, reason } => {
@@ -3423,10 +3907,7 @@ mod tests {
 
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
         );
 
@@ -3457,10 +3938,7 @@ mod tests {
         // No edge at all into "jump-target" -- the marker alone is enough.
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
         );
 
@@ -3508,10 +3986,7 @@ mod tests {
 
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok(),
             "self-loops remain legal on entry nodes -- the check rejects strandedness, not loops"
         );
@@ -3555,10 +4030,7 @@ mod tests {
 
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
         );
     }
@@ -3570,10 +4042,7 @@ mod tests {
         // No add_entry call at all.
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::UnreachableNode { nodes, reason } => {
@@ -3602,10 +4071,7 @@ mod tests {
         graph.add_entry(NodeId::new("entry"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::UnreachableNode { nodes, .. } => {
@@ -3640,10 +4106,7 @@ mod tests {
         graph.add_entry(NodeId::new("entry"));
 
         assert!(matches!(
-            graph.validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new()
-            ),
+            graph.validate(&CustomDispatchResolver::new(), &EngineRegistries::default()),
             Err(EngineError::InvalidLimits { .. })
         ));
     }
@@ -3672,10 +4135,7 @@ mod tests {
         graph.add_entry(NodeId::new("entry"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(matches!(err, EngineError::UnknownNode(id) if id == NodeId::new("ghost")));
     }
@@ -3705,10 +4165,7 @@ mod tests {
         graph.add_entry(NodeId::new("entry"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::Battlefield(BattlefieldError::CustomDispatchNotRegistered { name }) => {
@@ -3760,10 +4217,7 @@ mod tests {
         assert!(graph.unschedulable_unfed_nodes().is_empty());
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok(),
             "a cycle fed from entry must validate cleanly -- it is schedulable via the \
              starvation release"
@@ -3864,10 +4318,7 @@ mod tests {
         graph.add_entry(NodeId::new("entry"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(
             matches!(err, EngineError::UnreachableNode { .. }),
@@ -3893,10 +4344,7 @@ mod tests {
         graph.add_entry(NodeId::new("a"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::UnregisteredEdgeCondition { names } => {
@@ -3930,10 +4378,7 @@ mod tests {
         graph.add_entry(NodeId::new("a"));
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::UnregisteredEdgeCondition { names } => {
@@ -3966,12 +4411,14 @@ mod tests {
                 Ok(true)
             }
         }
-        let mut evaluators = EdgeEvaluatorRegistry::new();
-        evaluators.register("is_urgent", StdArc::new(AlwaysTrue));
+        let mut registries = EngineRegistries::default();
+        registries
+            .edge_evaluators
+            .register("is_urgent", StdArc::new(AlwaysTrue));
 
         assert!(
             graph
-                .validate(&CustomDispatchResolver::new(), &evaluators)
+                .validate(&CustomDispatchResolver::new(), &registries)
                 .is_ok()
         );
     }
@@ -4005,10 +4452,7 @@ mod tests {
         parent.add_entry(sub);
 
         let err = parent
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::BattalionStateMapUnknownField { fields, .. } => {
@@ -4034,10 +4478,7 @@ mod tests {
         parent.add_entry(sub);
 
         let err = parent
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::BattalionStateMapUnknownField { fields, .. } => {
@@ -4063,10 +4504,7 @@ mod tests {
         parent.add_entry(sub);
 
         let err = parent
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::BattalionStateMapUnknownField { fields, .. } => {
@@ -4092,10 +4530,7 @@ mod tests {
         parent.add_entry(sub);
 
         let err = parent
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::BattalionStateMapUnknownField { fields, .. } => {
@@ -4134,10 +4569,7 @@ mod tests {
         parent.add_entry(sub);
 
         let err = parent
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         match err {
             EngineError::BattalionStateMapUnknownField { fields, .. } => {
@@ -4176,10 +4608,7 @@ mod tests {
         // Unregistered on either side: fails, because the child is
         // validated with the SAME registry the parent was given (D-19).
         let err = parent
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(
             matches!(err, EngineError::UnregisteredEdgeCondition { .. }),
@@ -4198,11 +4627,13 @@ mod tests {
                 Ok(true)
             }
         }
-        let mut registry = EdgeEvaluatorRegistry::new();
-        registry.register("special", StdArc::new(AlwaysTrue));
+        let mut registries = EngineRegistries::default();
+        registries
+            .edge_evaluators
+            .register("special", StdArc::new(AlwaysTrue));
         assert!(
             parent
-                .validate(&CustomDispatchResolver::new(), &registry)
+                .validate(&CustomDispatchResolver::new(), &registries)
                 .is_ok()
         );
     }
@@ -4228,10 +4659,7 @@ mod tests {
         parent.add_entry(sub);
 
         let err = parent
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .unwrap_err();
         assert!(
             matches!(
@@ -4287,7 +4715,7 @@ mod tests {
         let err = outer
             .validate_battalion_children(
                 &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
+                &EngineRegistries::default(),
                 &[child_fp],
             )
             .unwrap_err();
@@ -4327,7 +4755,7 @@ mod tests {
         let err = a
             .validate_battalion_children(
                 &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
+                &EngineRegistries::default(),
                 &[grandchild_fp],
             )
             .unwrap_err();
@@ -4356,10 +4784,7 @@ mod tests {
 
         assert!(
             level1
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
         );
     }
@@ -4397,10 +4822,7 @@ mod tests {
 
         assert!(
             parent
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
         );
     }
@@ -4420,11 +4842,473 @@ mod tests {
 
         assert!(
             parent
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok()
+        );
+    }
+
+    // --- Plan 25-03: EngineRegistries, the two fail-closed registries, and
+    // the Aegis validation matrix -----------------------------------------
+
+    #[test]
+    fn unregistered_custom_retry_predicate_fails_validation() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(NodeId::new("a"));
+        graph.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                retry: Some(RetryPolicy {
+                    retry_on: RetryPredicate::Custom("nope".to_string()),
+                    ..RetryPolicy::default()
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .expect_err("an unregistered Custom retry predicate must fail validation");
+        match err {
+            EngineError::UnregisteredRetryPredicate { names } => {
+                assert_eq!(names, vec!["nope".to_string()]);
+            }
+            other => panic!("expected UnregisteredRetryPredicate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unregistered_custom_error_handler_fails_validation() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(NodeId::new("a"));
+        graph.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                on_error: Some(ErrorHandlerSpec::Custom("nope".to_string())),
+                ..Aegis::default()
+            },
+        );
+
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .expect_err("an unregistered Custom error handler must fail validation");
+        match err {
+            EngineError::UnregisteredErrorHandler { names } => {
+                assert_eq!(names, vec!["nope".to_string()]);
+            }
+            other => panic!("expected UnregisteredErrorHandler, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validation_lists_every_unregistered_name_not_just_the_first() {
+        // Three unregistered `RetryPredicate::Custom` names reachable from
+        // three nodes: two via their own `set_aegis` override, one via
+        // `default_aegis` (a node's own entry always wins wholesale, D-10,
+        // so a node with its own override never sees the default). A single
+        // node can carry only ONE `retry_on` value, so three DISTINCT
+        // names within the SAME category necessarily spans more than two
+        // resolved-Aegis sources -- this is that structurally-minimal case.
+        let schema = one_field_schema();
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let a = NodeId::new("a");
+        let b = NodeId::new("b");
+        let c = NodeId::new("c");
+        graph.add_node(a.clone(), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(b.clone(), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(c.clone(), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(a.clone());
+        graph.add_entry(b.clone());
+        graph.add_entry(c.clone());
+        graph.set_aegis(
+            a,
+            Aegis {
+                retry: Some(RetryPolicy {
+                    retry_on: RetryPredicate::Custom("nope-a".to_string()),
+                    ..RetryPolicy::default()
+                }),
+                ..Aegis::default()
+            },
+        );
+        graph.set_aegis(
+            b,
+            Aegis {
+                retry: Some(RetryPolicy {
+                    retry_on: RetryPredicate::Custom("nope-b".to_string()),
+                    ..RetryPolicy::default()
+                }),
+                ..Aegis::default()
+            },
+        );
+        // `c` has no own override, so it resolves through `default_aegis`.
+        let _ = &c;
+        graph.with_default_aegis(Aegis {
+            retry: Some(RetryPolicy {
+                retry_on: RetryPredicate::Custom("nope-c".to_string()),
+                ..RetryPolicy::default()
+            }),
+            ..Aegis::default()
+        });
+
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .expect_err("three unregistered retry predicate names must fail validation");
+        match err {
+            EngineError::UnregisteredRetryPredicate { names } => {
+                assert_eq!(
+                    names,
+                    vec![
+                        "nope-a".to_string(),
+                        "nope-b".to_string(),
+                        "nope-c".to_string(),
+                    ],
+                    "all three unregistered names must appear in the ONE returned error, not \
+                     just the first encountered"
+                );
+            }
+            other => panic!("expected UnregisteredRetryPredicate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn registered_custom_names_validate_cleanly() {
+        struct AlwaysAllow;
+        #[async_trait::async_trait]
+        impl crate::retry_predicate::RetryPredicateEvaluator for AlwaysAllow {
+            async fn allows(
+                &self,
+                _err: &paladin_core::platform::container::node_error::NodeError,
+                _attempt: u32,
+            ) -> Result<bool, crate::retry_predicate::RetryPredicateError> {
+                Ok(true)
+            }
+        }
+        struct NoopHandler;
+        #[async_trait::async_trait]
+        impl crate::error_handler::ErrorHandler for NoopHandler {
+            async fn handle(
+                &self,
+                _err: &paladin_core::platform::container::node_error::NodeError,
+                _state: &Battlefield,
+            ) -> Result<
+                paladin_core::platform::container::directive::Directive,
+                paladin_core::platform::container::node_error::NodeError,
+            > {
+                Ok(paladin_core::platform::container::battlefield::StateDelta::new().into())
+            }
+        }
+
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(NodeId::new("a"));
+        graph.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                retry: Some(RetryPolicy {
+                    retry_on: RetryPredicate::Custom("my_retry".to_string()),
+                    ..RetryPolicy::default()
+                }),
+                on_error: Some(ErrorHandlerSpec::Custom("my_handler".to_string())),
+                ..Aegis::default()
+            },
+        );
+
+        let mut registries = EngineRegistries::default();
+        registries
+            .retry_predicates
+            .register("my_retry", StdArc::new(AlwaysAllow));
+        registries
+            .error_handlers
+            .register("my_handler", StdArc::new(NoopHandler));
+
+        assert!(
+            graph
+                .validate(&CustomDispatchResolver::new(), &registries)
+                .is_ok(),
+            "a graph whose Custom retry predicate and error handler are both registered on the \
+             engine must validate cleanly"
+        );
+    }
+
+    #[test]
+    fn aegis_on_undeclared_node_is_a_validation_error() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(NodeId::new("a"));
+        graph.set_aegis(NodeId::new("ghost-1"), Aegis::default());
+        graph.set_aegis(NodeId::new("ghost-2"), Aegis::default());
+
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .expect_err("Aegis set on undeclared nodes must fail validation");
+        match err {
+            EngineError::AegisOnUndeclaredNode { nodes, .. } => {
+                assert_eq!(
+                    nodes,
+                    vec![NodeId::new("ghost-1"), NodeId::new("ghost-2")],
+                    "every undeclared node must be named, not just the first"
+                );
+            }
+            other => panic!("expected AegisOnUndeclaredNode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn battalion_node_rejects_retry_and_cache_but_accepts_timeout_and_on_error() {
+        let sub = NodeId::new("sub");
+
+        // retry is rejected.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(trivial_graph()), StateMap::new()),
+        );
+        graph.add_entry(sub.clone());
+        graph.set_aegis(
+            sub.clone(),
+            Aegis {
+                retry: Some(RetryPolicy::default()),
+                ..Aegis::default()
+            },
+        );
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .expect_err("retry on a Battalion node must fail validation");
+        assert!(
+            matches!(err, EngineError::AegisUnsupportedForNodeKind { .. }),
+            "got {err:?}"
+        );
+
+        // cache is rejected.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(trivial_graph()), StateMap::new()),
+        );
+        graph.add_entry(sub.clone());
+        graph.set_aegis(
+            sub.clone(),
+            Aegis {
+                cache: Some(CachePolicy {
+                    ttl: Duration::from_secs(1),
+                    key: CacheKeySpec::Default,
+                }),
+                ..Aegis::default()
+            },
+        );
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .expect_err("cache on a Battalion node must fail validation");
+        assert!(
+            matches!(err, EngineError::AegisUnsupportedForNodeKind { .. }),
+            "got {err:?}"
+        );
+
+        // timeout and on_error are accepted.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(trivial_graph()), StateMap::new()),
+        );
+        graph.add_entry(sub.clone());
+        graph.set_aegis(
+            sub,
+            Aegis {
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(Duration::from_secs(30)),
+                    idle_timeout: None,
+                }),
+                on_error: Some(ErrorHandlerSpec::Absorb {
+                    fallback_delta: paladin_core::platform::container::battlefield::StateDelta::new(
+                    ),
+                }),
+                ..Aegis::default()
+            },
+        );
+        assert!(
+            graph
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+                .is_ok(),
+            "timeout and on_error must be accepted on a Battalion node"
+        );
+    }
+
+    #[test]
+    fn gate_node_rejects_any_aegis() {
+        let schema =
+            BattlefieldSchema::new(vec![field_with_default("result", serde_json::json!(true))]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let gate_id = NodeId::new("gate");
+        graph.add_node(
+            gate_id.clone(),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?")),
+                Some(FieldName::new("result").unwrap()),
+            ),
+        );
+        graph.add_entry(gate_id.clone());
+        graph.set_aegis(
+            gate_id,
+            Aegis {
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(Duration::from_secs(5)),
+                    idle_timeout: None,
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .expect_err("any Aegis on a Gate node must fail validation");
+        assert!(
+            matches!(err, EngineError::AegisUnsupportedForNodeKind { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn retry_policy_with_zero_attempts_fails_validation() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(NodeId::new("a"));
+        graph.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                retry: Some(RetryPolicy {
+                    max_attempts: 0,
+                    ..RetryPolicy::default()
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .expect_err("RetryPolicy.max_attempts == 0 must fail validation");
+        match err {
+            EngineError::RetryPolicyInvalid { node, .. } => {
+                assert_eq!(node, NodeId::new("a"));
+            }
+            other => panic!("expected RetryPolicyInvalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn timeout_policy_with_zero_duration_fails_validation() {
+        // A zero `run_timeout` fails.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(NodeId::new("a"));
+        graph.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(Duration::ZERO),
+                    idle_timeout: None,
+                }),
+                ..Aegis::default()
+            },
+        );
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .expect_err("a zero run_timeout must fail validation");
+        assert!(
+            matches!(err, EngineError::TimeoutPolicyInvalid { .. }),
+            "got {err:?}"
+        );
+
+        // A zero `idle_timeout` fails.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(NodeId::new("a"));
+        graph.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: None,
+                    idle_timeout: Some(Duration::ZERO),
+                }),
+                ..Aegis::default()
+            },
+        );
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .expect_err("a zero idle_timeout must fail validation");
+        assert!(
+            matches!(err, EngineError::TimeoutPolicyInvalid { .. }),
+            "got {err:?}"
+        );
+
+        // `TimeoutPolicy { run_timeout: None, idle_timeout: None }` is a
+        // valid no-op.
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(NodeId::new("a"));
+        graph.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: None,
+                    idle_timeout: None,
+                }),
+                ..Aegis::default()
+            },
+        );
+        assert!(
+            graph
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+                .is_ok(),
+            "TimeoutPolicy with both fields None must be a valid no-op"
+        );
+    }
+
+    #[test]
+    fn child_battalion_inherits_parent_registries() {
+        struct NoopHandler;
+        #[async_trait::async_trait]
+        impl crate::error_handler::ErrorHandler for NoopHandler {
+            async fn handle(
+                &self,
+                _err: &paladin_core::platform::container::node_error::NodeError,
+                _state: &Battlefield,
+            ) -> Result<
+                paladin_core::platform::container::directive::Directive,
+                paladin_core::platform::container::node_error::NodeError,
+            > {
+                Ok(paladin_core::platform::container::battlefield::StateDelta::new().into())
+            }
+        }
+
+        let mut child = trivial_graph();
+        child.set_aegis(
+            NodeId::new("only"),
+            Aegis {
+                on_error: Some(ErrorHandlerSpec::Custom("compensate".to_string())),
+                ..Aegis::default()
+            },
+        );
+
+        let mut parent = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let sub = NodeId::new("sub");
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
+        );
+        parent.add_entry(sub);
+
+        let mut registries = EngineRegistries::default();
+        registries
+            .error_handlers
+            .register("compensate", StdArc::new(NoopHandler));
+
+        assert!(
+            parent
+                .validate(&CustomDispatchResolver::new(), &registries)
+                .is_ok(),
+            "a Custom handler registered on the parent's registries must resolve inside a \
+             child Battalion graph with no re-registration"
         );
     }
 }

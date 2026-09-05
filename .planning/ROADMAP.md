@@ -423,7 +423,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 24-11-PLAN.md — Thread routes, DTOs, `openapi.json`, server composition
+- [x] 24-11-PLAN.md — Thread routes, DTOs, `openapi.json`, server composition
 
 **Wave 10** *(blocked on Wave 9 completion)*
 

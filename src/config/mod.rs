@@ -28,6 +28,8 @@ pub mod user_config;
 #[allow(missing_docs)]
 pub mod waypoint_retention;
 #[allow(missing_docs)]
+pub mod waypoint_store;
+#[allow(missing_docs)]
 pub mod web_server;
 
 // ── Re-exports ─────────────────────────────────────────────────────────────────
@@ -50,6 +52,7 @@ pub use crate::config::notifications::NotificationConfig;
 pub use crate::config::queue::QueueConfig;
 pub use crate::config::scheduler::SchedulerConfig;
 pub use crate::config::waypoint_retention::WaypointRetentionConfig;
+pub use crate::config::waypoint_store::{WaypointStoreBackend, WaypointStoreConfig};
 pub use crate::config::web_server::{MessageServiceSettings, ServerConfig, SourceConfig};
 pub use paladin_llm::config::vision::{VisionConfig, VisionProviderConfig, VisionRetryConfig};
 // Garrison, Sanctum, RAG and MemoryExtraction config types live in the paladin-memory crate (Task 6.0)

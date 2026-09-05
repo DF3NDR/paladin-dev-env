@@ -23,6 +23,12 @@
 /// plans behind their own feature flags.
 pub mod waypoint;
 
+/// `NodeCachePort` storage adapters (Doc 04 FT-FR-18…20, D-27). The
+/// in-memory backend is always available (no feature gate, mirroring
+/// `waypoint`'s D-01 precedent); the Redis backend is added behind the
+/// `redis-cache` feature.
+pub mod node_cache;
+
 /// SQLite implementation of `ContentRepository`, `ContentListRepository`,
 /// `MigrationManager`, and `SqlStore`.
 #[cfg(feature = "sqlite")]

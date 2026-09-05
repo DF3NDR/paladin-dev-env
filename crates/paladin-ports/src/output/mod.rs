@@ -10,6 +10,8 @@ pub mod file_storage_port;
 pub mod garrison_port;
 pub mod llm_port;
 pub mod log_port;
+/// Node cache port for per-node result caching (Doc 04 FT-FR-18…20, D-27).
+pub mod node_cache_port;
 pub mod notification_port;
 /// Agent → Orchestrator bridge port.
 pub mod orchestrator_port;

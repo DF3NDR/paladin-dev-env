@@ -110,3 +110,45 @@ pub trait StateNode: Send + Sync {
         ctx: &NodeContext,
     ) -> Result<Directive, StateNodeError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::heartbeat::HeartbeatHandle;
+
+    fn ctx(heartbeat: HeartbeatHandle) -> NodeContext {
+        NodeContext {
+            node_id: NodeId::new("n"),
+            thread_id: ThreadId::new("t").unwrap(),
+            superstep: 1,
+            muster: None,
+            parley_response: None,
+            attempt: 1,
+            heartbeat,
+        }
+    }
+
+    /// D-18: the `Debug, Clone, PartialEq` derive set on `NodeContext` is
+    /// load-bearing (interceptor tests and `Directive` plumbing compare
+    /// contexts by value), so `HeartbeatHandle` must satisfy it -- two
+    /// contexts differing ONLY in their handle compare equal, cloning
+    /// works, and `Debug` renders without exposing the handle's internals.
+    #[test]
+    fn node_context_keeps_its_derives_with_a_heartbeat_handle() {
+        fn assert_derives<T: Clone + PartialEq + std::fmt::Debug>() {}
+        assert_derives::<NodeContext>();
+
+        let a = ctx(HeartbeatHandle::new());
+        let b = ctx(HeartbeatHandle::new());
+        b.heartbeat.beat();
+        assert_eq!(a, b, "handles compare equal regardless of beat state");
+
+        let c = a.clone();
+        assert_eq!(a, c);
+        assert_eq!(c.attempt(), 1);
+        assert!(
+            format!("{a:?}").contains("HeartbeatHandle"),
+            "Debug renders an opaque placeholder for the handle"
+        );
+    }
+}

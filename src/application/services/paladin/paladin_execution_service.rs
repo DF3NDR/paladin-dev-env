@@ -2017,6 +2017,179 @@ mod tests {
         Node::new(data, Some("TestPaladin".to_string()))
     }
 
+    // --- Plan 25-09, D-19: the three beat points ------------------------
+
+    /// An `LlmPort` whose `generate` always requests the `lookup` tool (so
+    /// the Arsenal branch of the reasoning loop runs) and whose
+    /// `generate_stream` yields `chunks` deltas then a final marker.
+    struct ToolCallingLlmPort {
+        chunks: usize,
+    }
+
+    #[async_trait]
+    impl LlmPort for ToolCallingLlmPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model,
+                content: "calling lookup".to_string(),
+                finish_reason: paladin_ports::output::llm_port::FinishReason::FunctionCall,
+                usage: crate::core::platform::container::token_usage::TokenUsage::new(1, 1),
+                created_at: chrono::Utc::now(),
+                metadata: HashMap::new(),
+                function_call: Some(FunctionCall {
+                    name: "lookup".to_string(),
+                    arguments: r#"{"q":"x"}"#.to_string(),
+                }),
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            let mut items: Vec<Result<StreamingResponse, LlmError>> = (0..self.chunks)
+                .map(|i| {
+                    Ok(StreamingResponse {
+                        id: Uuid::new_v4(),
+                        delta: format!("c{i}"),
+                        finish_reason: None,
+                    })
+                })
+                .collect();
+            items.push(Ok(StreamingResponse {
+                id: Uuid::new_v4(),
+                delta: String::new(),
+                finish_reason: Some(paladin_ports::output::llm_port::FinishReason::Stop),
+            }));
+            Ok(Box::new(futures::stream::iter(items)))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "ToolCalling"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// An `ArsenalPort` that counts `invoke` calls and always succeeds.
+    #[derive(Default)]
+    struct CountingArsenal {
+        invocations: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ArsenalPort for CountingArsenal {
+        async fn list_armaments(&self) -> Vec<crate::core::platform::container::arsenal::Armament> {
+            Vec::new()
+        }
+
+        async fn invoke(
+            &self,
+            call: ArmamentCall,
+        ) -> Result<crate::core::platform::container::arsenal::ArmamentResult, ArsenalError> {
+            self.invocations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(
+                crate::core::platform::container::arsenal::ArmamentResult::success(
+                    call.call_id,
+                    serde_json::json!("found"),
+                    0,
+                ),
+            )
+        }
+
+        fn validate_call(&self, _call: &ArmamentCall) -> Result<(), ArsenalError> {
+            Ok(())
+        }
+    }
+
+    /// D-19 / FT-FR-09: `execute_observed` beats on every completed LLM
+    /// call and every Armament invocation, and `execute_stream_observed`
+    /// beats once per streamed chunk -- a recording `HeartbeatHandle`
+    /// observes at least one beat per event, and the buffered result is
+    /// identical to `execute`'s for identical inputs.
+    #[tokio::test]
+    async fn paladin_execution_service_beats_on_llm_completion_stream_chunk_and_armament() {
+        use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+        use paladin_core::platform::container::paladin::MaxLoops;
+
+        let arsenal = Arc::new(CountingArsenal::default());
+        let llm: Arc<dyn LlmPort> = Arc::new(ToolCallingLlmPort { chunks: 3 });
+        let circuit_breaker = Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60)));
+        let service = PaladinExecutionService::new(
+            llm,
+            circuit_breaker,
+            None,
+            Some(arsenal.clone() as Arc<dyn ArsenalPort>),
+        );
+        let mut paladin = create_test_paladin();
+        paladin.node.max_loops = MaxLoops::Fixed(2);
+
+        // --- buffered path: 2 loops x (1 LLM completion + 1 Armament call)
+        let heartbeat = HeartbeatHandle::new();
+        let observed = service
+            .execute_observed(&paladin, "hello", &heartbeat)
+            .await
+            .expect("observed execution succeeds");
+        assert_eq!(
+            arsenal
+                .invocations
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "one Armament invocation per loop"
+        );
+        assert!(
+            heartbeat.beats() >= 4,
+            "at least one beat per LLM completion (2) and per Armament invocation (2), got {}",
+            heartbeat.beats()
+        );
+
+        // --- identical result to the unobserved path
+        let direct = service
+            .execute(&paladin, "hello")
+            .await
+            .expect("direct execution succeeds");
+        assert_eq!(observed.output, direct.output);
+        assert_eq!(observed.loop_count, direct.loop_count);
+        assert_eq!(observed.stop_reason, direct.stop_reason);
+
+        // --- streaming path: one beat per chunk (3 content chunks + final)
+        let stream_heartbeat = HeartbeatHandle::new();
+        let mut stream = service
+            .execute_stream_observed(&paladin, "hello", &stream_heartbeat)
+            .await
+            .expect("stream opens");
+        let mut chunks = 0usize;
+        while let Some(item) = stream.recv().await {
+            let chunk = item.expect("chunk is Ok");
+            chunks += 1;
+            if chunk.is_final {
+                break;
+            }
+        }
+        assert_eq!(chunks, 4, "3 deltas plus the final marker");
+        assert!(
+            stream_heartbeat.beats() >= 3,
+            "at least one beat per streamed content chunk, got {}",
+            stream_heartbeat.beats()
+        );
+    }
+
     /// Where a [`FailingLlmPort`] surfaces its `LlmError`.
     #[derive(Clone, Copy)]
     enum FailAt {

@@ -9901,4 +9901,135 @@ mod tests {
             "the Halted Waypoint's vanguard must be exactly the nodes that would have run next"
         );
     }
+
+    // --- Plan 25-09 Task 1: HeartbeatHandle, NodeContext.attempt/heartbeat(),
+    // and the defaulted PaladinPort::execute_observed (D-18, D-19) ----------
+
+    use crate::engine::test_support::{HeartbeatingNode, ObservedCallRecordingPort};
+
+    /// A retry policy that retries `Unknown`-classified `StateNodeError`s
+    /// (the default `TransientOnly` never would) with a 1 ms, jitter-free
+    /// backoff -- `engine::mod`'s `retrying_aegis` shape, restated here for
+    /// this module's own retry-aware tests.
+    fn retrying_aegis(max_attempts: u32) -> Aegis {
+        Aegis {
+            retry: Some(paladin_core::platform::container::aegis::RetryPolicy {
+                max_attempts,
+                retry_on: paladin_core::platform::container::aegis::RetryPredicate::TransientAndUnknown,
+                jitter: false,
+                initial_interval: std::time::Duration::from_millis(1),
+                ..paladin_core::platform::container::aegis::RetryPolicy::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// D-18: `ctx.heartbeat()` on a node with NO `idle_timeout` (no Aegis at
+    /// all here) neither panics nor changes the run -- the handle exists
+    /// but nothing is watching it, and the run completes normally.
+    #[tokio::test]
+    async fn heartbeat_is_a_no_op_without_an_idle_timeout() {
+        let out = field("out");
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("beater");
+        let node = HeartbeatingNode::new(1, 50, out.clone());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("heartbeat-no-op").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(final_state.get_raw(&out), Some(&serde_json::json!("done")));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(node.observed_attempts(), vec![1]);
+    }
+
+    /// D-18: on a node's second attempt, `ctx.attempt` is `2` -- the
+    /// context is rebuilt per attempt with the retry loop's own counter.
+    #[tokio::test]
+    async fn node_context_exposes_the_current_attempt() {
+        let out = field("out");
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("second-try");
+        let node = HeartbeatingNode::new(2, 0, out.clone());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(3));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("ctx-attempt").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "expected Completed, got {outcome:?}"
+        );
+        assert_eq!(
+            node.observed_attempts(),
+            vec![1, 2],
+            "attempt 1 fails, attempt 2 sees ctx.attempt == 2 and succeeds"
+        );
+    }
+
+    /// D-19: the engine dispatches EVERY `NodeSpec::Paladin` node through
+    /// `PaladinPort::execute_observed`, never `execute` directly -- a port
+    /// that overrides the defaulted method sees exactly one observed call
+    /// and zero direct calls.
+    #[tokio::test]
+    async fn the_engine_always_calls_execute_observed() {
+        let out = field("out");
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("scribe");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(make_paladin("scribe"), InputMapping::new("scribe"), out.clone()),
+        );
+        graph.add_entry(node_id);
+
+        let recording = ObservedCallRecordingPort::new();
+        let port: Arc<dyn PaladinPort> = recording.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("always-observed").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("observed")),
+                    "the output written is the one execute_observed produced"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(recording.observed_calls(), 1);
+        assert_eq!(
+            recording.direct_calls(),
+            0,
+            "the engine must never call execute() directly for a Paladin node"
+        );
+    }
 }

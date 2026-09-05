@@ -812,6 +812,68 @@ pub trait PaladinPort: Send + Sync {
 mod tests {
     use super::*;
 
+    /// Plan 25-09, D-19 / X-10.4: `execute_observed` is a DEFAULTED method
+    /// whose default body delegates to `execute` and beats nothing. A port
+    /// that never overrides it produces exactly what `execute` produces,
+    /// and the handle records zero beats -- the default correctly claims
+    /// no progress, so an `idle_timeout` over such a port degrades to a
+    /// per-attempt wall clock rather than to no bound at all.
+    #[tokio::test]
+    async fn execute_observed_defaults_to_execute() {
+        use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+        use paladin_core::platform::container::paladin::PaladinData;
+
+        struct ExecuteOnlyPort;
+
+        #[async_trait]
+        impl PaladinPort for ExecuteOnlyPort {
+            async fn execute(
+                &self,
+                _paladin: &Paladin,
+                input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                Ok(PaladinResult {
+                    output: format!("echo:{input}"),
+                    token_count: 7,
+                    loop_count: 1,
+                    stop_reason: StopReason::Completed,
+                    ..Default::default()
+                })
+            }
+
+            async fn execute_stream(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                unimplemented!("not exercised")
+            }
+
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+        }
+
+        let port = ExecuteOnlyPort;
+        let paladin: Paladin = paladin_core::base::entity::node::Node::new(
+            PaladinData::default(),
+            Some("p".to_string()),
+        );
+        let heartbeat = HeartbeatHandle::new();
+
+        let direct = port.execute(&paladin, "hi").await.unwrap();
+        let observed = port
+            .execute_observed(&paladin, "hi", &heartbeat)
+            .await
+            .unwrap();
+
+        assert_eq!(observed.output, direct.output);
+        assert_eq!(observed.token_count, direct.token_count);
+        assert_eq!(observed.loop_count, direct.loop_count);
+        assert_eq!(observed.stop_reason, direct.stop_reason);
+        assert_eq!(heartbeat.beats(), 0, "the default body emits no beat");
+    }
+
     #[test]
     fn test_paladin_result_creation() {
         let result = PaladinResult {

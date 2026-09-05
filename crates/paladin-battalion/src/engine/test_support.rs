@@ -24,6 +24,7 @@ use paladin_ports::output::waypoint_port::{
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use tokio_util::sync::CancellationToken;
 
+use crate::engine::heartbeat::HeartbeatHandle;
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor};
 use crate::engine::node::{NodeContext, StateNode, StateNodeError};
 
@@ -1058,5 +1059,130 @@ impl StateNode for AttemptObservingNode {
         let mut delta = StateDelta::new();
         delta.set_raw(self.field.clone(), serde_json::json!("recovered"));
         Ok(delta.into())
+    }
+}
+
+// --- Phase 25 Plan 09: heartbeat / execute_observed test doubles ------------
+
+/// A [`StateNode`] test double for plan 25-09 (D-18): on every run it
+/// records the `ctx.attempt` it observed, beats `ctx.heartbeat()`
+/// `beats_per_run` times, and fails with a `StateNodeError` until its
+/// `fail_until_attempt`-th run -- so a test can prove both that
+/// `heartbeat()` on a node with no `idle_timeout` is a harmless no-op, and
+/// that `NodeContext.attempt` really is the 1-indexed attempt number the
+/// retry loop is on.
+pub struct HeartbeatingNode {
+    fail_until_attempt: u32,
+    beats_per_run: usize,
+    field: FieldName,
+    observed_attempts: Mutex<Vec<u32>>,
+}
+
+impl HeartbeatingNode {
+    /// Construct a node that beats `beats_per_run` times per run and fails
+    /// before its `fail_until_attempt`-th run (`1` never fails).
+    pub fn new(fail_until_attempt: u32, beats_per_run: usize, field: FieldName) -> Arc<Self> {
+        Arc::new(Self {
+            fail_until_attempt,
+            beats_per_run,
+            field,
+            observed_attempts: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Every `ctx.attempt` value this node observed, in run order.
+    pub fn observed_attempts(&self) -> Vec<u32> {
+        self.observed_attempts.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for HeartbeatingNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        self.observed_attempts.lock().unwrap().push(ctx.attempt);
+        for _ in 0..self.beats_per_run {
+            ctx.heartbeat();
+        }
+        if ctx.attempt < self.fail_until_attempt {
+            return Err(StateNodeError("transient".to_string()));
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), serde_json::json!("done"));
+        Ok(delta.into())
+    }
+}
+
+/// A [`PaladinPort`] test double for plan 25-09 (D-19) that overrides
+/// `execute_observed` and counts, separately, how many times the engine
+/// invoked `execute_observed` versus `execute` directly -- the double the
+/// engine-always-calls-`execute_observed` test asserts against. Beats the
+/// supplied handle once per `execute_observed` call so a test can also see
+/// the beat reach the engine's timer.
+#[derive(Default)]
+pub struct ObservedCallRecordingPort {
+    observed_calls: AtomicUsize,
+    direct_calls: AtomicUsize,
+}
+
+impl ObservedCallRecordingPort {
+    /// Construct a port with both counters at zero.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// How many times `execute_observed` was called.
+    pub fn observed_calls(&self) -> usize {
+        self.observed_calls.load(Ordering::SeqCst)
+    }
+
+    /// How many times `execute` was called directly (never through the
+    /// `execute_observed` default body, which this double overrides).
+    pub fn direct_calls(&self) -> usize {
+        self.direct_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl PaladinPort for ObservedCallRecordingPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.direct_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(PaladinResult {
+            output: "direct".to_string(),
+            ..Default::default()
+        })
+    }
+
+    async fn execute_observed(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+        heartbeat: &HeartbeatHandle,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.observed_calls.fetch_add(1, Ordering::SeqCst);
+        heartbeat.beat();
+        Ok(PaladinResult {
+            output: "observed".to_string(),
+            ..Default::default()
+        })
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("ObservedCallRecordingPort only supports execute_observed()")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
     }
 }

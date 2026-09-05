@@ -410,7 +410,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 24-07-PLAN.md — `replay`/`fork`, `ChronicleService`, immutability and subgraph-fork
+- [x] 24-07-PLAN.md — `replay`/`fork`, `ChronicleService`, immutability and subgraph-fork
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

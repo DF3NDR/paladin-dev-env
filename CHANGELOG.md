@@ -119,7 +119,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /v1/threads/{id}/resume` (returns `202 Accepted { thread_id, state_url }` immediately —
   the engine continuation runs as a background task, never holding the connection open; a client
   polls `.../state` for the outcome), and `GET /v1/threads/{id}/history` (paginated, `limit` ≤
-  100, opaque cursor). Backed by a new `ParleyPort` (`paladin-ports`) with zero `paladin-battalion`
+  100, opaque cursor). `POST /v1/threads/{id}/resume` additionally requires an admin-role
+  credential and answers `403` to an authenticated non-admin caller, while
+  `GET /v1/threads/{id}/state` and `GET /v1/threads/{id}/history` remain reachable by any
+  authenticated role — an interim narrowing of this phase's own D-24 decision, applied because no
+  per-thread ownership exists yet to scope against, with PLAT-06 (Phase 27) named as the successor
+  that replaces it. See [`MIGRATION.md` §9.6](MIGRATION.md#96-http-api) for the status-code
+  registry. Backed by a new `ParleyPort` (`paladin-ports`) with zero `paladin-battalion`
   dependency; `paladin-server` wires a real backend via the new `WaypointStoreConfig`
   (`APP_WAYPOINT_STORE_BACKEND=sqlite|postgres`, disabled by default — every thread route answers
   `501 not_implemented` naming the config key until an operator sets it). `openapi.json`

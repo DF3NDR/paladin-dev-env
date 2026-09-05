@@ -418,8 +418,8 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 24-09-PLAN.md — Process wiring, k8s manifests, deployment docs, M-B-02 example
-- [ ] 24-10-PLAN.md — `ParleyPort`, facade adapter, `GraphRegistry`, `WaypointStoreConfig`
+- [x] 24-09-PLAN.md — Process wiring, k8s manifests, deployment docs, M-B-02 example
+- [x] 24-10-PLAN.md — `ParleyPort`, facade adapter, `GraphRegistry`, `WaypointStoreConfig`
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

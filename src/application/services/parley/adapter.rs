@@ -429,7 +429,7 @@ fn map_engine_error(err: EngineError) -> ParleyError {
 mod tests {
     use super::*;
     use async_trait::async_trait as async_trait_attr;
-    use paladin_battalion::engine::node::{NodeContext, NodeError, StateNode};
+    use paladin_battalion::engine::node::{NodeContext, StateNode, StateNodeError};
     use paladin_battalion::engine::{EngineLimits, NodeSpec, WaypointDurability};
     use paladin_core::platform::container::battlefield::{
         Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
@@ -482,7 +482,7 @@ mod tests {
             &self,
             _state: &Battlefield,
             _ctx: &NodeContext,
-        ) -> Result<Directive, NodeError> {
+        ) -> Result<Directive, StateNodeError> {
             let mut delta = paladin_core::platform::container::battlefield::StateDelta::new();
             delta.set_raw(self.output_field.clone(), serde_json::json!(true));
             Ok(Directive {
@@ -749,7 +749,7 @@ mod tests {
             &self,
             _state: &Battlefield,
             _ctx: &NodeContext,
-        ) -> Result<Directive, NodeError> {
+        ) -> Result<Directive, StateNodeError> {
             self.run_count.fetch_add(1, Ordering::SeqCst);
             let mut delta = paladin_core::platform::container::battlefield::StateDelta::new();
             delta.set_raw(self.output_field.clone(), serde_json::json!(true));

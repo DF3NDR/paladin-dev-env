@@ -31,8 +31,8 @@ use std::time::Duration;
 use paladin_battalion::EdgeEvaluatorRegistry;
 use paladin_battalion::engine::graph::StateMap;
 use paladin_battalion::engine::{
-    EdgeSpec, EngineLimits, NodeContext, NodeError, NodeSpec, RunOutcome, StateNode, WarEngine,
-    WarGraph,
+    EdgeSpec, EngineLimits, NodeContext, NodeSpec, RunOutcome, StateNode, StateNodeError,
+    WarEngine, WarGraph,
 };
 use paladin_core::base::entity::node::Node;
 use paladin_core::platform::container::battalion::BattalionConfig;
@@ -102,7 +102,11 @@ struct RouterNode;
 
 #[async_trait::async_trait]
 impl StateNode for RouterNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         Ok(StateDelta::new().into())
     }
 }
@@ -117,7 +121,11 @@ struct OtherArmNode {
 
 #[async_trait::async_trait]
 impl StateNode for OtherArmNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let mut delta = StateDelta::new();
         delta.set_raw(self.field.clone(), serde_json::json!("other-ran"));
         Ok(delta.into())

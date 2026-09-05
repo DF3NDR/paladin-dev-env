@@ -16,8 +16,8 @@ use std::time::Duration;
 use chrono::Utc;
 
 use paladin_battalion::engine::{
-    EngineError, EngineLimits, NodeContext, NodeError, NodeSpec, RunOutcome, StateNode, WarEngine,
-    WarGraph,
+    EngineError, EngineLimits, NodeContext, NodeSpec, RunOutcome, StateNode, StateNodeError,
+    WarEngine, WarGraph,
 };
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
@@ -57,7 +57,11 @@ impl ParleyingFunctionNode {
 
 #[async_trait::async_trait]
 impl StateNode for ParleyingFunctionNode {
-    async fn run(&self, _state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         match ctx.parley_response() {
             None => {
                 let request = ParleyRequest {

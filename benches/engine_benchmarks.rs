@@ -38,7 +38,7 @@ use uuid::Uuid;
 
 use paladin_battalion::engine::WarEngine;
 use paladin_battalion::engine::graph::{EngineLimits, NodeSpec, WarGraph};
-use paladin_battalion::engine::node::{NodeContext, NodeError, StateNode};
+use paladin_battalion::engine::node::{NodeContext, StateNode, StateNodeError};
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
 };
@@ -171,7 +171,11 @@ struct FixedValueNode {
 
 #[async_trait]
 impl StateNode for FixedValueNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let mut delta = StateDelta::new();
         delta.set_raw(self.field.clone(), self.value.clone());
         Ok(delta.into())

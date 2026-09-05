@@ -20,8 +20,8 @@ use chrono::Utc;
 
 use paladin_battalion::engine::graph::GateRequestTemplate;
 use paladin_battalion::engine::{
-    EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeError, NodeSpec, RunOutcome, StateNode,
-    WarEngine, WarGraph,
+    EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeSpec, RunOutcome, StateNode,
+    StateNodeError, WarEngine, WarGraph,
 };
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
@@ -62,7 +62,11 @@ impl FixedOutputNode {
 
 #[async_trait::async_trait]
 impl StateNode for FixedOutputNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let mut delta = StateDelta::new();
         delta.set_raw(self.field.clone(), self.value.clone());
         Ok(delta.into())

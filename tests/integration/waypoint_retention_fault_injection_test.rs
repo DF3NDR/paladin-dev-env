@@ -29,8 +29,8 @@ use paladin::application::services::waypoint_retention::WaypointRetentionService
 use paladin::config::WaypointRetentionConfig;
 
 use paladin_battalion::engine::{
-    EdgeSpec, EngineLimits, NodeContext, NodeError, NodeSpec, RunOutcome, StateNode, WarEngine,
-    WarGraph,
+    EdgeSpec, EngineLimits, NodeContext, NodeSpec, RunOutcome, StateNode, StateNodeError,
+    WarEngine, WarGraph,
 };
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
@@ -375,11 +375,15 @@ struct SetFieldNode {
 
 #[async_trait]
 impl StateNode for SetFieldNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let mut delta = StateDelta::new();
         delta
             .set(self.field.clone(), self.value.clone())
-            .map_err(|e| NodeError(e.to_string()))?;
+            .map_err(|e| StateNodeError(e.to_string()))?;
         Ok(delta.into())
     }
 }

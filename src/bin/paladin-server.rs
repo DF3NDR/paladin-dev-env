@@ -691,7 +691,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn resume_continues_a_halted_thread_after_process_shutdown() {
         use async_trait::async_trait;
-        use paladin_battalion::engine::node::{NodeContext, NodeError, StateNode};
+        use paladin_battalion::engine::node::{NodeContext, StateNode, StateNodeError};
         use paladin_battalion::engine::{EngineLimits, NodeSpec, RunOutcome, WarEngine, WarGraph};
         use paladin_core::platform::container::battlefield::StateDelta;
         use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
@@ -714,7 +714,7 @@ mod tests {
                 &self,
                 _state: &Battlefield,
                 _ctx: &NodeContext,
-            ) -> Result<Directive, NodeError> {
+            ) -> Result<Directive, StateNodeError> {
                 Ok(StateDelta::new().into())
             }
         }

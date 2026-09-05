@@ -270,7 +270,7 @@ mod tests {
     use std::env;
     use std::sync::Arc;
 
-    use paladin_battalion::engine::node::{NodeContext, NodeError, StateNode};
+    use paladin_battalion::engine::node::{NodeContext, StateNode, StateNodeError};
     use paladin_battalion::engine::{EngineError, NodeSpec, RunOutcome, WarEngine, WarGraph};
     use paladin_core::platform::container::battlefield::{
         Battlefield, BattlefieldSchema, StateDelta,
@@ -530,7 +530,7 @@ mod tests {
             &self,
             _state: &Battlefield,
             _ctx: &NodeContext,
-        ) -> Result<Directive, NodeError> {
+        ) -> Result<Directive, StateNodeError> {
             let tasks = (0..self.task_count)
                 .map(|i| MusterTask {
                     worker: self.worker.clone(),
@@ -553,7 +553,7 @@ mod tests {
             &self,
             _state: &Battlefield,
             _ctx: &NodeContext,
-        ) -> Result<Directive, NodeError> {
+        ) -> Result<Directive, StateNodeError> {
             Ok(StateDelta::new().into())
         }
     }

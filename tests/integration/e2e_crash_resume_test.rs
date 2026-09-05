@@ -26,8 +26,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use paladin_battalion::engine::{
-    EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeError, NodeSpec, RunOutcome, StateNode,
-    WarEngine, WarGraph,
+    EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeSpec, RunOutcome, StateNode,
+    StateNodeError, WarEngine, WarGraph,
 };
 use paladin_core::base::entity::node::Node;
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
@@ -65,12 +65,16 @@ struct LoopGateNode;
 
 #[async_trait::async_trait]
 impl StateNode for LoopGateNode {
-    async fn run(&self, state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let count_field = FieldName::new("loop_count").expect("valid field name");
         let status_field = FieldName::new("loop_status").expect("valid field name");
         let current = state
             .get::<i64>(&count_field)
-            .map_err(|e| NodeError(e.to_string()))?
+            .map_err(|e| StateNodeError(e.to_string()))?
             .unwrap_or(0);
         let next = current + 1;
         let status = if next < LOOP_BOUND {
@@ -82,10 +86,10 @@ impl StateNode for LoopGateNode {
         let mut delta = StateDelta::new();
         delta
             .set(count_field, next)
-            .map_err(|e| NodeError(e.to_string()))?;
+            .map_err(|e| StateNodeError(e.to_string()))?;
         delta
             .set(status_field, status)
-            .map_err(|e| NodeError(e.to_string()))?;
+            .map_err(|e| StateNodeError(e.to_string()))?;
         Ok(delta.into())
     }
 }

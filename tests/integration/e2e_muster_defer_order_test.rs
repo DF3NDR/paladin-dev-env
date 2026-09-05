@@ -38,8 +38,8 @@
 use std::sync::Arc;
 
 use paladin_battalion::engine::{
-    EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeError, NodeSpec, RunOutcome, StateNode,
-    WarEngine, WarGraph,
+    EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeSpec, RunOutcome, StateNode,
+    StateNodeError, WarEngine, WarGraph,
 };
 use paladin_core::base::entity::node::Node;
 use paladin_core::platform::container::battlefield::{
@@ -97,7 +97,11 @@ struct PlannerNode;
 
 #[async_trait::async_trait]
 impl StateNode for PlannerNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let worker = NodeId::new("worker");
         let tasks = TASK_KEYS
             .iter()
@@ -125,10 +129,14 @@ struct AggregatorNode {
 
 #[async_trait::async_trait]
 impl StateNode for AggregatorNode {
-    async fn run(&self, state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let results = state
             .get::<Vec<String>>(&self.worker_out)
-            .map_err(|e| NodeError(e.to_string()))?
+            .map_err(|e| StateNodeError(e.to_string()))?
             .unwrap_or_default();
         let mut delta = StateDelta::new();
         delta.set_raw(self.aggregated.clone(), serde_json::json!(results));

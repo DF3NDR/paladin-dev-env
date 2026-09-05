@@ -46,7 +46,7 @@ use async_trait::async_trait;
 use paladin_battalion::engine::RunOutcome;
 use paladin_battalion::engine::WarEngine;
 use paladin_battalion::engine::graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
-use paladin_battalion::engine::node::{NodeContext, NodeError, StateNode};
+use paladin_battalion::engine::node::{NodeContext, StateNode, StateNodeError};
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
 };
@@ -135,7 +135,11 @@ struct TrackingNode {
 
 #[async_trait]
 impl StateNode for TrackingNode {
-    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let ptr = state as *const Battlefield as usize;
         self.tracker.record(ctx.superstep, ptr);
         let mut delta = StateDelta::new();

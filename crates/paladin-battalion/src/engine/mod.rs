@@ -1096,6 +1096,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             Some(Arc::clone(&self.waypoint_port)),
+            self.shutdown_grace,
         )
         .await;
         self.trace_dispatcher
@@ -1291,6 +1292,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             Some(Arc::clone(&self.waypoint_port)),
+            self.shutdown_grace,
         )
         .await;
         self.trace_dispatcher
@@ -1616,6 +1618,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // branch's resume never silently reverts to mainline.
             latest.fork_of,
             Some(responses_by_node),
+            self.shutdown_grace,
         )
         .await;
         self.trace_dispatcher
@@ -1761,6 +1764,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // `fork_of = Some(from)`, propagated verbatim.
             Some(from),
             None,
+            self.shutdown_grace,
         )
         .await;
         self.trace_dispatcher.emit(TraceEvent::RunFinished {

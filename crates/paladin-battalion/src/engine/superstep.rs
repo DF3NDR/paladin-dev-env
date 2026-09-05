@@ -25,6 +25,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use log::warn;
 use regex::Regex;
 use tokio::sync::Semaphore;
@@ -94,6 +96,66 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     /// concatenated -- a branch root is a single value shared by the whole
     /// run tree, unlike `checkpoint_ns`'s per-level namespace segments).
     fork_of: Option<WaypointId>,
+    /// THIS run's own `shutdown_grace` (HITL-04, D-19, D-20) -- captured
+    /// once here so a nested `NodeSpec::Battalion` child run observes the
+    /// SAME grace window its parent does when racing its own in-flight
+    /// batch against a mid-superstep cancellation (a runtime setting shared
+    /// by the whole run tree, exactly like `fork_of` above).
+    shutdown_grace: std::time::Duration,
+}
+
+/// Pairs a spawned node task's own dispatch-order position with its
+/// [`tokio::task::JoinHandle`], so a batch of handles can be raced through a
+/// [`FuturesUnordered`] (which does not preserve insertion order) while
+/// still recovering each result's ORIGINAL `dispatch_entries` index for the
+/// existing order-sensitive bookkeeping (`node_failure`'s first-wins guard,
+/// `goto_targets` push order, etc. -- D-19, RESEARCH.md Pitfall 1).
+/// [`IndexedHandle::abort`] delegates to the wrapped handle so the
+/// grace-deadline race can cancel a still-outstanding task without first
+/// removing it from the `FuturesUnordered` (`iter()` inspects without
+/// polling or removing).
+struct IndexedHandle<T> {
+    index: usize,
+    handle: tokio::task::JoinHandle<T>,
+}
+
+impl<T> IndexedHandle<T> {
+    /// Abort the wrapped task (`JoinHandle::abort`, cancel-safe to call
+    /// while the handle is also registered in a `FuturesUnordered`).
+    fn abort(&self) {
+        self.handle.abort();
+    }
+}
+
+impl<T> std::future::Future for IndexedHandle<T> {
+    type Output = (usize, Result<T, tokio::task::JoinError>);
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        // `tokio::task::JoinHandle<T>` is `Unpin` unconditionally, so
+        // `IndexedHandle<T>` (a `usize` plus a `JoinHandle<T>`, nothing
+        // self-referential) is auto-`Unpin` too -- no `unsafe` needed to
+        // reach `&mut self.handle` through the `Pin`.
+        let this = self.get_mut();
+        let index = this.index;
+        std::pin::Pin::new(&mut this.handle)
+            .poll(cx)
+            .map(|res| (index, res))
+    }
+}
+
+/// Resolves to the token's own cancellation the moment it fires, or never
+/// resolves at all when `token` is `None` -- lets the mid-superstep grace
+/// race (D-19) include "watch for cancellation" as an ordinary
+/// `tokio::select!` branch regardless of whether a `CancellationToken` is
+/// configured, with no `unwrap()`/`expect()` on the `Option` (house rule).
+async fn cancelled_or_pending(token: &Option<CancellationToken>) {
+    match token {
+        Some(t) => t.cancelled().await,
+        None => std::future::pending::<()>().await,
+    }
 }
 
 /// What one vanguard node resolves to for this superstep's execution: either
@@ -638,6 +700,12 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     // child is unsupported this phase (see the
                     // `RunOutcome::AwaitingInput` arm below).
                     None,
+                    // --- HITL-04, D-19, D-20: the child run races its OWN
+                    // mid-superstep batch against the SAME grace window the
+                    // parent was configured with (`ChildEngineResources`'s
+                    // own rustdoc) -- a runtime setting shared by the whole
+                    // run tree, exactly like `fork_of` above.
+                    resources.shutdown_grace,
                 ));
                 let outcome = child_fut.await;
 
@@ -721,6 +789,21 @@ enum NodeRunOutcome {
     /// returned `Fail(error)` before the node could run.
     Failed(NodeFailure),
 }
+
+/// What one spawned node-dispatch task (the `tokio::spawn`'d async block in
+/// the dispatch loop below) resolves to: the node's own `NodeId` (so the
+/// grace-race join phase, which re-indexes by `dispatch_entries` position
+/// rather than relying on completion order, can still cross-check it),
+/// when it started, how long it ran, its Paladin identity if any, its token
+/// count, and its [`NodeRunOutcome`].
+type NodeTaskOutput = (
+    NodeId,
+    chrono::DateTime<chrono::Utc>,
+    u64,
+    Option<Uuid>,
+    u64,
+    NodeRunOutcome,
+);
 
 /// The `tasks.len() > limits.max_muster_tasks` comparison (D-13's
 /// `precision` edge truth), factored out of [`validate_muster_tasks`] so it
@@ -870,6 +953,15 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     interceptors: &[Arc<dyn NodeInterceptor>],
     cancellation: &Option<CancellationToken>,
     waypoint_port_arc: Option<Arc<W>>,
+    // --- HITL-04, D-19, D-20: unlike `checkpoint_ns`/`fork_of`/
+    // `initial_parley_responses` below (each fixed to a top-level-only
+    // `None` and never a real value this wrapper's own callers supply),
+    // `shutdown_grace` IS a real, always-present value every top-level
+    // caller configures via `WarEngine::with_shutdown_grace` -- so, unlike
+    // those three, it is a genuine new parameter on this wrapper's own
+    // signature (forwarded verbatim to [`run_with_namespace`]), not one
+    // this plan can fix to a constant.
+    shutdown_grace: std::time::Duration,
 ) -> Result<RunOutcome, EngineError> {
     // --- CF-FR-15, D-20: a top-level call through this public entry point
     // (`WarEngine::start`/`resume_with_options`, and every existing test
@@ -915,6 +1007,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         // directly (bypassing this wrapper) so this function's SIGNATURE
         // stays unchanged by this plan, exactly like `checkpoint_ns` above.
         None,
+        shutdown_grace,
     )
     .await
 }
@@ -984,6 +1077,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // re-enters the vanguard later in the same run (e.g. a Goto/cycle
     // revisit).
     initial_parley_responses: Option<BTreeMap<NodeId, ParleyResponse>>,
+    // --- HITL-04, D-19, D-20: the grace window this run's OWN mid-superstep
+    // cancellation race (below) shares across the whole in-flight batch,
+    // computed once as `cancel_observed_at + shutdown_grace` -- never a
+    // per-handle timeout (RESEARCH.md Pitfall 1). A runtime setting, never
+    // hashed into the graph fingerprint and never part of `EngineLimits`
+    // (D-20); every real `WarEngine::start`/`resume`/`resume_with`/
+    // `replay`/`fork` call forwards its own configured
+    // `WarEngine::with_shutdown_grace` value here, and a nested
+    // `NodeSpec::Battalion` child run inherits the SAME value via
+    // `ChildEngineResources::shutdown_grace`.
+    shutdown_grace: std::time::Duration,
 ) -> Result<RunOutcome, EngineError> {
     // --- CF-FR-16, D-21: gathered ONCE per `run()` call, never per
     // dispatch -- see `ChildEngineResources`'s own rustdoc for why a
@@ -1005,6 +1109,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 cancellation: cancellation.clone(),
                 checkpoint_ns: checkpoint_ns.clone(),
                 fork_of,
+                shutdown_grace,
             })
         });
 
@@ -1340,7 +1445,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         let semaphore = Arc::new(Semaphore::new(limit));
 
         let mut handles = Vec::with_capacity(dispatch_entries.len());
-        for (node_id, muster_ctx) in &dispatch_entries {
+        for (dispatch_index, (node_id, muster_ctx)) in dispatch_entries.iter().enumerate() {
             let spec = graph.node(node_id).ok_or_else(|| {
                 EngineError::Node(NodeError(format!(
                     "vanguard node {node_id} not found in graph"
@@ -1407,89 +1512,92 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 parley_response: parley_responses_this_round.get(node_id).cloned(),
             };
             let nid = node_id.clone();
-            handles.push(tokio::spawn(async move {
-                node_trace.emit(TraceEvent::NodeStarted {
-                    thread_id: ctx.thread_id.clone(),
-                    superstep: ctx.superstep,
-                    node_id: nid.clone(),
-                });
-                let started_at = Utc::now();
+            handles.push(IndexedHandle {
+                index: dispatch_index,
+                handle: tokio::spawn(async move {
+                    node_trace.emit(TraceEvent::NodeStarted {
+                        thread_id: ctx.thread_id.clone(),
+                        superstep: ctx.superstep,
+                        node_id: nid.clone(),
+                    });
+                    let started_at = Utc::now();
 
-                // --- ENG-FR-22: run every `before` in order, short-
-                // circuiting on the first non-`Proceed` decision.
-                let mut decision = InterceptDecision::Proceed;
-                for interceptor in &node_interceptors {
-                    decision = interceptor.before(&ctx, &snap).await;
-                    if !matches!(decision, InterceptDecision::Proceed) {
-                        break;
-                    }
-                }
-
-                let (paladin_id, token_count, outcome) = match decision {
-                    InterceptDecision::Skip(reason) => {
-                        (None, 0u64, NodeRunOutcome::Skipped(reason))
-                    }
-                    InterceptDecision::Fail(err) => {
-                        (None, 0u64, NodeRunOutcome::Failed(NodeFailure::Node(err)))
-                    }
-                    InterceptDecision::Proceed => match sem.acquire_owned().await {
-                        Ok(_permit) => {
-                            let (paladin_id, token_count, result) =
-                                execute_vanguard_node(dispatch, &snap, &ctx, &port).await;
-                            match result {
-                                Ok(mut directive) => {
-                                    // --- ENG-FR-22: run every `after` in
-                                    // order, each observing the previous
-                                    // one's mutation. `after` still takes
-                                    // `&mut StateDelta` only -- the ENG-07
-                                    // hook signature is unchanged by CF-02;
-                                    // `directive.next` is not visible to any
-                                    // interceptor this phase.
-                                    for interceptor in &node_interceptors {
-                                        interceptor.after(&ctx, &mut directive.delta).await;
-                                    }
-                                    (
-                                        paladin_id,
-                                        token_count,
-                                        NodeRunOutcome::Succeeded(directive),
-                                    )
-                                }
-                                Err(e) => (paladin_id, token_count, NodeRunOutcome::Failed(e)),
-                            }
+                    // --- ENG-FR-22: run every `before` in order, short-
+                    // circuiting on the first non-`Proceed` decision.
+                    let mut decision = InterceptDecision::Proceed;
+                    for interceptor in &node_interceptors {
+                        decision = interceptor.before(&ctx, &snap).await;
+                        if !matches!(decision, InterceptDecision::Proceed) {
+                            break;
                         }
-                        // Semaphore is never `.close()`d anywhere in this
-                        // engine today, so this arm is unreachable in
-                        // practice -- but library code must not `.expect()`
-                        // an invariant it cannot enforce (WR-01, Phase
-                        // 22.1). Report it the same way a node's own
-                        // execution error is reported, through the existing
-                        // NodeRunOutcome/NodeError plumbing, rather than
-                        // panicking inside a detached `tokio::spawn`ed task.
-                        Err(_) => (
-                            None,
-                            0u64,
-                            NodeRunOutcome::Failed(NodeFailure::Node(NodeError(
-                                "internal error: superstep semaphore closed unexpectedly"
-                                    .to_string(),
-                            ))),
-                        ),
-                    },
-                };
-                let duration_ms = (Utc::now() - started_at).num_milliseconds().max(0) as u64;
-                node_trace.emit(TraceEvent::NodeFinished {
-                    thread_id: ctx.thread_id.clone(),
-                    superstep: ctx.superstep,
-                    node_id: nid.clone(),
-                });
-                (
-                    nid,
-                    started_at,
-                    duration_ms,
-                    paladin_id,
-                    token_count,
-                    outcome,
-                )
-            }));
+                    }
+
+                    let (paladin_id, token_count, outcome) = match decision {
+                        InterceptDecision::Skip(reason) => {
+                            (None, 0u64, NodeRunOutcome::Skipped(reason))
+                        }
+                        InterceptDecision::Fail(err) => {
+                            (None, 0u64, NodeRunOutcome::Failed(NodeFailure::Node(err)))
+                        }
+                        InterceptDecision::Proceed => match sem.acquire_owned().await {
+                            Ok(_permit) => {
+                                let (paladin_id, token_count, result) =
+                                    execute_vanguard_node(dispatch, &snap, &ctx, &port).await;
+                                match result {
+                                    Ok(mut directive) => {
+                                        // --- ENG-FR-22: run every `after` in
+                                        // order, each observing the previous
+                                        // one's mutation. `after` still takes
+                                        // `&mut StateDelta` only -- the ENG-07
+                                        // hook signature is unchanged by CF-02;
+                                        // `directive.next` is not visible to any
+                                        // interceptor this phase.
+                                        for interceptor in &node_interceptors {
+                                            interceptor.after(&ctx, &mut directive.delta).await;
+                                        }
+                                        (
+                                            paladin_id,
+                                            token_count,
+                                            NodeRunOutcome::Succeeded(directive),
+                                        )
+                                    }
+                                    Err(e) => (paladin_id, token_count, NodeRunOutcome::Failed(e)),
+                                }
+                            }
+                            // Semaphore is never `.close()`d anywhere in this
+                            // engine today, so this arm is unreachable in
+                            // practice -- but library code must not `.expect()`
+                            // an invariant it cannot enforce (WR-01, Phase
+                            // 22.1). Report it the same way a node's own
+                            // execution error is reported, through the existing
+                            // NodeRunOutcome/NodeError plumbing, rather than
+                            // panicking inside a detached `tokio::spawn`ed task.
+                            Err(_) => (
+                                None,
+                                0u64,
+                                NodeRunOutcome::Failed(NodeFailure::Node(NodeError(
+                                    "internal error: superstep semaphore closed unexpectedly"
+                                        .to_string(),
+                                ))),
+                            ),
+                        },
+                    };
+                    let duration_ms = (Utc::now() - started_at).num_milliseconds().max(0) as u64;
+                    node_trace.emit(TraceEvent::NodeFinished {
+                        thread_id: ctx.thread_id.clone(),
+                        superstep: ctx.superstep,
+                        node_id: nid.clone(),
+                    });
+                    (
+                        nid,
+                        started_at,
+                        duration_ms,
+                        paladin_id,
+                        token_count,
+                        outcome,
+                    )
+                }),
+            });
         }
 
         let mut deltas = Vec::with_capacity(handles.len());
@@ -1520,12 +1628,109 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         let mut routing_failure: Option<(NodeId, EngineError)> = None;
         let mut mustered: Option<(NodeId, Vec<MusterTask>)> = None;
         let mut parley_requests: Vec<ParleyRequest> = Vec::new();
-        for (entry, handle) in dispatch_entries.iter().zip(handles) {
-            let (_entry_node_id, entry_muster_ctx) = entry;
+
+        // --- HITL-04, D-19, RESEARCH.md Pitfall 1: race the WHOLE batch of
+        // spawned node tasks against ONE shared grace deadline, never a
+        // per-handle timeout. `results` is indexed by `dispatch_entries`
+        // position (`FuturesUnordered` does not preserve insertion order),
+        // so the bookkeeping loop just below still runs in dispatch order,
+        // exactly as it did when this was a plain sequential `for` loop.
+        // `cancel_observed_at` starts `Some` the instant the token is ALREADY
+        // cancelled (e.g. observed at the top-of-loop boundary check just
+        // barely before dispatch), and otherwise flips to `Some` the first
+        // time the watch branch below fires -- either way, the deadline is
+        // computed exactly once, from that one moment.
+        let handle_count = dispatch_entries.len();
+        let mut results: Vec<Option<NodeTaskOutput>> = (0..handle_count).map(|_| None).collect();
+        let mut aborted_node_ids: Vec<NodeId> = Vec::new();
+        let mut remaining: FuturesUnordered<IndexedHandle<NodeTaskOutput>> =
+            handles.into_iter().collect();
+        let mut cancel_observed_at: Option<tokio::time::Instant> = cancellation
+            .as_ref()
+            .filter(|token| token.is_cancelled())
+            .map(|_| tokio::time::Instant::now());
+
+        while !remaining.is_empty() {
+            match cancel_observed_at {
+                None => {
+                    tokio::select! {
+                        biased;
+                        Some((idx, res)) = remaining.next() => {
+                            match res {
+                                Ok(output) => results[idx] = Some(output),
+                                Err(e) => {
+                                    return Err(EngineError::Node(NodeError(format!(
+                                        "task join error: {e}"
+                                    ))));
+                                }
+                            }
+                        }
+                        _ = cancelled_or_pending(cancellation) => {
+                            cancel_observed_at = Some(tokio::time::Instant::now());
+                        }
+                    }
+                }
+                Some(observed_at) => {
+                    let deadline = observed_at + shutdown_grace;
+                    tokio::select! {
+                        biased;
+                        Some((idx, res)) = remaining.next() => {
+                            match res {
+                                Ok(output) => results[idx] = Some(output),
+                                Err(e) => {
+                                    return Err(EngineError::Node(NodeError(format!(
+                                        "task join error: {e}"
+                                    ))));
+                                }
+                            }
+                        }
+                        _ = tokio::time::sleep_until(deadline) => {
+                            // --- D-19: every handle still outstanding at the
+                            // deadline is aborted; its delta is discarded
+                            // (never awaited, never merged) and its own
+                            // dispatch-order id is recorded so the
+                            // bookkeeping loop below can produce a
+                            // `Skipped { reason: "shutdown" }` record for it
+                            // without needing the (never-arriving) real
+                            // outcome. `iter()` inspects without polling or
+                            // removing -- `abort()` is safe to call on a
+                            // handle still registered in `remaining`.
+                            for handle in remaining.iter() {
+                                handle.abort();
+                                aborted_node_ids.push(dispatch_entries[handle.index].0.clone());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (dispatch_index, entry) in dispatch_entries.iter().enumerate() {
+            let (entry_node_id, entry_muster_ctx) = entry;
             let is_muster_task = entry_muster_ctx.is_some();
-            let (node_id, started_at, duration_ms, paladin_id, token_count, outcome) = handle
-                .await
-                .map_err(|e| EngineError::Node(NodeError(format!("task join error: {e}"))))?;
+            let Some((node_id, started_at, duration_ms, paladin_id, token_count, outcome)) =
+                results[dispatch_index].take()
+            else {
+                // --- D-19: aborted past the shared grace deadline. Recorded
+                // `Skipped { reason: "shutdown" }`, exactly like an
+                // interceptor `Skip` decision above -- never pushed to
+                // `deltas`/`ran`, so `frontier.record_execution` is never
+                // called for it and its outgoing edges stay `Pending`
+                // (acceptance 5), and never both merged and skipped.
+                completed_records.push(NodeExecutionRecord {
+                    node_id: entry_node_id.clone(),
+                    paladin_id: None,
+                    started_at: Utc::now(),
+                    duration_ms: 0,
+                    token_count: 0,
+                    outcome: NodeOutcomeKind::Skipped {
+                        reason: "shutdown".to_string(),
+                    },
+                    attempt: 1,
+                });
+                continue;
+            };
             match outcome {
                 NodeRunOutcome::Succeeded(directive) => {
                     let Directive { delta, next } = directive;
@@ -1869,6 +2074,50 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     next_vanguard.push(target);
                 }
             }
+        }
+
+        // --- HITL-04, D-19: one or more nodes were aborted past the shared
+        // grace deadline this superstep. Every peer that finished in time
+        // already merged normally above and its edges already resolved
+        // (the loop just above only ever calls `frontier.record_execution`
+        // for `ran`, which never includes an aborted node); this Halted
+        // Waypoint's own vanguard re-lists each aborted node's id
+        // ALONGSIDE the normally computed `next_vanguard` (D-19 acceptance
+        // 5), so `resume` re-runs exactly those nodes exactly once, same as
+        // the boundary cancellation check's own Halted Waypoint. Checked
+        // BEFORE the Parley/End/starvation logic below: the run is going
+        // away, so none of those normal-completion paths apply once a node
+        // has actually been aborted (a mere `cancel_observed_at: Some` with
+        // NO aborted node -- Test 1's case -- changes nothing here; the
+        // very next loop iteration's existing top-of-loop boundary check
+        // Halts before the next superstep ever dispatches).
+        if !aborted_node_ids.is_empty() {
+            let mut halted_vanguard = next_vanguard.clone();
+            let mut seen: HashSet<NodeId> = halted_vanguard.iter().cloned().collect();
+            for node in aborted_node_ids {
+                if seen.insert(node.clone()) {
+                    halted_vanguard.push(node);
+                }
+            }
+            let waypoint = build_waypoint(
+                &thread,
+                parent_waypoint_id,
+                superstep_number,
+                graph,
+                &battlefield,
+                halted_vanguard,
+                completed_records,
+                WaypointStatus::Halted,
+                visit_counts,
+                frontier.snapshot(graph),
+                None,
+                checkpoint_ns.clone(),
+                fork_of,
+            );
+            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+            return Ok(RunOutcome::Halted {
+                waypoint: waypoint.waypoint_id,
+            });
         }
 
         // --- HITL-01, D-02, D-03, D-08: a `NextStep::Parley` raised
@@ -2781,7 +3030,7 @@ mod tests {
     use crate::engine::node::StateNode;
     use crate::engine::test_support::{
         ConcurrencyTrackingNode, CountingFunctionNode, FailingFunctionNode, RecordingPaladinPort,
-        RecordingWaypointStore, YieldingNode, shuffle_seeded,
+        RecordingWaypointStore, SlowFunctionNode, YieldingNode, shuffle_seeded,
     };
 
     fn field(name: &str) -> FieldName {
@@ -2810,6 +3059,15 @@ mod tests {
 
     fn no_interceptors() -> Vec<Arc<dyn NodeInterceptor>> {
         Vec::new()
+    }
+
+    /// A grace window generous enough that no pre-existing (non-shutdown)
+    /// test in this module ever observes an abort -- every helper below
+    /// that does not itself test HITL-04's grace race passes this fixed
+    /// value, mirroring `no_trace()`/`no_interceptors()`'s "harmless
+    /// default" convention.
+    fn default_shutdown_grace() -> std::time::Duration {
+        std::time::Duration::from_secs(30)
     }
 
     async fn run_default(
@@ -2841,6 +3099,7 @@ mod tests {
             &no_interceptors(),
             &None,
             None,
+            default_shutdown_grace(),
         )
         .await
         .unwrap()
@@ -2879,6 +3138,7 @@ mod tests {
             &no_interceptors(),
             &None,
             None,
+            default_shutdown_grace(),
         )
         .await
         .unwrap()
@@ -2923,6 +3183,7 @@ mod tests {
             &no_interceptors(),
             &None,
             None,
+            default_shutdown_grace(),
         )
         .await
         .unwrap()
@@ -3665,6 +3926,7 @@ mod tests {
             &no_interceptors(),
             &None,
             None,
+            default_shutdown_grace(),
         )
         .await
         .unwrap();
@@ -4929,6 +5191,7 @@ mod tests {
             &no_interceptors(),
             &None,
             None,
+            default_shutdown_grace(),
         )
         .await;
 
@@ -4979,6 +5242,7 @@ mod tests {
             &no_interceptors(),
             &None,
             None,
+            default_shutdown_grace(),
         )
         .await
         .unwrap();
@@ -5560,6 +5824,7 @@ mod tests {
             &no_interceptors(),
             &None,
             None,
+            default_shutdown_grace(),
         )
         .await;
 
@@ -5593,6 +5858,7 @@ mod tests {
             &no_interceptors(),
             &None,
             None,
+            default_shutdown_grace(),
         )
         .await
         .unwrap();
@@ -5652,6 +5918,7 @@ mod tests {
             &no_interceptors(),
             &None,
             None,
+            default_shutdown_grace(),
         )
         .await
         .unwrap();
@@ -7161,6 +7428,7 @@ mod tests {
             &no_interceptors(),
             cancellation,
             Some(Arc::clone(store)),
+            default_shutdown_grace(),
         )
         .await
     }
@@ -8520,5 +8788,599 @@ mod tests {
                  here"
             );
         }
+    }
+
+    // --- Phase 24 Plan 08: mid-superstep shutdown-grace race (HITL-04, D-19,
+    // RESEARCH.md Pitfall 1) ------------------------------------------------
+
+    /// Race `graph`'s dispatch through the real join loop under `cancellation`
+    /// and `shutdown_grace`, exposing both directly (unlike every helper
+    /// above, which always passes `&None`/`default_shutdown_grace()`).
+    async fn run_with_shutdown_grace(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        cancellation: &Option<CancellationToken>,
+        shutdown_grace: std::time::Duration,
+    ) -> RunOutcome {
+        run(
+            store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            graph,
+            thread,
+            Battlefield::initialize(
+                graph.schema().clone(),
+                &paladin_core::platform::container::battlefield::StateDelta::new(),
+            )
+            .unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            1,
+            &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            cancellation,
+            None,
+            shutdown_grace,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Resume `thread` from its latest (`Halted`) Waypoint through the SAME
+    /// low-level `run()` entry point, restoring vanguard/battlefield/
+    /// visit_counts/frontier exactly as `WarEngine::resume` would (D-19
+    /// acceptance 5).
+    async fn resume_after_halt(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        shutdown_grace: std::time::Duration,
+    ) -> RunOutcome {
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .last()
+            .cloned()
+            .expect("at least one Waypoint must already be saved for this thread");
+        run(
+            store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EdgeEvaluatorRegistry::new(),
+            graph,
+            thread,
+            latest.battlefield,
+            latest.vanguard,
+            latest.visit_counts,
+            Some(latest.frontier),
+            None,
+            Some(latest.waypoint_id),
+            latest.superstep + 1,
+            &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            &None,
+            None,
+            shutdown_grace,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// A graph with exactly one entry node -- a [`SlowFunctionNode`] that
+    /// cancels `token` the instant it starts, then sleeps `hold` -- so
+    /// cancellation is always observed mid-flight, deterministically,
+    /// without racing a background poller against real time.
+    fn single_slow_entry_graph(
+        hold: std::time::Duration,
+        run_count: Arc<std::sync::atomic::AtomicUsize>,
+        token: CancellationToken,
+    ) -> (WarGraph, NodeId, FieldName) {
+        let f = field("x");
+        let s = schema(vec![FieldSpec::new(
+            f.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let id = NodeId::new("slow");
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(SlowFunctionNode::cancelling(
+                f.clone(),
+                serde_json::json!("done"),
+                hold,
+                run_count,
+                token,
+            )),
+        );
+        graph.add_entry(id.clone());
+        (graph, id, f)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn in_flight_nodes_finishing_inside_grace_merge_normally() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, _id, f) = single_slow_entry_graph(
+            std::time::Duration::from_millis(30),
+            run_count.clone(),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-merge-in-time").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "a node finishing inside the grace window must merge normally and complete the run, \
+             got {outcome:?}"
+        );
+        assert_eq!(run_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert_eq!(
+            first.battlefield.get_raw(&f),
+            Some(&serde_json::json!("done"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn over_grace_node_is_aborted_and_recorded_skipped() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, id, f) = single_slow_entry_graph(
+            std::time::Duration::from_secs(2),
+            run_count.clone(),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-over-abort").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+
+        assert!(
+            matches!(outcome, RunOutcome::Halted { .. }),
+            "an over-grace node must Halt the run, got {outcome:?}"
+        );
+        assert_eq!(
+            run_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the node must have started exactly once before being aborted"
+        );
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert_eq!(
+            first.battlefield.get_raw(&f),
+            None,
+            "an aborted node's delta must never reach the Battlefield"
+        );
+        let record = first
+            .completed
+            .iter()
+            .find(|r| r.node_id == id)
+            .expect("the aborted node must still have a completed record");
+        assert_eq!(
+            record.outcome,
+            NodeOutcomeKind::Skipped {
+                reason: "shutdown".to_string()
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn over_grace_node_is_relisted_in_the_halted_vanguard() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, id, _f) = single_slow_entry_graph(
+            std::time::Duration::from_secs(2),
+            run_count.clone(),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-relisted").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+        assert!(matches!(outcome, RunOutcome::Halted { .. }));
+
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert!(
+            first.vanguard.contains(&id),
+            "the aborted node's id must be re-listed in the Halted Waypoint's vanguard, got {:?}",
+            first.vanguard
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resume_reruns_the_skipped_node_exactly_once() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, _id, f) = single_slow_entry_graph(
+            std::time::Duration::from_millis(150),
+            run_count.clone(),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-resume-exactly-once").unwrap();
+        let halted = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(20),
+        )
+        .await;
+        assert!(matches!(halted, RunOutcome::Halted { .. }));
+        assert_eq!(run_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let resumed = resume_after_halt(
+            &graph,
+            thread.clone(),
+            &store,
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(
+            matches!(resumed, RunOutcome::Completed { .. }),
+            "resuming a Halted run must re-run the skipped node and complete, got {resumed:?}"
+        );
+        assert_eq!(
+            run_count.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "exactly one aborted attempt plus one completed attempt across the whole scenario"
+        );
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert_eq!(
+            first.battlefield.get_raw(&f),
+            Some(&serde_json::json!("done"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_slow_nodes_share_one_deadline() {
+        let field_m = field("m");
+        let s = schema(vec![FieldSpec::new(
+            field_m.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let token = CancellationToken::new();
+        let run_count_a = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let run_count_b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let id_a = NodeId::new("a_finishes_in_time");
+        let id_b = NodeId::new("b_over_grace");
+        graph.add_node(
+            id_a.clone(),
+            NodeSpec::Function(SlowFunctionNode::cancelling(
+                field_m.clone(),
+                serde_json::json!("a-done"),
+                std::time::Duration::from_millis(30),
+                run_count_a.clone(),
+                token.clone(),
+            )),
+        );
+        graph.add_node(
+            id_b.clone(),
+            NodeSpec::Function(SlowFunctionNode::new(
+                field_m.clone(),
+                serde_json::json!("b-done"),
+                std::time::Duration::from_millis(400),
+                run_count_b.clone(),
+            )),
+        );
+        graph.add_entry(id_a.clone());
+        graph.add_entry(id_b.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-shared-deadline").unwrap();
+        let started = std::time::Instant::now();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(100),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert!(matches!(outcome, RunOutcome::Halted { .. }));
+        assert_eq!(run_count_a.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(run_count_b.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert_eq!(
+            first.battlefield.get_raw(&field_m),
+            Some(&serde_json::json!("a-done")),
+            "the node finishing inside the shared grace window must merge normally"
+        );
+        assert!(
+            first.vanguard.contains(&id_b) && !first.vanguard.contains(&id_a),
+            "only the node still running past the shared deadline is re-listed for resume, got \
+             {:?}",
+            first.vanguard
+        );
+        // The deadline is shared, computed once -- not a fresh per-handle
+        // budget. A per-handle-timeout bug would need roughly a's own
+        // window PLUS b's own freshly-started window once the loop reaches
+        // it; the correct, shared-deadline behavior finishes close to the
+        // single 100ms window regardless of a's own completion time.
+        assert!(
+            elapsed < std::time::Duration::from_millis(250),
+            "the shared deadline must not be penalised by node a's own completion time \
+             (elapsed: {elapsed:?}) -- this is the regression signature of a per-handle timeout"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zero_grace_aborts_immediately() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, id, _f) = single_slow_entry_graph(
+            std::time::Duration::from_secs(2),
+            run_count.clone(),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-zero").unwrap();
+        let started = std::time::Instant::now();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::ZERO,
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert!(matches!(outcome, RunOutcome::Halted { .. }));
+        assert_eq!(run_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "Duration::ZERO must abort in-flight nodes immediately, not wait for their own \
+             completion (elapsed: {elapsed:?})"
+        );
+        let saved = store.saved_waypoints(&thread).await;
+        assert!(saved.first().unwrap().vanguard.contains(&id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn completed_records_stay_sorted_by_node_id_after_the_race() {
+        let field_m = field("m");
+        let s = schema(vec![FieldSpec::new(
+            field_m.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let token = CancellationToken::new();
+        let run_count_fast = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let run_count_slow = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // Deliberately dispatched/declared out of NodeId order: "z_fast"
+        // completes quickly (inside grace), "a_slow" is aborted -- the
+        // post-race sort must still land them in NodeId order regardless.
+        let id_fast = NodeId::new("z_fast");
+        let id_slow = NodeId::new("a_slow");
+        graph.add_node(
+            id_fast.clone(),
+            NodeSpec::Function(SlowFunctionNode::cancelling(
+                field_m.clone(),
+                serde_json::json!("fast-done"),
+                std::time::Duration::from_millis(10),
+                run_count_fast.clone(),
+                token.clone(),
+            )),
+        );
+        graph.add_node(
+            id_slow.clone(),
+            NodeSpec::Function(SlowFunctionNode::new(
+                field_m.clone(),
+                serde_json::json!("never"),
+                std::time::Duration::from_millis(500),
+                run_count_slow.clone(),
+            )),
+        );
+        graph.add_entry(id_fast.clone());
+        graph.add_entry(id_slow.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-sorted-records").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(60),
+        )
+        .await;
+        assert!(matches!(outcome, RunOutcome::Halted { .. }));
+
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        let ids: Vec<&NodeId> = first.completed.iter().map(|r| &r.node_id).collect();
+        let mut sorted_ids = ids.clone();
+        sorted_ids.sort();
+        assert_eq!(
+            ids, sorted_ids,
+            "completed records must stay sorted by node_id regardless of completion/abort order"
+        );
+    }
+
+    /// A [`StateNode`] test double that sleeps for `delay` before failing
+    /// with a fixed message -- lets a test control REAL completion order
+    /// independently of dispatch order (Test 8, D-19's re-indexing
+    /// requirement).
+    struct DelayedFailingNode {
+        message: String,
+        delay: std::time::Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl StateNode for DelayedFailingNode {
+        async fn run(
+            &self,
+            _state: &Battlefield,
+            _ctx: &NodeContext,
+        ) -> Result<Directive, NodeError> {
+            tokio::time::sleep(self.delay).await;
+            Err(NodeError(self.message.clone()))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn first_failure_wins_is_dispatch_order_not_completion_order() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        // Dispatch position 0 ("first") completes LATER than dispatch
+        // position 1 ("second") in wall-clock time -- proving the reported
+        // failure is picked by re-indexed DISPATCH order, not by whichever
+        // FuturesUnordered handle happens to resolve first.
+        let first = NodeId::new("first_dispatched_slow_to_fail");
+        let second = NodeId::new("second_dispatched_fast_to_fail");
+        graph.add_node(
+            first.clone(),
+            NodeSpec::Function(Arc::new(DelayedFailingNode {
+                message: "first".to_string(),
+                delay: std::time::Duration::from_millis(100),
+            })),
+        );
+        graph.add_node(
+            second.clone(),
+            NodeSpec::Function(Arc::new(DelayedFailingNode {
+                message: "second".to_string(),
+                delay: std::time::Duration::ZERO,
+            })),
+        );
+        graph.add_entry(first);
+        graph.add_entry(second);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("dispatch-order-first-wins").unwrap();
+        let outcome =
+            run_with_shutdown_grace(&graph, thread, &store, &None, default_shutdown_grace()).await;
+
+        match outcome {
+            RunOutcome::Failed {
+                error: EngineError::Node(NodeError(msg)),
+                ..
+            } => {
+                assert_eq!(
+                    msg, "first",
+                    "the reported failure must be the earlier-DISPATCHED node's error, even \
+                     though it completed later in wall-clock time"
+                );
+            }
+            other => panic!("expected Failed(Node(\"first\")), got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn boundary_cancellation_behaviour_is_unchanged() {
+        // A regression guard on the EXISTING, untouched superstep-boundary
+        // cancellation check (top of the loop): node1 cancels the token as
+        // part of its own execution; superstep 1 (node1 alone) still
+        // finishes and merges normally, and the boundary check for
+        // superstep 2 -- not the new mid-superstep grace race -- is what
+        // Halts the run before node2 is ever dispatched.
+        let schema_field = field("trace");
+        let closure_field = schema_field.clone();
+        let s = schema(vec![FieldSpec::new(
+            schema_field,
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let token = CancellationToken::new();
+        let node1 = NodeId::new("node1");
+        let node2 = NodeId::new("node2");
+        let node2_runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let node2_runs_clone = node2_runs.clone();
+        let token_clone = token.clone();
+        graph.add_node(
+            node1.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                token_clone.cancel();
+                let mut d = StateDelta::new();
+                d.set_raw(closure_field.clone(), serde_json::json!("node1"));
+                d
+            })),
+        );
+        graph.add_node(
+            node2.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                node2_runs_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                StateDelta::new()
+            })),
+        );
+        graph.add_edge(EdgeSpec {
+            from: node1.clone(),
+            to: node2.clone(),
+            condition: None,
+        });
+        graph.add_entry(node1);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("boundary-cancellation-unchanged").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+
+        assert!(matches!(outcome, RunOutcome::Halted { .. }));
+        assert_eq!(
+            node2_runs.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "node2 must never be dispatched -- the boundary check halts before superstep 2 starts"
+        );
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert!(
+            first.vanguard.contains(&node2),
+            "the Halted Waypoint's vanguard must be exactly the nodes that would have run next"
+        );
     }
 }

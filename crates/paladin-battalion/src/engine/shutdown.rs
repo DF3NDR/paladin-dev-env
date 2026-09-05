@@ -410,9 +410,7 @@ mod tests {
         let coordinator = ShutdownCoordinator::new();
         let (_token, guard) = coordinator.register();
 
-        let outcome = coordinator
-            .cancel_and_wait(Duration::from_millis(50))
-            .await;
+        let outcome = coordinator.cancel_and_wait(Duration::from_millis(50)).await;
 
         assert!(outcome.timed_out());
         assert_eq!(

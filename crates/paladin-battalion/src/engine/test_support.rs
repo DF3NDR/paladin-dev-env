@@ -303,6 +303,81 @@ impl StateNode for ConcurrencyTrackingNode {
     }
 }
 
+/// A [`StateNode`] test double for the shutdown-grace race (Phase 24 Plan
+/// 08, HITL-04, D-19): increments a shared run counter, THEN sleeps for
+/// `hold` before returning a fixed delta. Incrementing before the `.await`
+/// point means aborting the task mid-sleep (as the mid-superstep grace
+/// race's deadline branch does via `JoinHandle::abort`) still leaves
+/// `run_count` incremented for that attempt -- a test can assert an EXACT
+/// run count across an aborted-then-resumed scenario (D-19 acceptance 5:
+/// `run_count == 2`, one aborted, one completed).
+pub struct SlowFunctionNode {
+    field: paladin_core::platform::container::battlefield::FieldName,
+    value: serde_json::Value,
+    hold: std::time::Duration,
+    run_count: Arc<AtomicUsize>,
+    /// `Some` deterministically places a mid-superstep cancellation exactly
+    /// at the moment this node starts (before its own `.await` point),
+    /// mirroring `engine::mod`'s own `four_node_chain_graph_with_cancel_at`
+    /// convention (a node cancelling ITS OWN token synchronously) rather
+    /// than racing a background poller against a real-time sleep.
+    cancel_on_start: Option<tokio_util::sync::CancellationToken>,
+}
+
+impl SlowFunctionNode {
+    /// Construct a node that increments `run_count`, sleeps for `hold`,
+    /// then writes `value` to `field`. Never cancels any token itself.
+    pub fn new(
+        field: paladin_core::platform::container::battlefield::FieldName,
+        value: serde_json::Value,
+        hold: std::time::Duration,
+        run_count: Arc<AtomicUsize>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            value,
+            hold,
+            run_count,
+            cancel_on_start: None,
+        })
+    }
+
+    /// As [`SlowFunctionNode::new`], but also cancels `token` the instant
+    /// this node starts executing (before incrementing `run_count` or
+    /// sleeping) -- deterministically placing a mid-superstep cancellation
+    /// without any real-time race against sibling nodes in the same
+    /// dispatch batch.
+    pub fn cancelling(
+        field: paladin_core::platform::container::battlefield::FieldName,
+        value: serde_json::Value,
+        hold: std::time::Duration,
+        run_count: Arc<AtomicUsize>,
+        token: tokio_util::sync::CancellationToken,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            value,
+            hold,
+            run_count,
+            cancel_on_start: Some(token),
+        })
+    }
+}
+
+#[async_trait]
+impl StateNode for SlowFunctionNode {
+    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+        if let Some(token) = &self.cancel_on_start {
+            token.cancel();
+        }
+        self.run_count.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(self.hold).await;
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), self.value.clone());
+        Ok(delta.into())
+    }
+}
+
 /// A [`StateNode`] test double that always fails with a fixed error message,
 /// for exercising the engine's node-execution-error path.
 pub struct FailingFunctionNode {

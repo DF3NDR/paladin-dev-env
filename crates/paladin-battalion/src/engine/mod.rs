@@ -828,6 +828,22 @@ pub enum EngineError {
         /// Explains why the default value is invalid.
         reason: String,
     },
+
+    /// [`WarEngine::replay`] or [`WarEngine::fork`] named a `from` Waypoint
+    /// id that does not exist on `thread` (HITL-03, D-16): the SAME
+    /// "missing is `None`, not an error" contract
+    /// [`WaypointPort::get`](paladin_ports::output::waypoint_port::WaypointPort::get)
+    /// documents is here turned into a typed engine error, mirroring how
+    /// [`EngineError::ThreadNotFound`] turns [`WaypointPort::latest`]'s own
+    /// `None` into a typed error at THIS layer. Nothing is persisted when
+    /// this is returned.
+    #[error("waypoint {waypoint} not found on thread {thread}")]
+    WaypointNotFound {
+        /// The thread `replay`/`fork` was called against.
+        thread: ThreadId,
+        /// The unknown starting `WaypointId`.
+        waypoint: WaypointId,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -1546,6 +1562,152 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         .await;
         self.trace_dispatcher
             .emit(TraceEvent::RunFinished { thread_id: thread });
+        outcome
+    }
+
+    /// Re-enter the superstep loop from `from`, exactly as it ran the first
+    /// time, producing a NEW branch chain while `thread`'s existing
+    /// Waypoints stay byte-identical (HITL-03, D-16, D-17).
+    ///
+    /// Loads `from` through [`WaypointPort::get`] (absent ->
+    /// [`EngineError::WaypointNotFound`]), checks `graph.fingerprint()`
+    /// against the loaded Waypoint's own (mismatch -> [`EngineError::GraphMismatch`],
+    /// ENG-FR-14) -- BEFORE anything else, mirroring `resume_with_options`'s
+    /// own guard order -- then re-enters [`superstep::run_with_namespace`]
+    /// with `parent_waypoint_id = Some(from)`, `fork_of = Some(from)` and
+    /// superstep numbering continuing at `from`'s own `superstep + 1`
+    /// (the SAME `from.superstep` when `from` carries a mid-muster
+    /// `muster_progress` record, mirroring `resume_with_options`'s own
+    /// mid-muster re-entry rule). Neither this call nor [`WarEngine::fork`]
+    /// ever mutates, overwrites or deletes an existing Waypoint -- a branch
+    /// is always new Waypoints on the SAME thread, distinguished only by
+    /// `fork_of`. Calling `replay` twice from the same `from` produces two
+    /// independent branches; neither call disturbs the other's Waypoints or
+    /// the mainline chain.
+    pub async fn replay(
+        &self,
+        graph: &WarGraph,
+        thread: &ThreadId,
+        from: WaypointId,
+    ) -> Result<RunOutcome, EngineError> {
+        self.replay_or_fork(graph, thread, from, None).await
+    }
+
+    /// Like [`WarEngine::replay`], but merges `edit` into the starting
+    /// Waypoint's Battlefield through the schema's own dispatch rules
+    /// BEFORE the first forked superstep runs (HITL-03, D-16), so an edit
+    /// that flips a conditional edge's evaluated value routes the branch
+    /// down a different path than the original chain took, while the
+    /// original chain's own routing is unchanged.
+    ///
+    /// `edit` is merged as a single synthetic writer (this call names no
+    /// real graph node as the edit's author) through
+    /// [`Battlefield::merge`](paladin_core::platform::container::battlefield::Battlefield::merge)
+    /// -- an edit naming a field the graph's schema does not declare fails
+    /// with a typed [`EngineError::Battlefield`] and persists nothing,
+    /// exactly like [`WarEngine::replay`]'s own guard clauses.
+    pub async fn fork(
+        &self,
+        graph: &WarGraph,
+        thread: &ThreadId,
+        from: WaypointId,
+        edit: StateDelta,
+    ) -> Result<RunOutcome, EngineError> {
+        self.replay_or_fork(graph, thread, from, Some(edit)).await
+    }
+
+    /// Shared implementation of [`WarEngine::replay`]/[`WarEngine::fork`]
+    /// (HITL-03, D-16): `edit` is `None` for a plain replay, `Some(delta)`
+    /// for a fork-with-edit.
+    async fn replay_or_fork(
+        &self,
+        graph: &WarGraph,
+        thread: &ThreadId,
+        from: WaypointId,
+        edit: Option<StateDelta>,
+    ) -> Result<RunOutcome, EngineError> {
+        let waypoint = self
+            .waypoint_port
+            .get(thread, &from)
+            .await
+            .map_err(|source| EngineError::WaypointRead { source })?
+            .ok_or_else(|| EngineError::WaypointNotFound {
+                thread: thread.clone(),
+                waypoint: from,
+            })?;
+
+        // --- HITL-03, D-16: the fingerprint is checked before anything
+        // else, mirroring `resume_with_options`'s own guard order --
+        // nothing is persisted by either check above or this one.
+        let expected = graph.fingerprint();
+        if waypoint.graph_fingerprint != expected {
+            return Err(EngineError::GraphMismatch {
+                expected,
+                got: waypoint.graph_fingerprint,
+            });
+        }
+
+        let registry = self.dispatch_registry.resolver();
+        graph.validate(registry, &self.edge_evaluators)?;
+
+        // --- HITL-03, D-16: `fork`'s edit is merged through the schema's
+        // OWN dispatch rules -- an undeclared field is `EngineError::Battlefield`
+        // (`BattlefieldError::UnknownField`), a typed error, and merge is
+        // all-or-nothing (`Battlefield::merge`'s own contract), so a
+        // rejected edit leaves `battlefield` untouched and persists
+        // nothing. This happens BEFORE the first forked superstep runs
+        // (D-16, acceptance 4).
+        let resume_superstep = if waypoint.muster_progress.is_some() {
+            waypoint.superstep
+        } else {
+            waypoint.superstep + 1
+        };
+        let mut battlefield = waypoint.battlefield;
+        if let Some(edit) = edit {
+            battlefield.merge(
+                vec![(NodeId::new("__fork_edit__"), edit)],
+                resume_superstep,
+                registry,
+            )?;
+        }
+
+        self.trace_dispatcher.emit(TraceEvent::RunStarted {
+            thread_id: thread.clone(),
+        });
+        let outcome = superstep::run_with_namespace(
+            self.waypoint_port.as_ref(),
+            self.durability,
+            self.parallelism,
+            registry,
+            &self.edge_evaluators,
+            graph,
+            thread.clone(),
+            battlefield,
+            waypoint.vanguard,
+            waypoint.visit_counts,
+            Some(waypoint.frontier),
+            waypoint.muster_progress,
+            // --- HITL-03, D-16: the new branch's FIRST Waypoint chains
+            // from `from` -- `parent_waypoint_id = Some(from)`.
+            Some(from),
+            resume_superstep,
+            &self.paladin_port,
+            &self.trace_dispatcher,
+            &self.interceptors,
+            &self.cancellation_token,
+            Some(Arc::clone(&self.waypoint_port)),
+            waypoint.checkpoint_ns,
+            // --- HITL-03, D-14/D-16: `from` becomes the branch ROOT --
+            // every Waypoint this run (and any nested Battalion child run,
+            // via `ChildEngineResources::fork_of`) produces carries
+            // `fork_of = Some(from)`, propagated verbatim.
+            Some(from),
+            None,
+        )
+        .await;
+        self.trace_dispatcher.emit(TraceEvent::RunFinished {
+            thread_id: thread.clone(),
+        });
         outcome
     }
 }
@@ -5813,5 +5975,521 @@ mod tests {
             }
             other => panic!("expected AwaitingInput, got {other:?}"),
         }
+    }
+
+    // --- Plan 24-07, Task 1: `WarEngine::replay`/`WarEngine::fork` --
+    // Chronicle branch lineage with byte-for-byte mainline immutability
+    // (HITL-03, D-16, D-17). RED-STATE MARKER: `WarEngine::replay`,
+    // `WarEngine::fork` and `EngineError::WaypointNotFound` do not exist
+    // yet at this commit -- this whole block fails to compile until the
+    // GREEN commit lands them.
+
+    /// A linear two-node chain (`n1` -> `n2`, unconditional edge) whose
+    /// first Waypoint (`n1`'s own, vanguard = `[n2]`) is a convenient
+    /// `from` for a plain `replay` with no routing to flip.
+    fn linear_two_node_graph() -> (WarGraph, NodeId, NodeId) {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let n1 = NodeId::new("n1");
+        let n2 = NodeId::new("n2");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("n1"),
+            )),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("n2"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n2.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+        (graph, n1, n2)
+    }
+
+    /// Read every Waypoint of `thread` back out of `port`, sorted by
+    /// `(superstep, created_at)` -- oldest first, mirroring
+    /// `subgraph_formation_in_campaign_test.rs`'s own `full_history` helper.
+    async fn full_history<W: WaypointPort>(port: &W, thread: &ThreadId) -> Vec<Waypoint> {
+        let summaries = port.history(thread, None, None).await.unwrap();
+        let mut waypoints = Vec::with_capacity(summaries.len());
+        for summary in summaries {
+            let wp = port
+                .get(thread, &summary.waypoint_id)
+                .await
+                .unwrap()
+                .expect("summary's own waypoint must exist");
+            waypoints.push(wp);
+        }
+        waypoints.sort_by_key(|w| (w.superstep, w.created_at));
+        waypoints
+    }
+
+    /// Test 1: `replay(graph, thread, from)` produces a new branch Waypoint
+    /// with `parent_waypoint_id = Some(from)`, `fork_of = Some(from)` and
+    /// superstep numbering starting at `from.superstep + 1`.
+    #[tokio::test]
+    async fn replay_creates_a_new_branch_from_the_given_waypoint() {
+        let (graph, _n1, _n2) = linear_two_node_graph();
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("replay-creates-branch").unwrap();
+
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let mainline = full_history(store.as_ref(), &thread).await;
+        assert_eq!(mainline.len(), 2, "n1's superstep, then n2's");
+        assert_eq!(mainline[0].fork_of, None);
+        let from = mainline[0].waypoint_id;
+
+        let outcome = engine.replay(&graph, &thread, from).await.unwrap();
+        match outcome {
+            RunOutcome::Completed { .. } => {}
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        let after = full_history(store.as_ref(), &thread).await;
+        let branch: Vec<&Waypoint> = after.iter().filter(|w| w.fork_of == Some(from)).collect();
+        assert_eq!(
+            branch.len(),
+            1,
+            "replaying the tail of a 2-superstep chain from n1's Waypoint produces exactly one \
+             new branch Waypoint"
+        );
+        assert_eq!(branch[0].parent_waypoint_id, Some(from));
+        assert_eq!(branch[0].superstep, mainline[0].superstep + 1);
+    }
+
+    /// Test 2 (acceptance 3): every mainline Waypoint is byte-identical,
+    /// serialized, before and after `replay`.
+    #[tokio::test]
+    async fn replay_leaves_the_mainline_byte_identical() {
+        let (graph, _n1, _n2) = linear_two_node_graph();
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("replay-byte-identical").unwrap();
+
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let before = full_history(store.as_ref(), &thread).await;
+        let before_bytes: Vec<(WaypointId, String)> = before
+            .iter()
+            .map(|w| (w.waypoint_id, serde_json::to_string(w).unwrap()))
+            .collect();
+        let from = before[0].waypoint_id;
+
+        engine.replay(&graph, &thread, from).await.unwrap();
+
+        for (id, expected_json) in &before_bytes {
+            let after = store
+                .get(&thread, id)
+                .await
+                .unwrap()
+                .expect("mainline waypoint must still exist");
+            let after_json = serde_json::to_string(&after).unwrap();
+            assert_eq!(
+                &after_json, expected_json,
+                "mainline waypoint {id} must be byte-identical before and after replay"
+            );
+        }
+    }
+
+    /// Test 3: calling `replay` twice from the same Waypoint leaves the
+    /// mainline byte-identical after BOTH calls, and neither call mutates
+    /// or deletes the other's branch Waypoints.
+    #[tokio::test]
+    async fn replay_twice_is_safe() {
+        let (graph, _n1, _n2) = linear_two_node_graph();
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("replay-twice-is-safe").unwrap();
+
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let before = full_history(store.as_ref(), &thread).await;
+        let before_bytes: Vec<(WaypointId, String)> = before
+            .iter()
+            .map(|w| (w.waypoint_id, serde_json::to_string(w).unwrap()))
+            .collect();
+        let from = before[0].waypoint_id;
+
+        engine.replay(&graph, &thread, from).await.unwrap();
+        let first_branch_ids: std::collections::HashSet<WaypointId> =
+            full_history(store.as_ref(), &thread)
+                .await
+                .into_iter()
+                .filter(|w| w.fork_of == Some(from))
+                .map(|w| w.waypoint_id)
+                .collect();
+        assert_eq!(first_branch_ids.len(), 1);
+
+        engine.replay(&graph, &thread, from).await.unwrap();
+        let after = full_history(store.as_ref(), &thread).await;
+
+        for (id, expected_json) in &before_bytes {
+            let wp = store.get(&thread, id).await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::to_string(&wp).unwrap(),
+                *expected_json,
+                "mainline waypoint {id} must stay byte-identical after two replays"
+            );
+        }
+
+        let second_branch_ids: std::collections::HashSet<WaypointId> = after
+            .iter()
+            .filter(|w| w.fork_of == Some(from))
+            .map(|w| w.waypoint_id)
+            .collect();
+        assert!(
+            first_branch_ids.is_subset(&second_branch_ids),
+            "the second replay must not delete or mutate the first branch's own Waypoint"
+        );
+        assert_eq!(
+            second_branch_ids.len(),
+            2,
+            "two independent replays from the same Waypoint produce two distinct branch Waypoints"
+        );
+    }
+
+    /// A branching graph (`seed` -> `router` -> `node_a` | `node_b`, decided
+    /// by the `route` field's value) whose routing edge is a genuine
+    /// `EdgeCondition::Contains` check against the whole post-merge
+    /// Battlefield (D-06's "_" arm), not a hand-computed `Directive`.
+    fn conditional_route_graph() -> (WarGraph, NodeId, NodeId, NodeId, NodeId) {
+        let route = FieldName::new("route").unwrap();
+        let a_ran = FieldName::new("a_ran").unwrap();
+        let b_ran = FieldName::new("b_ran").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                route.clone(),
+                DispatchRule::LastWrite,
+                Some(serde_json::json!("a")),
+                false,
+            ),
+            FieldSpec::new(
+                a_ran.clone(),
+                DispatchRule::LastWrite,
+                Some(serde_json::json!(false)),
+                false,
+            ),
+            FieldSpec::new(
+                b_ran.clone(),
+                DispatchRule::LastWrite,
+                Some(serde_json::json!(false)),
+                false,
+            ),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+
+        let seed = NodeId::new("seed");
+        let router = NodeId::new("router");
+        let node_a = NodeId::new("node_a");
+        let node_b = NodeId::new("node_b");
+
+        graph.add_node(
+            seed.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(|_run, _state| StateDelta::new())),
+        );
+        graph.add_node(
+            router.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(|_run, _state| StateDelta::new())),
+        );
+        graph.add_node(
+            node_a.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                a_ran.clone(),
+                serde_json::json!(true),
+            )),
+        );
+        graph.add_node(
+            node_b.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                b_ran.clone(),
+                serde_json::json!(true),
+            )),
+        );
+
+        graph.add_edge(EdgeSpec {
+            from: seed.clone(),
+            to: router.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: router.clone(),
+            to: node_a.clone(),
+            condition: Some(EdgeCondition::Contains("\"route\":\"a\"".to_string())),
+        });
+        graph.add_edge(EdgeSpec {
+            from: router.clone(),
+            to: node_b.clone(),
+            condition: Some(EdgeCondition::Contains("\"route\":\"b\"".to_string())),
+        });
+        graph.add_entry(seed.clone());
+
+        (graph, seed, router, node_a, node_b)
+    }
+
+    /// Test 4: a `fork` whose `StateDelta` edit changes the field a
+    /// conditional edge tests routes down the OTHER branch, while the
+    /// original chain's own routing is unchanged.
+    #[tokio::test]
+    async fn fork_with_edit_flips_a_conditional_edge() {
+        let (graph, _seed, router, _node_a, _node_b) = conditional_route_graph();
+        let a_ran = FieldName::new("a_ran").unwrap();
+        let b_ran = FieldName::new("b_ran").unwrap();
+        let route = FieldName::new("route").unwrap();
+
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("fork-flips-conditional-edge").unwrap();
+
+        let control = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        match control {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(final_state.get::<bool>(&a_ran).unwrap(), Some(true));
+                assert_eq!(final_state.get::<bool>(&b_ran).unwrap(), Some(false));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        let mainline = full_history(store.as_ref(), &thread).await;
+        assert_eq!(mainline[0].vanguard, vec![router.clone()]);
+        let from = mainline[0].waypoint_id;
+
+        let mut edit = StateDelta::new();
+        edit.set(route.clone(), "b").unwrap();
+
+        let outcome = engine.fork(&graph, &thread, from, edit).await.unwrap();
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<bool>(&a_ran).unwrap(),
+                    Some(false),
+                    "the branch must never run node_a"
+                );
+                assert_eq!(
+                    final_state.get::<bool>(&b_ran).unwrap(),
+                    Some(true),
+                    "the edit must route the branch down node_b instead"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+
+        // The original chain's own routing (and every mainline Waypoint's
+        // bytes) is unchanged.
+        let mainline_after: Vec<Waypoint> = full_history(store.as_ref(), &thread)
+            .await
+            .into_iter()
+            .filter(|w| w.fork_of.is_none())
+            .collect();
+        assert_eq!(mainline_after.len(), mainline.len());
+        for (before, after) in mainline.iter().zip(mainline_after.iter()) {
+            assert_eq!(
+                serde_json::to_string(before).unwrap(),
+                serde_json::to_string(after).unwrap()
+            );
+        }
+    }
+
+    /// Test 5: the edit is visible to the FIRST node executed on the
+    /// branch -- proven by a node that reads the edited field at its own
+    /// run time and echoes it into another field, rather than by routing
+    /// alone (Test 4's concern).
+    #[tokio::test]
+    async fn fork_merges_the_edit_before_the_first_forked_superstep() {
+        let value = FieldName::new("value").unwrap();
+        let echoed = FieldName::new("echoed").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                value.clone(),
+                DispatchRule::LastWrite,
+                Some(serde_json::json!("orig")),
+                false,
+            ),
+            FieldSpec::new(echoed.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let seed = NodeId::new("seed");
+        let reader = NodeId::new("reader");
+        graph.add_node(
+            seed.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(|_run, _state| StateDelta::new())),
+        );
+        let value_for_reader = value.clone();
+        let echoed_for_reader = echoed.clone();
+        graph.add_node(
+            reader.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(move |_run, state| {
+                let seen = state
+                    .get::<String>(&value_for_reader)
+                    .unwrap()
+                    .unwrap_or_default();
+                let mut delta = StateDelta::new();
+                delta.set(echoed_for_reader.clone(), seen).unwrap();
+                delta
+            })),
+        );
+        graph.add_edge(EdgeSpec {
+            from: seed.clone(),
+            to: reader.clone(),
+            condition: None,
+        });
+        graph.add_entry(seed.clone());
+
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("fork-edit-visible-first-node").unwrap();
+
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let mainline = full_history(store.as_ref(), &thread).await;
+        assert_eq!(mainline[0].vanguard, vec![reader.clone()]);
+        let from = mainline[0].waypoint_id;
+
+        let mut edit = StateDelta::new();
+        edit.set(value.clone(), "edited").unwrap();
+
+        let outcome = engine.fork(&graph, &thread, from, edit).await.unwrap();
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&echoed).unwrap(),
+                    Some("edited".to_string()),
+                    "the reader node must observe the fork edit at its own dispatch time"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Test 6: an unknown `from` returns `EngineError::WaypointNotFound {
+    /// thread, waypoint }` with nothing persisted.
+    #[tokio::test]
+    async fn replay_rejects_unknown_waypoint() {
+        let (graph, _n1, _n2) = linear_two_node_graph();
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("replay-unknown-waypoint").unwrap();
+
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let saves_before = store.save_call_count();
+
+        let unknown = WaypointId::generate();
+        let err = engine.replay(&graph, &thread, unknown).await.unwrap_err();
+        match err {
+            EngineError::WaypointNotFound {
+                thread: t,
+                waypoint,
+            } => {
+                assert_eq!(t, thread);
+                assert_eq!(waypoint, unknown);
+            }
+            other => panic!("expected WaypointNotFound, got {other:?}"),
+        }
+        assert_eq!(
+            store.save_call_count(),
+            saves_before,
+            "an unknown `from` must persist nothing"
+        );
+    }
+
+    /// Test 7: a graph whose fingerprint differs from `from`'s own returns
+    /// `GraphMismatch` with nothing persisted, checked BEFORE the response
+    /// (here: the graph itself) is otherwise inspected.
+    #[tokio::test]
+    async fn replay_rejects_fingerprint_mismatch() {
+        let (graph, _n1, _n2) = linear_two_node_graph();
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("replay-fingerprint-mismatch").unwrap();
+
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let mainline = full_history(store.as_ref(), &thread).await;
+        let from = mainline[0].waypoint_id;
+        let saves_before = store.save_call_count();
+
+        let (mut altered_graph, ..) = linear_two_node_graph();
+        altered_graph.add_node(
+            NodeId::new("extra"),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("extra"),
+            )),
+        );
+        assert_ne!(graph.fingerprint(), altered_graph.fingerprint());
+
+        let err = engine
+            .replay(&altered_graph, &thread, from)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::GraphMismatch { .. }));
+        assert_eq!(
+            store.save_call_count(),
+            saves_before,
+            "a fingerprint mismatch must persist nothing"
+        );
+    }
+
+    /// Test 8: an edit naming a field the schema does not declare is a
+    /// typed error with nothing persisted.
+    #[tokio::test]
+    async fn fork_rejects_an_edit_the_schema_does_not_accept() {
+        let (graph, _n1, _n2) = linear_two_node_graph();
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("fork-rejects-bad-edit").unwrap();
+
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let mainline = full_history(store.as_ref(), &thread).await;
+        let from = mainline[0].waypoint_id;
+        let saves_before = store.save_call_count();
+
+        let mut edit = StateDelta::new();
+        edit.set_raw(
+            FieldName::new("not_a_real_field").unwrap(),
+            serde_json::json!("x"),
+        );
+
+        let err = engine.fork(&graph, &thread, from, edit).await.unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::Battlefield(BattlefieldError::UnknownField { .. })
+        ));
+        assert_eq!(
+            store.save_call_count(),
+            saves_before,
+            "a schema-rejected edit must persist nothing"
+        );
     }
 }

@@ -436,3 +436,209 @@ async fn phalanx_and_campaign_bridges_also_embed() {
         )
         .expect("from_campaign must embed as a validating NodeSpec::Battalion child");
 }
+
+// --- Plan 24-07, Task 2: subgraph forks never share child Waypoints
+// (HITL-03, D-18). RED-STATE MARKER: at this commit, the
+// `NodeSpec::Battalion` dispatch arm in `superstep.rs` always derives the
+// child thread via `ThreadId::child`, ignoring a run's own `fork_of` --
+// these tests fail (assertion failures, not compile errors, since
+// `WarEngine::fork`/`ThreadId::child_on_branch` already exist from earlier
+// plans) until the GREEN commit wires `ThreadId::child_on_branch` in for a
+// run entered from a branch.
+
+/// Read every Waypoint of `thread` back out of a `&dyn WaypointPort`,
+/// oldest first -- a `dyn`-erased sibling of this file's own `full_history`
+/// (which is typed for `&SqliteWaypointStore`) so these `InMemoryWaypointStore`-
+/// backed tests can read an arbitrary derived thread id (a mainline child,
+/// or a branch-scoped one) through the same port reference.
+async fn full_history_dyn(port: &dyn WaypointPort, thread: &ThreadId) -> Vec<Waypoint> {
+    let summaries = port
+        .history(thread, None, None)
+        .await
+        .expect("history should succeed");
+    let mut waypoints = Vec::with_capacity(summaries.len());
+    for summary in summaries {
+        let wp = port
+            .get(thread, &summary.waypoint_id)
+            .await
+            .expect("get should succeed")
+            .expect("summary's own waypoint must exist");
+        waypoints.push(wp);
+    }
+    waypoints.sort_by_key(|w| w.superstep);
+    waypoints
+}
+
+#[tokio::test]
+async fn fork_child_thread_differs_from_mainline_child_thread() {
+    let (graph, _router, _other_arm, sub) = build_branching_parent(vec![
+        make_paladin("fork-a"),
+        make_paladin("fork-b"),
+        make_paladin("fork-c"),
+    ]);
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let port = Arc::new(FaultyPaladinPort::new());
+    let engine = WarEngine::new(port.clone(), store.clone());
+    let thread = ThreadId::new("cf-fr-17-fork-child-thread-differs").unwrap();
+
+    engine
+        .start(&graph, thread.clone(), initial_delta("fork-seed"))
+        .await
+        .expect("control run should succeed");
+
+    // router's own Waypoint: vanguard = [sub], not yet run.
+    let parent_waypoints = full_history_dyn(store.as_ref(), &thread).await;
+    let from = parent_waypoints[0].waypoint_id;
+
+    let outcome = engine
+        .fork(&graph, &thread, from, StateDelta::new())
+        .await
+        .expect("fork should succeed");
+    match outcome {
+        RunOutcome::Completed { .. } => {}
+        other => panic!("expected Completed, got {other:?}"),
+    }
+
+    let mainline_child_thread = ThreadId::child(&thread, &sub).expect("valid child thread id");
+    let branch_child_thread =
+        ThreadId::child_on_branch(&thread, &from, &sub).expect("valid branch child thread id");
+    assert_ne!(
+        mainline_child_thread.as_str(),
+        branch_child_thread.as_str(),
+        "a fork's subgraph child must run under a distinct, branch-scoped thread id"
+    );
+
+    let branch_child_waypoints = full_history_dyn(store.as_ref(), &branch_child_thread).await;
+    assert_eq!(
+        branch_child_waypoints.len(),
+        3,
+        "the branch's own child (a 3-Paladin Formation) must have run, under its own \
+         branch-scoped thread, fully fresh"
+    );
+}
+
+#[tokio::test]
+async fn fork_does_not_touch_mainline_child_waypoints() {
+    let (graph, _router, _other_arm, sub) = build_branching_parent(vec![
+        make_paladin("keep-a"),
+        make_paladin("keep-b"),
+        make_paladin("keep-c"),
+    ]);
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let port = Arc::new(FaultyPaladinPort::new());
+    let engine = WarEngine::new(port.clone(), store.clone());
+    let thread = ThreadId::new("cf-fr-17-fork-keeps-mainline-child").unwrap();
+
+    engine
+        .start(&graph, thread.clone(), initial_delta("keep-seed"))
+        .await
+        .expect("control run should succeed");
+
+    let mainline_child_thread = ThreadId::child(&thread, &sub).expect("valid child thread id");
+    let before = full_history_dyn(store.as_ref(), &mainline_child_thread).await;
+    let before_bytes: Vec<String> = before
+        .iter()
+        .map(|w| serde_json::to_string(w).unwrap())
+        .collect();
+    assert_eq!(before_bytes.len(), 3);
+
+    let parent_waypoints = full_history_dyn(store.as_ref(), &thread).await;
+    let from = parent_waypoints[0].waypoint_id;
+    engine
+        .fork(&graph, &thread, from, StateDelta::new())
+        .await
+        .expect("fork should succeed");
+
+    let after = full_history_dyn(store.as_ref(), &mainline_child_thread).await;
+    let after_bytes: Vec<String> = after
+        .iter()
+        .map(|w| serde_json::to_string(w).unwrap())
+        .collect();
+    assert_eq!(
+        before_bytes, after_bytes,
+        "the mainline child's Waypoints must be unchanged in count and in serialised bytes \
+         after a fork"
+    );
+}
+
+#[tokio::test]
+async fn latest_on_a_fork_child_thread_does_not_resolve_the_mainline_child() {
+    let (graph, _router, _other_arm, sub) = build_branching_parent(vec![
+        make_paladin("latest-a"),
+        make_paladin("latest-b"),
+        make_paladin("latest-c"),
+    ]);
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let port = Arc::new(FaultyPaladinPort::new());
+    let engine = WarEngine::new(port.clone(), store.clone());
+    let thread = ThreadId::new("cf-fr-17-fork-latest-child").unwrap();
+
+    engine
+        .start(&graph, thread.clone(), initial_delta("latest-seed"))
+        .await
+        .expect("control run should succeed");
+
+    let mainline_child_thread = ThreadId::child(&thread, &sub).expect("valid child thread id");
+    let mainline_latest = store
+        .latest(&mainline_child_thread)
+        .await
+        .expect("latest should succeed")
+        .expect("mainline child must have a latest Waypoint");
+
+    let parent_waypoints = full_history_dyn(store.as_ref(), &thread).await;
+    let from = parent_waypoints[0].waypoint_id;
+    engine
+        .fork(&graph, &thread, from, StateDelta::new())
+        .await
+        .expect("fork should succeed");
+
+    let branch_child_thread =
+        ThreadId::child_on_branch(&thread, &from, &sub).expect("valid branch child thread id");
+    let branch_latest = store
+        .latest(&branch_child_thread)
+        .await
+        .expect("latest should succeed")
+        .expect("branch child must have a latest Waypoint");
+
+    assert_ne!(
+        branch_latest.waypoint_id, mainline_latest.waypoint_id,
+        "latest on the branch's own child thread must never resolve the mainline child's"
+    );
+
+    let mainline_latest_after = store
+        .latest(&mainline_child_thread)
+        .await
+        .expect("latest should succeed")
+        .expect("mainline child must still have a latest Waypoint");
+    assert_eq!(
+        mainline_latest_after.waypoint_id, mainline_latest.waypoint_id,
+        "the mainline child's own latest must be unaffected by the fork"
+    );
+}
+
+#[tokio::test]
+async fn mainline_runs_keep_using_child() {
+    let (graph, _router, _other_arm, sub) = build_branching_parent(vec![
+        make_paladin("mainline-a"),
+        make_paladin("mainline-b"),
+        make_paladin("mainline-c"),
+    ]);
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let port = Arc::new(FaultyPaladinPort::new());
+    let engine = WarEngine::new(port.clone(), store.clone());
+    let thread = ThreadId::new("cf-fr-17-mainline-keeps-child").unwrap();
+
+    engine
+        .start(&graph, thread.clone(), initial_delta("mainline-seed"))
+        .await
+        .expect("run should succeed");
+
+    let mainline_child_thread = ThreadId::child(&thread, &sub).expect("valid child thread id");
+    let waypoints = full_history_dyn(store.as_ref(), &mainline_child_thread).await;
+    assert_eq!(
+        waypoints.len(),
+        3,
+        "a plain (non-forked) run's subgraph child must still run under the unchanged \
+         ThreadId::child derivation (regression guard, D-18)"
+    );
+}

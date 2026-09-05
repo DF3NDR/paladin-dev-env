@@ -414,15 +414,35 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     }
                 }
 
-                // --- CF-FR-15, D-20: the child's thread id is a derived,
-                // PROVABLY INJECTIVE encoding of (this run's thread, this
-                // node's id) -- `ThreadId::child`, length-prefixed exactly
-                // like `graph.rs`'s `push_field` (22.1 CR-01's lesson: a
-                // bare delimiter join of `NodeId`s, which accept any
-                // non-empty string, is collidable by construction). Fails
-                // typed (never silently truncates) if the derived id would
-                // itself exceed `ThreadId`'s own limits.
-                let child_thread = match ThreadId::child(&ctx.thread_id, &ctx.node_id) {
+                // --- CF-FR-15, D-20, HITL-03, D-18: the child's thread id
+                // is a derived, PROVABLY INJECTIVE encoding of (this run's
+                // thread, this node's id) -- `ThreadId::child`,
+                // length-prefixed exactly like `graph.rs`'s `push_field`
+                // (22.1 CR-01's lesson: a bare delimiter join of `NodeId`s,
+                // which accept any non-empty string, is collidable by
+                // construction). When this run is itself executing on a
+                // branch (`resources.fork_of` is `Some(branch_root)`), the
+                // child instead derives under `ThreadId::child_on_branch`,
+                // extended with the SAME branch root -- so a fork's
+                // subgraph child can never resolve to the mainline child's
+                // thread, and `latest(child_thread)` on the branch never
+                // sees the mainline child's history (D-18, HITL-FR-12).
+                // Mainline runs (`resources.fork_of: None`) keep deriving
+                // via `ThreadId::child`, byte-for-byte as before this plan.
+                // A fork's subgraph child therefore always starts fresh
+                // (D-18's `restart_on_resume` resolution): the derived id
+                // has no prior history for `existing_latest` (below) to
+                // find, which follows by construction from this distinct
+                // id rather than a separate flag. Fails typed (never
+                // silently truncates) if the derived id would itself
+                // exceed `ThreadId`'s own limits.
+                let child_thread = match &resources.fork_of {
+                    Some(branch_root) => {
+                        ThreadId::child_on_branch(&ctx.thread_id, branch_root, &ctx.node_id)
+                    }
+                    None => ThreadId::child(&ctx.thread_id, &ctx.node_id),
+                };
+                let child_thread = match child_thread {
                     Ok(id) => id,
                     Err(e) => {
                         return (

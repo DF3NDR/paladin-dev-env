@@ -88,6 +88,18 @@ pub enum NodeSpec {
         /// `checkpoint_ns` / resume-mid-child), which owns interpreting
         /// this flag -- this plan carries it and defaults it to `false`
         /// via [`NodeSpec::battalion`], but does not itself act on it.
+        ///
+        /// **A run entered from a branch (HITL-03, D-18) always starts this
+        /// node's child fresh, regardless of this flag's value.** A fork's
+        /// dispatch derives the child's thread id via
+        /// [`ThreadId::child_on_branch`](paladin_core::platform::container::waypoint::ThreadId::child_on_branch)
+        /// -- extended with the branch's own root -- rather than
+        /// [`ThreadId::child`](paladin_core::platform::container::waypoint::ThreadId::child),
+        /// so the derived id has no prior history for the resume-mid-child
+        /// lookup to find. This follows BY CONSTRUCTION from the distinct
+        /// derived id, not from a second flag: `restart_on_resume` and
+        /// "is this run on a branch" are independent questions, and the
+        /// branch case always wins because there is nothing to resume.
         restart_on_resume: bool,
     },
     /// A first-class human-input node (HITL-01, D-05): has **no `run` body

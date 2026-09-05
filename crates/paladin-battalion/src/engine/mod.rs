@@ -3702,6 +3702,1158 @@ mod tests {
         );
     }
 
+    // --- HITL-02, D-10, D-11, D-12: the resume_with validation matrix,
+    // partial-answer persistence and lazy expiry (Phase 24 Plan 04) ------
+    //
+    // RED-STATE MARKER: every test below references `EngineError` variants
+    // (`ParleyAlreadyAnswered`, `ResponseShapeInvalid`, `ParleyExpired`,
+    // `ThreadAlreadyFailed`) not yet added to the enum -- the crate does
+    // not compile until the GREEN commit lands them alongside the
+    // `resume_with` rewrite.
+
+    /// A graph of `n` independent, single-parley-raising `Function` nodes
+    /// (each its own entry point, no edges between them): on first visit
+    /// each raises its own `Approval` parley (via `sample_parley_request`,
+    /// no expiry); on the post-resume visit each writes its delivered
+    /// value to its own field (`f0`, `f1`, ...). All `n` parleys are
+    /// raised in the SAME superstep, so the suspending Waypoint carries
+    /// all `n` requests together.
+    fn multi_parley_graph(n: usize) -> (WarGraph, Vec<NodeId>, Vec<ParleyId>) {
+        let fields: Vec<FieldName> = (0..n).map(|i| FieldName::new(format!("f{i}")).unwrap()).collect();
+        let schema = BattlefieldSchema::new(
+            fields
+                .iter()
+                .map(|f| FieldSpec::new(f.clone(), DispatchRule::LastWrite, None, false))
+                .collect(),
+        );
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_ids: Vec<NodeId> = (0..n).map(|i| NodeId::new(format!("asker{i}"))).collect();
+        let parley_ids: Vec<ParleyId> = (0..n).map(|_| ParleyId::new()).collect();
+        for i in 0..n {
+            let node_id_for_request = node_ids[i].clone();
+            let parley_id = parley_ids[i];
+            let field = fields[i].clone();
+            graph.add_node(
+                node_ids[i].clone(),
+                NodeSpec::Function(CountingFunctionNode::with_context_directive(
+                    move |run, _state, ctx| {
+                        if run == 0 {
+                            Directive {
+                                delta: StateDelta::new(),
+                                next: NextStep::Parley(sample_parley_request(
+                                    node_id_for_request.clone(),
+                                    parley_id,
+                                )),
+                            }
+                        } else {
+                            let value = ctx
+                                .parley_response()
+                                .expect("parley_response must be populated on resume")
+                                .value
+                                .clone();
+                            let mut delta = StateDelta::new();
+                            delta.set_raw(field.clone(), value);
+                            delta.into()
+                        }
+                    },
+                )),
+            );
+            graph.add_entry(node_ids[i].clone());
+        }
+        (graph, node_ids, parley_ids)
+    }
+
+    fn approval_response(parley_id: ParleyId, value: bool) -> ParleyResponse {
+        ParleyResponse {
+            parley_id,
+            // Stamped over by `resume_with` regardless -- never observed.
+            kind: ParleyKind::Approval,
+            prompt: String::new(),
+            value: serde_json::json!(value),
+            responded_by: Some("tester".to_string()),
+            responded_at: Utc::now(),
+            defaulted: false,
+        }
+    }
+
+    // --- Task 1: the total per-kind validation matrix -------------------
+
+    /// Test 1: an unknown `parley_id` is rejected and writes no Waypoint.
+    #[tokio::test]
+    async fn resume_with_rejects_unknown_parley_id() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let node = CountingFunctionNode::with_directive(move |_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(sample_parley_request(NodeId::new(""), parley_id)),
+        });
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("resume-with-rejects-unknown-parley-id").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let save_count_before = store.save_call_count();
+
+        let wrong_response = approval_response(ParleyId::new(), true);
+        let err = engine
+            .resume_with(&graph, thread, vec![wrong_response])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::UnknownParleyId { .. }));
+        assert_eq!(store.save_call_count(), save_count_before);
+    }
+
+    /// Test 2: a `parley_id` already answered (either by the thread's
+    /// prior history, or by an earlier response in the SAME call) is
+    /// rejected and writes no Waypoint.
+    #[tokio::test]
+    async fn resume_with_rejects_already_answered_parley() {
+        // Cross-call: a second resume_with re-answering an already
+        // accepted parley.
+        let (graph, _node_ids, parley_ids) = multi_parley_graph(2);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("resume-with-rejects-already-answered").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let outcome = engine
+            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[0], true)])
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::AwaitingInput { .. }));
+
+        let save_count_before = store.save_call_count();
+        let err = engine
+            .resume_with(&graph, thread, vec![approval_response(parley_ids[0], false)])
+            .await
+            .unwrap_err();
+        match err {
+            EngineError::ParleyAlreadyAnswered { parley_id } => {
+                assert_eq!(parley_id, parley_ids[0]);
+            }
+            other => panic!("expected ParleyAlreadyAnswered, got {other:?}"),
+        }
+        assert_eq!(
+            store.save_call_count(),
+            save_count_before,
+            "re-answering an already-answered parley must write no Waypoint"
+        );
+
+        // Within one call: two responses answering the SAME parley_id are
+        // BOTH rejected -- the first is accepted into the working set
+        // before the second is checked (the "review manually" edge
+        // probe's planner-resolved reading).
+        let (graph2, _node_ids2, parley_ids2) = multi_parley_graph(1);
+        let store2 = Arc::new(RecordingWaypointStore::new());
+        let engine2 = WarEngine::new(Arc::new(UnimplementedPaladinPort), store2.clone());
+        let thread2 = ThreadId::new("resume-with-rejects-duplicate-in-one-call").unwrap();
+        engine2
+            .start(&graph2, thread2.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let save_count_before2 = store2.save_call_count();
+        let err2 = engine2
+            .resume_with(
+                &graph2,
+                thread2,
+                vec![
+                    approval_response(parley_ids2[0], true),
+                    approval_response(parley_ids2[0], false),
+                ],
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err2, EngineError::ParleyAlreadyAnswered { .. }));
+        assert_eq!(store2.save_call_count(), save_count_before2);
+    }
+
+    /// Test 3: one invalid-shape case per `ParleyKind`, each rejected with
+    /// `ResponseShapeInvalid` naming the offending `parley_id`.
+    #[tokio::test]
+    async fn resume_with_rejects_wrong_shape_per_kind() {
+        struct Case {
+            kind: ParleyKind,
+            choices: Option<Vec<String>>,
+            invalid_value: serde_json::Value,
+        }
+        let cases = vec![
+            Case {
+                kind: ParleyKind::Approval,
+                choices: None,
+                invalid_value: serde_json::json!(123),
+            },
+            Case {
+                kind: ParleyKind::Choice,
+                choices: Some(vec!["yes".to_string(), "no".to_string()]),
+                invalid_value: serde_json::json!("maybe"),
+            },
+            Case {
+                kind: ParleyKind::FreeText,
+                choices: None,
+                invalid_value: serde_json::json!(42),
+            },
+            Case {
+                kind: ParleyKind::StateEdit,
+                choices: None,
+                invalid_value: serde_json::json!("not-a-state-delta"),
+            },
+        ];
+
+        for case in cases {
+            let node_id = NodeId::new("asker");
+            let parley_id = ParleyId::new();
+            let request = ParleyRequest {
+                parley_id,
+                node_id: node_id.clone(),
+                kind: case.kind.clone(),
+                prompt: "provide input".to_string(),
+                payload: serde_json::json!({}),
+                choices: case.choices.clone(),
+                expires_at: None,
+                created_at: Utc::now(),
+                on_expire: OnExpire::FailRun,
+            };
+            let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+            let node = CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Parley(request.clone()),
+            });
+            graph.add_node(node_id.clone(), NodeSpec::Function(node));
+            graph.add_entry(node_id);
+
+            let store = Arc::new(RecordingWaypointStore::new());
+            let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+            let thread = ThreadId::new(format!("resume-with-wrong-shape-{:?}", case.kind)).unwrap();
+            engine
+                .start(&graph, thread.clone(), StateDelta::new())
+                .await
+                .unwrap();
+
+            let response = ParleyResponse {
+                parley_id,
+                kind: case.kind.clone(),
+                prompt: String::new(),
+                value: case.invalid_value.clone(),
+                responded_by: Some("tester".to_string()),
+                responded_at: Utc::now(),
+                defaulted: false,
+            };
+            let err = engine
+                .resume_with(&graph, thread, vec![response])
+                .await
+                .unwrap_err();
+            match err {
+                EngineError::ResponseShapeInvalid {
+                    parley_id: err_parley_id,
+                    ..
+                } => assert_eq!(err_parley_id, parley_id, "kind {:?}", case.kind),
+                other => panic!(
+                    "expected ResponseShapeInvalid for kind {:?}, got {other:?}",
+                    case.kind
+                ),
+            }
+        }
+    }
+
+    /// Test 4: a `StateEdit` response naming an undeclared schema field
+    /// rejects THIS response, leaves the thread `AwaitingInput`, and
+    /// applies no partial edit.
+    #[tokio::test]
+    async fn state_edit_unknown_schema_field_rejects_the_response_not_the_run() {
+        let schema = string_field_schema("known", "");
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("editor");
+        let parley_id = ParleyId::new();
+        let request = ParleyRequest {
+            parley_id,
+            node_id: node_id.clone(),
+            kind: ParleyKind::StateEdit,
+            prompt: "edit".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
+        };
+        let node = CountingFunctionNode::with_directive(move |_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(request.clone()),
+        });
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("state-edit-unknown-schema-field").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let response = ParleyResponse {
+            parley_id,
+            kind: ParleyKind::StateEdit,
+            prompt: String::new(),
+            value: serde_json::json!({"values": {"undeclared": "x"}}),
+            responded_by: Some("tester".to_string()),
+            responded_at: Utc::now(),
+            defaulted: false,
+        };
+        let err = engine
+            .resume_with(&graph, thread.clone(), vec![response])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::ResponseShapeInvalid { .. }));
+
+        let latest = store.latest(&thread).await.unwrap().unwrap();
+        match latest.status {
+            WaypointStatus::AwaitingInput { parleys, responses } => {
+                assert_eq!(parleys.len(), 1);
+                assert!(responses.is_empty(), "no partial edit may be applied");
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+    }
+
+    /// Test 5: a submission of three responses where the third is invalid
+    /// writes no Waypoint at all and leaves `latest(thread)` unchanged.
+    #[tokio::test]
+    async fn resume_with_validation_is_total_before_any_write() {
+        let (graph, _node_ids, parley_ids) = multi_parley_graph(3);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("resume-with-validation-is-total").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let before = store.latest(&thread).await.unwrap().unwrap();
+        let save_count_before = store.save_call_count();
+
+        let mut invalid_response = approval_response(parley_ids[2], true);
+        invalid_response.value = serde_json::json!(999);
+        let responses = vec![
+            approval_response(parley_ids[0], true),
+            approval_response(parley_ids[1], false),
+            invalid_response,
+        ];
+
+        let err = engine
+            .resume_with(&graph, thread.clone(), responses)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::ResponseShapeInvalid { .. }));
+        assert_eq!(
+            store.save_call_count(),
+            save_count_before,
+            "a submission with any invalid response must write no Waypoint"
+        );
+        let after = store.latest(&thread).await.unwrap().unwrap();
+        assert_eq!(after, before, "latest(thread) must be byte-identical");
+    }
+
+    /// Test 6: a graph fingerprint mismatch is returned before any
+    /// response is even inspected.
+    #[tokio::test]
+    async fn resume_with_checks_graph_fingerprint() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let node = CountingFunctionNode::with_directive(move |_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(sample_parley_request(NodeId::new(""), parley_id)),
+        });
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("resume-with-checks-fingerprint").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let mut altered_graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        altered_graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("noop"),
+            )),
+        );
+        altered_graph.add_node(
+            NodeId::new("extra"),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("extra"),
+            )),
+        );
+        altered_graph.add_entry(node_id);
+        assert_ne!(graph.fingerprint(), altered_graph.fingerprint());
+
+        // Even an obviously-invalid response (unknown parley id) must not
+        // be inspected before the fingerprint check runs.
+        let err = engine
+            .resume_with(&altered_graph, thread, vec![approval_response(ParleyId::new(), true)])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::GraphMismatch { .. }));
+    }
+
+    /// Test 7: a `Running`/`Completed` latest Waypoint returns
+    /// `ThreadNotAwaitingInput` carrying the observed status.
+    #[tokio::test]
+    async fn resume_with_rejects_non_awaiting_input_thread() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("solo");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("done"),
+            )),
+        );
+        graph.add_entry(node_id);
+
+        let engine = engine();
+        let thread = ThreadId::new("resume-with-rejects-non-awaiting-input").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let err = engine
+            .resume_with(&graph, thread, Vec::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::ThreadNotAwaitingInput { .. }));
+    }
+
+    /// Test 8: a valid `ParleyId` outstanding on a DIFFERENT thread is
+    /// `UnknownParleyId` here -- never a global lookup.
+    #[tokio::test]
+    async fn resume_with_parley_ids_are_scoped_to_the_requested_thread() {
+        let (graph_a, _node_ids_a, parley_ids_a) = multi_parley_graph(1);
+        let (graph_b, _node_ids_b, _parley_ids_b) = multi_parley_graph(1);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+
+        let thread_a = ThreadId::new("resume-with-scoped-a").unwrap();
+        engine
+            .start(&graph_a, thread_a.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let thread_b = ThreadId::new("resume-with-scoped-b").unwrap();
+        engine
+            .start(&graph_b, thread_b.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let err = engine
+            .resume_with(&graph_b, thread_b, vec![approval_response(parley_ids_a[0], true)])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::UnknownParleyId { .. }));
+    }
+
+    // --- Task 2: partial answers and durable response consumption -------
+
+    /// Test 1: with two outstanding parleys, answering one writes a child
+    /// Waypoint at the SAME superstep whose status is `AwaitingInput` with
+    /// `responses.len() == 1` and `parleys` still listing both requests.
+    #[tokio::test]
+    async fn partial_answer_persists_new_awaiting_input_at_same_superstep() {
+        let (graph, _node_ids, parley_ids) = multi_parley_graph(2);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("partial-answer-same-superstep").unwrap();
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let original_superstep = match &suspended {
+            RunOutcome::AwaitingInput { waypoint, .. } => {
+                store.get(&thread, waypoint).await.unwrap().unwrap().superstep
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        };
+
+        let outcome = engine
+            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[0], true)])
+            .await
+            .unwrap();
+        match outcome {
+            RunOutcome::AwaitingInput { parleys, waypoint } => {
+                assert_eq!(parleys.len(), 1);
+                let wp = store.get(&thread, &waypoint).await.unwrap().unwrap();
+                assert_eq!(
+                    wp.superstep, original_superstep,
+                    "a partial answer must persist at the SAME superstep"
+                );
+                match wp.status {
+                    WaypointStatus::AwaitingInput {
+                        parleys: wp_parleys,
+                        responses,
+                    } => {
+                        assert_eq!(wp_parleys.len(), 2);
+                        assert_eq!(responses.len(), 1);
+                    }
+                    other => panic!("expected AwaitingInput, got {other:?}"),
+                }
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+    }
+
+    /// Test 2: the returned `RunOutcome::AwaitingInput` lists exactly the
+    /// one still-unanswered request.
+    #[tokio::test]
+    async fn partial_answer_returns_only_remaining_parleys() {
+        let (graph, _node_ids, parley_ids) = multi_parley_graph(2);
+        let engine = engine();
+        let thread = ThreadId::new("partial-answer-remaining").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let outcome = engine
+            .resume_with(&graph, thread, vec![approval_response(parley_ids[0], true)])
+            .await
+            .unwrap();
+        match outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                assert_eq!(parleys[0].parley_id, parley_ids[1]);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+    }
+
+    /// Test 3: answering the second parley proceeds into the resume
+    /// superstep rather than writing another `AwaitingInput` Waypoint.
+    #[tokio::test]
+    async fn answering_the_last_parley_advances_the_run() {
+        let (graph, _node_ids, parley_ids) = multi_parley_graph(2);
+        let engine = engine();
+        let thread = ThreadId::new("answering-last-parley-advances").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let partial = engine
+            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[0], true)])
+            .await
+            .unwrap();
+        assert!(matches!(partial, RunOutcome::AwaitingInput { .. }));
+
+        let final_outcome = engine
+            .resume_with(&graph, thread, vec![approval_response(parley_ids[1], false)])
+            .await
+            .unwrap();
+        match final_outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state
+                        .get::<bool>(&FieldName::new("f0").unwrap())
+                        .unwrap(),
+                    Some(true)
+                );
+                assert_eq!(
+                    final_state
+                        .get::<bool>(&FieldName::new("f1").unwrap())
+                        .unwrap(),
+                    Some(false)
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Test 4: loading `latest(thread)` from the store handle directly
+    /// (no in-process WarEngine state involved) reports two parleys and
+    /// one response.
+    #[tokio::test]
+    async fn partial_answer_state_is_queryable_from_the_waypoint_alone() {
+        let (graph, _node_ids, parley_ids) = multi_parley_graph(2);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("partial-answer-queryable").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        engine
+            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[0], true)])
+            .await
+            .unwrap();
+
+        let latest = store.latest(&thread).await.unwrap().unwrap();
+        match latest.status {
+            WaypointStatus::AwaitingInput { parleys, responses } => {
+                assert_eq!(parleys.len(), 2);
+                assert_eq!(responses.len(), 1);
+                assert_eq!(responses[0].parley_id, parley_ids[0]);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+    }
+
+    /// Test 5: with `fail_next_save` armed, a `resume_with` whose Waypoint
+    /// write fails leaves the previous `AwaitingInput` Waypoint as latest,
+    /// and re-submitting the identical response succeeds rather than
+    /// returning `ParleyAlreadyAnswered`.
+    #[tokio::test]
+    async fn resubmitting_responses_after_a_failed_save_is_safe() {
+        let (graph, _node_ids, parley_ids) = multi_parley_graph(2);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("resubmit-after-failed-save").unwrap();
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let original_waypoint = match suspended {
+            RunOutcome::AwaitingInput { waypoint, .. } => waypoint,
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        };
+
+        store.fail_next_save();
+        let response = approval_response(parley_ids[0], true);
+        let err = engine
+            .resume_with(&graph, thread.clone(), vec![response.clone()])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::WaypointWrite { .. }));
+
+        let latest_after_failure = store.latest(&thread).await.unwrap().unwrap();
+        assert_eq!(
+            latest_after_failure.waypoint_id, original_waypoint,
+            "a failed save must leave the original AwaitingInput Waypoint as latest"
+        );
+
+        let outcome = engine
+            .resume_with(&graph, thread, vec![response])
+            .await
+            .unwrap();
+        match outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                assert_eq!(parleys[0].parley_id, parley_ids[1]);
+            }
+            other => panic!("expected AwaitingInput (safe resubmission), got {other:?}"),
+        }
+    }
+
+    /// Test 6: each partial answer's Waypoint carries `parent_waypoint_id`
+    /// pointing at the previous one, so the sequence is a chain.
+    #[tokio::test]
+    async fn chain_of_partial_answers_is_linear() {
+        let (graph, _node_ids, parley_ids) = multi_parley_graph(3);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("chain-of-partial-answers").unwrap();
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let root_waypoint = match suspended {
+            RunOutcome::AwaitingInput { waypoint, .. } => waypoint,
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        };
+
+        let first = engine
+            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[0], true)])
+            .await
+            .unwrap();
+        let first_waypoint = match first {
+            RunOutcome::AwaitingInput { waypoint, .. } => waypoint,
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        };
+        let first_wp = store.get(&thread, &first_waypoint).await.unwrap().unwrap();
+        assert_eq!(first_wp.parent_waypoint_id, Some(root_waypoint));
+
+        let second = engine
+            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[1], true)])
+            .await
+            .unwrap();
+        let second_waypoint = match second {
+            RunOutcome::AwaitingInput { waypoint, .. } => waypoint,
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        };
+        let second_wp = store.get(&thread, &second_waypoint).await.unwrap().unwrap();
+        assert_eq!(second_wp.parent_waypoint_id, Some(first_waypoint));
+
+        let third = engine
+            .resume_with(&graph, thread, vec![approval_response(parley_ids[2], true)])
+            .await
+            .unwrap();
+        assert!(matches!(third, RunOutcome::Completed { .. }));
+    }
+
+    // --- Task 3: lazy expiry with both `on_expire` policies --------------
+
+    /// Test 1: a request whose `expires_at` is in the past with
+    /// `on_expire: FailRun` causes `resume_with` to persist a `Failed`
+    /// Waypoint naming the expired parley, and to return
+    /// `Err(ParleyExpired)`.
+    #[tokio::test]
+    async fn expired_parley_with_fail_run_persists_failed_waypoint() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let expires_at = Utc::now() - chrono::Duration::seconds(60);
+        let request = ParleyRequest {
+            parley_id,
+            node_id: node_id.clone(),
+            kind: ParleyKind::Approval,
+            prompt: "proceed?".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: Some(expires_at),
+            created_at: Utc::now() - chrono::Duration::seconds(120),
+            on_expire: OnExpire::FailRun,
+        };
+        let node = CountingFunctionNode::with_directive(move |_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(request.clone()),
+        });
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("expired-parley-fail-run").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let err = engine
+            .resume_with(&graph, thread.clone(), Vec::new())
+            .await
+            .unwrap_err();
+        match err {
+            EngineError::ParleyExpired {
+                parley_id: err_id,
+                expires_at: err_expires_at,
+            } => {
+                assert_eq!(err_id, parley_id);
+                assert_eq!(err_expires_at, expires_at);
+            }
+            other => panic!("expected ParleyExpired, got {other:?}"),
+        }
+
+        let latest = store.latest(&thread).await.unwrap().unwrap();
+        match latest.status {
+            WaypointStatus::Failed { error, failed_node } => {
+                assert!(error.contains(parley_id.to_string().as_str()));
+                assert_eq!(failed_node, node_id);
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    /// Test 2: after that failure, both `resume` and `resume_with` refuse
+    /// the thread.
+    #[tokio::test]
+    async fn expired_fail_run_thread_is_not_resumable() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let expires_at = Utc::now() - chrono::Duration::seconds(60);
+        let request = ParleyRequest {
+            parley_id,
+            node_id: node_id.clone(),
+            kind: ParleyKind::Approval,
+            prompt: "proceed?".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: Some(expires_at),
+            created_at: Utc::now() - chrono::Duration::seconds(120),
+            on_expire: OnExpire::FailRun,
+        };
+        let node = CountingFunctionNode::with_directive(move |_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(request.clone()),
+        });
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id);
+
+        let engine = engine();
+        let thread = ThreadId::new("expired-fail-run-not-resumable").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        engine
+            .resume_with(&graph, thread.clone(), Vec::new())
+            .await
+            .unwrap_err();
+
+        let resume_err = engine.resume(&graph, thread.clone()).await.unwrap_err();
+        assert!(matches!(resume_err, EngineError::ThreadAlreadyFailed { .. }));
+
+        let resume_with_err = engine
+            .resume_with(&graph, thread, Vec::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            resume_with_err,
+            EngineError::ThreadNotAwaitingInput { .. }
+        ));
+    }
+
+    /// Test 3: a request whose `expires_at` is in the past with
+    /// `on_expire: ResumeWithDefault(v)` substitutes `v` as the response,
+    /// records `responded_by: None` and `defaulted: true`, and lets the
+    /// run proceed.
+    #[tokio::test]
+    async fn expired_parley_with_resume_with_default_substitutes_value() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let expires_at = Utc::now() - chrono::Duration::seconds(60);
+        let request = ParleyRequest {
+            parley_id,
+            node_id: node_id.clone(),
+            kind: ParleyKind::Approval,
+            prompt: "proceed?".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: Some(expires_at),
+            created_at: Utc::now() - chrono::Duration::seconds(120),
+            on_expire: OnExpire::ResumeWithDefault(serde_json::json!(true)),
+        };
+        let node = CountingFunctionNode::with_context_directive(move |run, _state, ctx| {
+            if run == 0 {
+                Directive {
+                    delta: StateDelta::new(),
+                    next: NextStep::Parley(request.clone()),
+                }
+            } else {
+                let response = ctx
+                    .parley_response()
+                    .expect("parley_response must be populated on resume");
+                assert_eq!(response.responded_by, None);
+                assert!(response.defaulted);
+                let mut delta = StateDelta::new();
+                delta.set_raw(FieldName::new("result").unwrap(), response.value.clone());
+                delta.into()
+            }
+        });
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id);
+
+        let engine = engine();
+        let thread = ThreadId::new("expired-parley-resume-with-default").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let outcome = engine
+            .resume_with(&graph, thread, Vec::new())
+            .await
+            .unwrap();
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state
+                        .get::<bool>(&FieldName::new("result").unwrap())
+                        .unwrap(),
+                    Some(true)
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Test 4: a request whose `expires_at` is in the future is not
+    /// treated as expired, and an ordinary submitted response completes
+    /// the run normally.
+    #[tokio::test]
+    async fn expiry_is_evaluated_only_at_resume_time() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let expires_at = Utc::now() + chrono::Duration::seconds(3600);
+        let request = ParleyRequest {
+            parley_id,
+            node_id: node_id.clone(),
+            kind: ParleyKind::Approval,
+            prompt: "proceed?".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: Some(expires_at),
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
+        };
+        let node = CountingFunctionNode::with_context_directive(move |run, _state, ctx| {
+            if run == 0 {
+                Directive {
+                    delta: StateDelta::new(),
+                    next: NextStep::Parley(request.clone()),
+                }
+            } else {
+                let value = ctx
+                    .parley_response()
+                    .expect("parley_response must be populated on resume")
+                    .value
+                    .clone();
+                let mut delta = StateDelta::new();
+                delta.set_raw(FieldName::new("result").unwrap(), value);
+                delta.into()
+            }
+        });
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id);
+
+        let engine = engine();
+        let thread = ThreadId::new("expiry-evaluated-only-at-resume-time").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        let outcome = engine
+            .resume_with(&graph, thread, vec![approval_response(parley_id, true)])
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+    }
+
+    /// Test 5: the substituted response's `defaulted` flag is persisted on
+    /// the (partial-answer) `AwaitingInput` Waypoint and survives a serde
+    /// round trip, so an audit can see it.
+    #[tokio::test]
+    async fn defaulted_marker_is_persisted_and_queryable() {
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(FieldName::new("a").unwrap(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(FieldName::new("b").unwrap(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+
+        let node_a = NodeId::new("asker-a");
+        let parley_a = ParleyId::new();
+        let expires_at = Utc::now() - chrono::Duration::seconds(60);
+        let request_a = ParleyRequest {
+            parley_id: parley_a,
+            node_id: node_a.clone(),
+            kind: ParleyKind::Approval,
+            prompt: "proceed a?".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: Some(expires_at),
+            created_at: Utc::now() - chrono::Duration::seconds(120),
+            on_expire: OnExpire::ResumeWithDefault(serde_json::json!(true)),
+        };
+        let field_a = FieldName::new("a").unwrap();
+        graph.add_node(
+            node_a.clone(),
+            NodeSpec::Function(CountingFunctionNode::with_context_directive(
+                move |run, _state, ctx| {
+                    if run == 0 {
+                        Directive {
+                            delta: StateDelta::new(),
+                            next: NextStep::Parley(request_a.clone()),
+                        }
+                    } else {
+                        let value = ctx.parley_response().expect("populated").value.clone();
+                        let mut delta = StateDelta::new();
+                        delta.set_raw(field_a.clone(), value);
+                        delta.into()
+                    }
+                },
+            )),
+        );
+        graph.add_entry(node_a);
+
+        let node_b = NodeId::new("asker-b");
+        let parley_b = ParleyId::new();
+        let field_b = FieldName::new("b").unwrap();
+        let node_b_for_request = node_b.clone();
+        graph.add_node(
+            node_b.clone(),
+            NodeSpec::Function(CountingFunctionNode::with_context_directive(
+                move |run, _state, ctx| {
+                    if run == 0 {
+                        Directive {
+                            delta: StateDelta::new(),
+                            next: NextStep::Parley(sample_parley_request(
+                                node_b_for_request.clone(),
+                                parley_b,
+                            )),
+                        }
+                    } else {
+                        let value = ctx.parley_response().expect("populated").value.clone();
+                        let mut delta = StateDelta::new();
+                        delta.set_raw(field_b.clone(), value);
+                        delta.into()
+                    }
+                },
+            )),
+        );
+        graph.add_entry(node_b);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("defaulted-marker-queryable").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        // No responses submitted: parley_a's default substitutes
+        // automatically; parley_b stays outstanding, so a partial
+        // AwaitingInput Waypoint carrying the defaulted response persists.
+        let outcome = engine
+            .resume_with(&graph, thread.clone(), Vec::new())
+            .await
+            .unwrap();
+        match outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                assert_eq!(parleys[0].parley_id, parley_b);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+
+        let latest = store.latest(&thread).await.unwrap().unwrap();
+        match &latest.status {
+            WaypointStatus::AwaitingInput { responses, .. } => {
+                assert_eq!(responses.len(), 1);
+                assert_eq!(responses[0].parley_id, parley_a);
+                assert!(responses[0].defaulted);
+                assert_eq!(responses[0].responded_by, None);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+
+        // The marker survives a serde round trip.
+        let json = serde_json::to_string(&latest).unwrap();
+        let restored: Waypoint = serde_json::from_str(&json).unwrap();
+        match restored.status {
+            WaypointStatus::AwaitingInput { responses, .. } => {
+                assert!(responses[0].defaulted);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+    }
+
+    /// Test 6: a submission mixing an expired `FailRun` parley (untouched
+    /// by this call's own responses) with a valid response for a
+    /// different, non-expired parley fails the whole submission with
+    /// `ParleyExpired` before the valid response is ever accepted.
+    #[tokio::test]
+    async fn expired_and_valid_responses_in_one_submission() {
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(FieldName::new("a").unwrap(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(FieldName::new("b").unwrap(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+
+        let node_a = NodeId::new("asker-a");
+        let parley_a = ParleyId::new();
+        let expires_at = Utc::now() - chrono::Duration::seconds(60);
+        let request_a = ParleyRequest {
+            parley_id: parley_a,
+            node_id: node_a.clone(),
+            kind: ParleyKind::Approval,
+            prompt: "proceed a?".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: Some(expires_at),
+            created_at: Utc::now() - chrono::Duration::seconds(120),
+            on_expire: OnExpire::FailRun,
+        };
+        let field_a = FieldName::new("a").unwrap();
+        graph.add_node(
+            node_a.clone(),
+            NodeSpec::Function(CountingFunctionNode::with_context_directive(
+                move |run, _state, ctx| {
+                    if run == 0 {
+                        Directive {
+                            delta: StateDelta::new(),
+                            next: NextStep::Parley(request_a.clone()),
+                        }
+                    } else {
+                        let value = ctx.parley_response().expect("populated").value.clone();
+                        let mut delta = StateDelta::new();
+                        delta.set_raw(field_a.clone(), value);
+                        delta.into()
+                    }
+                },
+            )),
+        );
+        graph.add_entry(node_a);
+
+        let node_b = NodeId::new("asker-b");
+        let parley_b = ParleyId::new();
+        let field_b = FieldName::new("b").unwrap();
+        let node_b_for_request = node_b.clone();
+        graph.add_node(
+            node_b.clone(),
+            NodeSpec::Function(CountingFunctionNode::with_context_directive(
+                move |run, _state, ctx| {
+                    if run == 0 {
+                        Directive {
+                            delta: StateDelta::new(),
+                            next: NextStep::Parley(sample_parley_request(
+                                node_b_for_request.clone(),
+                                parley_b,
+                            )),
+                        }
+                    } else {
+                        let value = ctx.parley_response().expect("populated").value.clone();
+                        let mut delta = StateDelta::new();
+                        delta.set_raw(field_b.clone(), value);
+                        delta.into()
+                    }
+                },
+            )),
+        );
+        graph.add_entry(node_b);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("expired-and-valid-in-one-submission").unwrap();
+        engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let save_count_before = store.save_call_count();
+
+        let err = engine
+            .resume_with(&graph, thread.clone(), vec![approval_response(parley_b, true)])
+            .await
+            .unwrap_err();
+        match err {
+            EngineError::ParleyExpired { parley_id, .. } => assert_eq!(parley_id, parley_a),
+            other => panic!("expected ParleyExpired, got {other:?}"),
+        }
+
+        // The FailRun expiry itself persists exactly one Failed Waypoint
+        // (the policy's own required write); nothing else is written.
+        assert_eq!(store.save_call_count(), save_count_before + 1);
+        let latest = store.latest(&thread).await.unwrap().unwrap();
+        assert!(matches!(latest.status, WaypointStatus::Failed { .. }));
+    }
+
     // --- HITL-01, D-05/D-06: Gate node dispatch (Phase 24 Plan 02) ------
 
     fn bool_field_schema(name: &str, default: bool) -> BattlefieldSchema {

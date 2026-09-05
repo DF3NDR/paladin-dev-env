@@ -733,6 +733,208 @@ mod tests {
         assert!(outcome.drained());
     }
 
+    // --- WR-02 (24-REVIEW.md): shadow_validate vs. the real engine -----
+
+    /// Like [`MarkerNode`], but also increments a shared counter every time
+    /// it runs -- proof the continuation actually reached this node,
+    /// independent of interpreting the returned `RunOutcome` variant.
+    struct CountingMarkerNode {
+        output_field: FieldName,
+        run_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait_attr]
+    impl StateNode for CountingMarkerNode {
+        async fn run(
+            &self,
+            _state: &Battlefield,
+            _ctx: &NodeContext,
+        ) -> Result<Directive, NodeError> {
+            self.run_count.fetch_add(1, Ordering::SeqCst);
+            let mut delta = paladin_core::platform::container::battlefield::StateDelta::new();
+            delta.set_raw(self.output_field.clone(), serde_json::json!(true));
+            Ok(Directive {
+                delta,
+                next: NextStep::Edges,
+            })
+        }
+    }
+
+    /// Like [`approval_graph`], but wired to a [`CountingMarkerNode`] so a
+    /// test can observe whether the continuation actually ran.
+    fn approval_graph_with_counter(run_count: Arc<AtomicUsize>) -> WarGraph {
+        let schema = BattlefieldSchema::new(vec![FieldSpec {
+            name: FieldName::new("approved").unwrap(),
+            dispatch: DispatchRule::LastWrite,
+            default: None,
+            required: false,
+        }]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(
+            NodeId::new("approve"),
+            NodeSpec::Function(Arc::new(CountingMarkerNode {
+                output_field: FieldName::new("approved").unwrap(),
+                run_count,
+            })),
+        );
+        graph.add_entry(NodeId::new("approve"));
+        graph
+    }
+
+    /// WR-02 (24-REVIEW.md): a drift guard between [`shadow_validate`]'s
+    /// hand-maintained re-implementation and the REAL
+    /// `WarEngine::resume_with`. For each fixture, asserts `shadow_validate`'s
+    /// prediction of "this call reaches the continuation"
+    /// (`ShadowOutcome::Complete`) agrees with whether a REAL,
+    /// directly-constructed `WarEngine` (bypassing this adapter entirely)
+    /// actually ran its worker node -- so a future validation change in
+    /// `paladin-battalion` that silently desyncs this adapter's shadow copy
+    /// fails HERE, in this crate, not only in production.
+    #[tokio::test]
+    async fn shadow_validate_agrees_with_the_real_engine_across_fixtures() {
+        struct Fixture {
+            name: &'static str,
+            parleys: Vec<ParleyRequest>,
+            existing: Vec<ParleyResponse>,
+            submitted: Vec<ParleyResponse>,
+            reaches_continuation: bool,
+        }
+
+        let approve = sample_request(ParleyKind::Approval, None);
+        let approve_answered = approve_response(approve.parley_id);
+
+        let two_a = sample_request(ParleyKind::Approval, None);
+        let two_b = ParleyRequest {
+            node_id: NodeId::new("approve-2"),
+            ..sample_request(ParleyKind::Approval, None)
+        };
+        let two_a_answered = approve_response(two_a.parley_id);
+
+        let already = sample_request(ParleyKind::Approval, None);
+        let already_existing = approve_response(already.parley_id);
+        let already_duplicate = approve_response(already.parley_id);
+
+        let bad_shape = sample_request(ParleyKind::Approval, None);
+        let bad_shape_response = ParleyResponse {
+            parley_id: bad_shape.parley_id,
+            kind: ParleyKind::Approval,
+            prompt: "confirm?".to_string(),
+            value: serde_json::json!(42),
+            responded_by: None,
+            responded_at: Utc::now(),
+            defaulted: false,
+        };
+
+        let expired_fail = ParleyRequest {
+            expires_at: Some(Utc::now() - chrono::Duration::hours(1)),
+            on_expire: OnExpire::FailRun,
+            ..sample_request(ParleyKind::Approval, None)
+        };
+
+        let expired_default = ParleyRequest {
+            expires_at: Some(Utc::now() - chrono::Duration::hours(1)),
+            on_expire: OnExpire::ResumeWithDefault(serde_json::json!(true)),
+            ..sample_request(ParleyKind::Approval, None)
+        };
+
+        let fixtures = vec![
+            Fixture {
+                name: "complete-single-approval-answered",
+                parleys: vec![approve.clone()],
+                existing: vec![],
+                submitted: vec![approve_answered.clone()],
+                reaches_continuation: true,
+            },
+            Fixture {
+                name: "partial-one-of-two-outstanding-answered",
+                parleys: vec![two_a.clone(), two_b.clone()],
+                existing: vec![],
+                submitted: vec![two_a_answered.clone()],
+                reaches_continuation: false,
+            },
+            Fixture {
+                name: "rejected-unknown-parley-id",
+                parleys: vec![approve.clone()],
+                existing: vec![],
+                submitted: vec![approve_response(ParleyId::new())],
+                reaches_continuation: false,
+            },
+            Fixture {
+                name: "rejected-already-answered",
+                parleys: vec![already.clone()],
+                existing: vec![already_existing.clone()],
+                submitted: vec![already_duplicate.clone()],
+                reaches_continuation: false,
+            },
+            Fixture {
+                name: "rejected-response-shape-invalid",
+                parleys: vec![bad_shape.clone()],
+                existing: vec![],
+                submitted: vec![bad_shape_response.clone()],
+                reaches_continuation: false,
+            },
+            Fixture {
+                name: "delegate-expired-under-fail-run",
+                parleys: vec![expired_fail.clone()],
+                existing: vec![],
+                submitted: vec![],
+                reaches_continuation: false,
+            },
+            Fixture {
+                name: "complete-expired-under-resume-with-default",
+                parleys: vec![expired_default.clone()],
+                existing: vec![],
+                submitted: vec![],
+                reaches_continuation: true,
+            },
+        ];
+
+        for fixture in fixtures {
+            let run_count = Arc::new(AtomicUsize::new(0));
+            let graph = approval_graph_with_counter(run_count.clone());
+
+            let shadow_outcome = shadow_validate(
+                &fixture.parleys,
+                &fixture.existing,
+                &fixture.submitted,
+                &graph,
+            );
+            let shadow_says_complete = matches!(shadow_outcome, ShadowOutcome::Complete);
+            assert_eq!(
+                shadow_says_complete, fixture.reaches_continuation,
+                "fixture '{}': shadow_validate's own prediction disagrees with the fixture's \
+                 own expectation",
+                fixture.name
+            );
+
+            let store = Arc::new(InMemoryWaypointStore::new());
+            let t = thread(&format!("shadow-drift-{}", fixture.name));
+            seed_awaiting_input(
+                &store,
+                &t,
+                &graph,
+                fixture.parleys.clone(),
+                fixture.existing.clone(),
+            )
+            .await;
+
+            let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), Arc::clone(&store))
+                .with_durability(WaypointDurability::Strict);
+            let _ = engine
+                .resume_with(&graph, t.clone(), fixture.submitted.clone())
+                .await;
+
+            let actually_reached_continuation = run_count.load(Ordering::SeqCst) > 0;
+            assert_eq!(
+                shadow_says_complete, actually_reached_continuation,
+                "fixture '{}': shadow_validate's Complete prediction must agree with whether \
+                 the REAL WarEngine::resume_with call actually reached the continuation \
+                 (predicted {shadow_says_complete}, actual {actually_reached_continuation})",
+                fixture.name
+            );
+        }
+    }
+
     // --- WR-03 (24-REVIEW.md): a losing background race is logged, not silent
 
     /// A `WaypointPort` wrapper that answers every call by delegating to

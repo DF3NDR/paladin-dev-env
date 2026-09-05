@@ -29,8 +29,15 @@ use crate::waypoint::redact::redact_database_url_password;
 /// descending `superstep`, bounded by a bound `LIMIT` parameter (never an
 /// unbounded query — `None` is translated to `u32::MAX` by the caller so a
 /// single query shape covers both cases without `format!`-building SQL).
+/// `fork_of` (HITL-03, D-14) is not a dedicated column -- it rides in the
+/// existing `payload` JSON column exactly like `visit_counts`/`frontier`/
+/// `muster_progress`/`checkpoint_ns` do on the full `Waypoint`, so no SQL
+/// migration is needed. `json_extract` reads just that one field out of
+/// `payload` without deserializing the whole (potentially large) payload,
+/// keeping `history`'s summary query cheap.
 const HISTORY_QUERY_NO_CURSOR: &str = r#"
-    SELECT waypoint_id, parent_id, superstep, status, created_at
+    SELECT waypoint_id, parent_id, superstep, status, created_at,
+           json_extract(payload, '$.fork_of') AS fork_of
     FROM waypoints
     WHERE thread_id = ?
     ORDER BY created_at DESC, superstep DESC
@@ -42,7 +49,8 @@ const HISTORY_QUERY_NO_CURSOR: &str = r#"
 /// comparison `created_at < ? OR (created_at = ? AND superstep < ?)` is
 /// exactly "strictly older, under the same order the query itself sorts by".
 const HISTORY_QUERY_WITH_CURSOR: &str = r#"
-    SELECT waypoint_id, parent_id, superstep, status, created_at
+    SELECT waypoint_id, parent_id, superstep, status, created_at,
+           json_extract(payload, '$.fork_of') AS fork_of
     FROM waypoints
     WHERE thread_id = ?
       AND (created_at < ? OR (created_at = ? AND superstep < ?))
@@ -200,12 +208,25 @@ impl SqliteWaypointStore {
             .try_get("created_at")
             .map_err(|e| WaypointError::Backend { source: e.into() })?;
 
+        // --- HITL-03, D-14: `fork_of` is extracted from the `payload` JSON
+        // column via `json_extract`, never a dedicated column -- see
+        // `HISTORY_QUERY_NO_CURSOR`'s doc comment. `NULL` covers both a
+        // pre-D-14 payload (key absent) and a genuine JSON `null`
+        // (mainline waypoint), exactly like `parent_id` above.
+        let fork_of_str: Option<String> = row
+            .try_get("fork_of")
+            .map_err(|e| WaypointError::Backend { source: e.into() })?;
+        let fork_of = fork_of_str
+            .map(|s| Self::parse_waypoint_id(&s))
+            .transpose()?;
+
         Ok(WaypointSummary {
             waypoint_id,
             parent_waypoint_id,
             superstep: superstep as u64,
             status,
             created_at,
+            fork_of,
         })
     }
 
@@ -686,6 +707,25 @@ mod tests {
     #[tokio::test]
     async fn checkpoint_ns_none_round_trips() {
         contract_tests::checkpoint_ns_none_round_trips(&fresh_store().await).await;
+    }
+
+    // ── D-02 / D-14 / D-15: AwaitingInput payload, fork_of, branch-aware
+    //    latest ordering (Phase 24 Plan 06) ─────────────────────────────
+
+    #[tokio::test]
+    async fn awaiting_input_payload_round_trips() {
+        contract_tests::awaiting_input_payload_round_trips(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn fork_of_round_trips() {
+        contract_tests::fork_of_round_trips(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn latest_prefers_most_recently_created_across_branches() {
+        contract_tests::latest_prefers_most_recently_created_across_branches(&fresh_store().await)
+            .await;
     }
 
     // ── Backend-specific tests (T-22-17, T-22-18) ───────────────────────

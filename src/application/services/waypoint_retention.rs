@@ -140,6 +140,7 @@ mod tests {
             superstep: wp.superstep,
             status: wp.status.clone(),
             created_at: wp.created_at,
+            fork_of: wp.fork_of,
         }
     }
 

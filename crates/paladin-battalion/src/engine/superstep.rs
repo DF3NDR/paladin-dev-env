@@ -88,6 +88,12 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     /// as `"{this}{grandchild_node_id}/"` without threading an extra
     /// parameter through the whole dispatch/execute call chain.
     checkpoint_ns: Option<String>,
+    /// THIS run's own `fork_of` (HITL-03, D-14) -- captured once here so a
+    /// NESTED `NodeSpec::Battalion` dispatch propagates the SAME branch
+    /// root onto its child run's own Waypoints, verbatim (never
+    /// concatenated -- a branch root is a single value shared by the whole
+    /// run tree, unlike `checkpoint_ns`'s per-level namespace segments).
+    fork_of: Option<WaypointId>,
 }
 
 /// What one vanguard node resolves to for this superstep's execution: either
@@ -601,6 +607,11 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     &resources.cancellation,
                     Some(Arc::clone(&resources.waypoint_port)),
                     child_checkpoint_ns,
+                    // --- HITL-03, D-14: the child run inherits the SAME
+                    // branch root as the parent, verbatim -- a branch is a
+                    // property of the whole run tree, not re-derived or
+                    // concatenated per nesting level like `checkpoint_ns`.
+                    resources.fork_of,
                     // --- D-04: a child run never inherits the parent's
                     // resume-time parley responses -- those are keyed to
                     // the PARENT thread's own vanguard, and a suspended
@@ -872,6 +883,12 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         cancellation,
         waypoint_port_arc,
         None,
+        // --- HITL-03, D-14: a top-level `start`/`resume_with_options` call
+        // is never itself entered from a branch -- only a later plan's
+        // `WarEngine::fork` first produces a `Some` value, and it calls
+        // `run_with_namespace` directly (bypassing this wrapper), exactly
+        // like `checkpoint_ns` above.
+        None,
         // --- HITL-01, D-08: a top-level `start`/`resume_with_options` call
         // never carries a resume-superstep's parley responses -- only
         // `WarEngine::resume_with` does, and it calls `run_with_namespace`
@@ -926,6 +943,16 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // mutated mid-run); a nested Battalion dispatch below derives the NEXT
     // level's namespace from it via `ChildEngineResources::checkpoint_ns`.
     checkpoint_ns: Option<String>,
+    // --- HITL-03, D-14: the branch root THIS run's own Waypoints are
+    // stamped with (`Waypoint.fork_of`) -- `None` for every mainline run
+    // (`WarEngine::start`/`resume_with_options`/`resume_with`, until a
+    // later plan's `WarEngine::fork` first produces a `Some` value), and
+    // `Some(root)` for a run entered from a branch. Stamped, verbatim
+    // (never re-derived or concatenated), onto every Waypoint
+    // [`build_waypoint`] produces in this call; a nested `NodeSpec::Battalion`
+    // dispatch propagates the SAME value onto its child run via
+    // `ChildEngineResources::fork_of`.
+    fork_of: Option<WaypointId>,
     // --- HITL-01, D-08: `Some(responses_by_node)` ONLY on a
     // `WarEngine::resume_with` re-entry, keyed by the PARLEYING node's own
     // `NodeId` (never a `parley_id`, since `NodeContext.parley_response`
@@ -957,6 +984,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 interceptors: interceptors.to_vec(),
                 cancellation: cancellation.clone(),
                 checkpoint_ns: checkpoint_ns.clone(),
+                fork_of,
             })
         });
 
@@ -1026,6 +1054,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 entry_frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -1047,6 +1076,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             entry_frontier.snapshot(graph),
             None,
             checkpoint_ns.clone(),
+            fork_of,
         );
         persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
         return Ok(RunOutcome::Completed {
@@ -1096,6 +1126,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Halted {
@@ -1147,6 +1178,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -1188,6 +1220,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -1600,6 +1633,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                 frontier.snapshot(graph),
                                 Some(progress),
                                 checkpoint_ns.clone(),
+                                fork_of,
                             );
                             persist_waypoint(waypoint_port, durability, &progress_waypoint, trace)
                                 .await?;
@@ -1671,6 +1705,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -1702,6 +1737,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -1765,6 +1801,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     frontier.snapshot(graph),
                     None,
                     checkpoint_ns.clone(),
+                    fork_of,
                 );
                 persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
                 return Ok(RunOutcome::Failed {
@@ -1850,6 +1887,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::AwaitingInput {
@@ -1897,6 +1935,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Completed {
@@ -1950,6 +1989,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     frontier.snapshot(graph),
                     None,
                     checkpoint_ns.clone(),
+                    fork_of,
                 );
                 persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
                 return Ok(RunOutcome::Failed {
@@ -1978,6 +2018,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             frontier.snapshot(graph),
             None,
             checkpoint_ns.clone(),
+            fork_of,
         );
         persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
 
@@ -2644,6 +2685,12 @@ pub(crate) fn build_waypoint(
     // entirely from `thread` already being the child's own derived
     // `ThreadId` by the time this function is called.
     checkpoint_ns: Option<String>,
+    // --- HITL-03, D-14: the branch root this `run()` call's OWN Waypoints
+    // are stamped with -- `None` for every mainline run, `Some(root)` for a
+    // run entered from a branch. Propagated verbatim (never re-derived) --
+    // every Waypoint a single `run_with_namespace` call produces carries the
+    // SAME value.
+    fork_of: Option<WaypointId>,
 ) -> Waypoint {
     Waypoint {
         thread_id: thread.clone(),
@@ -2661,6 +2708,7 @@ pub(crate) fn build_waypoint(
         frontier,
         muster_progress,
         checkpoint_ns,
+        fork_of,
     }
 }
 
@@ -3869,6 +3917,156 @@ mod tests {
             .find(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. }))
             .expect("an AwaitingInput waypoint must exist");
         assert_eq!(awaiting.vanguard, vec![asker_a, asker_b]);
+    }
+
+    // --- HITL-03 / D-14: fork_of propagation (Phase 24 Plan 06) --------
+
+    /// Test 3: an ordinary mainline run's Waypoints all carry
+    /// `fork_of: None` -- no fork/replay entry point produces a `Some`
+    /// value yet (a later plan's `WarEngine::fork` is the first producer),
+    /// so every Waypoint the top-level `run()`/`run_default` path writes
+    /// must still show `None`.
+    #[tokio::test]
+    async fn mainline_waypoints_carry_no_fork_of() {
+        let s = schema(vec![FieldSpec::new(
+            field("result"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_a = NodeId::new("a");
+        let node_b = NodeId::new("b");
+        let result_field = field("result");
+        let a_node = CountingFunctionNode::new(move |_run, _state| {
+            let mut delta = StateDelta::new();
+            delta.set_raw(result_field.clone(), serde_json::json!("a"));
+            delta
+        });
+        let b_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        graph.add_node(node_a.clone(), NodeSpec::Function(a_node));
+        graph.add_node(node_b.clone(), NodeSpec::Function(b_node));
+        graph.add_edge(EdgeSpec {
+            from: node_a.clone(),
+            to: node_b.clone(),
+            condition: Some(EdgeCondition::Always),
+        });
+        graph.add_entry(node_a.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("mainline-no-fork-of").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let saved = store.saved_waypoints(&thread).await;
+        assert!(
+            !saved.is_empty(),
+            "the run must have persisted at least one waypoint"
+        );
+        assert!(
+            saved.iter().all(|w| w.fork_of.is_none()),
+            "every mainline waypoint must carry fork_of: None"
+        );
+    }
+
+    /// Test 4: given a Waypoint whose `fork_of` is `Some(root)`, the next
+    /// Waypoint `build_waypoint` constructs for that same run also carries
+    /// `Some(root)` -- the branch root propagates verbatim onto every
+    /// Waypoint of the run, never re-derived per call.
+    #[test]
+    fn branch_waypoints_inherit_fork_of_from_the_branch_root() {
+        let s = schema(vec![]);
+        let graph = WarGraph::new(s.clone(), EngineLimits::default());
+        let thread = ThreadId::new("branch-inherits-fork-of").unwrap();
+        let battlefield = Battlefield::new(s);
+        let root = WaypointId::new();
+
+        let first = build_waypoint(
+            &thread,
+            None,
+            1,
+            &graph,
+            &battlefield,
+            vec![],
+            vec![],
+            WaypointStatus::Running,
+            BTreeMap::new(),
+            FrontierSnapshot::default(),
+            None,
+            None,
+            Some(root),
+        );
+        assert_eq!(first.fork_of, Some(root));
+
+        // The next Waypoint of the SAME (branch) run propagates the SAME
+        // root verbatim, exactly as `resume_with` forwards `latest.fork_of`.
+        let second = build_waypoint(
+            &thread,
+            Some(first.waypoint_id),
+            2,
+            &graph,
+            &battlefield,
+            vec![],
+            vec![],
+            WaypointStatus::Completed,
+            BTreeMap::new(),
+            FrontierSnapshot::default(),
+            None,
+            None,
+            first.fork_of,
+        );
+        assert_eq!(second.fork_of, Some(root));
+    }
+
+    /// Test 5: forking again from a Waypoint whose own `fork_of` is already
+    /// `Some(a)` yields Waypoints carrying `Some(b)` where `b` is the NEWER
+    /// branch point, not `Some(a)`.
+    #[test]
+    fn fork_of_a_fork_carries_the_newer_root() {
+        let s = schema(vec![]);
+        let graph = WarGraph::new(s.clone(), EngineLimits::default());
+        let thread = ThreadId::new("fork-of-a-fork").unwrap();
+        let battlefield = Battlefield::new(s);
+        let root_a = WaypointId::new();
+        let root_b = WaypointId::new();
+
+        // A Waypoint already on branch `a`.
+        let on_branch_a = build_waypoint(
+            &thread,
+            None,
+            1,
+            &graph,
+            &battlefield,
+            vec![],
+            vec![],
+            WaypointStatus::Running,
+            BTreeMap::new(),
+            FrontierSnapshot::default(),
+            None,
+            None,
+            Some(root_a),
+        );
+        assert_eq!(on_branch_a.fork_of, Some(root_a));
+
+        // Forking AGAIN from it carries the NEWER root, `root_b`, never the
+        // older `root_a` it was itself forked from.
+        let on_branch_b = build_waypoint(
+            &thread,
+            Some(on_branch_a.waypoint_id),
+            2,
+            &graph,
+            &battlefield,
+            vec![],
+            vec![],
+            WaypointStatus::Running,
+            BTreeMap::new(),
+            FrontierSnapshot::default(),
+            None,
+            None,
+            Some(root_b),
+        );
+        assert_eq!(on_branch_b.fork_of, Some(root_b));
+        assert_ne!(on_branch_b.fork_of, on_branch_a.fork_of);
     }
 
     // --- CF-03: Muster dynamic fan-out (Plan 23-05).

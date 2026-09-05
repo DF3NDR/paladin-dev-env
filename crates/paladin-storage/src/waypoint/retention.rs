@@ -472,6 +472,61 @@ mod tests {
         assert!(report.total_removed() > 0);
     }
 
+    /// Case 4 (Phase 24 Plan 06, D-14): the SAME protection holds for an
+    /// `AwaitingInput` Waypoint that lives on a BRANCH (`fork_of: Some(..)`)
+    /// -- the wildcard `AwaitingInput { .. }` match in
+    /// `latest_and_awaiting_protected` above (and the real
+    /// `src/application/services/waypoint_retention.rs` it mirrors) is
+    /// unaffected by the payload reshape, so a branch-resident suspension
+    /// is protected exactly like a mainline one.
+    #[tokio::test]
+    async fn retention_protects_awaiting_input_on_any_branch() {
+        let store = InMemoryWaypointStore::new();
+        let t = thread("retention-awaiting-input-on-branch-survives");
+        let now = Utc::now();
+        let branch_root = WaypointId::generate();
+
+        // An old, BRANCH-RESIDENT AwaitingInput waypoint that would
+        // otherwise be pruned by both bounds.
+        let mut awaiting = sample_waypoint_at(&t, 0, now - Duration::days(365));
+        awaiting.fork_of = Some(branch_root);
+        awaiting.status = WaypointStatus::AwaitingInput {
+            parleys: vec![sample_parley_request()],
+            responses: Vec::new(),
+        };
+        store.save(&awaiting).await.unwrap();
+
+        // Nine more recent waypoints, so a max_waypoints_per_thread bound
+        // would also want to evict the old one by count.
+        for superstep in 1..10u64 {
+            store
+                .save(&sample_waypoint_at(&t, superstep, now))
+                .await
+                .unwrap();
+        }
+
+        let report = prune(&store, Some(1), Some(3), &latest_and_awaiting_protected)
+            .await
+            .unwrap();
+
+        let remaining = store.history(&t, None, None).await.unwrap();
+        assert!(
+            remaining
+                .iter()
+                .any(|s| s.waypoint_id == awaiting.waypoint_id),
+            "a branch-resident AwaitingInput waypoint must survive both bounds"
+        );
+        assert!(report.total_removed() > 0);
+
+        // Confirm the surviving summary still carries its branch marker --
+        // retention did not silently strip it.
+        let survivor = remaining
+            .iter()
+            .find(|s| s.waypoint_id == awaiting.waypoint_id)
+            .unwrap();
+        assert_eq!(survivor.fork_of, Some(branch_root));
+    }
+
     #[tokio::test]
     async fn running_the_same_prune_twice_removes_nothing_the_second_time() {
         let store = InMemoryWaypointStore::new();

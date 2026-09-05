@@ -435,7 +435,7 @@ Plans:
 
 **Wave 12** *(gap closure — blocked on Wave 11 completion)*
 
-- [ ] 24-14-PLAN.md — Blocking human diff read of the CR-02 mid-Muster shutdown-abort fix
+- [x] 24-14-PLAN.md — Blocking human diff read of the CR-02 mid-Muster shutdown-abort fix
 
 ### Phase 25: Node-Level Fault Tolerance
 

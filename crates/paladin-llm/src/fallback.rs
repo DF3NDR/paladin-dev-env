@@ -177,17 +177,16 @@ impl FallbackLlmAdapter {
             "Fallback chain hopping from provider '{from}' to '{to}' after {transience:?} error: {err}",
             transience = err.transience()
         );
-        if let Some(sink) = &self.trace_sink {
-            if let Err(sink_err) = sink
-                .on_event(TraceEvent::FallbackHop {
-                    node_id: None,
-                    from_provider: from.to_string(),
-                    to_provider: to.to_string(),
-                })
-                .await
-            {
-                log::debug!("trace sink rejected FallbackHop event: {sink_err}");
-            }
+        let Some(sink) = &self.trace_sink else {
+            return;
+        };
+        let event = TraceEvent::FallbackHop {
+            node_id: None,
+            from_provider: from.to_string(),
+            to_provider: to.to_string(),
+        };
+        if let Err(sink_err) = sink.on_event(event).await {
+            log::debug!("trace sink rejected FallbackHop event: {sink_err}");
         }
     }
 
@@ -229,37 +228,100 @@ impl FallbackLlmAdapter {
 
 #[async_trait]
 impl LlmPort for FallbackLlmAdapter {
-    async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        Err(LlmError::ProcessingError(
-            "FallbackLlmAdapter::generate is not implemented yet".to_string(),
-        ))
+    /// Try each provider from chain element 0, hopping on `Transient` or
+    /// `Unknown` errors only. The served response is stamped with the
+    /// provider's name under [`SERVED_BY_METADATA_KEY`].
+    async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+        let mut attempts: Vec<(String, String)> = Vec::new();
+        for (index, provider) in self.chain.iter().enumerate() {
+            let name = provider.get_provider_name();
+            match provider.generate(request.clone()).await {
+                Ok(mut response) => {
+                    response
+                        .metadata
+                        .insert(SERVED_BY_METADATA_KEY.to_string(), name.to_string());
+                    return Ok(response);
+                }
+                Err(err) => self.after_failure(index, name, err, &mut attempts).await?,
+            }
+        }
+        Err(Self::chain_exhausted())
     }
 
+    /// Fall through only when the call itself fails or the stream's FIRST
+    /// item is `Err`; once any `Ok` chunk has been observed the stream is
+    /// handed to the caller untouched and later errors propagate (D-25).
     async fn generate_stream(
         &self,
-        _request: LlmRequest,
+        request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = StreamItem> + Send>, LlmError> {
-        let _ = stream::iter(Vec::<StreamItem>::new()).boxed();
-        Err(LlmError::ProcessingError(
-            "FallbackLlmAdapter::generate_stream is not implemented yet".to_string(),
-        ))
-    }
-
-    async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
-        let _ = self.first();
+        let mut attempts: Vec<(String, String)> = Vec::new();
+        for (index, provider) in self.chain.iter().enumerate() {
+            let name = provider.get_provider_name();
+            let first_item = match provider.generate_stream(request.clone()).await {
+                Ok(raw) => {
+                    // Peek exactly one item. `Box<dyn Stream>` is not
+                    // `Unpin`, so pin it once here and keep the pinned
+                    // handle — it is what the caller receives.
+                    let mut rest = Box::into_pin(raw);
+                    match rest.next().await {
+                        Some(Err(err)) => Err(err),
+                        peeked => Ok((peeked, rest)),
+                    }
+                }
+                Err(err) => Err(err),
+            };
+            match first_item {
+                Ok((peeked, rest)) => {
+                    // Re-attach the peeked chunk (or nothing, if the stream
+                    // was already exhausted) in front of the remainder so
+                    // the consumer sees every item the provider produced.
+                    let replayed = stream::iter(peeked).chain(rest);
+                    return Ok(Box::new(replayed));
+                }
+                Err(err) => self.after_failure(index, name, err, &mut attempts).await?,
+            }
+        }
         Err(Self::chain_exhausted())
     }
 
+    /// The first element that answers `Ok`; the last element's error if
+    /// none does (D-24).
+    async fn validate_model(&self, model: &str) -> Result<bool, LlmError> {
+        let mut last_err = None;
+        for provider in &self.chain {
+            match provider.validate_model(model).await {
+                Ok(valid) => return Ok(valid),
+                Err(err) => last_err = Some(err),
+            }
+        }
+        Err(last_err.unwrap_or_else(Self::chain_exhausted))
+    }
+
+    /// The first element that answers `Ok`; the last element's error if
+    /// none does (D-24).
     async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
-        Err(Self::chain_exhausted())
+        let mut last_err = None;
+        for provider in &self.chain {
+            match provider.get_available_models().await {
+                Ok(models) => return Ok(models),
+                Err(err) => last_err = Some(err),
+            }
+        }
+        Err(last_err.unwrap_or_else(Self::chain_exhausted))
     }
 
+    /// Always [`FALLBACK_PROVIDER_NAME`]; the provider that actually served
+    /// a response is in its metadata under [`SERVED_BY_METADATA_KEY`].
     fn get_provider_name(&self) -> &'static str {
         FALLBACK_PROVIDER_NAME
     }
 
+    /// The first element's capabilities (D-24).
     fn get_capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities::default()
+        self.first()
+            .map(|provider| provider.get_capabilities())
+            .unwrap_or_default()
     }
 }
 
@@ -635,8 +697,8 @@ mod tests {
 
         assert_eq!(adapter.get_provider_name(), "fallback");
         assert_eq!(adapter.get_capabilities(), p1.get_capabilities());
-        assert_eq!(adapter.validate_model("claude").await.unwrap(), true);
-        assert_eq!(adapter.validate_model("gpt").await.unwrap(), false);
+        assert!(adapter.validate_model("claude").await.unwrap());
+        assert!(!adapter.validate_model("gpt").await.unwrap());
         assert_eq!(
             adapter.get_available_models().await.unwrap(),
             vec!["claude".to_string()]

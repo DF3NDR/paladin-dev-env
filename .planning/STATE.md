@@ -5,7 +5,7 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 24
 current_phase_name: pause-resume-history-graceful-shutdown
 status: executing
-stopped_at: Phase 24 executed (12/12 plans, code review fixed 5/5); verification gaps_found — 3-file docs drift after CR-01 admin-gate + CR-02 human diff read pending
+stopped_at: Phase 24 --gaps-only in progress — 24-13 complete (wave 11 merged 8566dd10; hook, build, test, mdbook gates green; tracking cd97d712); 24-14 blocked at its human-verify checkpoint (CR-02 diff read of commit 9802ce60) awaiting the human verdict, approved or defect found; re-run /gsd-execute-phase 24 --gaps-only to re-present it
 last_updated: "2026-09-05T11:17:16.340Z"
 last_activity: 2026-09-05
 last_activity_desc: Phase 24 execution started

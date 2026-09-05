@@ -116,7 +116,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   chain stays byte-identical (immutability hard invariant), branch-aware latest resolution, and
   defined subgraph-fork semantics (HITL-FR-07…12)
 
-- [ ] **HITL-04**: Graceful shutdown loses no work: cancellation finishes the in-flight superstep
+- [x] **HITL-04**: Graceful shutdown loses no work: cancellation finishes the in-flight superstep
   within `shutdown_grace` (default 30 s; over-grace nodes recorded `Skipped` and re-listed in
   the vanguard), `resume` continues a `Halted` thread, and the facade wires SIGTERM/SIGINT to
   all in-flight runs with `k8s/` manifests and docs updated and a documented disable switch —
@@ -364,7 +364,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | HITL-01 | Phase 24 | Complete |
 | HITL-02 | Phase 24 | Complete |
 | HITL-03 | Phase 24 | Complete |
-| HITL-04 | Phase 24 | Pending |
+| HITL-04 | Phase 24 | Complete |
 | HITL-05 | Phase 24 | Pending |
 | FT-01 | Phase 25 | Pending |
 | FT-02 | Phase 25 | Pending |

@@ -51,6 +51,7 @@ pub mod graph;
 pub mod hooks;
 pub mod input_mapping;
 pub mod node;
+pub mod shutdown;
 mod superstep;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -896,6 +897,12 @@ pub struct WarEngine<W: WaypointPort> {
     /// (ENG-FR-23). `None` behaves identically to a token that is never
     /// cancelled.
     cancellation_token: Option<CancellationToken>,
+    /// The grace window a mid-superstep cancellation races the in-flight
+    /// batch of spawned node tasks against (HITL-04, D-19, D-20). A runtime
+    /// setting, never part of `EngineLimits` and never hashed into the
+    /// graph fingerprint -- see [`WarEngine::with_shutdown_grace`].
+    /// Defaults to 30 seconds.
+    shutdown_grace: std::time::Duration,
 }
 
 // --- CF-FR-16, D-21: `+ 'static` is required here (not on the struct
@@ -921,6 +928,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             trace_dispatcher: Arc::new(TraceDispatcher::new(None)),
             interceptors: Vec::new(),
             cancellation_token: None,
+            shutdown_grace: std::time::Duration::from_secs(30),
         }
     }
 
@@ -993,6 +1001,56 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         self
     }
 
+    /// Set the grace window a mid-superstep cancellation races the
+    /// in-flight batch of spawned node tasks against (HITL-04, D-19, D-20):
+    /// once the cancellation token fires while nodes are executing, the
+    /// engine keeps awaiting them until this deadline, then aborts every
+    /// still-outstanding task and records it `Skipped { reason: "shutdown"
+    /// }`, re-listed in the Halted Waypoint's vanguard so `resume` re-runs
+    /// it exactly once. Defaults to 30 seconds when never called.
+    /// `Duration::ZERO` aborts every in-flight node the moment cancellation
+    /// is observed.
+    ///
+    /// A runtime setting only: never part of [`EngineLimits`] and never
+    /// hashed into [`WarGraph::fingerprint`] (D-20) -- changing it does not
+    /// invalidate a suspended thread's [`crate::engine::graph::WarGraph::fingerprint`]
+    /// comparison on resume.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_battalion::engine::WarEngine;
+    /// use paladin_battalion::engine::node::{NodeContext, NodeError, StateNode};
+    /// use paladin_core::platform::container::directive::Directive;
+    /// use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
+    /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    /// use paladin_core::platform::container::paladin::Paladin;
+    /// use paladin_core::platform::container::paladin_error::PaladinError;
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use async_trait::async_trait;
+    ///
+    /// struct NoopPort;
+    /// #[async_trait]
+    /// impl PaladinPort for NoopPort {
+    ///     async fn execute(&self, _p: &Paladin, _i: &str) -> Result<PaladinResult, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     async fn execute_stream(&self, _p: &Paladin, _i: &str) -> Result<PaladinStream, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     fn validate(&self, _p: &Paladin) -> Result<(), PaladinError> { Ok(()) }
+    /// }
+    ///
+    /// let engine = WarEngine::new(Arc::new(NoopPort), Arc::new(InMemoryWaypointStore::new()))
+    ///     .with_shutdown_grace(Duration::from_secs(5));
+    /// ```
+    pub fn with_shutdown_grace(mut self, grace: std::time::Duration) -> Self {
+        self.shutdown_grace = grace;
+        self
+    }
+
     /// Start a new run of `graph` under `thread`, seeded with `initial`.
     ///
     /// Runs the full superstep loop (ENG-FR-01): validates the graph,
@@ -1038,6 +1096,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             Some(Arc::clone(&self.waypoint_port)),
+            self.shutdown_grace,
         )
         .await;
         self.trace_dispatcher
@@ -1233,6 +1292,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             Some(Arc::clone(&self.waypoint_port)),
+            self.shutdown_grace,
         )
         .await;
         self.trace_dispatcher
@@ -1558,6 +1618,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // branch's resume never silently reverts to mainline.
             latest.fork_of,
             Some(responses_by_node),
+            self.shutdown_grace,
         )
         .await;
         self.trace_dispatcher
@@ -1703,6 +1764,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // `fork_of = Some(from)`, propagated verbatim.
             Some(from),
             None,
+            self.shutdown_grace,
         )
         .await;
         self.trace_dispatcher.emit(TraceEvent::RunFinished {

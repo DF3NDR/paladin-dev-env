@@ -5,8 +5,8 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 25
 current_phase_name: Node-Level Fault Tolerance
 status: planning
-stopped_at: Phase 24 complete (14/14 plans — 12 executed + 2 gap closure; re-verification passed 6/6; post-fix re-review 0 critical / 3 advisory warnings in 24-REVIEW.md; 24-SECURITY.md not yet produced) — next: plan Phase 25 Node-Level Fault Tolerance
-last_updated: "2026-09-05T12:07:01.328Z"
+stopped_at: Phase 24 complete (14/14 plans — 12 executed + 2 gap closure; re-verification passed 6/6; UAT 63/63 passed in 24-UAT.md; 24-SECURITY.md verified, threats_open 0; post-fix re-review 0 critical / 3 advisory warnings in 24-REVIEW.md) — next: plan Phase 25 Node-Level Fault Tolerance
+last_updated: "2026-09-05T14:00:09.000Z"
 last_activity: 2026-09-05
 last_activity_desc: Phase 24 complete, transitioned to Phase 25
 progress:
@@ -357,6 +357,13 @@ Entering them here would fabricate authority the corpus does not contain.
 None yet.
 
 ### Blockers/Concerns
+
+**Phase 24 close (2026-09-05): no blockers.** Carried concern from UAT: the untracked, gitignored
+local `config.yml` in the devcontainer no longer deserialises into `Settings` (it lacks
+`llm.deepseek.api_key` unless `DEEPSEEK_API_KEY` is exported, and `rag.retrieval_trigger`, which has
+been a required field since `e5c58f4a`, 2026-01-30). Pre-existing, unrelated to Phase 24; the
+tracked `config.test.yml` boots `paladin-server` cleanly. Regenerate the local file from
+`config.example.yml` or add the two fields.
 
 **Phase 23 close (2026-09-04): no blockers.** Carried concerns: (1) Docker is unavailable in the
 devcontainer, so the Postgres Tier-2 Waypoint contract suite is provable only through CI's
@@ -820,14 +827,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 24 executed (12/12 plans, code review fixed 5/5); verification gaps_found — 3-file docs drift after CR-01 admin-gate + CR-02 human diff read pending
+**Stopped at:** Phase 24 complete — UAT 63/63 passed (2026-09-05: cold-start smoke test, CR-02 human verdict confirmed, 60 coverage-auto-passed deliverables accepted), canonical verification `passed`, security `threats_open: 0`; ready to plan Phase 25 Node-Level Fault Tolerance
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-05T09:18:38.406Z
-Resume file: .planning/phases/24-pause-resume-history-graceful-shutdown/24-VERIFICATION.md
+Last session: 2026-09-05T14:00:09.000Z
+Resume file: None
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

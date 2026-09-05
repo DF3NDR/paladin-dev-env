@@ -719,6 +719,7 @@ impl WarGraph {
         }
 
         self.validate_muster_prefix_schema_fields()?;
+        self.validate_parley_prefix_schema_fields()?;
         self.validate_gates()?;
         self.validate_edge_evaluators(edge_evaluators)?;
         self.validate_worker_templates()?;
@@ -881,6 +882,38 @@ impl WarGraph {
             reason: "the muster. prefix is reserved for {muster.payload}/{muster.task_key} \
                      InputMapping placeholders, resolved from a Muster worker's NodeContext, \
                      never from the Battlefield -- rename the schema field"
+                .to_string(),
+        })
+    }
+
+    /// HITL-01 / D-07's namespace-reservation clause (23 D-15's precedent,
+    /// extended): a Battlefield schema field whose name starts with the
+    /// `parley.` prefix is rejected, so `{parley.value}`/`{parley.prompt}`/
+    /// `{parley.kind}`/`{parley.responded_by}` in an `InputMapping` template
+    /// are unambiguously a parleying node's own `ParleyResponse` references
+    /// and can never be shadowed by a same-named schema field the
+    /// Battlefield would otherwise resolve them from (T-24-09). Collects
+    /// every offending field name, mirroring
+    /// [`WarGraph::validate_muster_prefix_schema_fields`]'s "report the
+    /// whole problem at once" discipline.
+    fn validate_parley_prefix_schema_fields(&self) -> Result<(), EngineError> {
+        let mut fields: Vec<String> = self
+            .schema
+            .fields
+            .iter()
+            .filter(|f| f.name.as_str().starts_with("parley."))
+            .map(|f| f.name.as_str().to_string())
+            .collect();
+        if fields.is_empty() {
+            return Ok(());
+        }
+        fields.sort_unstable();
+        Err(EngineError::ParleyPrefixSchemaField {
+            fields,
+            reason: "the parley. prefix is reserved for {parley.value}/{parley.prompt}/\
+                     {parley.kind}/{parley.responded_by} InputMapping placeholders, resolved \
+                     from a parleying node's own NodeContext ParleyResponse, never from the \
+                     Battlefield -- rename the schema field"
                 .to_string(),
         })
     }
@@ -3140,6 +3173,32 @@ mod tests {
                 assert_eq!(fields, vec!["muster.payload".to_string()]);
             }
             other => panic!("expected MusterPrefixSchemaField, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn schema_field_with_parley_prefix_is_rejected_by_validate() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("parley.value").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_entry(NodeId::new("a"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        match err {
+            EngineError::ParleyPrefixSchemaField { fields, .. } => {
+                assert_eq!(fields, vec!["parley.value".to_string()]);
+            }
+            other => panic!("expected ParleyPrefixSchemaField, got {other:?}"),
         }
     }
 

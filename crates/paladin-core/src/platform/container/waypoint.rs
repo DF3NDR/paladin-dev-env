@@ -996,6 +996,8 @@ mod tests {
         };
         let response = ParleyResponse {
             parley_id: request.parley_id,
+            kind: request.kind.clone(),
+            prompt: request.prompt.clone(),
             value: serde_json::json!(true),
             responded_by: Some("alice".to_string()),
             responded_at: Utc::now(),

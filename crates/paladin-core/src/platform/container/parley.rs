@@ -162,11 +162,13 @@ pub struct ParleyRequest {
 ///
 /// ```
 /// # fn main() -> Result<(), serde_json::Error> {
-/// use paladin_core::platform::container::parley::{ParleyId, ParleyResponse};
+/// use paladin_core::platform::container::parley::{ParleyId, ParleyKind, ParleyResponse};
 /// use chrono::Utc;
 ///
 /// let response = ParleyResponse {
 ///     parley_id: ParleyId::new(),
+///     kind: ParleyKind::Approval,
+///     prompt: "Proceed with the deploy?".to_string(),
 ///     value: serde_json::json!(true),
 ///     responded_by: Some("ops@example.com".to_string()),
 ///     responded_at: Utc::now(),
@@ -184,6 +186,19 @@ pub struct ParleyRequest {
 pub struct ParleyResponse {
     /// The request this response answers.
     pub parley_id: ParleyId,
+    /// The originating [`ParleyRequest::kind`] this response answers,
+    /// stamped by `WarEngine::resume_with` from the matching request
+    /// regardless of what value an external caller supplied when
+    /// submitting this response (mirrors [`ParleyRequest::node_id`]'s own
+    /// engine-stamped-regardless contract, 24-01). This lets the
+    /// `parley.kind` `InputMapping` placeholder (24-03, D-07) resolve
+    /// entirely from this one type, with no `NodeContext`-only side
+    /// channel duplicating what is already recorded on the request.
+    pub kind: ParleyKind,
+    /// The originating [`ParleyRequest::prompt`] this response answers,
+    /// stamped the same way [`Self::kind`] is (see its own rustdoc) — never
+    /// meaningfully supplied by an external caller.
+    pub prompt: String,
     /// The submitted value, validated per [`ParleyKind`] at `resume_with`
     /// (the richer validation matrix lands in a later plan; this phase's
     /// `resume_with` accepts any value shape on its happy path).
@@ -279,6 +294,8 @@ mod tests {
     fn parley_response_round_trips_through_serde() {
         let response = ParleyResponse {
             parley_id: ParleyId::new(),
+            kind: ParleyKind::Approval,
+            prompt: "confirm?".to_string(),
             value: serde_json::json!(true),
             responded_by: Some("alice".to_string()),
             responded_at: Utc::now(),
@@ -293,9 +310,14 @@ mod tests {
     fn parley_response_without_defaulted_key_deserializes_as_false() {
         // D-12: `defaulted` is `#[serde(default)]` -- a payload written
         // before this field existed (or a hand-built envelope that omits
-        // it) must still deserialize, defaulting to `false`.
+        // it) must still deserialize, defaulting to `false`. `kind`/`prompt`
+        // are NOT `#[serde(default)]` (added same-phase, pre-release, 24-03
+        // -- no released Waypoint predates them) so this fixture supplies
+        // both explicitly.
         let mut value = serde_json::json!({
             "parley_id": ParleyId::new(),
+            "kind": "Approval",
+            "prompt": "confirm?",
             "value": true,
             "responded_by": null,
             "responded_at": Utc::now(),

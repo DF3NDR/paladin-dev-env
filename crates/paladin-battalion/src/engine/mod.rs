@@ -598,6 +598,20 @@ pub enum EngineError {
         reason: String,
     },
 
+    /// `WarGraph::validate` found a Battlefield schema field named with the
+    /// `parley.` prefix (HITL-01, D-07, T-24-09): that namespace is reserved
+    /// for `InputMapping`'s `{parley.value}`/`{parley.prompt}`/
+    /// `{parley.kind}`/`{parley.responded_by}` placeholders, resolved from a
+    /// parleying node's own `NodeContext` `ParleyResponse`, never from the
+    /// Battlefield.
+    #[error("schema field(s) reserved for the parley. namespace: {reason}")]
+    ParleyPrefixSchemaField {
+        /// Every offending schema field name, sorted.
+        fields: Vec<String>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
+
     /// `resume`/`resume_with_options` loaded a mid-muster progress
     /// Waypoint (CF-FR-12, D-14) whose `MusterProgress.tasks` names a
     /// `worker` the (possibly new, under `allow_graph_change`) graph no
@@ -1185,9 +1199,21 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         // --- D-08: `NodeContext.parley_response` is looked up by the
         // executing node's own `NodeId`, never by `parley_id` -- so
         // responses are re-keyed here, through the matching request, once.
+        // HITL-01, D-07: `kind`/`prompt` are ALSO stamped onto the response
+        // here, from the matching request, regardless of what an external
+        // caller supplied for them when constructing this `ParleyResponse`
+        // -- mirroring `ParleyRequest.node_id`'s own engine-stamped-
+        // regardless contract (24-01). This is what lets the `parley.`
+        // `InputMapping` namespace (`InputMapping::render`'s third
+        // parameter) resolve `{parley.prompt}`/`{parley.kind}` from this
+        // ONE type, with no separate `NodeContext`-only side channel
+        // duplicating data already recorded on the request.
         let mut responses_by_node: BTreeMap<NodeId, ParleyResponse> = BTreeMap::new();
         for response in responses {
             if let Some(request) = parleys.iter().find(|p| p.parley_id == response.parley_id) {
+                let mut response = response;
+                response.kind = request.kind.clone();
+                response.prompt = request.prompt.clone();
                 responses_by_node.insert(request.node_id.clone(), response);
             }
         }
@@ -1558,7 +1584,10 @@ mod tests {
             .unwrap();
 
         let mapping = InputMapping::new("hello {name}!");
-        assert_eq!(mapping.render(&battlefield, None).unwrap(), "hello world!");
+        assert_eq!(
+            mapping.render(&battlefield, None, None).unwrap(),
+            "hello world!"
+        );
     }
 
     // --- Task 1: NodeSpec::Paladin execution ------------------------------
@@ -3468,6 +3497,12 @@ mod tests {
 
         let response = ParleyResponse {
             parley_id,
+            // `kind`/`prompt` are stamped over by `resume_with` regardless
+            // (mirrors `ParleyRequest.node_id`'s own engine-stamped
+            // contract, HITL-01, D-07) -- these placeholder values are
+            // never observed.
+            kind: ParleyKind::Approval,
+            prompt: String::new(),
             value: serde_json::json!("approved"),
             responded_by: Some("tester".to_string()),
             responded_at: Utc::now(),
@@ -3517,6 +3552,8 @@ mod tests {
 
         let wrong_response = ParleyResponse {
             parley_id: ParleyId::new(),
+            kind: ParleyKind::Approval,
+            prompt: String::new(),
             value: serde_json::json!(true),
             responded_by: None,
             responded_at: Utc::now(),
@@ -3834,6 +3871,10 @@ mod tests {
 
             let response = ParleyResponse {
                 parley_id,
+                // `kind`/`prompt` are stamped over by `resume_with`
+                // regardless -- never observed.
+                kind: ParleyKind::Approval,
+                prompt: String::new(),
                 value: submitted.clone(),
                 responded_by: Some("tester".to_string()),
                 responded_at: Utc::now(),
@@ -3888,6 +3929,10 @@ mod tests {
 
             let response = ParleyResponse {
                 parley_id,
+                // `kind`/`prompt` are stamped over by `resume_with`
+                // regardless -- never observed.
+                kind: ParleyKind::Approval,
+                prompt: String::new(),
                 value: submitted.clone(),
                 responded_by: Some("tester".to_string()),
                 responded_at: Utc::now(),
@@ -3934,6 +3979,12 @@ mod tests {
 
         let response = ParleyResponse {
             parley_id,
+            // `kind`/`prompt` are stamped over by `resume_with` regardless
+            // (mirrors `ParleyRequest.node_id`'s own engine-stamped
+            // contract, HITL-01, D-07) -- these placeholder values are
+            // never observed.
+            kind: ParleyKind::Approval,
+            prompt: String::new(),
             value: serde_json::json!({"values": {"extra": "hello"}}),
             responded_by: Some("tester".to_string()),
             responded_at: Utc::now(),
@@ -4038,6 +4089,10 @@ mod tests {
             };
             let response = ParleyResponse {
                 parley_id,
+                // `kind`/`prompt` are stamped over by `resume_with`
+                // regardless -- never observed.
+                kind: ParleyKind::Approval,
+                prompt: String::new(),
                 value: submitted,
                 responded_by: Some("tester".to_string()),
                 responded_at: Utc::now(),
@@ -4118,6 +4173,12 @@ mod tests {
         };
         let response = ParleyResponse {
             parley_id,
+            // `kind`/`prompt` are stamped over by `resume_with` regardless
+            // (mirrors `ParleyRequest.node_id`'s own engine-stamped
+            // contract, HITL-01, D-07) -- these placeholder values are
+            // never observed.
+            kind: ParleyKind::Approval,
+            prompt: String::new(),
             value: serde_json::json!("approve"),
             responded_by: Some("tester".to_string()),
             responded_at: Utc::now(),
@@ -4129,5 +4190,62 @@ mod tests {
             .unwrap();
 
         assert_eq!(captured.lock().unwrap().as_deref(), Some("true"));
+    }
+
+    // --- Plan 24-03, Task 2: the structured directive envelope's
+    // `next.parley` key (HITL-01, D-07) -- a Paladin node raising a parley
+    // through its own raw output, not a declarative `NodeSpec::Gate`.
+
+    #[tokio::test]
+    async fn paladin_node_parley_round_trips_to_awaiting_input() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("approved").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!(false)),
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("approver");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin_with_directive_parser(
+                make_paladin("approver"),
+                InputMapping::new("decide"),
+                FieldName::new("approved").unwrap(),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            ),
+        );
+        graph.add_entry(node_id.clone());
+
+        let port = Arc::new(crate::engine::test_support::RecordingPaladinPort::new());
+        port.set_output(
+            "approver",
+            r#"{"delta": {}, "next": {"parley": {"kind": "Approval", "prompt": "Approve this?"}}}"#,
+        );
+        let engine = engine_with_port(port);
+
+        let thread = ThreadId::new("paladin-parley-round-trip").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                let request = &parleys[0];
+                // The engine's own suspension arm re-stamps `node_id` from
+                // the DISPATCHING node regardless of the directive parser's
+                // placeholder (24-01) -- proving the round trip actually
+                // reached the real suspension path, not a hand-built value.
+                assert_eq!(request.node_id, node_id);
+                assert_eq!(request.kind, ParleyKind::Approval);
+                assert_eq!(request.prompt, "Approve this?");
+                assert_eq!(request.on_expire, OnExpire::FailRun);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
     }
 }

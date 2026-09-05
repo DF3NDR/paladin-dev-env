@@ -199,7 +199,10 @@ impl LlmDecisionEvaluator {
             Some(battlefield) => InputMapping::new(self.prompt_template.clone())
                 // CF-03, D-15: `LlmDecision`'s prompt template is never a
                 // Muster worker execution, so no muster context applies.
-                .render(battlefield, None)
+                // HITL-01, D-07: nor is it ever a parleying node's own
+                // execution context (an edge evaluator has no `NodeContext`
+                // at all) -- no parley context applies either.
+                .render(battlefield, None, None)
                 .map_err(|e| self.evaluation_error(format!("template rendering failed: {e}"))),
             None => Ok(self.prompt_template.replace("{output}", output)),
         }

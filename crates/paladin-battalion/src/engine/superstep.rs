@@ -34,6 +34,7 @@ use tokio_util::sync::CancellationToken;
 
 use uuid::Uuid;
 
+use paladin_core::platform::container::aegis::Aegis;
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
     Battlefield, CustomDispatchResolver, FieldName, StateDelta,
@@ -41,10 +42,12 @@ use paladin_core::platform::container::battlefield::{
 use paladin_core::platform::container::directive::{
     Directive, MusterContext, MusterTask, NextStep,
 };
+use paladin_core::platform::container::node_error::{NodeError, NodeErrorSource};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{
     ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
+use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, MusterProgress, NodeExecutionRecord, NodeId,
     NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
@@ -58,7 +61,8 @@ use crate::engine::directive_parser::{DirectiveParseError, DirectiveParser};
 use crate::engine::graph::{EngineLimits, GateRequestTemplate, NodeSpec, StateMap, WarGraph};
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 use crate::engine::input_mapping::InputMapping;
-use crate::engine::node::{NodeContext, NodeError, StateNode};
+use crate::engine::node::{NodeContext, StateNode, StateNodeError};
+use crate::engine::retry;
 use crate::engine::{EngineError, RunOutcome, WaypointDurability};
 
 /// Every parent engine resource D-21 requires forwarding into a
@@ -198,6 +202,42 @@ enum NodeDispatch<W: WaypointPort + 'static> {
     },
 }
 
+// Manual `Clone` (rather than `#[derive(Clone)]`) so this impl does NOT pick
+// up a spurious `W: Clone` bound -- every field that mentions `W` is already
+// behind an `Arc` (`ChildEngineResources<W>`), which is `Clone` regardless
+// of whether `W` itself is. D-14's retry loop needs to re-dispatch the SAME
+// `NodeDispatch` on every attempt, so this is now load-bearing rather than
+// merely convenient.
+impl<W: WaypointPort + 'static> Clone for NodeDispatch<W> {
+    fn clone(&self) -> Self {
+        match self {
+            NodeDispatch::Function(node) => NodeDispatch::Function(Arc::clone(node)),
+            NodeDispatch::Paladin {
+                paladin,
+                input_template,
+                output_field,
+                directive_parser,
+            } => NodeDispatch::Paladin {
+                paladin: paladin.clone(),
+                input_template: input_template.clone(),
+                output_field: output_field.clone(),
+                directive_parser: directive_parser.clone(),
+            },
+            NodeDispatch::Battalion {
+                graph,
+                state_map,
+                resources,
+                restart_on_resume,
+            } => NodeDispatch::Battalion {
+                graph: Arc::clone(graph),
+                state_map: state_map.clone(),
+                resources: Arc::clone(resources),
+                restart_on_resume: *restart_on_resume,
+            },
+        }
+    }
+}
+
 /// A vanguard node's failure, distinguishing a `DirectiveParser` parse
 /// failure (CF-02, D-11) -- which the per-node accumulation loop below
 /// converts to the typed `EngineError::DirectiveParseFailed` naming this
@@ -208,9 +248,9 @@ enum NodeDispatch<W: WaypointPort + 'static> {
 enum NodeFailure {
     /// A `Function` node's own error, a `NodeSpec::Paladin` node's
     /// `InputMapping::render`/`PaladinPort::execute` failure, or an
-    /// internal engine error -- everything that was `NodeError` before this
+    /// internal engine error -- everything that was `StateNodeError` before this
     /// phase, unchanged.
-    Node(NodeError),
+    Node(StateNodeError),
     /// A `NodeSpec::Paladin` node's `DirectiveParser::StructuredDirective`
     /// call under `OnParseError::FailRun` (CF-02, D-11).
     DirectiveParse(DirectiveParseError),
@@ -247,7 +287,11 @@ struct GateDispatchNode {
 
 #[async_trait::async_trait]
 impl StateNode for GateDispatchNode {
-    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         match ctx.parley_response() {
             // --- First visit: render and raise. Never merges anything
             // beyond an empty delta -- a Gate's own contribution to the
@@ -263,12 +307,12 @@ impl StateNode for GateDispatchNode {
                     .request
                     .prompt_template
                     .render(state, ctx.muster.as_ref(), None)
-                    .map_err(|e| NodeError(format!("gate {}: {e}", ctx.node_id)))?;
+                    .map_err(|e| StateNodeError(format!("gate {}: {e}", ctx.node_id)))?;
                 let payload = match &self.request.payload_template {
                     Some(template) => {
                         let rendered = template
                             .render(state, ctx.muster.as_ref(), None)
-                            .map_err(|e| NodeError(format!("gate {}: {e}", ctx.node_id)))?;
+                            .map_err(|e| StateNodeError(format!("gate {}: {e}", ctx.node_id)))?;
                         // A payload template commonly renders a JSON shape
                         // (e.g. `{"amount": {amount}}`) through ordinary
                         // `InputMapping` field substitution -- parsed back
@@ -314,7 +358,7 @@ impl StateNode for GateDispatchNode {
                     ParleyKind::StateEdit => {
                         let state_delta: StateDelta =
                             serde_json::from_value(response.value.clone()).map_err(|e| {
-                                NodeError(format!(
+                                StateNodeError(format!(
                                     "gate {}: StateEdit response value is not a valid \
                                      StateDelta: {e}",
                                     ctx.node_id
@@ -326,7 +370,7 @@ impl StateNode for GateDispatchNode {
                         let approved =
                             crate::engine::graph::normalize_approval_value(&response.value)
                                 .ok_or_else(|| {
-                                    NodeError(format!(
+                                    StateNodeError(format!(
                                         "gate {}: response value {} is not a valid Approval value",
                                         ctx.node_id, response.value
                                     ))
@@ -375,7 +419,7 @@ impl StateNode for GateDispatchNode {
 /// populated from the executed `Paladin` and its `PaladinResult` for a
 /// `NodeSpec::Paladin` node. An `InputMapping::render` failure (an
 /// undeclared field, or a declared field with no value and no default) and a
-/// `PaladinPort::execute` error both become a `NodeError` here, so a Paladin
+/// `PaladinPort::execute` error both become a `StateNodeError` here, so a Paladin
 /// node's failure reaches the exact same node-failure path (and the same
 /// `WaypointStatus::Failed { failed_node, .. }` reporting) a `Function`
 /// node's own error already does — no special-cased Paladin failure path.
@@ -429,7 +473,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         return (
                             paladin_id,
                             0,
-                            Err(NodeFailure::Node(NodeError(e.to_string()))),
+                            Err(NodeFailure::Node(StateNodeError(e.to_string()))),
                         );
                     }
                 };
@@ -451,7 +495,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     Err(e) => (
                         paladin_id,
                         0,
-                        Err(NodeFailure::Node(NodeError(e.to_string()))),
+                        Err(NodeFailure::Node(StateNodeError(e.to_string()))),
                     ),
                 }
             }
@@ -510,7 +554,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         return (
                             None,
                             0,
-                            Err(NodeFailure::Node(NodeError(format!(
+                            Err(NodeFailure::Node(StateNodeError(format!(
                                 "battalion node {}: failed to derive child thread id: {e}",
                                 ctx.node_id
                             )))),
@@ -559,7 +603,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             return (
                                 None,
                                 0,
-                                Err(NodeFailure::Node(NodeError(format!(
+                                Err(NodeFailure::Node(StateNodeError(format!(
                                     "battalion node {}: failed to read child thread history: {e}",
                                     ctx.node_id
                                 )))),
@@ -618,7 +662,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                     return (
                                         None,
                                         0,
-                                        Err(NodeFailure::Node(NodeError(format!(
+                                        Err(NodeFailure::Node(StateNodeError(format!(
                                             "battalion node {}: failed to initialize child \
                                          battlefield: {e}",
                                             ctx.node_id
@@ -630,7 +674,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             return (
                                 None,
                                 0,
-                                Err(NodeFailure::Node(NodeError(format!(
+                                Err(NodeFailure::Node(StateNodeError(format!(
                                     "battalion node {}: child battlefield missing required \
                                      field(s): {e}",
                                     ctx.node_id
@@ -770,7 +814,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
 /// What one vanguard node's per-superstep processing (its `NodeInterceptor`
 /// `before` chain, its dispatch if `Proceed`d, and its `after` chain)
 /// resolved to (ENG-FR-22), replacing the plain `Result<StateDelta,
-/// NodeError>` `execute_vanguard_node` alone would produce: a `Skip`
+/// StateNodeError>` `execute_vanguard_node` alone would produce: a `Skip`
 /// decision is neither a success nor a failure, so it needs its own
 /// variant rather than being folded into one of the other two.
 enum NodeRunOutcome {
@@ -794,8 +838,11 @@ enum NodeRunOutcome {
 /// the dispatch loop below) resolves to: the node's own `NodeId` (so the
 /// grace-race join phase, which re-indexes by `dispatch_entries` position
 /// rather than relying on completion order, can still cross-check it),
-/// when it started, how long it ran, its Paladin identity if any, its token
-/// count, and its [`NodeRunOutcome`].
+/// when its FINAL (succeeding or exhausted) attempt started, how long that
+/// attempt ran, its Paladin identity if any, its token count, its
+/// [`NodeRunOutcome`], and the 1-indexed attempt number that produced it
+/// (D-15: populates `NodeExecutionRecord.attempt`, `1` for a node with no
+/// `Aegis` retry policy, exactly as before this phase).
 type NodeTaskOutput = (
     NodeId,
     chrono::DateTime<chrono::Utc>,
@@ -803,6 +850,7 @@ type NodeTaskOutput = (
     Option<Uuid>,
     u64,
     NodeRunOutcome,
+    u32,
 );
 
 /// The `tasks.len() > limits.max_muster_tasks` comparison (D-13's
@@ -927,7 +975,7 @@ fn validate_muster_tasks(
 /// from every real `WarEngine::start`/`resume_with_options` call (which
 /// already hold `Arc<W>`), `None` from a test helper whose graph never
 /// embeds a Battalion node. A Battalion dispatch entry with no Arc
-/// available fails closed with a `NodeError` naming the node, rather than
+/// available fails closed with a `StateNodeError` naming the node, rather than
 /// silently skipping the child -- this seam existing at all is what lets
 /// [`ChildEngineResources`] be gathered exactly once per `run()` call and
 /// `Arc`-cloned into each dispatching node's `tokio::spawn`'d task, the
@@ -1447,7 +1495,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         let mut handles = Vec::with_capacity(dispatch_entries.len());
         for (dispatch_index, (node_id, muster_ctx)) in dispatch_entries.iter().enumerate() {
             let spec = graph.node(node_id).ok_or_else(|| {
-                EngineError::Node(NodeError(format!(
+                EngineError::Node(StateNodeError(format!(
                     "vanguard node {node_id} not found in graph"
                 )))
             })?;
@@ -1474,7 +1522,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     // call has no `Arc<W>` available -- see `run`'s own
                     // rustdoc note on `waypoint_port_arc`.
                     let resources = child_resources.clone().ok_or_else(|| {
-                        EngineError::Node(NodeError(format!(
+                        EngineError::Node(StateNodeError(format!(
                             "battalion node {node_id}: no child-engine resources available for \
                              this run"
                         )))
@@ -1512,90 +1560,172 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 parley_response: parley_responses_this_round.get(node_id).cloned(),
             };
             let nid = node_id.clone();
+            // --- D-09, D-10, D-14: this node's resolved Aegis (its own
+            // `set_aegis` entry, else the graph's `default_aegis`, else
+            // `None`), and this run's cancellation token, both cloned out
+            // of the graph/outer scope so the spawned task owns everything
+            // it touches, mirroring every other per-dispatch clone above.
+            let node_aegis: Option<Aegis> = graph.aegis_for(node_id).cloned();
+            let node_cancellation = cancellation.clone();
             handles.push(IndexedHandle {
                 index: dispatch_index,
                 handle: tokio::spawn(async move {
-                    node_trace.emit(TraceEvent::NodeStarted {
-                        thread_id: ctx.thread_id.clone(),
-                        superstep: ctx.superstep,
-                        node_id: nid.clone(),
-                    });
-                    let started_at = Utc::now();
+                    // --- D-14: the retry loop wraps the ENTIRE per-attempt
+                    // sequence below -- the `NodeStarted` emit, the whole
+                    // `before` interceptor chain, `execute_vanguard_node`,
+                    // the whole `after` interceptor chain, and the
+                    // `NodeFinished` emit -- so every attempt runs through
+                    // interceptors afresh (`hooks.rs`'s own contract), never
+                    // just the dispatch call in isolation. A node with no
+                    // resolved Aegis (or no `retry` policy on it) runs
+                    // exactly once, byte-identical to pre-Phase-25 behavior
+                    // (D-09's "no policy, no change" truth).
+                    let mut attempt: u32 = 0;
+                    loop {
+                        attempt += 1;
+                        node_trace.emit(TraceEvent::NodeStarted {
+                            thread_id: ctx.thread_id.clone(),
+                            superstep: ctx.superstep,
+                            node_id: nid.clone(),
+                        });
+                        let started_at = Utc::now();
 
-                    // --- ENG-FR-22: run every `before` in order, short-
-                    // circuiting on the first non-`Proceed` decision.
-                    let mut decision = InterceptDecision::Proceed;
-                    for interceptor in &node_interceptors {
-                        decision = interceptor.before(&ctx, &snap).await;
-                        if !matches!(decision, InterceptDecision::Proceed) {
-                            break;
-                        }
-                    }
-
-                    let (paladin_id, token_count, outcome) = match decision {
-                        InterceptDecision::Skip(reason) => {
-                            (None, 0u64, NodeRunOutcome::Skipped(reason))
-                        }
-                        InterceptDecision::Fail(err) => {
-                            (None, 0u64, NodeRunOutcome::Failed(NodeFailure::Node(err)))
-                        }
-                        InterceptDecision::Proceed => match sem.acquire_owned().await {
-                            Ok(_permit) => {
-                                let (paladin_id, token_count, result) =
-                                    execute_vanguard_node(dispatch, &snap, &ctx, &port).await;
-                                match result {
-                                    Ok(mut directive) => {
-                                        // --- ENG-FR-22: run every `after` in
-                                        // order, each observing the previous
-                                        // one's mutation. `after` still takes
-                                        // `&mut StateDelta` only -- the ENG-07
-                                        // hook signature is unchanged by CF-02;
-                                        // `directive.next` is not visible to any
-                                        // interceptor this phase.
-                                        for interceptor in &node_interceptors {
-                                            interceptor.after(&ctx, &mut directive.delta).await;
-                                        }
-                                        (
-                                            paladin_id,
-                                            token_count,
-                                            NodeRunOutcome::Succeeded(directive),
-                                        )
-                                    }
-                                    Err(e) => (paladin_id, token_count, NodeRunOutcome::Failed(e)),
-                                }
+                        // --- ENG-FR-22: run every `before` in order, short-
+                        // circuiting on the first non-`Proceed` decision.
+                        let mut decision = InterceptDecision::Proceed;
+                        for interceptor in &node_interceptors {
+                            decision = interceptor.before(&ctx, &snap).await;
+                            if !matches!(decision, InterceptDecision::Proceed) {
+                                break;
                             }
-                            // Semaphore is never `.close()`d anywhere in this
-                            // engine today, so this arm is unreachable in
-                            // practice -- but library code must not `.expect()`
-                            // an invariant it cannot enforce (WR-01, Phase
-                            // 22.1). Report it the same way a node's own
-                            // execution error is reported, through the existing
-                            // NodeRunOutcome/NodeError plumbing, rather than
-                            // panicking inside a detached `tokio::spawn`ed task.
-                            Err(_) => (
-                                None,
-                                0u64,
-                                NodeRunOutcome::Failed(NodeFailure::Node(NodeError(
-                                    "internal error: superstep semaphore closed unexpectedly"
-                                        .to_string(),
-                                ))),
-                            ),
-                        },
-                    };
-                    let duration_ms = (Utc::now() - started_at).num_milliseconds().max(0) as u64;
-                    node_trace.emit(TraceEvent::NodeFinished {
-                        thread_id: ctx.thread_id.clone(),
-                        superstep: ctx.superstep,
-                        node_id: nid.clone(),
-                    });
-                    (
-                        nid,
-                        started_at,
-                        duration_ms,
-                        paladin_id,
-                        token_count,
-                        outcome,
-                    )
+                        }
+
+                        let (paladin_id, token_count, outcome) = match decision {
+                            InterceptDecision::Skip(reason) => {
+                                (None, 0u64, NodeRunOutcome::Skipped(reason))
+                            }
+                            InterceptDecision::Fail(err) => {
+                                (None, 0u64, NodeRunOutcome::Failed(NodeFailure::Node(err)))
+                            }
+                            InterceptDecision::Proceed => match Arc::clone(&sem)
+                                .acquire_owned()
+                                .await
+                            {
+                                Ok(_permit) => {
+                                    let (paladin_id, token_count, result) =
+                                        execute_vanguard_node(dispatch.clone(), &snap, &ctx, &port)
+                                            .await;
+                                    match result {
+                                        Ok(mut directive) => {
+                                            // --- ENG-FR-22: run every `after` in
+                                            // order, each observing the previous
+                                            // one's mutation. `after` still takes
+                                            // `&mut StateDelta` only -- the ENG-07
+                                            // hook signature is unchanged by CF-02;
+                                            // `directive.next` is not visible to any
+                                            // interceptor this phase.
+                                            for interceptor in &node_interceptors {
+                                                interceptor.after(&ctx, &mut directive.delta).await;
+                                            }
+                                            (
+                                                paladin_id,
+                                                token_count,
+                                                NodeRunOutcome::Succeeded(directive),
+                                            )
+                                        }
+                                        Err(e) => {
+                                            (paladin_id, token_count, NodeRunOutcome::Failed(e))
+                                        }
+                                    }
+                                }
+                                // Semaphore is never `.close()`d anywhere in this
+                                // engine today, so this arm is unreachable in
+                                // practice -- but library code must not `.expect()`
+                                // an invariant it cannot enforce (WR-01, Phase
+                                // 22.1). Report it the same way a node's own
+                                // execution error is reported, through the existing
+                                // NodeRunOutcome/StateNodeError plumbing, rather than
+                                // panicking inside a detached `tokio::spawn`ed task.
+                                Err(_) => (
+                                    None,
+                                    0u64,
+                                    NodeRunOutcome::Failed(NodeFailure::Node(StateNodeError(
+                                        "internal error: superstep semaphore closed unexpectedly"
+                                            .to_string(),
+                                    ))),
+                                ),
+                            },
+                        };
+                        let duration_ms =
+                            (Utc::now() - started_at).num_milliseconds().max(0) as u64;
+                        node_trace.emit(TraceEvent::NodeFinished {
+                            thread_id: ctx.thread_id.clone(),
+                            superstep: ctx.superstep,
+                            node_id: nid.clone(),
+                        });
+
+                        // --- D-14, D-15: only a `NodeFailure::Node` (a
+                        // `Function`/`Paladin` node's own error, an
+                        // `InputMapping`/`PaladinPort` failure, or an
+                        // `InterceptDecision::Fail` decision -- everything
+                        // carrying a `StateNodeError`) is retry-eligible. A
+                        // `DirectiveParse`/`Battalion` failure, a `Skipped`
+                        // outcome, or a `Succeeded` outcome never enters
+                        // this block.
+                        if let NodeRunOutcome::Failed(NodeFailure::Node(ref state_err)) = outcome
+                            && let Some(retry_policy) =
+                                node_aegis.as_ref().and_then(|a| a.retry.as_ref())
+                            && attempt < retry_policy.max_attempts
+                        {
+                            // --- D-05/D-07 stand-in: this plan lands no
+                            // adapter-sourced error classifier yet (plan
+                            // 25-02's `PaladinError::transience`/
+                            // `LlmError::transience`) -- every
+                            // `StateNodeError` -> `NodeErrorSource`
+                            // conversion here classifies as
+                            // `Transience::Unknown` until then, which is why
+                            // `transient_function_node_failure_is_retried_and_run_completes`
+                            // sets `retry_on: RetryPredicate::TransientAndUnknown`
+                            // explicitly rather than relying on the
+                            // `TransientOnly` default.
+                            let node_error = NodeError {
+                                node_id: nid.clone(),
+                                attempt,
+                                transience: Transience::Unknown,
+                                source: NodeErrorSource::from(state_err.clone()),
+                            };
+                            if retry::should_retry(retry_policy, &node_error, attempt) {
+                                let delay = retry::backoff_delay(retry_policy, attempt + 1);
+                                if retry::wait_backoff(delay, &node_cancellation).await {
+                                    continue;
+                                }
+                                // --- D-15, RESEARCH.md Pitfall 7: the run is
+                                // shutting down mid-backoff -- stop retrying
+                                // and report this dispatch entry `Skipped {
+                                // reason: "shutdown" }` rather than a
+                                // failure, exactly like the grace-race abort
+                                // path below.
+                                break (
+                                    nid,
+                                    started_at,
+                                    duration_ms,
+                                    paladin_id,
+                                    token_count,
+                                    NodeRunOutcome::Skipped("shutdown".to_string()),
+                                    attempt,
+                                );
+                            }
+                        }
+                        break (
+                            nid,
+                            started_at,
+                            duration_ms,
+                            paladin_id,
+                            token_count,
+                            outcome,
+                            attempt,
+                        );
+                    }
                 }),
             });
         }
@@ -1668,7 +1798,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             match res {
                                 Ok(output) => results[idx] = Some(output),
                                 Err(e) => {
-                                    return Err(EngineError::Node(NodeError(format!(
+                                    return Err(EngineError::Node(StateNodeError(format!(
                                         "task join error: {e}"
                                     ))));
                                 }
@@ -1687,7 +1817,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             match res {
                                 Ok(output) => results[idx] = Some(output),
                                 Err(e) => {
-                                    return Err(EngineError::Node(NodeError(format!(
+                                    return Err(EngineError::Node(StateNodeError(format!(
                                         "task join error: {e}"
                                     ))));
                                 }
@@ -1728,7 +1858,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         for (dispatch_index, entry) in dispatch_entries.iter().enumerate() {
             let (entry_node_id, entry_muster_ctx) = entry;
             let is_muster_task = entry_muster_ctx.is_some();
-            let Some((node_id, started_at, duration_ms, paladin_id, token_count, outcome)) =
+            let Some((node_id, started_at, duration_ms, paladin_id, token_count, outcome, attempt)) =
                 results[dispatch_index].take()
             else {
                 // --- D-19: aborted past the shared grace deadline. Recorded
@@ -1834,7 +1964,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         duration_ms,
                         token_count,
                         outcome: outcome_kind,
-                        attempt: 1,
+                        attempt,
                     });
 
                     if is_muster_task {
@@ -1895,7 +2025,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         duration_ms,
                         token_count,
                         outcome: NodeOutcomeKind::Skipped { reason },
-                        attempt: 1,
+                        attempt,
                     });
                 }
                 NodeRunOutcome::Failed(e) => {
@@ -1906,7 +2036,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         duration_ms,
                         token_count,
                         outcome: NodeOutcomeKind::Failed,
-                        attempt: 1,
+                        attempt,
                     });
                     if node_failure.is_none() {
                         node_failure = Some((node_id, e));
@@ -2942,7 +3072,7 @@ async fn evaluate_edge_condition(
         }
         EdgeCondition::Custom(name) => {
             let evaluator = evaluators.get(name).cloned().ok_or_else(|| {
-                EngineError::Node(NodeError(format!(
+                EngineError::Node(StateNodeError(format!(
                     "internal error: edge evaluator '{name}' missing after graph validation"
                 )))
             })?;
@@ -4486,7 +4616,7 @@ mod tests {
                 &self,
                 _state: &Battlefield,
                 ctx: &crate::engine::node::NodeContext,
-            ) -> Result<Directive, NodeError> {
+            ) -> Result<Directive, StateNodeError> {
                 let key = ctx.task_key().unwrap_or_default().to_string();
                 let delay_ms = match key.as_str() {
                     "a" => 30,
@@ -4917,7 +5047,7 @@ mod tests {
                 &self,
                 _state: &Battlefield,
                 ctx: &crate::engine::node::NodeContext,
-            ) -> Result<Directive, NodeError> {
+            ) -> Result<Directive, StateNodeError> {
                 let key = ctx.task_key().unwrap_or_default().to_string();
                 self.executed_keys.lock().unwrap().push(key.clone());
                 let mut delta = StateDelta::new();
@@ -5231,7 +5361,7 @@ mod tests {
                 &self,
                 _state: &Battlefield,
                 ctx: &crate::engine::node::NodeContext,
-            ) -> Result<Directive, NodeError> {
+            ) -> Result<Directive, StateNodeError> {
                 let key = ctx.task_key().unwrap_or_default().to_string();
                 if key == self.slow_key {
                     self.token.cancel();
@@ -5764,7 +5894,7 @@ mod tests {
             // wraps a DIFFERENT, unrelated call path); the message names
             // the unresolved placeholder.
             RunOutcome::Failed {
-                error: EngineError::Node(NodeError(message)),
+                error: EngineError::Node(StateNodeError(message)),
                 ..
             } => {
                 assert!(
@@ -5798,7 +5928,7 @@ mod tests {
                 &self,
                 _state: &Battlefield,
                 ctx: &crate::engine::node::NodeContext,
-            ) -> Result<Directive, NodeError> {
+            ) -> Result<Directive, StateNodeError> {
                 let key = ctx.task_key().unwrap_or_default().to_string();
                 let delay_ms = self.delays_by_key.get(&key).copied().unwrap_or(0);
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
@@ -9507,9 +9637,9 @@ mod tests {
             &self,
             _state: &Battlefield,
             _ctx: &NodeContext,
-        ) -> Result<Directive, NodeError> {
+        ) -> Result<Directive, StateNodeError> {
             tokio::time::sleep(self.delay).await;
-            Err(NodeError(self.message.clone()))
+            Err(StateNodeError(self.message.clone()))
         }
     }
 
@@ -9547,7 +9677,7 @@ mod tests {
 
         match outcome {
             RunOutcome::Failed {
-                error: EngineError::Node(NodeError(msg)),
+                error: EngineError::Node(StateNodeError(msg)),
                 ..
             } => {
                 assert_eq!(

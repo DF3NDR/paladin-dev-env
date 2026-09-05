@@ -23,7 +23,8 @@ use paladin_ports::output::waypoint_port::{
 };
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
-use crate::engine::node::{NodeContext, NodeError, StateNode};
+use crate::engine::hooks::{InterceptDecision, NodeInterceptor};
+use crate::engine::node::{NodeContext, StateNode, StateNodeError};
 
 /// A [`WaypointPort`] test double wrapping an [`InMemoryWaypointStore`],
 /// additionally recording every `save` call and able to fail its NEXT save
@@ -247,7 +248,11 @@ impl CountingFunctionNode {
 
 #[async_trait]
 impl StateNode for CountingFunctionNode {
-    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let run_index = self.run_count.fetch_add(1, Ordering::SeqCst);
         self.observed_ptrs
             .lock()
@@ -291,7 +296,11 @@ impl ConcurrencyTrackingNode {
 
 #[async_trait]
 impl StateNode for ConcurrencyTrackingNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let now_in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_seen.fetch_max(now_in_flight, Ordering::SeqCst);
         tokio::time::sleep(self.hold).await;
@@ -366,7 +375,11 @@ impl SlowFunctionNode {
 
 #[async_trait]
 impl StateNode for SlowFunctionNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         if let Some(token) = &self.cancel_on_start {
             token.cancel();
         }
@@ -385,7 +398,7 @@ pub struct FailingFunctionNode {
 }
 
 impl FailingFunctionNode {
-    /// Construct a node that always returns `NodeError(message)`.
+    /// Construct a node that always returns `StateNodeError(message)`.
     pub fn new(message: impl Into<String>) -> Arc<Self> {
         Arc::new(Self {
             message: message.into(),
@@ -395,8 +408,12 @@ impl FailingFunctionNode {
 
 #[async_trait]
 impl StateNode for FailingFunctionNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
-        Err(NodeError(self.message.clone()))
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        Err(StateNodeError(self.message.clone()))
     }
 }
 
@@ -422,7 +439,11 @@ impl YieldingNode {
 
 #[async_trait]
 impl StateNode for YieldingNode {
-    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         for _ in 0..self.yields {
             tokio::task::yield_now().await;
         }
@@ -663,4 +684,150 @@ impl TraceSink for GatedTraceSink {
         self.events.lock().await.push(event);
         Ok(())
     }
+}
+
+// --- Plan 25-01: Aegis retry loop test doubles ---------------------------
+
+/// A [`StateNode`] test double that fails with a fixed message on its first
+/// `fail_until_attempt - 1` runs, then succeeds on and after
+/// `fail_until_attempt` (1-indexed), for exercising the Aegis retry loop's
+/// "fails once, retries in place, run completes" path
+/// (`transient_function_node_failure_is_retried_and_run_completes`). Records
+/// the run count and each run's Battlefield snapshot pointer, mirroring
+/// [`CountingFunctionNode`]'s own snapshot-identity assertions.
+pub struct FailThenSucceedNode {
+    fail_until_attempt: usize,
+    message: String,
+    field: paladin_core::platform::container::battlefield::FieldName,
+    success_value: serde_json::Value,
+    run_count: Arc<AtomicUsize>,
+    observed_snapshots: Arc<Mutex<Vec<Battlefield>>>,
+}
+
+impl FailThenSucceedNode {
+    /// Construct a node that fails (with `message`) on every run before its
+    /// `fail_until_attempt`-th (1-indexed), then succeeds by writing
+    /// `success_value` to `field`. A failing run's `StateNode::run` returns
+    /// `Err` with no `Directive` at all -- so no delta from a failing
+    /// attempt can ever reach the merge on any code path
+    /// (`failed_attempt_delta_never_reaches_the_battlefield` proves this
+    /// end-to-end: the merged Battlefield after the run contains only the
+    /// succeeding attempt's `success_value`, never any earlier attempt's
+    /// state).
+    pub fn new(
+        fail_until_attempt: usize,
+        message: impl Into<String>,
+        field: paladin_core::platform::container::battlefield::FieldName,
+        success_value: serde_json::Value,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            fail_until_attempt,
+            message: message.into(),
+            field,
+            success_value,
+            run_count: Arc::new(AtomicUsize::new(0)),
+            observed_snapshots: Arc::new(Mutex::new(Vec::new())),
+        })
+    }
+
+    /// How many times this node has run so far (across every attempt).
+    pub fn run_count(&self) -> usize {
+        self.run_count.load(Ordering::SeqCst)
+    }
+
+    /// The Battlefield snapshot observed on each run, in run order --
+    /// `each_attempt_reads_an_identical_battlefield_snapshot` compares
+    /// these for equality (never identity: each attempt clones the same
+    /// underlying data out of the shared `Arc<Battlefield>`, D-14).
+    pub fn observed_snapshots(&self) -> Vec<Battlefield> {
+        self.observed_snapshots.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for FailThenSucceedNode {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        let run_index = self.run_count.fetch_add(1, Ordering::SeqCst) + 1;
+        self.observed_snapshots.lock().unwrap().push(state.clone());
+        if run_index < self.fail_until_attempt {
+            return Err(StateNodeError(self.message.clone()));
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), self.success_value.clone());
+        Ok(delta.into())
+    }
+}
+
+/// A [`NodeInterceptor`] test double recording every `before`/`after` call,
+/// in receipt order, for
+/// `interceptors_run_once_per_attempt_not_once_per_node` to assert the exact
+/// `before, after, before, after, ...` sequence a 2-attempt retry produces.
+/// Always decides `Proceed`.
+#[derive(Default)]
+pub struct RecordingInterceptor {
+    calls: Mutex<Vec<&'static str>>,
+}
+
+impl RecordingInterceptor {
+    /// Construct a recorder with no calls yet.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// The ordered call log: `"before"`/`"after"` per hook invocation.
+    pub fn calls(&self) -> Vec<&'static str> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl NodeInterceptor for RecordingInterceptor {
+    async fn before(&self, _ctx: &NodeContext, _state: &Battlefield) -> InterceptDecision {
+        self.calls.lock().unwrap().push("before");
+        InterceptDecision::Proceed
+    }
+
+    async fn after(&self, _ctx: &NodeContext, _delta: &mut StateDelta) {
+        self.calls.lock().unwrap().push("after");
+    }
+}
+
+/// A [`NodeInterceptor`] test double whose `before` always returns a fixed
+/// decision, for `interceptor_fail_decision_is_not_retried`'s
+/// `InterceptDecision::Fail`/`Skip` cases. Records how many times `before`
+/// was called, so a test can assert the decision was reached exactly once
+/// (never retried).
+pub struct FixedDecisionInterceptor {
+    decision_fn: Arc<dyn Fn() -> InterceptDecision + Send + Sync>,
+    before_calls: Arc<AtomicUsize>,
+}
+
+impl FixedDecisionInterceptor {
+    /// Construct an interceptor whose `before` always returns
+    /// `decision_fn()`'s result.
+    pub fn new(decision_fn: impl Fn() -> InterceptDecision + Send + Sync + 'static) -> Arc<Self> {
+        Arc::new(Self {
+            decision_fn: Arc::new(decision_fn),
+            before_calls: Arc::new(AtomicUsize::new(0)),
+        })
+    }
+
+    /// How many times `before` has been called.
+    pub fn before_call_count(&self) -> usize {
+        self.before_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl NodeInterceptor for FixedDecisionInterceptor {
+    async fn before(&self, _ctx: &NodeContext, _state: &Battlefield) -> InterceptDecision {
+        self.before_calls.fetch_add(1, Ordering::SeqCst);
+        (self.decision_fn)()
+    }
+
+    async fn after(&self, _ctx: &NodeContext, _delta: &mut StateDelta) {}
 }

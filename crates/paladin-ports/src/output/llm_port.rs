@@ -243,6 +243,7 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::content::ContentItem;
 use paladin_core::platform::container::prompt::PromptItem;
+use paladin_core::platform::container::transience::Transience;
 
 /// Errors that can occur during LLM operations
 ///
@@ -455,6 +456,99 @@ pub enum LlmError {
     /// **Recovery**: Retry with potentially longer timeout
     #[error("Timeout: {0}")]
     Timeout(String),
+
+    /// A non-2xx HTTP response from a provider with no dedicated variant
+    /// above (D-03): every adapter's non-2xx match routes through one shared
+    /// `map_http_status` helper (plan 25-05), which builds this variant for
+    /// any status that is not one of the dedicated 401/429/400/402/404
+    /// mappings already covered by [`LlmError::AuthenticationError`],
+    /// [`LlmError::RateLimitExceeded`], [`LlmError::InvalidPrompt`],
+    /// [`LlmError::UsageLimitExceeded`] and [`LlmError::ModelNotAvailable`].
+    ///
+    /// `message` crosses a trust boundary (T-25-06): it is populated only by
+    /// `map_http_status`, which redacts through `paladin-llm`'s
+    /// `redaction.rs` **before** bounding -- never parsed by
+    /// [`LlmError::transience`], which classifies `status` only.
+    #[error("Provider '{provider}' returned HTTP {status}: {message}")]
+    ProviderError {
+        /// The provider that returned the non-2xx response (e.g.
+        /// `"openai"`, `"deepseek"`).
+        provider: String,
+        /// The HTTP status code.
+        status: u16,
+        /// A redacted, human-readable summary of the response body.
+        message: String,
+    },
+
+    /// Every provider in a fallback chain (Doc 04 FT-FR-16/17) failed; the
+    /// chain gives up and surfaces the LAST provider's own error alongside
+    /// the full attempt history.
+    #[error(
+        "All {} provider(s) in the fallback chain failed; last error: {last}",
+        attempts.len()
+    )]
+    AllProvidersFailed {
+        /// One `(provider, error message)` pair per hop attempted, in
+        /// chronological order.
+        attempts: Vec<(String, String)>,
+        /// The last provider's own error -- this variant's `transience()` is
+        /// exactly this error's own `transience()`.
+        last: Box<LlmError>,
+    },
+}
+
+impl LlmError {
+    /// Classify whether this error is worth retrying (Doc 04 FT-FR-01, D-05).
+    ///
+    /// Every arm reads a typed field or a variant identity only -- never a
+    /// rendered `Display` string, a substring or a parsed status code out of
+    /// message text. Dedicated variants ([`LlmError::AuthenticationError`],
+    /// [`LlmError::RateLimitExceeded`], [`LlmError::InvalidPrompt`],
+    /// [`LlmError::UsageLimitExceeded`], [`LlmError::ModelNotAvailable`],
+    /// [`LlmError::TokenLimitExceeded`]) are matched on their own arms and
+    /// never fall through to [`LlmError::ProviderError`]'s status-range arms.
+    pub fn transience(&self) -> Transience {
+        match self {
+            // Obviously transient: a network blip, a request timeout or a
+            // rate limit all describe conditions that clear with time.
+            LlmError::NetworkError(_) => Transience::Transient,
+            LlmError::Timeout(_) => Transience::Transient,
+            LlmError::RateLimitExceeded => Transience::Transient,
+
+            // Obviously permanent: retrying the exact same request
+            // reproduces the exact same failure. Each of these is matched on
+            // its own dedicated arm -- never falling through to
+            // `ProviderError`'s status-range classification below.
+            LlmError::AuthenticationError(_) => Transience::Permanent,
+            LlmError::InvalidPrompt(_) => Transience::Permanent,
+            LlmError::UsageLimitExceeded { .. } => Transience::Permanent,
+            LlmError::ModelNotAvailable(_) => Transience::Permanent,
+            LlmError::TokenLimitExceeded => Transience::Permanent,
+            LlmError::EmptyCompletion(_) => Transience::Permanent,
+
+            // Unresolvable from a bare string: no typed field distinguishes
+            // a transient cause from a permanent one.
+            LlmError::ProcessingError(_) => Transience::Unknown,
+
+            // Status-carrying provider error, classified by value only
+            // (T-25-07): never by inspecting `message`. 408 (request
+            // timeout), 429 (rate limited) and every 5xx (server-side fault)
+            // are transient; every other 4xx (client-side fault: bad
+            // request, unauthorized, payment required, not found, and any
+            // other 4xx not enumerated above) is permanent. This arm is only
+            // reached for a status with no dedicated variant above (D-03) --
+            // a dedicated variant's own arm always wins.
+            LlmError::ProviderError { status, .. } => match status {
+                408 | 429 => Transience::Transient,
+                500..=599 => Transience::Transient,
+                _ => Transience::Permanent,
+            },
+
+            // A fallback chain's own transience is exactly its last
+            // attempt's transience (D-05, FT-FR-16).
+            LlmError::AllProvidersFailed { last, .. } => last.transience(),
+        }
+    }
 }
 
 /// Request structure for LLM generation operations
@@ -1453,5 +1547,97 @@ mod tests {
         };
 
         assert_eq!(caps1, caps2);
+    }
+
+    /// One row per `LlmError` variant (D-05), so a variant added later
+    /// cannot silently inherit a neighbour's classification.
+    #[test]
+    fn llm_error_transience_table() {
+        use Transience::*;
+        let cases: Vec<(LlmError, Transience)> = vec![
+            (LlmError::NetworkError("x".into()), Transient),
+            (LlmError::Timeout("x".into()), Transient),
+            (LlmError::RateLimitExceeded, Transient),
+            (LlmError::AuthenticationError("x".into()), Permanent),
+            (LlmError::InvalidPrompt("x".into()), Permanent),
+            (
+                LlmError::UsageLimitExceeded {
+                    provider: "openai".into(),
+                    regain_hint: None,
+                },
+                Permanent,
+            ),
+            (LlmError::ModelNotAvailable("x".into()), Permanent),
+            (LlmError::TokenLimitExceeded, Permanent),
+            (LlmError::EmptyCompletion("x".into()), Permanent),
+            (LlmError::ProcessingError("x".into()), Unknown),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(
+                err.transience(),
+                expected,
+                "variant {err:?} classified as {:?}, expected {expected:?}",
+                err.transience()
+            );
+        }
+    }
+
+    /// `ProviderError`'s boundary statuses classify by value only: 408, 429
+    /// and every 5xx are Transient; every other 4xx (400, 401, 402, 404,
+    /// 407, 418, 499) is Permanent.
+    #[test]
+    fn provider_error_status_boundaries_classify_by_value() {
+        for status in [408u16, 429, 500, 503, 599] {
+            let err = LlmError::ProviderError {
+                provider: "openai".into(),
+                status,
+                message: "boom".into(),
+            };
+            assert_eq!(
+                err.transience(),
+                Transience::Transient,
+                "status {status} should classify Transient"
+            );
+        }
+        for status in [400u16, 401, 402, 404, 407, 418, 499] {
+            let err = LlmError::ProviderError {
+                provider: "openai".into(),
+                status,
+                message: "boom".into(),
+            };
+            assert_eq!(
+                err.transience(),
+                Transience::Permanent,
+                "status {status} should classify Permanent"
+            );
+        }
+    }
+
+    /// Classification never reads the message: an empty `ProviderError`
+    /// message still classifies by status.
+    #[test]
+    fn empty_provider_message_does_not_change_classification() {
+        let err = LlmError::ProviderError {
+            provider: "openai".into(),
+            status: 503,
+            message: String::new(),
+        };
+        assert_eq!(err.transience(), Transience::Transient);
+    }
+
+    /// `AllProvidersFailed` takes the transience of its LAST error.
+    #[test]
+    fn all_providers_failed_takes_the_transience_of_its_last_error() {
+        let transient = LlmError::AllProvidersFailed {
+            attempts: vec![("openai".into(), "boom".into())],
+            last: Box::new(LlmError::NetworkError("connection reset".into())),
+        };
+        assert_eq!(transient.transience(), Transience::Transient);
+
+        let permanent = LlmError::AllProvidersFailed {
+            attempts: vec![("openai".into(), "boom".into())],
+            last: Box::new(LlmError::AuthenticationError("bad key".into())),
+        };
+        assert_eq!(permanent.transience(), Transience::Permanent);
     }
 }

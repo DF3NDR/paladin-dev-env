@@ -284,6 +284,10 @@ path = "tests/integration/e2e_approval_gate_test.rs"
 name = "multi_parley_suspension"
 path = "tests/integration/multi_parley_suspension_test.rs"
 
+[[test]]
+name = "parley_resume_stress"
+path = "tests/integration/parley_resume_stress_test.rs"
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"

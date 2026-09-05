@@ -397,7 +397,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 24-03-PLAN.md — Directive parley envelope and the `parley.` InputMapping namespace
+- [x] 24-03-PLAN.md — Directive parley envelope and the `parley.` InputMapping namespace
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

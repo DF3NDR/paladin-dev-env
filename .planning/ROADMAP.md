@@ -401,7 +401,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 24-04-PLAN.md — `resume_with` validation matrix, partial answers, expiry
+- [x] 24-04-PLAN.md — `resume_with` validation matrix, partial answers, expiry
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

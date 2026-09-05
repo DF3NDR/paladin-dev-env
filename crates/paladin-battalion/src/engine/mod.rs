@@ -828,6 +828,22 @@ pub enum EngineError {
         /// Explains why the default value is invalid.
         reason: String,
     },
+
+    /// [`WarEngine::replay`] or [`WarEngine::fork`] named a `from` Waypoint
+    /// id that does not exist on `thread` (HITL-03, D-16): the SAME
+    /// "missing is `None`, not an error" contract
+    /// [`WaypointPort::get`](paladin_ports::output::waypoint_port::WaypointPort::get)
+    /// documents is here turned into a typed engine error, mirroring how
+    /// [`EngineError::ThreadNotFound`] turns [`WaypointPort::latest`]'s own
+    /// `None` into a typed error at THIS layer. Nothing is persisted when
+    /// this is returned.
+    #[error("waypoint {waypoint} not found on thread {thread}")]
+    WaypointNotFound {
+        /// The thread `replay`/`fork` was called against.
+        thread: ThreadId,
+        /// The unknown starting `WaypointId`.
+        waypoint: WaypointId,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -1546,6 +1562,152 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         .await;
         self.trace_dispatcher
             .emit(TraceEvent::RunFinished { thread_id: thread });
+        outcome
+    }
+
+    /// Re-enter the superstep loop from `from`, exactly as it ran the first
+    /// time, producing a NEW branch chain while `thread`'s existing
+    /// Waypoints stay byte-identical (HITL-03, D-16, D-17).
+    ///
+    /// Loads `from` through [`WaypointPort::get`] (absent ->
+    /// [`EngineError::WaypointNotFound`]), checks `graph.fingerprint()`
+    /// against the loaded Waypoint's own (mismatch -> [`EngineError::GraphMismatch`],
+    /// ENG-FR-14) -- BEFORE anything else, mirroring `resume_with_options`'s
+    /// own guard order -- then re-enters [`superstep::run_with_namespace`]
+    /// with `parent_waypoint_id = Some(from)`, `fork_of = Some(from)` and
+    /// superstep numbering continuing at `from`'s own `superstep + 1`
+    /// (the SAME `from.superstep` when `from` carries a mid-muster
+    /// `muster_progress` record, mirroring `resume_with_options`'s own
+    /// mid-muster re-entry rule). Neither this call nor [`WarEngine::fork`]
+    /// ever mutates, overwrites or deletes an existing Waypoint -- a branch
+    /// is always new Waypoints on the SAME thread, distinguished only by
+    /// `fork_of`. Calling `replay` twice from the same `from` produces two
+    /// independent branches; neither call disturbs the other's Waypoints or
+    /// the mainline chain.
+    pub async fn replay(
+        &self,
+        graph: &WarGraph,
+        thread: &ThreadId,
+        from: WaypointId,
+    ) -> Result<RunOutcome, EngineError> {
+        self.replay_or_fork(graph, thread, from, None).await
+    }
+
+    /// Like [`WarEngine::replay`], but merges `edit` into the starting
+    /// Waypoint's Battlefield through the schema's own dispatch rules
+    /// BEFORE the first forked superstep runs (HITL-03, D-16), so an edit
+    /// that flips a conditional edge's evaluated value routes the branch
+    /// down a different path than the original chain took, while the
+    /// original chain's own routing is unchanged.
+    ///
+    /// `edit` is merged as a single synthetic writer (this call names no
+    /// real graph node as the edit's author) through
+    /// [`Battlefield::merge`](paladin_core::platform::container::battlefield::Battlefield::merge)
+    /// -- an edit naming a field the graph's schema does not declare fails
+    /// with a typed [`EngineError::Battlefield`] and persists nothing,
+    /// exactly like [`WarEngine::replay`]'s own guard clauses.
+    pub async fn fork(
+        &self,
+        graph: &WarGraph,
+        thread: &ThreadId,
+        from: WaypointId,
+        edit: StateDelta,
+    ) -> Result<RunOutcome, EngineError> {
+        self.replay_or_fork(graph, thread, from, Some(edit)).await
+    }
+
+    /// Shared implementation of [`WarEngine::replay`]/[`WarEngine::fork`]
+    /// (HITL-03, D-16): `edit` is `None` for a plain replay, `Some(delta)`
+    /// for a fork-with-edit.
+    async fn replay_or_fork(
+        &self,
+        graph: &WarGraph,
+        thread: &ThreadId,
+        from: WaypointId,
+        edit: Option<StateDelta>,
+    ) -> Result<RunOutcome, EngineError> {
+        let waypoint = self
+            .waypoint_port
+            .get(thread, &from)
+            .await
+            .map_err(|source| EngineError::WaypointRead { source })?
+            .ok_or_else(|| EngineError::WaypointNotFound {
+                thread: thread.clone(),
+                waypoint: from,
+            })?;
+
+        // --- HITL-03, D-16: the fingerprint is checked before anything
+        // else, mirroring `resume_with_options`'s own guard order --
+        // nothing is persisted by either check above or this one.
+        let expected = graph.fingerprint();
+        if waypoint.graph_fingerprint != expected {
+            return Err(EngineError::GraphMismatch {
+                expected,
+                got: waypoint.graph_fingerprint,
+            });
+        }
+
+        let registry = self.dispatch_registry.resolver();
+        graph.validate(registry, &self.edge_evaluators)?;
+
+        // --- HITL-03, D-16: `fork`'s edit is merged through the schema's
+        // OWN dispatch rules -- an undeclared field is `EngineError::Battlefield`
+        // (`BattlefieldError::UnknownField`), a typed error, and merge is
+        // all-or-nothing (`Battlefield::merge`'s own contract), so a
+        // rejected edit leaves `battlefield` untouched and persists
+        // nothing. This happens BEFORE the first forked superstep runs
+        // (D-16, acceptance 4).
+        let resume_superstep = if waypoint.muster_progress.is_some() {
+            waypoint.superstep
+        } else {
+            waypoint.superstep + 1
+        };
+        let mut battlefield = waypoint.battlefield;
+        if let Some(edit) = edit {
+            battlefield.merge(
+                vec![(NodeId::new("__fork_edit__"), edit)],
+                resume_superstep,
+                registry,
+            )?;
+        }
+
+        self.trace_dispatcher.emit(TraceEvent::RunStarted {
+            thread_id: thread.clone(),
+        });
+        let outcome = superstep::run_with_namespace(
+            self.waypoint_port.as_ref(),
+            self.durability,
+            self.parallelism,
+            registry,
+            &self.edge_evaluators,
+            graph,
+            thread.clone(),
+            battlefield,
+            waypoint.vanguard,
+            waypoint.visit_counts,
+            Some(waypoint.frontier),
+            waypoint.muster_progress,
+            // --- HITL-03, D-16: the new branch's FIRST Waypoint chains
+            // from `from` -- `parent_waypoint_id = Some(from)`.
+            Some(from),
+            resume_superstep,
+            &self.paladin_port,
+            &self.trace_dispatcher,
+            &self.interceptors,
+            &self.cancellation_token,
+            Some(Arc::clone(&self.waypoint_port)),
+            waypoint.checkpoint_ns,
+            // --- HITL-03, D-14/D-16: `from` becomes the branch ROOT --
+            // every Waypoint this run (and any nested Battalion child run,
+            // via `ChildEngineResources::fork_of`) produces carries
+            // `fork_of = Some(from)`, propagated verbatim.
+            Some(from),
+            None,
+        )
+        .await;
+        self.trace_dispatcher.emit(TraceEvent::RunFinished {
+            thread_id: thread.clone(),
+        });
         outcome
     }
 }
@@ -6240,7 +6402,10 @@ mod tests {
         let unknown = WaypointId::generate();
         let err = engine.replay(&graph, &thread, unknown).await.unwrap_err();
         match err {
-            EngineError::WaypointNotFound { thread: t, waypoint } => {
+            EngineError::WaypointNotFound {
+                thread: t,
+                waypoint,
+            } => {
                 assert_eq!(t, thread);
                 assert_eq!(waypoint, unknown);
             }

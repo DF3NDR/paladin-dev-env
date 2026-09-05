@@ -57,7 +57,38 @@ pub struct EngineConfig {
     /// Maximum number of tasks a single `NextStep::Muster` directive may
     /// request (CF-FR-13, D-16). Must be `>= 1`.
     pub max_muster_tasks: u32,
+    /// Grace window (seconds) a mid-superstep cancellation races the
+    /// in-flight batch of spawned node tasks against before aborting
+    /// stragglers (HITL-04, D-19, D-20). Env `APP_ENGINE_SHUTDOWN_GRACE_SECS`.
+    /// Default `30`. `0` is an explicitly supported value (abort
+    /// immediately); values past 3600 (1 hour) are rejected by
+    /// [`EngineConfig::validate`] as almost certainly a misconfiguration.
+    ///
+    /// A RUNTIME setting only, consumed by
+    /// `WarEngine::with_shutdown_grace` (`paladin-battalion`) and, from a
+    /// later plan, the process shutdown wait -- it deliberately does NOT
+    /// enter `impl From<EngineConfig> for EngineLimits` below, and is
+    /// therefore never hashed into `WarGraph::fingerprint()` (D-20):
+    /// changing it must never look like a graph change to `resume`'s
+    /// `GraphMismatch` check.
+    pub shutdown_grace_secs: u64,
+    /// Whether the process waits up to `shutdown_grace_secs` for in-flight
+    /// runs to drain before exiting on SIGTERM/SIGINT (`true`, default) or
+    /// exits immediately without waiting (`false` -- the `MIGRATION.md`
+    /// M-B-02 disable switch for legacy-only deployments). Env
+    /// `APP_ENGINE_GRACEFUL_SHUTDOWN`.
+    ///
+    /// A runtime setting only, like `shutdown_grace_secs` above -- never
+    /// part of `EngineLimits`, never hashed into the graph fingerprint.
+    pub graceful_shutdown: bool,
 }
+
+/// Upper bound [`EngineConfig::validate`] enforces on `shutdown_grace_secs`
+/// (D-20): one hour. A grace window longer than this is not a tuning choice
+/// -- it is almost certainly a misconfigured value (e.g. milliseconds
+/// mistaken for seconds) that would otherwise stall every deployment
+/// restart for an implausible amount of time.
+const MAX_SHUTDOWN_GRACE_SECS: u64 = 3600;
 
 // A manual Default impl (no derive macro), colocated with `validate()`'s
 // zero-checks, mirroring `WaypointRetentionConfig`'s convention. Unlike that
@@ -75,6 +106,8 @@ impl Default for EngineConfig {
             run_timeout_secs: None,
             waypoint_durability: WaypointDurability::Strict,
             max_muster_tasks: 100,
+            shutdown_grace_secs: 30,
+            graceful_shutdown: true,
         }
     }
 }
@@ -109,6 +142,13 @@ impl EngineConfig {
         if self.run_timeout_secs == Some(0) {
             return Err("run_timeout_secs must be greater than 0 when set".to_string());
         }
+        if self.shutdown_grace_secs > MAX_SHUTDOWN_GRACE_SECS {
+            return Err(format!(
+                "shutdown_grace_secs must be at most {MAX_SHUTDOWN_GRACE_SECS} (1 hour), got \
+                 {}",
+                self.shutdown_grace_secs
+            ));
+        }
         Ok(())
     }
 }
@@ -137,6 +177,12 @@ impl EnvOverridable for EngineConfig {
         if let Some(v) = read_env::<u32>("APP_ENGINE_MAX_MUSTER_TASKS") {
             self.max_muster_tasks = v;
         }
+        if let Some(v) = read_env::<u64>("APP_ENGINE_SHUTDOWN_GRACE_SECS") {
+            self.shutdown_grace_secs = v;
+        }
+        if let Some(v) = read_env::<bool>("APP_ENGINE_GRACEFUL_SHUTDOWN") {
+            self.graceful_shutdown = v;
+        }
     }
 }
 
@@ -147,6 +193,18 @@ impl From<EngineConfig> for EngineLimits {
     /// source `EngineConfig` value itself (a public field this conversion
     /// does not consume) -- pass it to `WarEngine::with_durability`
     /// separately.
+    ///
+    /// `shutdown_grace_secs`/`graceful_shutdown` are DELIBERATELY absent
+    /// here (D-20, RESEARCH.md Pitfall 4): they are runtime settings
+    /// consumed only by `WarEngine::with_shutdown_grace`, never graph
+    /// settings, and `EngineLimits` is exactly what
+    /// `WarGraph::fingerprint()` hashes -- adding them here (even via an
+    /// incidental `..Default::default()` struct-update pattern) would
+    /// silently make `shutdown_grace` changes look like graph changes to
+    /// `resume`'s `GraphMismatch` check. If a future change to this
+    /// function seems to require touching those two fields, that is the
+    /// signal to re-check this boundary, not to touch the test that pins
+    /// it (`default_engine_config_matches_todays_engine_defaults`).
     ///
     /// # Examples
     ///

@@ -2082,12 +2082,15 @@ mod tests {
         // Re-pinned again for Phase 23 D-18's `v3` bump (Plan 23-10): the
         // version tag alone moves the literal even though this fixture has
         // no worker templates, Battalion nodes, or Paladin nodes.
-        // `fingerprint_golden_hex_pins_canonical_bytes` (Task 2) is the
+        // Re-pinned again for Phase 24 D-09's `v4` bump (Plan 24-02): same
+        // reason -- the version tag alone moves the literal even though
+        // this fixture has no Gate nodes either.
+        // `fingerprint_golden_hex_v4` (originally `fingerprint_golden_hex_pins_canonical_bytes`, Task 2 of Plan 22-01) is the
         // dedicated golden test guarding future canonicalization changes;
         // this assertion only re-confirms same-input determinism.
         assert_eq!(
             a.as_str(),
-            "v3:64e5f08db24bd94d05b337fe56105b3cc4c7ef2f2ee06d94fc9f1f523db1f798"
+            "v4:971f6eceeb58d5c1c764b04c19a6c8dd6ea72d41aebd41c5086c757b40ef55ba"
         );
     }
 
@@ -2255,12 +2258,19 @@ mod tests {
     /// and the (empty) new section markers move the literal, plus the
     /// fixture's existing "worker" Paladin node now contributes a
     /// `directive_parsers:` record for its default `DirectiveParser::PlainOutput`.
+    ///
+    /// Re-pinned again for Phase 24 D-09's `v4` bump (Plan 24-02): same
+    /// reason again -- the reference graph has no Gate nodes, so only the
+    /// version tag and the (empty) new `;gates:` section marker move the
+    /// literal. Renamed from `fingerprint_golden_hex_pins_canonical_bytes`
+    /// to `fingerprint_golden_hex_v4` (Task 4's own naming) -- same test,
+    /// same one-way-after-release hazard it has guarded since Phase 22.
     #[test]
-    fn fingerprint_golden_hex_pins_canonical_bytes() {
+    fn fingerprint_golden_hex_v4() {
         let graph = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
         assert_eq!(
             graph.fingerprint().as_str(),
-            "v3:a67a12f2947ce17d60d9357fea366ad4539cdeaa174a3a19a4841182725f20e2",
+            "v4:abe252b5178a64932597e33d95e6c7ca125c8d3b0d00100aa81175a8c1aaecb5",
             "canonicalization changed -- this invalidates every stored Waypoint's \
              fingerprint; only update this literal together with a deliberate \
              format-version bump"
@@ -2433,8 +2443,10 @@ mod tests {
         StdArc::new(child)
     }
 
+    /// Test 1 (Task 4): the version tag is `v4` and appears in the hashed
+    /// preamble (D-09).
     #[test]
-    fn fingerprint_version_tag_is_v3() {
+    fn fingerprint_version_is_v4() {
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
         graph.add_node(
             NodeId::new("solo"),
@@ -2442,7 +2454,11 @@ mod tests {
         );
         graph.add_entry(NodeId::new("solo"));
 
-        assert!(graph.fingerprint().as_str().starts_with("v3:"));
+        assert!(graph.fingerprint().as_str().starts_with("v4:"));
+        assert_eq!(
+            paladin_core::platform::container::waypoint::GRAPH_FINGERPRINT_VERSION,
+            "v4"
+        );
     }
 
     #[test]
@@ -2655,6 +2671,239 @@ mod tests {
         fallback.add_entry(NodeId::new("worker"));
 
         assert_ne!(fail_run.fingerprint(), fallback.fingerprint());
+    }
+
+    // --- D-09 (Plan 24-02): `v4` hashes one new `;gates:` section for
+    // NodeSpec::Gate -- kind, output_field, choices and the on_expire
+    // DISCRIMINANT kind -- each written through the existing `push_field`
+    // helper, never a delimiter join (22.1 CR-01); prompt_template,
+    // payload_template and expires_in are excluded.
+
+    fn approval_gate_graph(field: &str, default: serde_json::Value) -> WarGraph {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new(field).unwrap(),
+            DispatchRule::LastWrite,
+            Some(default),
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?")),
+                Some(FieldName::new(field).unwrap()),
+            ),
+        );
+        graph.add_entry(NodeId::new("gate"));
+        graph
+    }
+
+    /// Test 3a (Task 4): changing a Gate's `kind` alone changes the digest.
+    #[test]
+    fn fingerprint_differs_on_gate_kind() {
+        let approval = approval_gate_graph("approved", serde_json::json!(false));
+
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("approved").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!("")),
+            false,
+        )]);
+        let mut free_text = WarGraph::new(schema, EngineLimits::default());
+        free_text.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::FreeText, InputMapping::new("go?")),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        free_text.add_entry(NodeId::new("gate"));
+
+        assert_ne!(approval.fingerprint(), free_text.fingerprint());
+    }
+
+    /// Test 3b (Task 4): changing a Gate's `output_field` alone changes the
+    /// digest.
+    #[test]
+    fn fingerprint_differs_on_output_field() {
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                FieldName::new("approved_a").unwrap(),
+                DispatchRule::LastWrite,
+                Some(serde_json::json!(false)),
+                false,
+            ),
+            FieldSpec::new(
+                FieldName::new("approved_b").unwrap(),
+                DispatchRule::LastWrite,
+                Some(serde_json::json!(false)),
+                false,
+            ),
+        ]);
+
+        let mut field_a = WarGraph::new(schema.clone(), EngineLimits::default());
+        field_a.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?")),
+                Some(FieldName::new("approved_a").unwrap()),
+            ),
+        );
+        field_a.add_entry(NodeId::new("gate"));
+
+        let mut field_b = WarGraph::new(schema, EngineLimits::default());
+        field_b.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?")),
+                Some(FieldName::new("approved_b").unwrap()),
+            ),
+        );
+        field_b.add_entry(NodeId::new("gate"));
+
+        assert_ne!(field_a.fingerprint(), field_b.fingerprint());
+    }
+
+    /// Test 3c (Task 4): changing a Gate's `choices` alone changes the
+    /// digest.
+    #[test]
+    fn fingerprint_differs_on_choices() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("choice").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!("")),
+            false,
+        )]);
+
+        let mut no_choices = WarGraph::new(schema.clone(), EngineLimits::default());
+        no_choices.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Choice, InputMapping::new("go?")),
+                Some(FieldName::new("choice").unwrap()),
+            ),
+        );
+        no_choices.add_entry(NodeId::new("gate"));
+
+        let mut with_choices = WarGraph::new(schema, EngineLimits::default());
+        with_choices.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Choice, InputMapping::new("go?"))
+                    .with_choices(vec!["yes".to_string(), "no".to_string()]),
+                Some(FieldName::new("choice").unwrap()),
+            ),
+        );
+        with_choices.add_entry(NodeId::new("gate"));
+
+        assert_ne!(no_choices.fingerprint(), with_choices.fingerprint());
+    }
+
+    /// Test 3d (Task 4): changing a Gate's `on_expire` DISCRIMINANT kind
+    /// alone changes the digest.
+    #[test]
+    fn fingerprint_differs_on_on_expire_kind() {
+        let fail_run = approval_gate_graph("approved", serde_json::json!(false));
+
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("approved").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!(false)),
+            false,
+        )]);
+        let mut resume_with_default = WarGraph::new(schema, EngineLimits::default());
+        resume_with_default.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?"))
+                    .with_on_expire(OnExpire::ResumeWithDefault(serde_json::json!(true))),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        resume_with_default.add_entry(NodeId::new("gate"));
+
+        assert_ne!(fail_run.fingerprint(), resume_with_default.fingerprint());
+    }
+
+    /// Test 4 (Task 4): changing `prompt_template`, `payload_template` or
+    /// `expires_in` alone leaves the digest unchanged (ENG-FR-14).
+    #[test]
+    fn fingerprint_ignores_gate_templates_and_expiry() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("approved").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!(false)),
+            false,
+        )]);
+
+        let mut base = WarGraph::new(schema.clone(), EngineLimits::default());
+        base.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?")),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        base.add_entry(NodeId::new("gate"));
+
+        let mut variant = WarGraph::new(schema, EngineLimits::default());
+        variant.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(
+                    ParleyKind::Approval,
+                    InputMapping::new("a completely different prompt entirely"),
+                )
+                .with_payload_template(InputMapping::new("{approved}"))
+                .with_expires_in(std::time::Duration::from_secs(999)),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        variant.add_entry(NodeId::new("gate"));
+
+        assert_eq!(base.fingerprint(), variant.fingerprint());
+    }
+
+    /// Test 5 (Task 4): two Gate configurations whose concatenated field
+    /// bytes would collide under delimiter joining produce different
+    /// digests -- the length-prefixed `push_field` discipline (22.1 CR-01)
+    /// applied to the `;gates:` section's `choices` list.
+    #[test]
+    fn fingerprint_gate_section_is_length_prefixed() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("choice").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!("")),
+            false,
+        )]);
+
+        // Two choices "a" and "bc" vs. one choice "ab" plus "c": under an
+        // unprefixed concatenation both produce the same joined bytes
+        // ("abc"); the length prefix on each `push_field`-written choice
+        // makes the split point unambiguous.
+        let mut two_three = WarGraph::new(schema.clone(), EngineLimits::default());
+        two_three.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Choice, InputMapping::new("go?"))
+                    .with_choices(vec!["a".to_string(), "bc".to_string()]),
+                Some(FieldName::new("choice").unwrap()),
+            ),
+        );
+        two_three.add_entry(NodeId::new("gate"));
+
+        let mut three_two = WarGraph::new(schema, EngineLimits::default());
+        three_two.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Choice, InputMapping::new("go?"))
+                    .with_choices(vec!["ab".to_string(), "c".to_string()]),
+                Some(FieldName::new("choice").unwrap()),
+            ),
+        );
+        three_two.add_entry(NodeId::new("gate"));
+
+        assert_ne!(two_three.fingerprint(), three_two.fingerprint());
     }
 
     #[test]

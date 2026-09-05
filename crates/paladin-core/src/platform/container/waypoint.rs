@@ -856,7 +856,7 @@ mod tests {
         let a = GraphFingerprint::from_canonical_bytes(b"node:a|edge:none|schema:result");
         let b = GraphFingerprint::from_canonical_bytes(b"node:a|edge:none|schema:result");
         assert_eq!(a, b);
-        assert!(a.as_str().starts_with("v3:"));
+        assert!(a.as_str().starts_with("v4:"));
     }
 
     #[test]

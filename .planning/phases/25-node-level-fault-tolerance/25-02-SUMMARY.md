@@ -180,6 +180,14 @@ None — no external service configuration required.
 - `PaladinResult`'s §9.2 row remains `TBD`, explicitly owned by plan 25-08, as scoped by this plan's own action text.
 - No blockers for the next wave.
 
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/25-node-level-fault-tolerance/25-02-SUMMARY.md`
+- FOUND commit: `2a70f579` (Task 1)
+- FOUND commit: `cf8e2d3f` (crash-recovery interim fix)
+- FOUND commit: `d15d5204` (Task 2)
+- FOUND commit: `821f65b2` (this SUMMARY)
+
 ---
 *Phase: 25-node-level-fault-tolerance*
 *Completed: 2026-09-05*

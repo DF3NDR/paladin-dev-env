@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod arsenal;
 pub mod battalion;
+pub mod chronicle;
 pub mod content;
 pub mod herald;
 pub mod log_orchestrator;

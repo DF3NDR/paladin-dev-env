@@ -283,6 +283,12 @@ fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
         // duplicate an already-actionable message rather than surface a
         // silent one.
         LlmError::ProcessingError(_) => FetchFailureClass::Supported,
+        // FT-01 (25-02 Task 1 landed these variants): a non-2xx status without a
+        // dedicated variant, and an exhausted fallback chain, are classified like
+        // the generic non-success catch-all above; 25-02 Task 2 / 25-05 own the
+        // final status-aware split.
+        LlmError::ProviderError { .. } => FetchFailureClass::Supported,
+        LlmError::AllProvidersFailed { .. } => FetchFailureClass::Supported,
     }
 }
 

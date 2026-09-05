@@ -318,6 +318,8 @@ pub(crate) fn llm_error_class(error: &LlmError) -> &'static str {
         LlmError::EmptyCompletion(_) => "empty completion",
         LlmError::ProcessingError(_) => "processing error",
         LlmError::Timeout(_) => "timeout",
+        LlmError::ProviderError { .. } => "provider error",
+        LlmError::AllProvidersFailed { .. } => "all providers failed",
     }
 }
 

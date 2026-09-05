@@ -363,6 +363,12 @@ impl ConclaveExecutionService {
             PaladinError::GarrisonError(_) => false,
             PaladinError::GarrisonRequired => false,
             PaladinError::ArsenalError(_) => false,
+            // FT-01 (25-02 Task 1 landed the variant; D-02): classify by the carried
+            // transience instead of message sniffing.
+            PaladinError::LlmFailure { .. } => matches!(
+                error.transience(),
+                paladin_core::platform::container::transience::Transience::Transient
+            ),
         }
     }
 

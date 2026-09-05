@@ -28,11 +28,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use paladin_battalion::EdgeEvaluatorRegistry;
 use paladin_battalion::engine::graph::StateMap;
 use paladin_battalion::engine::{
-    EdgeSpec, EngineLimits, NodeContext, NodeSpec, RunOutcome, StateNode, StateNodeError,
-    WarEngine, WarGraph,
+    EdgeSpec, EngineLimits, EngineRegistries, NodeContext, NodeSpec, RunOutcome, StateNode,
+    StateNodeError, WarEngine, WarGraph,
 };
 use paladin_core::base::entity::node::Node;
 use paladin_core::platform::container::battalion::BattalionConfig;
@@ -417,7 +416,7 @@ async fn phalanx_and_campaign_bridges_also_embed() {
     parent_phalanx
         .validate(
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
         )
         .expect("from_phalanx must embed as a validating NodeSpec::Battalion child");
 
@@ -440,7 +439,7 @@ async fn phalanx_and_campaign_bridges_also_embed() {
     parent_campaign
         .validate(
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
         )
         .expect("from_campaign must embed as a validating NodeSpec::Battalion child");
 }

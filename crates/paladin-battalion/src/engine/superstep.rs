@@ -62,6 +62,8 @@ use crate::engine::graph::{EngineLimits, GateRequestTemplate, NodeSpec, StateMap
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::{NodeContext, StateNode, StateNodeError};
+#[cfg(test)]
+use crate::engine::registries::EngineRegistries;
 use crate::engine::retry;
 use crate::engine::{EngineError, RunOutcome, WaypointDurability};
 
@@ -3802,19 +3804,13 @@ mod tests {
         graph.add_entry(a.clone());
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .expect_err("c is reachable only via Goto and not marked dynamic_target");
         assert!(matches!(err, EngineError::UnreachableNode { .. }));
 
         graph.mark_dynamic_target(c.clone());
         graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .expect("c is now a declared dynamic target");
 
         let store = RecordingWaypointStore::new();
@@ -6507,10 +6503,7 @@ mod tests {
         // accepts this graph. This is NOT a reachability problem.
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok(),
             "b is reachable from entry over a static edge, so validate() must accept this \
              graph -- the defect this test reproduces is a runtime readiness problem, not a \
@@ -6604,10 +6597,7 @@ mod tests {
         // already proves the two-node-cycle topology validates on its own).
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok(),
             "a is reachable from entry over a static edge, so validate() must accept this \
              graph -- the defect this test reproduces is a runtime readiness problem, not a \
@@ -6763,10 +6753,7 @@ mod tests {
 
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok(),
             "agg is reachable from entry over a static edge, so validate() must accept this \
              graph"

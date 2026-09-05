@@ -307,6 +307,12 @@ None -- no external service configuration required.
 - Phase 28 (OTel) renames nothing on the node events.
 - Shared artifacts (`STATE.md`, `ROADMAP.md`, `REQUIREMENTS.md`, `WINDOWS.md`) were deliberately not modified from this worktree; the orchestrator owns those writes after the wave merges.
 
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/25-node-level-fault-tolerance/25-07-SUMMARY.md`
+- FOUND commits: `f052d332`, `098a86b6`, `4bda070b`, `875e20c8`, `7ceffd49`, `bd20ada5`, `93dc8b30`, `8bbb89f9`
+- `git status --short` clean after the SUMMARY commit (no untracked or generated files left behind)
+
 ---
 *Phase: 25-node-level-fault-tolerance*
 *Completed: 2026-09-05*

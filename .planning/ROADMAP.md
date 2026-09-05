@@ -384,7 +384,7 @@ Plans:
   4. Graceful shutdown finishes the in-flight superstep within `shutdown_grace` (default 30s), records over-grace nodes `Skipped` and re-lists them in the vanguard, `resume` continues a `Halted` thread, and SIGTERM/SIGINT are wired to all in-flight runs with `k8s/` manifests and docs updated and a documented disable switch (HITL-04)
   5. `GET /threads/{id}/state`, `POST /threads/{id}/resume` (with 409/400/404 semantics), and `GET /threads/{id}/history` (paginated) are reachable over HTTP following existing utoipa + error-envelope conventions, with `openapi.json` regenerated (HITL-05)
 
-**Plans**: 12 plans
+**Plans**: 14 plans (12 executed + 2 gap closure)
 
 Plans:
 **Wave 1**
@@ -428,6 +428,14 @@ Plans:
 **Wave 10** *(blocked on Wave 9 completion)*
 
 - [x] 24-12-PLAN.md — mdBook page, MIGRATION/CHANGELOG/traceability, gate evidence
+
+**Wave 11** *(gap closure — 24-VERIFICATION.md, blocked on Wave 10 completion)*
+
+- [ ] 24-13-PLAN.md — Doc drift after CR-01: MIGRATION §9.6 `403`, CHANGELOG, mdBook posture callout
+
+**Wave 12** *(gap closure — blocked on Wave 11 completion)*
+
+- [ ] 24-14-PLAN.md — Blocking human diff read of the CR-02 mid-Muster shutdown-abort fix
 
 ### Phase 25: Node-Level Fault Tolerance
 

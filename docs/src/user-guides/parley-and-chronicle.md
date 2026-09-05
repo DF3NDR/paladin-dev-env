@@ -273,12 +273,13 @@ runtime settings only: they are never hashed into the graph fingerprint and neve
 ## The HTTP Surface
 
 `paladin-web` exposes three thread routes behind the same authentication middleware
-`/v1/agents/*` already uses:
+`/v1/agents/*` already uses; the one mutating route, `POST /v1/threads/{id}/resume`,
+additionally requires an admin-role credential:
 
 | Route | Behavior |
 |---|---|
 | `GET /v1/threads/{id}/state` | The thread's latest status, plus outstanding `parleys`/`responses` when suspended |
-| `POST /v1/threads/{id}/resume` | Submits `{ "responses": [{ "parley_id", "value", "responded_by" }] }`; returns **`202 Accepted { thread_id, state_url }`** immediately |
+| `POST /v1/threads/{id}/resume` | Submits `{ "responses": [{ "parley_id", "value", "responded_by" }] }`; returns **`202 Accepted { thread_id, state_url }`** immediately; an authenticated caller without the admin role gets `403` |
 | `GET /v1/threads/{id}/history` | Paginated Chronicle history: `?limit=20&cursor=...` (limit ≤ 100), `{ items, next_cursor }` |
 
 `POST .../resume` never holds the connection open: it validates synchronously (typed
@@ -297,10 +298,14 @@ BACKEND=sqlite|postgres`) is wired.
 > care you would a log line or an error message, never a place to carry an API key or a database
 > credential.
 
-> **Interim authorization posture.** As of this phase, the thread routes accept any
-> *authenticated* caller regardless of role — there is no admin/writer scope distinction on who
-> may answer an approval gate or inspect a thread's history yet. This is a documented, accepted
-> interim posture, not an oversight: admin/writer scopes on these routes are Phase 27's `PLAT-06`.
+> **Interim authorization posture.** The two read routes (`GET .../state`, `GET .../history`)
+> accept any authenticated caller, while answering an approval gate through `POST .../resume`
+> requires an admin-role credential and answers `403` otherwise. This narrows the phase's own
+> D-24 decision for the mutating route only, applied because neither `ThreadId` nor `Waypoint`
+> carries an owner or principal to scope against yet (CR-01, commit `00b1e552`, rationale
+> recorded in `thread_controller.rs`'s module rustdoc). This is a documented, accepted interim
+> posture, not an oversight: every credential configured for the resume route must be treated as
+> admin-equivalent until Phase 27's `PLAT-06` supplies real per-thread ownership scoping.
 
 ## Notifying a Human a Parley Is Waiting
 

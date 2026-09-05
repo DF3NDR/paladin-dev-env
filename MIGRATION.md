@@ -199,8 +199,17 @@ paths regardless of runtime wiring.
 | Method | Path | Status codes |
 |---|---|---|
 | `GET` | `/v1/threads/{id}/state` | `200`, `400`, `401`, `404`, `501` |
-| `POST` | `/v1/threads/{id}/resume` | `202`, `400`, `401`, `404`, `409` (two distinct envelope `code`s — `thread_not_awaiting_input`, `graph_not_registered` — sharing this one HTTP status), `501` |
+| `POST` | `/v1/threads/{id}/resume` | `202`, `400`, `401`, `403`, `404`, `409` (two distinct envelope `code`s — `thread_not_awaiting_input`, `graph_not_registered` — sharing this one HTTP status), `501` |
 | `GET` | `/v1/threads/{id}/history` | `200`, `400`, `401`, `501` |
+
+`POST .../resume` additionally requires an admin-role credential via
+`crate::agent_auth::require_admin`, returning `403` for an authenticated non-admin caller. This
+narrows D-24's "authenticated callers, any role" default for the one mutating route only (CR-01,
+`24-REVIEW.md`, commit `00b1e552`), because neither `ThreadId` nor `Waypoint` carries an
+owner/principal to scope against yet. `GET .../state` and `GET .../history` remain
+authenticated-any-role. Every credential configured for the resume route must be treated as
+admin-equivalent until PLAT-06 (Phase 27) supplies real per-thread ownership scoping;
+`crates/paladin-web/src/thread_controller.rs`'s module rustdoc carries the full rationale.
 
 `POST .../resume` returns `202 Accepted { thread_id, state_url }` immediately — the actual engine
 continuation runs as a background task registered with the process's `ShutdownCoordinator`

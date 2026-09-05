@@ -122,7 +122,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   all in-flight runs with `k8s/` manifests and docs updated and a documented disable switch —
   registered as `MIGRATION.md` M-B-02 (HITL-FR-13…15)
 
-- [ ] **HITL-05**: Engine-backed threads are reachable over HTTP: `GET /threads/{id}/state`,
+- [x] **HITL-05**: Engine-backed threads are reachable over HTTP: `GET /threads/{id}/state`,
   `POST /threads/{id}/resume` (409/400/404 semantics), `GET /threads/{id}/history` (paginated),
   following existing utoipa + error-envelope conventions with `openapi.json` regenerated
   (HITL-FR-16)
@@ -365,7 +365,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | HITL-02 | Phase 24 | Complete |
 | HITL-03 | Phase 24 | Complete |
 | HITL-04 | Phase 24 | Complete |
-| HITL-05 | Phase 24 | Pending |
+| HITL-05 | Phase 24 | Complete |
 | FT-01 | Phase 25 | Pending |
 | FT-02 | Phase 25 | Pending |
 | FT-03 | Phase 25 | Pending |

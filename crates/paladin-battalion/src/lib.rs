@@ -23,6 +23,7 @@
 //!
 //! - [`error_aggregation`] — Collect and summarise errors across parallel agent runs
 //! - [`retry`] — Exponential back-off retry helper
+//! - [`llm_failure`] — Structured `LlmError` -> `PaladinError::LlmFailure` conversion
 
 #![warn(missing_docs)]
 
@@ -48,6 +49,10 @@ pub mod grove_service;
 /// default -- reachable only when a workflow author constructs and
 /// registers one in code.
 pub mod llm_decision;
+/// The one `LlmError` -> `PaladinError::LlmFailure` conversion (D-02, X-06),
+/// shared by the engine-side and application-side call sites that used to
+/// erase a real `LlmError` into the stringly `PaladinError::LlmError`.
+pub mod llm_failure;
 pub mod maneuver;
 pub mod phalanx_service;
 pub mod retry;

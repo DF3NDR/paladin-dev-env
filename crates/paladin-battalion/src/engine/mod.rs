@@ -64,11 +64,13 @@ use tokio_util::sync::CancellationToken;
 use crate::edge_evaluator::{EdgeConditionEvaluator, EdgeEvaluatorRegistry};
 #[cfg(test)]
 use paladin_core::platform::container::battlefield::CustomDispatchResolver;
-use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
+use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
 use paladin_core::platform::container::battlefield_error::BattlefieldError;
 #[cfg(test)]
 use paladin_core::platform::container::paladin::Paladin;
-use paladin_core::platform::container::parley::{ParleyId, ParleyRequest, ParleyResponse};
+use paladin_core::platform::container::parley::{
+    ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
+};
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, ThreadId, WaypointId, WaypointStatus,
 };
@@ -667,6 +669,73 @@ pub enum EngineError {
         #[source]
         source: Box<EngineError>,
     },
+
+    /// `WarGraph::validate` found a [`crate::engine::graph::NodeSpec::Gate`]
+    /// node whose `kind` requires an `output_field` (`Approval`/`Choice`/
+    /// `FreeText`) but declares `None` (HITL-01, D-05).
+    #[error("gate {node} of kind {kind:?} requires an output_field")]
+    GateOutputFieldRequired {
+        /// The offending Gate node.
+        node: NodeId,
+        /// The Gate's kind.
+        kind: ParleyKind,
+    },
+
+    /// `WarGraph::validate` found a `ParleyKind::StateEdit` Gate node
+    /// declaring `output_field: Some(_)` (HITL-01, D-05): a `StateEdit`
+    /// gate returns its response as the node's own delta and writes no
+    /// named field.
+    #[error("gate {node} of kind StateEdit must not declare an output_field (found '{field}')")]
+    GateOutputFieldMustBeAbsent {
+        /// The offending Gate node.
+        node: NodeId,
+        /// The `output_field` that must be absent.
+        field: FieldName,
+    },
+
+    /// `WarGraph::validate` found a Gate node's `output_field` naming a
+    /// field absent from the graph's schema (HITL-01, D-05).
+    #[error("gate {node}'s output_field '{field}' is not declared in the graph schema")]
+    GateOutputFieldUnknown {
+        /// The offending Gate node.
+        node: NodeId,
+        /// The undeclared field name.
+        field: FieldName,
+    },
+
+    /// `WarGraph::validate` found a Gate node's `output_field` declared
+    /// with a schema-default type incompatible with its `kind` (HITL-01,
+    /// D-05): `Approval` accepts a `Bool` or `String` default;
+    /// `Choice`/`FreeText` accept only a `String` default.
+    #[error(
+        "gate {node}'s output_field '{field}' has an incompatible type for kind {kind:?}: {reason}"
+    )]
+    GateOutputFieldTypeIncompatible {
+        /// The offending Gate node.
+        node: NodeId,
+        /// The incompatible field.
+        field: FieldName,
+        /// The Gate's kind.
+        kind: ParleyKind,
+        /// Explains the incompatibility.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found a Gate node's
+    /// `on_expire: OnExpire::ResumeWithDefault` value that does not satisfy
+    /// its own `kind` (HITL-01, D-12, T-24-06): checked at graph-validate
+    /// time through the SAME per-kind validator a real submitted response
+    /// is checked against, so an unchecked default can never bypass an
+    /// approval gate.
+    #[error("gate {node}'s on_expire default value is invalid for kind {kind:?}: {reason}")]
+    GateResumeWithDefaultInvalid {
+        /// The offending Gate node.
+        node: NodeId,
+        /// The Gate's kind.
+        kind: ParleyKind,
+        /// Explains why the default value is invalid.
+        reason: String,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -1181,7 +1250,7 @@ mod tests {
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream};
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
-    use crate::engine::graph::EdgeSpec;
+    use crate::engine::graph::{EdgeSpec, GateRequestTemplate};
     use crate::engine::test_support::{
         CountingFunctionNode, RecordingPaladinPort, RecordingWaypointStore,
     };
@@ -3594,5 +3663,471 @@ mod tests {
                 .any(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. })),
             "no AwaitingInput waypoint may be written on the parent thread"
         );
+    }
+
+    // --- HITL-01, D-05/D-06: Gate node dispatch (Phase 24 Plan 02) ------
+
+    fn bool_field_schema(name: &str, default: bool) -> BattlefieldSchema {
+        BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new(name).unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!(default)),
+            false,
+        )])
+    }
+
+    fn string_field_schema(name: &str, default: &str) -> BattlefieldSchema {
+        BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new(name).unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!(default)),
+            false,
+        )])
+    }
+
+    /// Test 1 (Task 2): visiting a Gate suspends the run with an
+    /// `AwaitingInput` Waypoint whose single `ParleyRequest` carries the
+    /// rendered prompt, the rendered payload, the declared `choices`, the
+    /// Gate's `ParleyKind` and `on_expire`.
+    #[tokio::test]
+    async fn gate_raises_parley_on_first_visit() {
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                FieldName::new("topic").unwrap(),
+                DispatchRule::LastWrite,
+                Some(serde_json::json!("launch")),
+                false,
+            ),
+            FieldSpec::new(
+                FieldName::new("approved").unwrap(),
+                DispatchRule::LastWrite,
+                Some(serde_json::json!(false)),
+                false,
+            ),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let request = GateRequestTemplate::new(
+            ParleyKind::Approval,
+            InputMapping::new("Proceed with {topic}?"),
+        )
+        .with_payload_template(InputMapping::new("{topic}"));
+        graph.add_node(
+            NodeId::new("approve"),
+            NodeSpec::gate(request, Some(FieldName::new("approved").unwrap())),
+        );
+        graph.add_entry(NodeId::new("approve"));
+
+        let engine = engine();
+        let thread = ThreadId::new("gate-raises").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                let req = &parleys[0];
+                assert_eq!(req.node_id, NodeId::new("approve"));
+                assert_eq!(req.kind, ParleyKind::Approval);
+                assert_eq!(req.prompt, "Proceed with launch?");
+                assert_eq!(req.payload, serde_json::json!("launch"));
+                assert_eq!(req.choices, None);
+                assert_eq!(req.on_expire, OnExpire::FailRun);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+    }
+
+    /// Test 2 (Task 2): with `expires_in: Some(d)`, the raised request's
+    /// `expires_at` is `Some(created_at + d)`; with `None` it is `None`.
+    #[tokio::test]
+    async fn gate_stamps_expires_at_from_expires_in() {
+        let with_expiry_schema = bool_field_schema("approved", false);
+        let mut with_expiry_graph = WarGraph::new(with_expiry_schema, EngineLimits::default());
+        let request = GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?"))
+            .with_expires_in(std::time::Duration::from_secs(60));
+        with_expiry_graph.add_node(
+            NodeId::new("approve"),
+            NodeSpec::gate(request, Some(FieldName::new("approved").unwrap())),
+        );
+        with_expiry_graph.add_entry(NodeId::new("approve"));
+
+        let engine1 = engine();
+        let outcome = engine1
+            .start(
+                &with_expiry_graph,
+                ThreadId::new("gate-expiry-some").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        match outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                let req = &parleys[0];
+                let expires_at = req.expires_at.expect("expires_at must be Some");
+                let expected = req.created_at + chrono::Duration::seconds(60);
+                assert_eq!(expires_at, expected);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+
+        let no_expiry_schema = bool_field_schema("approved", false);
+        let mut no_expiry_graph = WarGraph::new(no_expiry_schema, EngineLimits::default());
+        let request = GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?"));
+        no_expiry_graph.add_node(
+            NodeId::new("approve"),
+            NodeSpec::gate(request, Some(FieldName::new("approved").unwrap())),
+        );
+        no_expiry_graph.add_entry(NodeId::new("approve"));
+
+        let engine2 = engine();
+        let outcome2 = engine2
+            .start(
+                &no_expiry_graph,
+                ThreadId::new("gate-expiry-none").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        match outcome2 {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys[0].expires_at, None);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+    }
+
+    /// Test 3 (Task 2): resuming a `kind: Approval` Gate with the JSON
+    /// string `"approve"` writes JSON `true` to a Bool `output_field`, and
+    /// `"deny"` writes `false`; the accepted set is `true`/`false` and
+    /// case-insensitive `yes`/`no`/`approve`/`deny`.
+    #[tokio::test]
+    async fn gate_writes_normalised_approval_value_on_resume() {
+        for (submitted, expected) in [
+            (serde_json::json!("approve"), true),
+            (serde_json::json!("deny"), false),
+            (serde_json::json!("YES"), true),
+            (serde_json::json!("No"), false),
+            (serde_json::json!(true), true),
+            (serde_json::json!(false), false),
+        ] {
+            let schema = bool_field_schema("approved", false);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let request = GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?"));
+            graph.add_node(
+                NodeId::new("approve"),
+                NodeSpec::gate(request, Some(FieldName::new("approved").unwrap())),
+            );
+            graph.add_entry(NodeId::new("approve"));
+
+            let engine = engine();
+            let thread = ThreadId::new(format!("gate-approval-{submitted}")).unwrap();
+            let suspended = engine
+                .start(&graph, thread.clone(), StateDelta::new())
+                .await
+                .unwrap();
+            let parley_id = match suspended {
+                RunOutcome::AwaitingInput { parleys, .. } => parleys[0].parley_id,
+                other => panic!("expected AwaitingInput, got {other:?}"),
+            };
+
+            let response = ParleyResponse {
+                parley_id,
+                value: submitted.clone(),
+                responded_by: Some("tester".to_string()),
+                responded_at: Utc::now(),
+                defaulted: false,
+            };
+            let resumed = engine
+                .resume_with(&graph, thread, vec![response])
+                .await
+                .unwrap();
+            match resumed {
+                RunOutcome::Completed { final_state, .. } => {
+                    assert_eq!(
+                        final_state
+                            .get::<bool>(&FieldName::new("approved").unwrap())
+                            .unwrap(),
+                        Some(expected),
+                        "submitted value {submitted} should normalise to {expected}"
+                    );
+                }
+                other => panic!("expected Completed, got {other:?}"),
+            }
+        }
+    }
+
+    /// Test 4 (Task 2): the same Approval delivery against a String
+    /// `output_field` writes `"true"`/`"false"`.
+    #[tokio::test]
+    async fn gate_writes_string_true_false_for_string_output_field() {
+        for (submitted, expected) in [
+            (serde_json::json!("approve"), "true"),
+            (serde_json::json!("deny"), "false"),
+        ] {
+            let schema = string_field_schema("approved", "");
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let request = GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?"));
+            graph.add_node(
+                NodeId::new("approve"),
+                NodeSpec::gate(request, Some(FieldName::new("approved").unwrap())),
+            );
+            graph.add_entry(NodeId::new("approve"));
+
+            let engine = engine();
+            let thread = ThreadId::new(format!("gate-approval-string-{submitted}")).unwrap();
+            let suspended = engine
+                .start(&graph, thread.clone(), StateDelta::new())
+                .await
+                .unwrap();
+            let parley_id = match suspended {
+                RunOutcome::AwaitingInput { parleys, .. } => parleys[0].parley_id,
+                other => panic!("expected AwaitingInput, got {other:?}"),
+            };
+
+            let response = ParleyResponse {
+                parley_id,
+                value: submitted.clone(),
+                responded_by: Some("tester".to_string()),
+                responded_at: Utc::now(),
+                defaulted: false,
+            };
+            let resumed = engine
+                .resume_with(&graph, thread, vec![response])
+                .await
+                .unwrap();
+            match resumed {
+                RunOutcome::Completed { final_state, .. } => {
+                    assert_eq!(
+                        final_state
+                            .get::<String>(&FieldName::new("approved").unwrap())
+                            .unwrap(),
+                        Some(expected.to_string())
+                    );
+                }
+                other => panic!("expected Completed, got {other:?}"),
+            }
+        }
+    }
+
+    /// Test 5 (Task 2): a `StateEdit` Gate merges the response's
+    /// `StateDelta` and writes no `output_field`.
+    #[tokio::test]
+    async fn gate_state_edit_returns_delta_and_writes_no_output_field() {
+        let schema = string_field_schema("extra", "");
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let request = GateRequestTemplate::new(ParleyKind::StateEdit, InputMapping::new("edit?"));
+        graph.add_node(NodeId::new("editor"), NodeSpec::gate(request, None));
+        graph.add_entry(NodeId::new("editor"));
+
+        let engine = engine();
+        let thread = ThreadId::new("gate-state-edit").unwrap();
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let parley_id = match suspended {
+            RunOutcome::AwaitingInput { parleys, .. } => parleys[0].parley_id,
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        };
+
+        let response = ParleyResponse {
+            parley_id,
+            value: serde_json::json!({"values": {"extra": "hello"}}),
+            responded_by: Some("tester".to_string()),
+            responded_at: Utc::now(),
+            defaulted: false,
+        };
+        let resumed = engine
+            .resume_with(&graph, thread, vec![response])
+            .await
+            .unwrap();
+        match resumed {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state
+                        .get::<String>(&FieldName::new("extra").unwrap())
+                        .unwrap(),
+                    Some("hello".to_string())
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Test 6 (Task 2): an Approval Gate plus a `Contains("true")` edge and
+    /// a `Contains("false")` edge routes to the action node on approval and
+    /// the cancellation node on denial (the E2E-2 shape).
+    ///
+    /// The edge needles are the full `"approved":true` / `"approved":false`
+    /// key-value pairs, not the bare words `true`/`false`: `Contains`
+    /// matches against `serde_json::to_string(&battlefield)`, which embeds
+    /// the WHOLE `BattlefieldSchema` alongside the current values --
+    /// including every OTHER field's `required: bool` flag (`"required":
+    /// false"` for any non-required field, always present regardless of
+    /// `approved`'s own value). A bare `Contains("false")` needle would
+    /// therefore match on every superstep from the unrelated `"required":
+    /// false"` text alone, independent of whether the gate was approved or
+    /// denied (confirmed empirically while authoring this test: both edges
+    /// fired for an "approve" response, corrupting the run with a
+    /// `DispatchConflict`). Anchoring the needle to `"approved":<value>`
+    /// disambiguates it from any other boolean-shaped text the serialised
+    /// schema happens to carry -- this is a caveat of `Contains`/`Regex`'s
+    /// whole-Battlefield-JSON matching strategy generally (pre-dating this
+    /// plan), not something specific to `Gate`; a real graph author's edge
+    /// condition should be similarly specific.
+    #[tokio::test]
+    async fn approval_gate_routes_both_branches() {
+        async fn run_branch(submitted: serde_json::Value) -> String {
+            let schema = BattlefieldSchema::new(vec![
+                FieldSpec::new(
+                    FieldName::new("approved").unwrap(),
+                    DispatchRule::LastWrite,
+                    Some(serde_json::json!(false)),
+                    false,
+                ),
+                FieldSpec::new(
+                    FieldName::new("path").unwrap(),
+                    DispatchRule::LastWrite,
+                    None,
+                    false,
+                ),
+            ]);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let request = GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?"));
+            graph.add_node(
+                NodeId::new("approve"),
+                NodeSpec::gate(request, Some(FieldName::new("approved").unwrap())),
+            );
+            graph.add_node(
+                NodeId::new("act"),
+                NodeSpec::Function(CountingFunctionNode::fixed(
+                    FieldName::new("path").unwrap(),
+                    serde_json::json!("act"),
+                )),
+            );
+            graph.add_node(
+                NodeId::new("cancel"),
+                NodeSpec::Function(CountingFunctionNode::fixed(
+                    FieldName::new("path").unwrap(),
+                    serde_json::json!("cancel"),
+                )),
+            );
+            graph.add_edge(EdgeSpec {
+                from: NodeId::new("approve"),
+                to: NodeId::new("act"),
+                condition: Some(EdgeCondition::Contains(r#""approved":true"#.to_string())),
+            });
+            graph.add_edge(EdgeSpec {
+                from: NodeId::new("approve"),
+                to: NodeId::new("cancel"),
+                condition: Some(EdgeCondition::Contains(r#""approved":false"#.to_string())),
+            });
+            graph.add_entry(NodeId::new("approve"));
+
+            let engine = engine();
+            let thread = ThreadId::new(format!("gate-routes-{submitted}")).unwrap();
+            let suspended = engine
+                .start(&graph, thread.clone(), StateDelta::new())
+                .await
+                .unwrap();
+            let parley_id = match suspended {
+                RunOutcome::AwaitingInput { parleys, .. } => parleys[0].parley_id,
+                other => panic!("expected AwaitingInput, got {other:?}"),
+            };
+            let response = ParleyResponse {
+                parley_id,
+                value: submitted,
+                responded_by: Some("tester".to_string()),
+                responded_at: Utc::now(),
+                defaulted: false,
+            };
+            let resumed = engine
+                .resume_with(&graph, thread, vec![response])
+                .await
+                .unwrap();
+            match resumed {
+                RunOutcome::Completed { final_state, .. } => final_state
+                    .get::<String>(&FieldName::new("path").unwrap())
+                    .unwrap()
+                    .expect("path field must be set"),
+                other => panic!("expected Completed, got {other:?}"),
+            }
+        }
+
+        assert_eq!(run_branch(serde_json::json!("approve")).await, "act");
+        assert_eq!(run_branch(serde_json::json!("deny")).await, "cancel");
+    }
+
+    /// Test 7 (Task 2): a registered `Custom` evaluator on an edge whose
+    /// source is a Gate receives the Gate's `output_field` value, not the
+    /// whole serialised Battlefield.
+    #[tokio::test]
+    async fn gate_source_uses_output_field_for_custom_evaluator() {
+        struct RecordingEvaluator(std::sync::Arc<std::sync::Mutex<Option<String>>>);
+
+        #[async_trait]
+        impl EdgeConditionEvaluator for RecordingEvaluator {
+            async fn evaluate(
+                &self,
+                output: &str,
+                _ctx: &crate::edge_evaluator::EdgeContext<'_>,
+            ) -> Result<bool, crate::edge_evaluator::EdgeEvaluatorError> {
+                *self.0.lock().unwrap() = Some(output.to_string());
+                Ok(true)
+            }
+        }
+
+        let schema = string_field_schema("approved", "");
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let request = GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?"));
+        graph.add_node(
+            NodeId::new("approve"),
+            NodeSpec::gate(request, Some(FieldName::new("approved").unwrap())),
+        );
+        graph.add_node(
+            NodeId::new("target"),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("approved").unwrap(),
+                serde_json::json!("unreachable-if-not-fired"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("approve"),
+            to: NodeId::new("target"),
+            condition: Some(EdgeCondition::Custom("record".to_string())),
+        });
+        graph.add_entry(NodeId::new("approve"));
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_edge_evaluator("record", Arc::new(RecordingEvaluator(captured.clone())));
+
+        let thread = ThreadId::new("gate-custom-evaluator").unwrap();
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        let parley_id = match suspended {
+            RunOutcome::AwaitingInput { parleys, .. } => parleys[0].parley_id,
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        };
+        let response = ParleyResponse {
+            parley_id,
+            value: serde_json::json!("approve"),
+            responded_by: Some("tester".to_string()),
+            responded_at: Utc::now(),
+            defaulted: false,
+        };
+        engine
+            .resume_with(&graph, thread, vec![response])
+            .await
+            .unwrap();
+
+        assert_eq!(captured.lock().unwrap().as_deref(), Some("true"));
     }
 }

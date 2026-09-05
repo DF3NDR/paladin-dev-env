@@ -14,10 +14,11 @@ use std::time::Duration;
 
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
-    BattlefieldSchema, CustomDispatchResolver, DispatchRule, FieldName,
+    BattlefieldSchema, CustomDispatchResolver, DispatchRule, FieldName, FieldSpec,
 };
 use paladin_core::platform::container::battlefield_error::BattlefieldError;
 use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::parley::{OnExpire, ParleyKind};
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, canonical_edge_condition,
 };
@@ -88,6 +89,40 @@ pub enum NodeSpec {
         /// this flag -- this plan carries it and defaults it to `false`
         /// via [`NodeSpec::battalion`], but does not itself act on it.
         restart_on_resume: bool,
+    },
+    /// A first-class human-input node (HITL-01, D-05): has **no `run` body
+    /// of its own**. On its first visit (`engine::superstep`'s dispatch)
+    /// it renders `request.prompt_template` and, if declared,
+    /// `request.payload_template` from the Battlefield and raises a
+    /// `ParleyRequest`, entering the same `NextStep::Parley` suspension
+    /// path (plan 24-01) any other node's `Directive` can enter. On the
+    /// post-resume visit it writes the delivered, normalised value to
+    /// `output_field` -- or, for `ParleyKind::StateEdit`, returns the
+    /// response's `StateDelta` as this node's own delta and writes no
+    /// field -- then routes via its static outgoing edges exactly like a
+    /// [`NodeSpec::Paladin`] node's `output_field` (D-06). An approval
+    /// gate is therefore three lines of graph: one `Gate` node plus a
+    /// `Contains("true")` and a `Contains("false")` edge.
+    ///
+    /// `output_field` is **required** for `ParleyKind::Approval`/`Choice`/
+    /// `FreeText` and **must be `None`** for `ParleyKind::StateEdit` --
+    /// [`WarGraph::validate`] rejects every other combination, and also
+    /// rejects an `output_field` absent from the schema or declared with an
+    /// incompatible type (D-05).
+    ///
+    /// **Limit (D-04):** a Gate raised inside a nested
+    /// [`NodeSpec::Battalion`] child is not supported this phase -- the
+    /// parent's dispatch of that Battalion node fails with the typed
+    /// `EngineError::ParleyInChildUnsupported` (landed in plan 24-01).
+    /// Raise the parley in the parent graph instead, today; propagating a
+    /// child's parley to the parent is a deferred idea a later phase may
+    /// promote.
+    Gate {
+        /// This Gate's declarative request template.
+        request: GateRequestTemplate,
+        /// The field the delivered value is written to, or `None` for
+        /// `ParleyKind::StateEdit`.
+        output_field: Option<FieldName>,
     },
 }
 
@@ -197,6 +232,106 @@ impl NodeSpec {
             restart_on_resume: false,
         }
     }
+
+    /// Construct a `NodeSpec::Gate` (HITL-01, D-05): a first-class
+    /// human-input node with no `run` body of its own. `WarGraph::validate`
+    /// enforces `output_field`'s presence/absence and type against
+    /// `request.kind` -- see [`NodeSpec::Gate`]'s own rustdoc for the exact
+    /// rule.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_battalion::engine::graph::{GateRequestTemplate, NodeSpec};
+    /// use paladin_battalion::engine::InputMapping;
+    /// use paladin_core::platform::container::battlefield::FieldName;
+    /// use paladin_core::platform::container::parley::ParleyKind;
+    ///
+    /// let gate = NodeSpec::gate(
+    ///     GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("Proceed?")),
+    ///     Some(FieldName::new("approved").unwrap()),
+    /// );
+    /// assert!(matches!(gate, NodeSpec::Gate { .. }));
+    /// ```
+    pub fn gate(request: GateRequestTemplate, output_field: Option<FieldName>) -> Self {
+        NodeSpec::Gate {
+            request,
+            output_field,
+        }
+    }
+}
+
+/// A [`NodeSpec::Gate`] node's declarative request template (HITL-01,
+/// D-05): rendered from the Battlefield through [`InputMapping`] on the
+/// node's first visit, with `expires_at = now + expires_in` stamped at
+/// raise time (`engine::superstep`).
+///
+/// Carries no `serde` derive, and needs none: `NodeSpec` itself is never
+/// serialized -- it holds `Arc<dyn StateNode>` and `Box<Paladin>` (see this
+/// file's own top, where [`NodeSpec`] is declared) -- so a
+/// `GateRequestTemplate` is, like every other `NodeSpec` payload,
+/// Rust-constructed graph-building code, never round-tripped through
+/// serde. `expires_in` is therefore a plain [`std::time::Duration`] with no
+/// seconds-based wire representation to design (RESEARCH.md Open Question
+/// 2, settled).
+#[derive(Debug, Clone)]
+pub struct GateRequestTemplate {
+    /// The shape of input this Gate awaits.
+    pub kind: ParleyKind,
+    /// Renders the raised `ParleyRequest.prompt` from the Battlefield.
+    pub prompt_template: InputMapping,
+    /// Renders the raised `ParleyRequest.payload` from the Battlefield, if
+    /// declared. `None` raises with an empty object payload.
+    pub payload_template: Option<InputMapping>,
+    /// Valid choices, for [`ParleyKind::Choice`].
+    pub choices: Option<Vec<String>>,
+    /// How long after raising this request expires, if ever --
+    /// `expires_at = now + expires_in`, stamped at raise time.
+    pub expires_in: Option<Duration>,
+    /// What happens if this request expires unanswered.
+    pub on_expire: OnExpire,
+}
+
+impl GateRequestTemplate {
+    /// Construct a `GateRequestTemplate` of `kind`, rendering `prompt_template`,
+    /// with no payload template, no choices, no expiry, and
+    /// [`OnExpire::FailRun`] (its `Default`) -- the fluent `with_*` methods
+    /// below customize any of these.
+    pub fn new(kind: ParleyKind, prompt_template: InputMapping) -> Self {
+        Self {
+            kind,
+            prompt_template,
+            payload_template: None,
+            choices: None,
+            expires_in: None,
+            on_expire: OnExpire::default(),
+        }
+    }
+
+    /// Render the raised `ParleyRequest.payload` from `payload_template`.
+    pub fn with_payload_template(mut self, payload_template: InputMapping) -> Self {
+        self.payload_template = Some(payload_template);
+        self
+    }
+
+    /// Declare the valid choices for a [`ParleyKind::Choice`] gate.
+    pub fn with_choices(mut self, choices: Vec<String>) -> Self {
+        self.choices = Some(choices);
+        self
+    }
+
+    /// Set how long after raising this request expires
+    /// (`expires_at = now + expires_in`, stamped at raise time).
+    pub fn with_expires_in(mut self, expires_in: Duration) -> Self {
+        self.expires_in = Some(expires_in);
+        self
+    }
+
+    /// Set what happens if this request expires unanswered.
+    pub fn with_on_expire(mut self, on_expire: OnExpire) -> Self {
+        self.on_expire = on_expire;
+        self
+    }
 }
 
 impl std::fmt::Debug for NodeSpec {
@@ -225,6 +360,14 @@ impl std::fmt::Debug for NodeSpec {
                 .field("inputs_len", &state_map.inputs.len())
                 .field("outputs_len", &state_map.outputs.len())
                 .field("restart_on_resume", restart_on_resume)
+                .finish(),
+            NodeSpec::Gate {
+                request,
+                output_field,
+            } => f
+                .debug_struct("NodeSpec::Gate")
+                .field("kind", &request.kind)
+                .field("output_field", output_field)
                 .finish(),
         }
     }
@@ -576,6 +719,7 @@ impl WarGraph {
         }
 
         self.validate_muster_prefix_schema_fields()?;
+        self.validate_gates()?;
         self.validate_edge_evaluators(edge_evaluators)?;
         self.validate_worker_templates()?;
         self.validate_battalion_state_maps()?;
@@ -739,6 +883,82 @@ impl WarGraph {
                      never from the Battlefield -- rename the schema field"
                 .to_string(),
         })
+    }
+
+    /// HITL-01, D-05's Gate well-formedness clause: for every
+    /// [`NodeSpec::Gate`] node, `output_field` is required for
+    /// `ParleyKind::Approval`/`Choice`/`FreeText` and must be `None` for
+    /// `ParleyKind::StateEdit`; when present, the field must exist in the
+    /// graph's schema with a type compatible with the Gate's `kind`
+    /// (`Approval` -> `Bool` or `String`; `Choice`/`FreeText` -> `String`,
+    /// per [`gate_output_field_is_type_compatible`]). An
+    /// `on_expire: OnExpire::ResumeWithDefault` value is checked against its
+    /// own `kind` through [`validate_parley_value_for_kind`] -- the SAME
+    /// per-kind validator `WarEngine::resume_with` applies to a real
+    /// submitted response (D-12, T-24-06) -- never a second, weaker check.
+    ///
+    /// Checked one Gate at a time, in `node_order`, returning the FIRST
+    /// violation found -- unlike
+    /// [`WarGraph::validate_muster_prefix_schema_fields`]'s "report every
+    /// offender" discipline, a single Gate's several distinct rules produce
+    /// distinctly-shaped, differently-typed errors that do not collapse
+    /// into one `Vec<String>`.
+    fn validate_gates(&self) -> Result<(), EngineError> {
+        for id in &self.node_order {
+            let Some(NodeSpec::Gate {
+                request,
+                output_field,
+            }) = self.nodes.get(id)
+            else {
+                continue;
+            };
+
+            let requires_output_field = !matches!(request.kind, ParleyKind::StateEdit);
+            match (requires_output_field, output_field) {
+                (true, None) => {
+                    return Err(EngineError::GateOutputFieldRequired {
+                        node: id.clone(),
+                        kind: request.kind.clone(),
+                    });
+                }
+                (false, Some(field)) => {
+                    return Err(EngineError::GateOutputFieldMustBeAbsent {
+                        node: id.clone(),
+                        field: field.clone(),
+                    });
+                }
+                _ => {}
+            }
+
+            if let Some(field) = output_field {
+                let spec = self.schema.field_spec(field).ok_or_else(|| {
+                    EngineError::GateOutputFieldUnknown {
+                        node: id.clone(),
+                        field: field.clone(),
+                    }
+                })?;
+                if let Err(reason) = gate_output_field_is_type_compatible(&request.kind, spec) {
+                    return Err(EngineError::GateOutputFieldTypeIncompatible {
+                        node: id.clone(),
+                        field: field.clone(),
+                        kind: request.kind.clone(),
+                        reason,
+                    });
+                }
+            }
+
+            if let OnExpire::ResumeWithDefault(value) = &request.on_expire
+                && let Err(reason) =
+                    validate_parley_value_for_kind(&request.kind, request.choices.as_deref(), value)
+            {
+                return Err(EngineError::GateResumeWithDefaultInvalid {
+                    node: id.clone(),
+                    kind: request.kind.clone(),
+                    reason,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// CF-03 / D-12's worker-template well-formedness clause: a node marked
@@ -1063,6 +1283,25 @@ impl WarGraph {
     /// limit to let a resumed run continue must not trip `GraphMismatch`
     /// any more under `v3` than it did under `v2`.
     ///
+    /// **`v4` (Phase 24, D-09)** adds one more section for the new
+    /// [`NodeSpec::Gate`] node (HITL-01): everything about a Gate that
+    /// changes scheduling or merge -- `kind`, `output_field`, `choices`
+    /// and the `on_expire` DISCRIMINANT kind (never its `ResumeWithDefault`
+    /// payload value, which does not change routing) -- sorted by node id,
+    /// walked in `node_order` and written through [`push_field`], the same
+    /// discipline as every prior section. Deliberately NOT covered:
+    /// `prompt_template`, `payload_template` and `expires_in` -- matching
+    /// how a Paladin's prompt and `InputMapping` templates are already
+    /// excluded above, hot-swapping a Gate's rendered text or expiry window
+    /// is a legitimate operator action and must not trip `GraphMismatch`.
+    ///
+    /// **A Gate's own `on_expire` payload deserves the same fixed-width
+    /// discipline `restart_on_resume`'s tag byte follows.** Only the
+    /// discriminant (`"FailRun"` / `"ResumeWithDefault"`, a fixed short
+    /// string through `push_field`) is hashed, never
+    /// `serde_json::to_string(&on_expire)` -- that would embed the
+    /// `ResumeWithDefault` payload value ENG-FR-14 excludes.
+    ///
     /// The edge condition and dispatch rule are hashed through their serde
     /// representation (`serde_json::to_string`), never through `Debug`: a
     /// `#[derive(Debug)]` change on either type would otherwise silently
@@ -1107,7 +1346,7 @@ impl WarGraph {
     ///
     /// A golden hex test pins the exact output of a fixture exercising
     /// every hashed property (`engine::graph::tests::
-    /// fingerprint_golden_hex_pins_canonical_bytes`); changing this
+    /// fingerprint_golden_hex_v4`); changing this
     /// function's byte layout invalidates every stored Waypoint's
     /// fingerprint and must not be done without a deliberate format-version
     /// bump (D-17).
@@ -1217,6 +1456,40 @@ impl WarGraph {
             let parser_json = serde_json::to_string(directive_parser).unwrap_or_default();
             push_field(&mut buf, parser_json.as_bytes());
         }
+        // --- v4 (Phase 24, D-09): one more scheduling/merge-relevant
+        // section for NodeSpec::Gate, see `fingerprint`'s rustdoc above for
+        // the exact fields hashed and excluded.
+        buf.extend_from_slice(b";gates:");
+        for id in &self.node_order {
+            let Some(NodeSpec::Gate {
+                request,
+                output_field,
+            }) = self.nodes.get(id)
+            else {
+                continue;
+            };
+            push_field(&mut buf, id.as_str().as_bytes());
+            let kind_json = serde_json::to_string(&request.kind).unwrap_or_default();
+            push_field(&mut buf, kind_json.as_bytes());
+            match output_field {
+                Some(field) => {
+                    buf.push(1); // "has output field" tag
+                    push_field(&mut buf, field.as_str().as_bytes());
+                }
+                None => buf.push(0), // "no output field" tag
+            }
+            match &request.choices {
+                Some(choices) => {
+                    buf.push(1); // "has choices" tag
+                    buf.extend_from_slice(&(choices.len() as u64).to_le_bytes());
+                    for choice in choices {
+                        push_field(&mut buf, choice.as_bytes());
+                    }
+                }
+                None => buf.push(0), // "no choices" tag
+            }
+            push_field(&mut buf, on_expire_kind_tag(&request.on_expire).as_bytes());
+        }
 
         GraphFingerprint::from_canonical_bytes(&buf)
     }
@@ -1232,6 +1505,154 @@ impl WarGraph {
 fn push_field(buf: &mut Vec<u8>, bytes: &[u8]) {
     buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
     buf.extend_from_slice(bytes);
+}
+
+/// The stable, hashed-into-the-fingerprint DISCRIMINANT tag for an
+/// [`OnExpire`] value (D-09, `v4`), used exclusively by
+/// [`WarGraph::fingerprint`]'s `;gates:` section: never the value's own
+/// serde representation, which would embed a `ResumeWithDefault` payload
+/// value ENG-FR-14 deliberately excludes (only the KIND of expiry policy
+/// changes routing; the substituted value does not).
+/// `#[non_exhaustive]`-safe: a future `OnExpire` variant reaching here gets
+/// a distinct fixed tag rather than silently colliding with an existing
+/// one.
+fn on_expire_kind_tag(on_expire: &OnExpire) -> &'static str {
+    match on_expire {
+        OnExpire::FailRun => "FailRun",
+        OnExpire::ResumeWithDefault(_) => "ResumeWithDefault",
+        _ => "Unknown",
+    }
+}
+
+/// Whether `spec`'s declared type is compatible with a Gate of `kind`
+/// (HITL-01, D-05): `ParleyKind::Approval` accepts a `Bool` or `String`
+/// field; `Choice`/`FreeText` accept only a `String` field.
+///
+/// `FieldSpec` carries no separate type declaration -- a field's "type" is
+/// inferred here from its schema `default` value, the only per-field type
+/// signal `BattlefieldSchema` carries. A field declared with **no**
+/// default cannot be type-checked and is therefore rejected: an
+/// `output_field` intended for a Gate must declare a default of the
+/// intended type (a Bool or empty-string default for a fresh field is a
+/// normal, cheap way to satisfy this).
+fn gate_output_field_is_type_compatible(kind: &ParleyKind, spec: &FieldSpec) -> Result<(), String> {
+    let Some(default) = spec.default.as_ref() else {
+        return Err(
+            "the field declares no schema default, so its type cannot be inferred -- declare a \
+             default value of the Gate's intended output type"
+                .to_string(),
+        );
+    };
+    match kind {
+        ParleyKind::Approval => match default {
+            serde_json::Value::Bool(_) | serde_json::Value::String(_) => Ok(()),
+            other => Err(format!(
+                "Approval requires a Bool or String output_field (inferred from its schema \
+                 default); found default {other}"
+            )),
+        },
+        ParleyKind::Choice | ParleyKind::FreeText => match default {
+            serde_json::Value::String(_) => Ok(()),
+            other => Err(format!(
+                "{kind:?} requires a String output_field (inferred from its schema default); \
+                 found default {other}"
+            )),
+        },
+        // `ParleyKind::StateEdit` never reaches here (`validate_gates`
+        // requires `output_field: None` for it, checked before this call
+        // is ever made) -- `ParleyKind` is `#[non_exhaustive]`, so a match
+        // in this crate still needs a catch-all for a future kind. Fails
+        // CLOSED (mirrors `EngineError::UnregisteredEdgeCondition`'s
+        // fail-closed stance): a Gate output_field type check for a kind
+        // this function does not yet know how to check is rejected, not
+        // silently passed.
+        other => Err(format!(
+            "no output_field type-compatibility rule is registered for ParleyKind {other:?} -- \
+             add one alongside the kind"
+        )),
+    }
+}
+
+/// Normalise an Approval [`ParleyResponse::value`](paladin_core::platform::container::parley::ParleyResponse)
+/// (or a Gate's `on_expire: OnExpire::ResumeWithDefault` value, checked at
+/// graph-validate time) to a canonical `bool` (HITL-FR-05, D-06): a JSON
+/// `Bool` passes through; a JSON `String` matches case-insensitively
+/// against `true`/`false`/`yes`/`no`/`approve`/`deny`. Every other shape,
+/// and every other string, is `None`.
+pub(crate) fn normalize_approval_value(value: &serde_json::Value) -> Option<bool> {
+    match value {
+        serde_json::Value::Bool(b) => Some(*b),
+        serde_json::Value::String(s) => match s.to_ascii_lowercase().as_str() {
+            "true" | "yes" | "approve" => Some(true),
+            "false" | "no" | "deny" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Validate a submitted or defaulted value against its own [`ParleyKind`]
+/// (D-12, T-24-06): the SAME validator [`WarGraph::validate`] applies to a
+/// Gate's `on_expire: OnExpire::ResumeWithDefault` value at graph-validate
+/// time, and the one a later plan's `WarEngine::resume_with` applies to a
+/// real submitted [`ParleyResponse::value`](paladin_core::platform::container::parley::ParleyResponse) --
+/// never a second, weaker check for either caller.
+///
+/// - `Approval`: accepted per [`normalize_approval_value`].
+/// - `Choice`: must be a JSON string; if `choices` is `Some`, the string
+///   must be a member of it.
+/// - `FreeText`: must be a JSON string (any content).
+/// - `StateEdit`: must deserialize as a
+///   [`StateDelta`](paladin_core::platform::container::battlefield::StateDelta)
+///   (its own schema-field compatibility is a later plan's concern, once a
+///   graph schema is in scope for the check).
+pub(crate) fn validate_parley_value_for_kind(
+    kind: &ParleyKind,
+    choices: Option<&[String]>,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    match kind {
+        ParleyKind::Approval => normalize_approval_value(value).map(|_| ()).ok_or_else(|| {
+            format!(
+                "Approval value must be a bool or one of true/false/yes/no/approve/deny \
+                 (case-insensitive); found {value}"
+            )
+        }),
+        ParleyKind::Choice => {
+            let Some(s) = value.as_str() else {
+                return Err(format!("Choice value must be a string; found {value}"));
+            };
+            if let Some(choices) = choices
+                && !choices.iter().any(|c| c == s)
+            {
+                return Err(format!(
+                    "Choice value '{s}' is not one of the declared choices: {choices:?}"
+                ));
+            }
+            Ok(())
+        }
+        ParleyKind::FreeText => {
+            if value.is_string() {
+                Ok(())
+            } else {
+                Err(format!("FreeText value must be a string; found {value}"))
+            }
+        }
+        ParleyKind::StateEdit => serde_json::from_value::<
+            paladin_core::platform::container::battlefield::StateDelta,
+        >(value.clone())
+        .map(|_| ())
+        .map_err(|e| format!("StateEdit value must deserialize as a StateDelta: {e}")),
+        // `ParleyKind` is `#[non_exhaustive]`: a future kind reaching here
+        // fails CLOSED rather than being accepted sight-unseen (T-24-06 --
+        // an unchecked `ResumeWithDefault` value is an elevation-of-
+        // privilege risk) -- a later plan adding the kind also adds its
+        // own arm here.
+        other => Err(format!(
+            "no value validator is registered for ParleyKind {other:?} -- add one alongside \
+             the kind"
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -1486,6 +1907,232 @@ mod tests {
         );
     }
 
+    fn field_with_default(name: &str, default: serde_json::Value) -> FieldSpec {
+        FieldSpec::new(
+            FieldName::new(name).unwrap(),
+            DispatchRule::LastWrite,
+            Some(default),
+            false,
+        )
+    }
+
+    #[test]
+    fn gate_requires_output_field_for_approval_choice_freetext() {
+        for kind in [
+            ParleyKind::Approval,
+            ParleyKind::Choice,
+            ParleyKind::FreeText,
+        ] {
+            let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+            graph.add_node(
+                NodeId::new("gate"),
+                NodeSpec::gate(
+                    GateRequestTemplate::new(kind.clone(), InputMapping::new("go?")),
+                    None,
+                ),
+            );
+            graph.add_entry(NodeId::new("gate"));
+
+            let err = graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new(),
+                )
+                .unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    EngineError::GateOutputFieldRequired { node, kind: k }
+                        if *node == NodeId::new("gate") && *k == kind
+                ),
+                "expected GateOutputFieldRequired for kind {kind:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gate_rejects_output_field_for_state_edit() {
+        let schema = BattlefieldSchema::new(vec![field_with_default(
+            "approved",
+            serde_json::json!(false),
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::StateEdit, InputMapping::new("edit?")),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        graph.add_entry(NodeId::new("gate"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::GateOutputFieldMustBeAbsent { node, field }
+                if node == NodeId::new("gate") && field == FieldName::new("approved").unwrap()
+        ));
+    }
+
+    #[test]
+    fn gate_output_field_must_exist_in_schema() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?")),
+                Some(FieldName::new("missing").unwrap()),
+            ),
+        );
+        graph.add_entry(NodeId::new("gate"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::GateOutputFieldUnknown { node, field }
+                if node == NodeId::new("gate") && field == FieldName::new("missing").unwrap()
+        ));
+    }
+
+    #[test]
+    fn gate_output_field_type_must_be_compatible() {
+        let schema = BattlefieldSchema::new(vec![
+            field_with_default("b", serde_json::json!(false)),
+            field_with_default("s", serde_json::json!("")),
+            field_with_default("n", serde_json::json!(0)),
+        ]);
+
+        let cases: &[(ParleyKind, &str, bool)] = &[
+            (ParleyKind::Approval, "b", true),
+            (ParleyKind::Approval, "s", true),
+            (ParleyKind::Approval, "n", false),
+            (ParleyKind::Choice, "s", true),
+            (ParleyKind::Choice, "n", false),
+            (ParleyKind::Choice, "b", false),
+            (ParleyKind::FreeText, "s", true),
+            (ParleyKind::FreeText, "b", false),
+        ];
+
+        for (kind, field, expect_ok) in cases {
+            let mut graph = WarGraph::new(schema.clone(), EngineLimits::default());
+            graph.add_node(
+                NodeId::new("gate"),
+                NodeSpec::gate(
+                    GateRequestTemplate::new(kind.clone(), InputMapping::new("go?")),
+                    Some(FieldName::new(*field).unwrap()),
+                ),
+            );
+            graph.add_entry(NodeId::new("gate"));
+
+            let result = graph.validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            );
+            if *expect_ok {
+                assert!(
+                    result.is_ok(),
+                    "expected {kind:?} + field '{field}' to validate, got {result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(EngineError::GateOutputFieldTypeIncompatible { .. })
+                    ),
+                    "expected {kind:?} + field '{field}' to be rejected as type-incompatible, \
+                     got {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gate_resume_with_default_value_is_validated_at_graph_validate_time() {
+        let schema = BattlefieldSchema::new(vec![field_with_default(
+            "approved",
+            serde_json::json!(false),
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let bad_request = GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?"))
+            .with_on_expire(OnExpire::ResumeWithDefault(serde_json::json!(42)));
+        graph.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(bad_request, Some(FieldName::new("approved").unwrap())),
+        );
+        graph.add_entry(NodeId::new("gate"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::GateResumeWithDefaultInvalid {
+                node,
+                kind: ParleyKind::Approval,
+                ..
+            } if node == NodeId::new("gate")
+        ));
+    }
+
+    #[test]
+    fn gate_with_valid_wiring_passes_validation() {
+        // The E2E-2 shape: one Approval Gate node plus two conditional
+        // edges is a complete approval gate.
+        let schema = BattlefieldSchema::new(vec![field_with_default(
+            "approved",
+            serde_json::json!(false),
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(
+            NodeId::new("approve"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("Proceed?")),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        graph.add_node(
+            NodeId::new("act"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_node(
+            NodeId::new("cancel"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("approve"),
+            to: NodeId::new("act"),
+            condition: Some(EdgeCondition::Contains("true".to_string())),
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("approve"),
+            to: NodeId::new("cancel"),
+            condition: Some(EdgeCondition::Contains("false".to_string())),
+        });
+        graph.add_entry(NodeId::new("approve"));
+
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
+                .is_ok()
+        );
+    }
+
     #[test]
     fn fingerprint_is_deterministic_across_calls() {
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
@@ -1505,12 +2152,15 @@ mod tests {
         // Re-pinned again for Phase 23 D-18's `v3` bump (Plan 23-10): the
         // version tag alone moves the literal even though this fixture has
         // no worker templates, Battalion nodes, or Paladin nodes.
-        // `fingerprint_golden_hex_pins_canonical_bytes` (Task 2) is the
+        // Re-pinned again for Phase 24 D-09's `v4` bump (Plan 24-02): same
+        // reason -- the version tag alone moves the literal even though
+        // this fixture has no Gate nodes either.
+        // `fingerprint_golden_hex_v4` (originally `fingerprint_golden_hex_pins_canonical_bytes`, Task 2 of Plan 22-01) is the
         // dedicated golden test guarding future canonicalization changes;
         // this assertion only re-confirms same-input determinism.
         assert_eq!(
             a.as_str(),
-            "v3:64e5f08db24bd94d05b337fe56105b3cc4c7ef2f2ee06d94fc9f1f523db1f798"
+            "v4:971f6eceeb58d5c1c764b04c19a6c8dd6ea72d41aebd41c5086c757b40ef55ba"
         );
     }
 
@@ -1678,12 +2328,19 @@ mod tests {
     /// and the (empty) new section markers move the literal, plus the
     /// fixture's existing "worker" Paladin node now contributes a
     /// `directive_parsers:` record for its default `DirectiveParser::PlainOutput`.
+    ///
+    /// Re-pinned again for Phase 24 D-09's `v4` bump (Plan 24-02): same
+    /// reason again -- the reference graph has no Gate nodes, so only the
+    /// version tag and the (empty) new `;gates:` section marker move the
+    /// literal. Renamed from `fingerprint_golden_hex_pins_canonical_bytes`
+    /// to `fingerprint_golden_hex_v4` (Task 4's own naming) -- same test,
+    /// same one-way-after-release hazard it has guarded since Phase 22.
     #[test]
-    fn fingerprint_golden_hex_pins_canonical_bytes() {
+    fn fingerprint_golden_hex_v4() {
         let graph = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
         assert_eq!(
             graph.fingerprint().as_str(),
-            "v3:a67a12f2947ce17d60d9357fea366ad4539cdeaa174a3a19a4841182725f20e2",
+            "v4:abe252b5178a64932597e33d95e6c7ca125c8d3b0d00100aa81175a8c1aaecb5",
             "canonicalization changed -- this invalidates every stored Waypoint's \
              fingerprint; only update this literal together with a deliberate \
              format-version bump"
@@ -1856,8 +2513,10 @@ mod tests {
         StdArc::new(child)
     }
 
+    /// Test 1 (Task 4): the version tag is `v4` and appears in the hashed
+    /// preamble (D-09).
     #[test]
-    fn fingerprint_version_tag_is_v3() {
+    fn fingerprint_version_is_v4() {
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
         graph.add_node(
             NodeId::new("solo"),
@@ -1865,7 +2524,11 @@ mod tests {
         );
         graph.add_entry(NodeId::new("solo"));
 
-        assert!(graph.fingerprint().as_str().starts_with("v3:"));
+        assert!(graph.fingerprint().as_str().starts_with("v4:"));
+        assert_eq!(
+            paladin_core::platform::container::waypoint::GRAPH_FINGERPRINT_VERSION,
+            "v4"
+        );
     }
 
     #[test]
@@ -2078,6 +2741,239 @@ mod tests {
         fallback.add_entry(NodeId::new("worker"));
 
         assert_ne!(fail_run.fingerprint(), fallback.fingerprint());
+    }
+
+    // --- D-09 (Plan 24-02): `v4` hashes one new `;gates:` section for
+    // NodeSpec::Gate -- kind, output_field, choices and the on_expire
+    // DISCRIMINANT kind -- each written through the existing `push_field`
+    // helper, never a delimiter join (22.1 CR-01); prompt_template,
+    // payload_template and expires_in are excluded.
+
+    fn approval_gate_graph(field: &str, default: serde_json::Value) -> WarGraph {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new(field).unwrap(),
+            DispatchRule::LastWrite,
+            Some(default),
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?")),
+                Some(FieldName::new(field).unwrap()),
+            ),
+        );
+        graph.add_entry(NodeId::new("gate"));
+        graph
+    }
+
+    /// Test 3a (Task 4): changing a Gate's `kind` alone changes the digest.
+    #[test]
+    fn fingerprint_differs_on_gate_kind() {
+        let approval = approval_gate_graph("approved", serde_json::json!(false));
+
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("approved").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!("")),
+            false,
+        )]);
+        let mut free_text = WarGraph::new(schema, EngineLimits::default());
+        free_text.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::FreeText, InputMapping::new("go?")),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        free_text.add_entry(NodeId::new("gate"));
+
+        assert_ne!(approval.fingerprint(), free_text.fingerprint());
+    }
+
+    /// Test 3b (Task 4): changing a Gate's `output_field` alone changes the
+    /// digest.
+    #[test]
+    fn fingerprint_differs_on_output_field() {
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                FieldName::new("approved_a").unwrap(),
+                DispatchRule::LastWrite,
+                Some(serde_json::json!(false)),
+                false,
+            ),
+            FieldSpec::new(
+                FieldName::new("approved_b").unwrap(),
+                DispatchRule::LastWrite,
+                Some(serde_json::json!(false)),
+                false,
+            ),
+        ]);
+
+        let mut field_a = WarGraph::new(schema.clone(), EngineLimits::default());
+        field_a.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?")),
+                Some(FieldName::new("approved_a").unwrap()),
+            ),
+        );
+        field_a.add_entry(NodeId::new("gate"));
+
+        let mut field_b = WarGraph::new(schema, EngineLimits::default());
+        field_b.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?")),
+                Some(FieldName::new("approved_b").unwrap()),
+            ),
+        );
+        field_b.add_entry(NodeId::new("gate"));
+
+        assert_ne!(field_a.fingerprint(), field_b.fingerprint());
+    }
+
+    /// Test 3c (Task 4): changing a Gate's `choices` alone changes the
+    /// digest.
+    #[test]
+    fn fingerprint_differs_on_choices() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("choice").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!("")),
+            false,
+        )]);
+
+        let mut no_choices = WarGraph::new(schema.clone(), EngineLimits::default());
+        no_choices.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Choice, InputMapping::new("go?")),
+                Some(FieldName::new("choice").unwrap()),
+            ),
+        );
+        no_choices.add_entry(NodeId::new("gate"));
+
+        let mut with_choices = WarGraph::new(schema, EngineLimits::default());
+        with_choices.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Choice, InputMapping::new("go?"))
+                    .with_choices(vec!["yes".to_string(), "no".to_string()]),
+                Some(FieldName::new("choice").unwrap()),
+            ),
+        );
+        with_choices.add_entry(NodeId::new("gate"));
+
+        assert_ne!(no_choices.fingerprint(), with_choices.fingerprint());
+    }
+
+    /// Test 3d (Task 4): changing a Gate's `on_expire` DISCRIMINANT kind
+    /// alone changes the digest.
+    #[test]
+    fn fingerprint_differs_on_on_expire_kind() {
+        let fail_run = approval_gate_graph("approved", serde_json::json!(false));
+
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("approved").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!(false)),
+            false,
+        )]);
+        let mut resume_with_default = WarGraph::new(schema, EngineLimits::default());
+        resume_with_default.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?"))
+                    .with_on_expire(OnExpire::ResumeWithDefault(serde_json::json!(true))),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        resume_with_default.add_entry(NodeId::new("gate"));
+
+        assert_ne!(fail_run.fingerprint(), resume_with_default.fingerprint());
+    }
+
+    /// Test 4 (Task 4): changing `prompt_template`, `payload_template` or
+    /// `expires_in` alone leaves the digest unchanged (ENG-FR-14).
+    #[test]
+    fn fingerprint_ignores_gate_templates_and_expiry() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("approved").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!(false)),
+            false,
+        )]);
+
+        let mut base = WarGraph::new(schema.clone(), EngineLimits::default());
+        base.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?")),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        base.add_entry(NodeId::new("gate"));
+
+        let mut variant = WarGraph::new(schema, EngineLimits::default());
+        variant.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(
+                    ParleyKind::Approval,
+                    InputMapping::new("a completely different prompt entirely"),
+                )
+                .with_payload_template(InputMapping::new("{approved}"))
+                .with_expires_in(std::time::Duration::from_secs(999)),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        variant.add_entry(NodeId::new("gate"));
+
+        assert_eq!(base.fingerprint(), variant.fingerprint());
+    }
+
+    /// Test 5 (Task 4): two Gate configurations whose concatenated field
+    /// bytes would collide under delimiter joining produce different
+    /// digests -- the length-prefixed `push_field` discipline (22.1 CR-01)
+    /// applied to the `;gates:` section's `choices` list.
+    #[test]
+    fn fingerprint_gate_section_is_length_prefixed() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("choice").unwrap(),
+            DispatchRule::LastWrite,
+            Some(serde_json::json!("")),
+            false,
+        )]);
+
+        // Two choices "a" and "bc" vs. one choice "ab" plus "c": under an
+        // unprefixed concatenation both produce the same joined bytes
+        // ("abc"); the length prefix on each `push_field`-written choice
+        // makes the split point unambiguous.
+        let mut two_three = WarGraph::new(schema.clone(), EngineLimits::default());
+        two_three.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Choice, InputMapping::new("go?"))
+                    .with_choices(vec!["a".to_string(), "bc".to_string()]),
+                Some(FieldName::new("choice").unwrap()),
+            ),
+        );
+        two_three.add_entry(NodeId::new("gate"));
+
+        let mut three_two = WarGraph::new(schema, EngineLimits::default());
+        three_two.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Choice, InputMapping::new("go?"))
+                    .with_choices(vec!["ab".to_string(), "c".to_string()]),
+                Some(FieldName::new("choice").unwrap()),
+            ),
+        );
+        three_two.add_entry(NodeId::new("gate"));
+
+        assert_ne!(two_three.fingerprint(), three_two.fingerprint());
     }
 
     #[test]

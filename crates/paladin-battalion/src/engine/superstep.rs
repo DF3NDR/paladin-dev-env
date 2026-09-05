@@ -40,7 +40,9 @@ use paladin_core::platform::container::directive::{
     Directive, MusterContext, MusterTask, NextStep,
 };
 use paladin_core::platform::container::paladin::Paladin;
-use paladin_core::platform::container::parley::{ParleyRequest, ParleyResponse};
+use paladin_core::platform::container::parley::{
+    ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
+};
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, MusterProgress, NodeExecutionRecord, NodeId,
     NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
@@ -51,10 +53,10 @@ use paladin_ports::output::waypoint_port::WaypointPort;
 
 use crate::edge_evaluator::EdgeEvaluatorRegistry;
 use crate::engine::directive_parser::{DirectiveParseError, DirectiveParser};
-use crate::engine::graph::{EngineLimits, NodeSpec, StateMap, WarGraph};
+use crate::engine::graph::{EngineLimits, GateRequestTemplate, NodeSpec, StateMap, WarGraph};
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 use crate::engine::input_mapping::InputMapping;
-use crate::engine::node::NodeError;
+use crate::engine::node::{NodeContext, NodeError, StateNode};
 use crate::engine::{EngineError, RunOutcome, WaypointDurability};
 
 /// Every parent engine resource D-21 requires forwarding into a
@@ -156,6 +158,141 @@ enum NodeFailure {
 /// (`None`/`0` for a `Function` or `Battalion` node) plus the resolved
 /// `Directive` or [`NodeFailure`].
 type NodeDispatchResult = (Option<Uuid>, u64, Result<Directive, NodeFailure>);
+
+/// Executes a [`NodeSpec::Gate`] node's no-`run`-body-of-its-own contract
+/// (HITL-01, D-05), dispatched exactly like a `Function` node
+/// ([`NodeDispatch::Function`]) so it reuses every existing
+/// dispatch/interceptor/trace code path with no changes to any of them.
+///
+/// On the node's first visit (`ctx.parley_response()` is `None`) renders
+/// `request.prompt_template`/`payload_template` from `state` and returns
+/// `NextStep::Parley`, entering the suspension path plan 24-01 landed. On
+/// the post-resume visit (`ctx.parley_response()` is `Some`) writes the
+/// normalised delivered value to `output_field` -- or, for
+/// `ParleyKind::StateEdit`, returns the response's `StateDelta` as this
+/// node's own delta -- and routes via `NextStep::Edges` like any other
+/// node (D-06).
+struct GateDispatchNode {
+    request: GateRequestTemplate,
+    output_field: Option<FieldName>,
+}
+
+#[async_trait::async_trait]
+impl StateNode for GateDispatchNode {
+    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError> {
+        match ctx.parley_response() {
+            // --- First visit: render and raise. Never merges anything
+            // beyond an empty delta -- a Gate's own contribution to the
+            // Battlefield happens only on the post-resume visit below.
+            None => {
+                let prompt = self
+                    .request
+                    .prompt_template
+                    .render(state, ctx.muster.as_ref())
+                    .map_err(|e| NodeError(format!("gate {}: {e}", ctx.node_id)))?;
+                let payload = match &self.request.payload_template {
+                    Some(template) => {
+                        let rendered = template
+                            .render(state, ctx.muster.as_ref())
+                            .map_err(|e| NodeError(format!("gate {}: {e}", ctx.node_id)))?;
+                        // A payload template commonly renders a JSON shape
+                        // (e.g. `{"amount": {amount}}`) through ordinary
+                        // `InputMapping` field substitution -- parsed back
+                        // into structured JSON when it is valid JSON, and
+                        // carried as a plain JSON string otherwise (never
+                        // an error: a payload is author-supplied context,
+                        // not a validated contract, HITL-FR-03).
+                        serde_json::from_str(&rendered)
+                            .unwrap_or(serde_json::Value::String(rendered))
+                    }
+                    None => serde_json::json!({}),
+                };
+                let created_at = Utc::now();
+                let expires_at = self.request.expires_in.map(|d| {
+                    created_at
+                        + chrono::Duration::from_std(d).unwrap_or_else(|_| chrono::Duration::zero())
+                });
+                let request = ParleyRequest {
+                    parley_id: ParleyId::new(),
+                    // Stamped onto the request regardless -- the engine's
+                    // suspension arm (plan 24-01) re-stamps it from the
+                    // dispatching `node_id` anyway, but setting it
+                    // correctly here keeps this type's own invariant
+                    // honest independent of that belt-and-braces rewrite.
+                    node_id: ctx.node_id.clone(),
+                    kind: self.request.kind.clone(),
+                    prompt,
+                    payload,
+                    choices: self.request.choices.clone(),
+                    expires_at,
+                    created_at,
+                    on_expire: self.request.on_expire.clone(),
+                };
+                Ok(Directive {
+                    delta: StateDelta::new(),
+                    next: NextStep::Parley(request),
+                })
+            }
+            // --- Post-resume visit: deliver and route via static edges.
+            Some(response) => {
+                let mut delta = StateDelta::new();
+                match &self.request.kind {
+                    ParleyKind::StateEdit => {
+                        let state_delta: StateDelta =
+                            serde_json::from_value(response.value.clone()).map_err(|e| {
+                                NodeError(format!(
+                                    "gate {}: StateEdit response value is not a valid \
+                                     StateDelta: {e}",
+                                    ctx.node_id
+                                ))
+                            })?;
+                        return Ok(state_delta.into());
+                    }
+                    ParleyKind::Approval => {
+                        let approved =
+                            crate::engine::graph::normalize_approval_value(&response.value)
+                                .ok_or_else(|| {
+                                    NodeError(format!(
+                                        "gate {}: response value {} is not a valid Approval value",
+                                        ctx.node_id, response.value
+                                    ))
+                                })?;
+                        if let Some(field) = &self.output_field {
+                            // D-06: a Bool output_field receives the JSON
+                            // boolean; a String output_field receives the
+                            // strings "true"/"false" -- inferred from the
+                            // field's schema default, the same signal
+                            // `WarGraph::validate` used to accept this
+                            // wiring in the first place.
+                            let is_bool_field = state
+                                .schema()
+                                .field_spec(field)
+                                .and_then(|spec| spec.default.as_ref())
+                                .is_some_and(serde_json::Value::is_boolean);
+                            let value = if is_bool_field {
+                                serde_json::json!(approved)
+                            } else {
+                                serde_json::json!(if approved { "true" } else { "false" })
+                            };
+                            delta.set_raw(field.clone(), value);
+                        }
+                    }
+                    ParleyKind::Choice | ParleyKind::FreeText => {
+                        if let Some(field) = &self.output_field {
+                            delta.set_raw(field.clone(), response.value.clone());
+                        }
+                    }
+                    // `ParleyKind` is `#[non_exhaustive]`: a future kind
+                    // reaching here (never raised by this phase's own
+                    // `GateRequestTemplate`) writes no output field rather
+                    // than panicking.
+                    _ => {}
+                }
+                Ok(delta.into())
+            }
+        }
+    }
+}
 
 /// Execute one vanguard node's dispatch against `snapshot`.
 ///
@@ -1173,6 +1310,18 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         restart_on_resume: *restart_on_resume,
                     }
                 }
+                // --- HITL-01, D-05: a Gate has no `run` body of its own --
+                // dispatched as an ordinary `Function` node wrapping a
+                // fresh `GateDispatchNode`, reusing every existing
+                // dispatch/interceptor/trace/NextStep::Parley-suspension
+                // code path below with no changes to any of it.
+                NodeSpec::Gate {
+                    request,
+                    output_field,
+                } => NodeDispatch::Function(Arc::new(GateDispatchNode {
+                    request: request.clone(),
+                    output_field: output_field.clone(),
+                })),
             };
             let snap = Arc::clone(&snapshot);
             let sem = Arc::clone(&semaphore);
@@ -2418,7 +2567,19 @@ async fn evaluate_edge_condition(
                 )))
             })?;
             let output = match graph.node(source) {
-                Some(NodeSpec::Paladin { output_field, .. }) => battlefield
+                // D-06: a Gate source's `Custom`-evaluator output is its
+                // `output_field` value, exactly like a Paladin node's --
+                // a single added pattern on this arm, never a separate
+                // match arm (`Contains`/`Regex` above need no Gate-specific
+                // code at all: they already read the whole rendered
+                // Battlefield JSON, and a Gate's `output_field` is an
+                // ordinary schema field merged into it on the post-resume
+                // superstep).
+                Some(NodeSpec::Paladin { output_field, .. })
+                | Some(NodeSpec::Gate {
+                    output_field: Some(output_field),
+                    ..
+                }) => battlefield
                     .get::<String>(output_field)
                     .ok()
                     .flatten()

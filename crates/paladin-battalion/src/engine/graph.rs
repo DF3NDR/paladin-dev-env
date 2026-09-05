@@ -1640,10 +1640,36 @@ impl WarGraph {
     ///
     /// A golden hex test pins the exact output of a fixture exercising
     /// every hashed property (`engine::graph::tests::
-    /// fingerprint_golden_hex_v4`); changing this
+    /// fingerprint_golden_hex_v5`); changing this
     /// function's byte layout invalidates every stored Waypoint's
     /// fingerprint and must not be done without a deliberate format-version
     /// bump (D-17).
+    ///
+    /// **`v5` (Phase 25, D-11) adds one more section for each node's
+    /// resolved [`Aegis`] (plan 25-03) -- and the split it draws is a RULE,
+    /// not a list, so the next phase adding a policy field knows which side
+    /// it belongs on without re-deriving the rationale:** a field is hashed
+    /// here if and only if changing it changes ROUTING or MERGE semantics --
+    /// which node runs next, or what a node's own delta looks like once
+    /// applied. `on_error` picks a different node/delta/routing outcome on
+    /// failure, so it is hashed; `cache` decides whether a node's delta is
+    /// served from a prior result rather than recomputed, so it is hashed
+    /// too. `retry` and `timeout` are pure TUNING -- how many times an
+    /// attempt is retried and how long it is allowed to run before either
+    /// still converges on THE SAME delta and THE SAME routing outcome -- so
+    /// neither contributes one byte, exactly like every [`EngineLimits`]
+    /// field (Phase 23 D-18). Both `on_error` and `cache` are read from each
+    /// node's OWN [`WarGraph::set_aegis`] sidecar entry ONLY -- never the
+    /// [`WarGraph::aegis_for`]-RESOLVED value -- sorted by node id and
+    /// written through [`push_field`] exactly like every other section; the
+    /// graph's own `default_aegis` is hashed SEPARATELY, as its own
+    /// length-prefixed sub-section. Reading the raw sidecar rather than the
+    /// resolved value is deliberate: it is what makes a graph that sets a
+    /// `default_aegis` policy distinguishable from a graph that sets the
+    /// IDENTICAL policy on every node individually via `set_aegis` -- the
+    /// two would hash identically under the resolved value, silently
+    /// erasing a real authoring difference the fingerprint exists to
+    /// capture.
     pub fn fingerprint(&self) -> GraphFingerprint {
         let mut node_ids: Vec<&NodeId> = self.nodes.keys().collect();
         node_ids.sort();
@@ -1784,8 +1810,64 @@ impl WarGraph {
             }
             push_field(&mut buf, on_expire_kind_tag(&request.on_expire).as_bytes());
         }
+        // --- v5 (Phase 25, D-11): one more scheduling/merge-relevant
+        // section for each node's OWN `set_aegis` sidecar entry -- see
+        // `fingerprint`'s rustdoc above for the hash/exclude rule. ONLY
+        // `on_error` and `cache` contribute; `retry` and `timeout` never
+        // write a single byte. Walks `self.aegis` (the raw sidecar), NEVER
+        // `aegis_for`'s resolved value -- see the rustdoc note on why.
+        buf.extend_from_slice(b";aegis:");
+        let mut aegis_ids: Vec<&NodeId> = self.aegis.keys().collect();
+        aegis_ids.sort();
+        for id in &aegis_ids {
+            let Some(aegis) = self.aegis.get(*id) else {
+                continue;
+            };
+            push_field(&mut buf, id.as_str().as_bytes());
+            push_aegis_hashed_fields(&mut buf, aegis);
+        }
+        // The graph-wide `default_aegis` fallback, hashed as its OWN
+        // length-prefixed sub-section -- distinct from the per-node
+        // `;aegis:` section above, so a graph that sets a default policy
+        // never collides with one that sets the identical policy on every
+        // node individually via `set_aegis`.
+        buf.extend_from_slice(b";default_aegis:");
+        match &self.default_aegis {
+            Some(default_aegis) => {
+                buf.push(1); // "has default_aegis" tag
+                push_aegis_hashed_fields(&mut buf, default_aegis);
+            }
+            None => buf.push(0), // "no default_aegis" tag
+        }
 
         GraphFingerprint::from_canonical_bytes(&buf)
+    }
+}
+
+/// Write ONLY `aegis`'s routing- and merge-affecting fields -- `on_error`
+/// and `cache` -- to `buf`, length-prefixed through [`push_field`] exactly
+/// like every other [`WarGraph::fingerprint`] section (Phase 25, D-11).
+/// `retry` and `timeout` are deliberately never read here: they are tuning,
+/// like every [`EngineLimits`] field (Phase 23 D-18), and must never
+/// contribute a byte. Used by both the per-node `;aegis:` section and the
+/// `;default_aegis:` sub-section so the two encode their `Aegis` payload
+/// identically.
+fn push_aegis_hashed_fields(buf: &mut Vec<u8>, aegis: &Aegis) {
+    match &aegis.on_error {
+        Some(on_error) => {
+            buf.push(1); // "has on_error" tag
+            let json = serde_json::to_string(on_error).unwrap_or_default();
+            push_field(buf, json.as_bytes());
+        }
+        None => buf.push(0), // "no on_error" tag
+    }
+    match &aegis.cache {
+        Some(cache) => {
+            buf.push(1); // "has cache" tag
+            let json = serde_json::to_string(cache).unwrap_or_default();
+            push_field(buf, json.as_bytes());
+        }
+        None => buf.push(0), // "no cache" tag
     }
 }
 
@@ -2408,12 +2490,15 @@ mod tests {
         // Re-pinned again for Phase 24 D-09's `v4` bump (Plan 24-02): same
         // reason -- the version tag alone moves the literal even though
         // this fixture has no Gate nodes either.
-        // `fingerprint_golden_hex_v4` (originally `fingerprint_golden_hex_pins_canonical_bytes`, Task 2 of Plan 22-01) is the
+        // Re-pinned again for Phase 25 D-11's `v5` bump (plan 25-03): same
+        // reason -- the version tag alone moves the literal even though
+        // this fixture has no Aegis sidecar entries either.
+        // `fingerprint_golden_hex_v5` (originally `fingerprint_golden_hex_pins_canonical_bytes`, Task 2 of Plan 22-01) is the
         // dedicated golden test guarding future canonicalization changes;
         // this assertion only re-confirms same-input determinism.
         assert_eq!(
             a.as_str(),
-            "v4:971f6eceeb58d5c1c764b04c19a6c8dd6ea72d41aebd41c5086c757b40ef55ba"
+            "v5:1ba3965ddeac27b3babc40353b93929ed15d8e90e2f9e37a00dbe43e0b9c3589"
         );
     }
 
@@ -2586,14 +2671,21 @@ mod tests {
     /// reason again -- the reference graph has no Gate nodes, so only the
     /// version tag and the (empty) new `;gates:` section marker move the
     /// literal. Renamed from `fingerprint_golden_hex_pins_canonical_bytes`
-    /// to `fingerprint_golden_hex_v4` (Task 4's own naming) -- same test,
-    /// same one-way-after-release hazard it has guarded since Phase 22.
+    /// to the version-tagged name that plan's own Task 4 established --
+    /// same test, same one-way-after-release hazard it has guarded since
+    /// Phase 22.
+    ///
+    /// Re-pinned again for Phase 25 D-11's `v5` bump (plan 25-03): same
+    /// reason again -- the reference graph has no `Aegis` sidecar entries,
+    /// so only the version tag and the (empty) new `;aegis:`/
+    /// `;default_aegis:` section markers move the literal. Renamed to
+    /// `fingerprint_golden_hex_v5`.
     #[test]
-    fn fingerprint_golden_hex_v4() {
+    fn fingerprint_golden_hex_v5() {
         let graph = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
         assert_eq!(
             graph.fingerprint().as_str(),
-            "v4:abe252b5178a64932597e33d95e6c7ca125c8d3b0d00100aa81175a8c1aaecb5",
+            "v5:a26b00e514c5adf137fadd279c644555ac5848897bae13b178431d3110138850",
             "canonicalization changed -- this invalidates every stored Waypoint's \
              fingerprint; only update this literal together with a deliberate \
              format-version bump"
@@ -2766,10 +2858,10 @@ mod tests {
         StdArc::new(child)
     }
 
-    /// Test 1 (Task 4): the version tag is `v4` and appears in the hashed
-    /// preamble (D-09).
+    /// Test 1 (plan 25-03): the version tag is `v5` and appears in the
+    /// hashed preamble (D-11).
     #[test]
-    fn fingerprint_version_is_v4() {
+    fn fingerprint_version_is_v5() {
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
         graph.add_node(
             NodeId::new("solo"),
@@ -2777,10 +2869,10 @@ mod tests {
         );
         graph.add_entry(NodeId::new("solo"));
 
-        assert!(graph.fingerprint().as_str().starts_with("v4:"));
+        assert!(graph.fingerprint().as_str().starts_with("v5:"));
         assert_eq!(
             paladin_core::platform::container::waypoint::GRAPH_FINGERPRINT_VERSION,
-            "v4"
+            "v5"
         );
     }
 
@@ -3185,6 +3277,261 @@ mod tests {
         variant.add_entry(NodeId::new("gate"));
 
         assert_eq!(base.fingerprint(), variant.fingerprint());
+    }
+
+    // --- Plan 25-03, Task 3: fingerprint v5 -- on_error/cache are hashed,
+    // retry/timeout are excluded -------------------------------------------
+
+    #[test]
+    fn changing_on_error_changes_the_fingerprint() {
+        let mut base = WarGraph::new(one_field_schema(), EngineLimits::default());
+        base.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        base.add_entry(NodeId::new("a"));
+        base.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                on_error: Some(ErrorHandlerSpec::Custom("handler-a".to_string())),
+                ..Aegis::default()
+            },
+        );
+
+        let mut variant = WarGraph::new(one_field_schema(), EngineLimits::default());
+        variant.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        variant.add_entry(NodeId::new("a"));
+        variant.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                on_error: Some(ErrorHandlerSpec::Custom("handler-b".to_string())),
+                ..Aegis::default()
+            },
+        );
+
+        assert_ne!(
+            base.fingerprint(),
+            variant.fingerprint(),
+            "changing a node's on_error must change the fingerprint (D-11)"
+        );
+    }
+
+    #[test]
+    fn changing_cache_policy_changes_the_fingerprint() {
+        let mut base = WarGraph::new(one_field_schema(), EngineLimits::default());
+        base.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        base.add_entry(NodeId::new("a"));
+        base.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                cache: Some(CachePolicy {
+                    ttl: Duration::from_secs(30),
+                    key: CacheKeySpec::Default,
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        let mut variant = WarGraph::new(one_field_schema(), EngineLimits::default());
+        variant.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        variant.add_entry(NodeId::new("a"));
+        variant.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                cache: Some(CachePolicy {
+                    ttl: Duration::from_secs(60),
+                    key: CacheKeySpec::Default,
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        assert_ne!(
+            base.fingerprint(),
+            variant.fingerprint(),
+            "changing a node's cache policy must change the fingerprint (D-11)"
+        );
+    }
+
+    #[test]
+    fn tuning_retry_does_not_change_the_fingerprint() {
+        let base_aegis = Aegis {
+            retry: Some(RetryPolicy::default()),
+            ..Aegis::default()
+        };
+        let base = {
+            let mut g = WarGraph::new(one_field_schema(), EngineLimits::default());
+            g.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+            g.add_entry(NodeId::new("a"));
+            g.set_aegis(NodeId::new("a"), base_aegis.clone());
+            g
+        };
+
+        // Every RetryPolicy field, tuned one at a time.
+        let variants = vec![
+            RetryPolicy {
+                max_attempts: 99,
+                ..RetryPolicy::default()
+            },
+            RetryPolicy {
+                initial_interval: Duration::from_millis(1),
+                ..RetryPolicy::default()
+            },
+            RetryPolicy {
+                backoff_factor: 9.9,
+                ..RetryPolicy::default()
+            },
+            RetryPolicy {
+                max_interval: Duration::from_secs(1),
+                ..RetryPolicy::default()
+            },
+            RetryPolicy {
+                jitter: false,
+                ..RetryPolicy::default()
+            },
+        ];
+        for retry in variants {
+            let mut variant = WarGraph::new(one_field_schema(), EngineLimits::default());
+            variant.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+            variant.add_entry(NodeId::new("a"));
+            variant.set_aegis(
+                NodeId::new("a"),
+                Aegis {
+                    retry: Some(retry.clone()),
+                    ..Aegis::default()
+                },
+            );
+            assert_eq!(
+                base.fingerprint(),
+                variant.fingerprint(),
+                "tuning a RetryPolicy field must never change the fingerprint (D-11, Phase 23 \
+                 D-18); offending retry: {retry:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tuning_timeout_does_not_change_the_fingerprint() {
+        let base = {
+            let mut g = WarGraph::new(one_field_schema(), EngineLimits::default());
+            g.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+            g.add_entry(NodeId::new("a"));
+            g.set_aegis(
+                NodeId::new("a"),
+                Aegis {
+                    timeout: Some(TimeoutPolicy {
+                        run_timeout: Some(Duration::from_secs(30)),
+                        idle_timeout: Some(Duration::from_secs(5)),
+                    }),
+                    ..Aegis::default()
+                },
+            );
+            g
+        };
+
+        let mut variant = WarGraph::new(one_field_schema(), EngineLimits::default());
+        variant.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        variant.add_entry(NodeId::new("a"));
+        variant.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(Duration::from_secs(1)),
+                    idle_timeout: Some(Duration::from_millis(1)),
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        assert_eq!(
+            base.fingerprint(),
+            variant.fingerprint(),
+            "tuning run_timeout/idle_timeout must never change the fingerprint (D-11, Phase 23 \
+             D-18)"
+        );
+    }
+
+    #[test]
+    fn aegis_hashing_is_sorted_by_node_id() {
+        let handler = || Aegis {
+            on_error: Some(ErrorHandlerSpec::Custom("h".to_string())),
+            ..Aegis::default()
+        };
+
+        let mut registered_a_then_b = WarGraph::new(one_field_schema(), EngineLimits::default());
+        registered_a_then_b.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        registered_a_then_b.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
+        registered_a_then_b.set_aegis(NodeId::new("a"), handler());
+        registered_a_then_b.set_aegis(NodeId::new("b"), handler());
+        registered_a_then_b.add_entry(NodeId::new("a"));
+
+        let mut registered_b_then_a = WarGraph::new(one_field_schema(), EngineLimits::default());
+        registered_b_then_a.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        registered_b_then_a.add_node(NodeId::new("b"), NodeSpec::Function(StdArc::new(NoopNode)));
+        registered_b_then_a.set_aegis(NodeId::new("b"), handler());
+        registered_b_then_a.set_aegis(NodeId::new("a"), handler());
+        registered_b_then_a.add_entry(NodeId::new("a"));
+
+        assert_eq!(
+            registered_a_then_b.fingerprint(),
+            registered_b_then_a.fingerprint(),
+            "aegis registration order must never affect the fingerprint -- the section is \
+             sorted by node id"
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_still_matches_after_a_retry_tuning_edit() {
+        let mut graph1 = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph1.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph1.add_entry(NodeId::new("a"));
+        graph1.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                retry: Some(RetryPolicy {
+                    max_attempts: 3,
+                    ..RetryPolicy::default()
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        let store = StdArc::new(crate::engine::test_support::RecordingWaypointStore::new());
+        let engine = crate::engine::WarEngine::new(
+            StdArc::new(crate::engine::test_support::RecordingPaladinPort::new()),
+            StdArc::clone(&store),
+        );
+        let thread =
+            paladin_core::platform::container::waypoint::ThreadId::new("retry-tuning-resume")
+                .unwrap();
+        let outcome = engine
+            .start(
+                &graph1,
+                thread.clone(),
+                paladin_core::platform::container::battlefield::StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        // Tighten the retry policy -- the exact field the fingerprint must
+        // exclude -- on an otherwise byte-identical graph.
+        let mut graph2 = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph2.add_node(NodeId::new("a"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph2.add_entry(NodeId::new("a"));
+        graph2.set_aegis(
+            NodeId::new("a"),
+            Aegis {
+                retry: Some(RetryPolicy {
+                    max_attempts: 10,
+                    ..RetryPolicy::default()
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        let outcome2 = engine.resume(&graph2, thread).await;
+        assert!(
+            matches!(outcome2, Ok(RunOutcome::Completed { .. })),
+            "a retry-tuning edit must never trip GraphMismatch on resume; got {outcome2:?}"
+        );
     }
 
     /// Test 5 (Task 4): two Gate configurations whose concatenated field

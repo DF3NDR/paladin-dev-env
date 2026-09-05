@@ -414,10 +414,7 @@ async fn phalanx_and_campaign_bridges_also_embed() {
     );
     parent_phalanx.add_entry(sub_phalanx);
     parent_phalanx
-        .validate(
-            &CustomDispatchResolver::new(),
-            &EngineRegistries::default(),
-        )
+        .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
         .expect("from_phalanx must embed as a validating NodeSpec::Battalion child");
 
     // D-22: `from_campaign` embeds unchanged too -- a minimal one-node
@@ -437,10 +434,7 @@ async fn phalanx_and_campaign_bridges_also_embed() {
     );
     parent_campaign.add_entry(sub_campaign);
     parent_campaign
-        .validate(
-            &CustomDispatchResolver::new(),
-            &EngineRegistries::default(),
-        )
+        .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
         .expect("from_campaign must embed as a validating NodeSpec::Battalion child");
 }
 

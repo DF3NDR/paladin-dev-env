@@ -302,8 +302,17 @@ impl ServiceRunner {
     /// legacy-only deployments, D-20). Split out from `wait_for_shutdown` so
     /// the drain behaviour is exercised by a simulated trigger in tests
     /// rather than requiring a real OS signal (HITL-04, D-22).
-    async fn drain_on_shutdown(&self, _grace: Duration, _graceful: bool) {
-        // RED: not yet wired to the coordinator (Phase 24 Plan 09, HITL-04, D-22).
+    async fn drain_on_shutdown(&self, grace: Duration, graceful: bool) {
+        if graceful {
+            let outcome = self.shutdown_coordinator.cancel_and_wait(grace).await;
+            log::info!("graceful shutdown drain complete: {outcome:?}");
+        } else {
+            self.shutdown_coordinator.token().cancel();
+            log::info!(
+                "graceful_shutdown disabled (APP_ENGINE_GRACEFUL_SHUTDOWN=false); cancelling \
+                 in-flight runs without waiting"
+            );
+        }
     }
 
     /// Wait for a termination signal, then cancel this runner's

@@ -8,6 +8,7 @@ pub mod log_orchestrator;
 pub mod notification_orchestrator;
 pub mod orchestration;
 pub mod paladin;
+pub mod parley;
 pub mod queue_orchestrator;
 pub mod sanctum;
 pub mod waypoint_retention;

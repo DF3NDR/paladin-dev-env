@@ -197,6 +197,33 @@ pub enum ParleyError {
         /// When it expired.
         expires_at: DateTime<Utc>,
     },
+
+    /// The underlying `WaypointPort` backend failed (a genuine I/O/backend
+    /// error, never a caller-input rejection) while loading the thread's
+    /// latest Waypoint. Added while implementing the facade adapter
+    /// (`src/application/services/parley/adapter.rs`, Task 2, Rule 2): a
+    /// real backend failure must surface as something other than
+    /// `ThreadNotFound`, which would misleadingly read as a 404 rather
+    /// than a 5xx-class failure to an HTTP caller (a later plan).
+    #[error("waypoint backend error: {source}")]
+    Backend {
+        /// The underlying backend error.
+        #[source]
+        source: crate::output::waypoint_port::WaypointError,
+    },
+
+    /// A future validation case a mapping from `paladin-battalion`'s
+    /// `EngineError` does not yet name explicitly (D-25's facade adapter
+    /// maps every named `EngineError` variant onto its own `ParleyError`
+    /// counterpart; this is the fail-closed catch-all `EngineError`'s own
+    /// `#[non_exhaustive]` status requires every downstream match to
+    /// carry). Added alongside [`Self::Backend`] (Task 2, Rule 2) rather
+    /// than silently dropping or panicking on an unmapped variant.
+    #[error("resume rejected: {reason}")]
+    Rejected {
+        /// The underlying, unmapped failure's own message.
+        reason: String,
+    },
 }
 
 /// Port trait for triggering a suspended thread's resume (HITL-05, D-25).
@@ -255,6 +282,8 @@ mod tests {
                 ParleyError::ParleyAlreadyAnswered { .. } => "parley_already_answered",
                 ParleyError::ResponseShapeInvalid { .. } => "response_shape_invalid",
                 ParleyError::ParleyExpired { .. } => "parley_expired",
+                ParleyError::Backend { .. } => "backend",
+                ParleyError::Rejected { .. } => "rejected",
             }
         }
 
@@ -300,12 +329,26 @@ mod tests {
                 },
                 "parley_expired",
             ),
+            (
+                ParleyError::Backend {
+                    source: crate::output::waypoint_port::WaypointError::Serialization(
+                        "boom".to_string(),
+                    ),
+                },
+                "backend",
+            ),
+            (
+                ParleyError::Rejected {
+                    reason: "unmapped engine error".to_string(),
+                },
+                "rejected",
+            ),
         ];
 
         for (err, expected) in &cases {
             assert_eq!(label(err), *expected);
         }
-        assert_eq!(cases.len(), 7, "every ParleyError variant must be covered");
+        assert_eq!(cases.len(), 9, "every ParleyError variant must be covered");
     }
 
     /// Test 3: the per-parley variants' `Display` output names the

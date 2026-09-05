@@ -14,6 +14,8 @@ pub mod file_storage;
 #[allow(missing_docs)]
 pub mod herald;
 #[allow(missing_docs)]
+pub mod node_cache;
+#[allow(missing_docs)]
 pub mod notifications;
 #[allow(missing_docs)]
 pub mod queue;
@@ -47,6 +49,7 @@ pub use crate::config::arsenal::{ArsenalConfig, MCPServerConfig};
 pub use crate::config::citadel::CitadelConfig;
 pub use crate::config::engine::EngineConfig;
 pub use crate::config::file_storage::FileStorageConfig;
+pub use crate::config::node_cache::{NodeCacheBackend, NodeCacheConfig};
 #[cfg(feature = "notifications")]
 pub use crate::config::notifications::NotificationConfig;
 pub use crate::config::queue::QueueConfig;

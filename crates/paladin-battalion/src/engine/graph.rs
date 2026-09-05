@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use paladin_core::platform::container::aegis::Aegis;
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
     BattlefieldSchema, CustomDispatchResolver, DispatchRule, FieldName, FieldSpec,
@@ -466,6 +467,14 @@ pub struct WarGraph {
     /// `validate_eligible_set`'s own rustdoc names) so a worker template is
     /// not rejected as unreachable despite having no static incoming edge.
     worker_templates: HashSet<NodeId>,
+    /// Per-node `Aegis` overrides, set via [`WarGraph::set_aegis`] (D-09,
+    /// D-10): a node's own entry here wins WHOLESALE over `default_aegis`
+    /// (never a field-level merge).
+    aegis: HashMap<NodeId, Aegis>,
+    /// The graph-wide fallback `Aegis`, set via
+    /// [`WarGraph::with_default_aegis`] (D-10): applies to every node with
+    /// no entry of its own in `aegis`.
+    default_aegis: Option<Aegis>,
     edges: Vec<EdgeSpec>,
     schema: BattlefieldSchema,
     entry: Vec<NodeId>,
@@ -481,6 +490,8 @@ impl WarGraph {
             defer_flags: HashSet::new(),
             dynamic_targets: HashSet::new(),
             worker_templates: HashSet::new(),
+            aegis: HashMap::new(),
+            default_aegis: None,
             edges: Vec::new(),
             schema,
             entry: Vec::new(),
@@ -569,6 +580,39 @@ impl WarGraph {
     /// Whether `id` was registered via [`WarGraph::add_worker_template`].
     pub fn is_worker_template(&self, id: &NodeId) -> bool {
         self.worker_templates.contains(id)
+    }
+
+    /// Attach `aegis` to the already-registered node `id`, overriding
+    /// [`WarGraph::with_default_aegis`] WHOLESALE for this node -- never a
+    /// field-level merge (D-09, D-10). Mirrors
+    /// [`WarGraph::mark_dynamic_target`]'s exact chainable shape.
+    ///
+    /// This method does not itself validate that `id` is a declared node,
+    /// nor that `aegis`'s fields are compatible with `id`'s `NodeSpec` kind
+    /// (e.g. `retry`/`cache` on a `Battalion` node) -- that "list every
+    /// offender before any node executes" validation is
+    /// [`WarGraph::validate`]'s (plan 25-03), following this file's own
+    /// established fail-closed-at-`validate`-time convention.
+    pub fn set_aegis(&mut self, id: NodeId, aegis: Aegis) -> &mut Self {
+        self.aegis.insert(id, aegis);
+        self
+    }
+
+    /// Set the graph-wide fallback `Aegis` applied to every node with no
+    /// entry of its own in [`WarGraph::set_aegis`] (D-10).
+    pub fn with_default_aegis(&mut self, aegis: Aegis) -> &mut Self {
+        self.default_aegis = Some(aegis);
+        self
+    }
+
+    /// Resolve `id`'s effective `Aegis`: its own [`WarGraph::set_aegis`]
+    /// entry if present, else [`WarGraph::with_default_aegis`]'s value,
+    /// else `None`. Never merges the two field-by-field -- a node's own
+    /// entry wins WHOLESALE (D-09, D-10): a node whose own `Aegis` sets
+    /// `retry: None` is NOT retried even under a graph-wide
+    /// `default_aegis` that carries a retry policy.
+    pub fn aegis_for(&self, id: &NodeId) -> Option<&Aegis> {
+        self.aegis.get(id).or(self.default_aegis.as_ref())
     }
 
     /// This graph's node ids in registration order (ENG-FR-04).
@@ -1728,7 +1772,7 @@ mod tests {
             _ctx: &crate::engine::node::NodeContext,
         ) -> Result<
             paladin_core::platform::container::directive::Directive,
-            crate::engine::node::NodeError,
+            crate::engine::node::StateNodeError,
         > {
             Ok(paladin_core::platform::container::battlefield::StateDelta::new().into())
         }

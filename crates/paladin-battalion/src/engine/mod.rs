@@ -30,7 +30,7 @@
 //!   default; `StructuredDirective` parses a documented JSON envelope.
 //! - [`input_mapping`] — `InputMapping`, `InputMappingError`: the X-03
 //!   string bridge a `NodeSpec::Paladin` node renders its input through.
-//! - [`node`] — `StateNode`, `NodeContext`, `NodeError`.
+//! - [`node`] — `StateNode`, `NodeContext`, `StateNodeError`.
 //! - [`dispatch_registry`] — `DispatchRegistry`, the engine-owned
 //!   `DispatchRule::Custom` name -> closure registration (ENG-FR-09).
 //! - [`hooks`] — `TraceDispatcher` (ENG-FR-21's bounded, drop-oldest
@@ -39,6 +39,11 @@
 //!   consumer yet (Docs 05, 07); ENG-FR-23's cancellation-to-`Halted` path
 //!   lives inline in `superstep`/`WarEngine` since it needs no dedicated
 //!   type beyond `tokio_util::sync::CancellationToken`.
+//! - [`retry`] — `backoff_delay`/`wait_backoff`/`should_retry` (Doc 04
+//!   FT-FR-02, D-15): the Aegis retry loop's own backoff math and
+//!   cancellation-aware wait, wrapped around the whole per-node dispatch
+//!   closure in `superstep` -- OUTSIDE the `hooks` interceptor chain
+//!   (D-14).
 //! - `superstep` (private) — the superstep loop `start`/`resume` reduce to.
 //! - `test_support` (`#[cfg(test)]`) — `RecordingWaypointStore`,
 //!   `RecordingPaladinPort` and `CountingFunctionNode`, the doubles this and
@@ -51,6 +56,7 @@ pub mod graph;
 pub mod hooks;
 pub mod input_mapping;
 pub mod node;
+pub mod retry;
 pub mod shutdown;
 mod superstep;
 #[cfg(test)]
@@ -86,7 +92,7 @@ pub use dispatch_registry::DispatchRegistry;
 pub use graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
 pub use hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 pub use input_mapping::{InputMapping, InputMappingError};
-pub use node::{NodeContext, NodeError, StateNode};
+pub use node::{NodeContext, StateNode, StateNodeError};
 
 /// Whether a `WaypointPort::save` failure fails the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -252,7 +258,7 @@ pub enum EngineError {
 
     /// A node's execution returned an error.
     #[error("node execution error: {0}")]
-    Node(#[from] NodeError),
+    Node(#[from] StateNodeError),
 
     /// `DispatchRegistry::register` was asked to register a custom
     /// dispatch rule under a name that collides with a built-in
@@ -1020,7 +1026,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
     ///
     /// ```
     /// use paladin_battalion::engine::WarEngine;
-    /// use paladin_battalion::engine::node::{NodeContext, NodeError, StateNode};
+    /// use paladin_battalion::engine::node::{NodeContext, StateNode, StateNodeError};
     /// use paladin_core::platform::container::directive::Directive;
     /// use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
     /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
@@ -1823,6 +1829,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use chrono::Utc;
+    use paladin_core::platform::container::aegis::{Aegis, RetryPolicy, RetryPredicate};
     use paladin_core::platform::container::battalion::campaign::EdgeCondition;
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
@@ -1836,7 +1843,8 @@ mod tests {
 
     use crate::engine::graph::{EdgeSpec, GateRequestTemplate};
     use crate::engine::test_support::{
-        CountingFunctionNode, RecordingPaladinPort, RecordingWaypointStore,
+        CountingFunctionNode, FailThenSucceedNode, FixedDecisionInterceptor, RecordingInterceptor,
+        RecordingPaladinPort, RecordingWaypointStore,
     };
 
     struct UnimplementedPaladinPort;
@@ -1875,7 +1883,8 @@ mod tests {
             &self,
             _state: &Battlefield,
             _ctx: &NodeContext,
-        ) -> Result<paladin_core::platform::container::directive::Directive, NodeError> {
+        ) -> Result<paladin_core::platform::container::directive::Directive, StateNodeError>
+        {
             let mut delta = StateDelta::new();
             delta.set_raw(self.field.clone(), self.value.clone());
             Ok(delta.into())
@@ -3401,7 +3410,7 @@ mod tests {
             _ctx: &crate::engine::node::NodeContext,
             _state: &Battlefield,
         ) -> InterceptDecision {
-            InterceptDecision::Fail(NodeError("interceptor-forced failure".to_string()))
+            InterceptDecision::Fail(StateNodeError("interceptor-forced failure".to_string()))
         }
         async fn after(&self, _ctx: &crate::engine::node::NodeContext, _delta: &mut StateDelta) {}
     }
@@ -3437,6 +3446,334 @@ mod tests {
             }
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    // --- Plan 25-01: the Aegis retry loop -----------------------------
+
+    /// D-09/D-15: the default `RetryPredicate` (`TransientOnly`) never
+    /// retries an `Unknown`-classified error -- this plan has no
+    /// adapter-sourced classifier yet (plan 25-02), so every
+    /// `StateNodeError` classifies `Unknown` until then. Every test below
+    /// that wants a retry to actually fire uses this predicate explicitly.
+    fn retrying_aegis(max_attempts: u32) -> Aegis {
+        Aegis {
+            retry: Some(RetryPolicy {
+                max_attempts,
+                retry_on: RetryPredicate::TransientAndUnknown,
+                jitter: false,
+                initial_interval: std::time::Duration::from_millis(1),
+                ..RetryPolicy::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_function_node_failure_is_retried_and_run_completes() {
+        let node_id = NodeId::new("flaky");
+        let node = FailThenSucceedNode::new(
+            2,
+            "transient failure",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("recovered"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("transient-retry-completes").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "expected Completed, got {outcome:?}"
+        );
+        assert_eq!(node.run_count(), 2, "node must run exactly twice");
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(waypoints.len(), 1);
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.node_id, node_id);
+        assert_eq!(record.attempt, 2, "the succeeding attempt is attempt 2");
+    }
+
+    #[tokio::test]
+    async fn failed_attempt_delta_never_reaches_the_battlefield() {
+        let node_id = NodeId::new("flaky-delta");
+        let field_name = FieldName::new("result").unwrap();
+        let node = FailThenSucceedNode::new(
+            2,
+            "transient failure",
+            field_name.clone(),
+            serde_json::json!("only-the-winner"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(3));
+
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let thread = ThreadId::new("failed-attempt-delta-isolated").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get::<String>(&field_name).unwrap(),
+                    Some("only-the-winner".to_string()),
+                    "the merged Battlefield reflects only the succeeding attempt's value -- a \
+                     failing `StateNode::run` returns `Err` with no `Directive` at all, so no \
+                     earlier attempt's delta can ever reach the merge on any code path"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn each_attempt_reads_an_identical_battlefield_snapshot() {
+        let node_id = NodeId::new("flaky-snapshot");
+        let node = FailThenSucceedNode::new(
+            2,
+            "transient failure",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("recovered"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(3));
+
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let thread = ThreadId::new("identical-snapshot-per-attempt").unwrap();
+        engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        let snapshots = node.observed_snapshots();
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(
+            snapshots[0], snapshots[1],
+            "every attempt observes an equal Battlefield snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn interceptors_run_once_per_attempt_not_once_per_node() {
+        let node_id = NodeId::new("flaky-intercepted");
+        let node = FailThenSucceedNode::new(
+            2,
+            "transient failure",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("recovered"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(3));
+
+        let recorder = RecordingInterceptor::new();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_interceptors(vec![Arc::clone(&recorder) as Arc<dyn NodeInterceptor>]);
+        let thread = ThreadId::new("interceptors-once-per-attempt").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(
+            recorder.calls(),
+            // `before` runs once per attempt (2 attempts here); `after`
+            // (hooks.rs's own documented contract: "Never called ... for a
+            // node whose own execution returned an error") runs only for
+            // the SUCCEEDING attempt -- the failing first attempt produces
+            // no `Directive`/delta for `after` to observe at all.
+            vec!["before", "before", "after"],
+            "before runs once per attempt; after only for the succeeding attempt"
+        );
+    }
+
+    #[tokio::test]
+    async fn interceptor_fail_decision_is_not_retried() {
+        let node_id = NodeId::new("intercepted-fail");
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("x"),
+            )),
+        );
+        graph.add_entry(node_id.clone());
+        // The DEFAULT `RetryPredicate` (`TransientOnly`) -- not
+        // `retrying_aegis`'s `TransientAndUnknown` -- because every
+        // `StateNodeError` (including one from an interceptor's own `Fail`
+        // decision) classifies `Unknown` until plan 25-02 lands a real
+        // classifier (D-05/D-07 stand-in, see the retry loop's own
+        // comment in `superstep.rs`): under `TransientOnly`, `Unknown`
+        // never retries, so THIS is what proves the "not retried" claim.
+        graph.set_aegis(
+            node_id.clone(),
+            Aegis {
+                retry: Some(RetryPolicy::default()),
+                ..Default::default()
+            },
+        );
+
+        let interceptor = FixedDecisionInterceptor::new(|| {
+            InterceptDecision::Fail(StateNodeError("intercepted failure".to_string()))
+        });
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_interceptors(vec![Arc::clone(&interceptor) as Arc<dyn NodeInterceptor>]);
+        let thread = ThreadId::new("interceptor-fail-not-retried").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, RunOutcome::Failed { .. }));
+        assert_eq!(
+            interceptor.before_call_count(),
+            1,
+            "a Fail decision is exactly one attempt, never retried"
+        );
+    }
+
+    #[tokio::test]
+    async fn interceptor_skip_decision_produces_exactly_one_attempt() {
+        let node_id = NodeId::new("intercepted-skip");
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                FieldName::new("result").unwrap(),
+                serde_json::json!("x"),
+            )),
+        );
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(3));
+
+        let interceptor =
+            FixedDecisionInterceptor::new(|| InterceptDecision::Skip("skip-once".to_string()));
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_interceptors(vec![Arc::clone(&interceptor) as Arc<dyn NodeInterceptor>]);
+        let thread = ThreadId::new("interceptor-skip-not-retried").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "Skip is never an error"
+        );
+        assert_eq!(
+            interceptor.before_call_count(),
+            1,
+            "a Skip decision is exactly one attempt, never retried"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_without_aegis_behaves_exactly_as_before() {
+        let node_id = NodeId::new("no-aegis-failure");
+        let node = FailThenSucceedNode::new(
+            // Never reaches this attempt: `usize::MAX` fail-until means
+            // every run fails.
+            usize::MAX,
+            "permanent-looking failure",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("never"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id);
+        // Deliberately no `set_aegis`/`with_default_aegis` call.
+
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let thread = ThreadId::new("no-aegis-byte-identical").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, RunOutcome::Failed { .. }));
+        assert_eq!(
+            node.run_count(),
+            1,
+            "no Aegis means exactly one attempt, byte-identical to pre-Phase-25 behavior"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_aegis_per_node_wins_wholesale_over_default_aegis() {
+        let node_id = NodeId::new("own-aegis-wins");
+        let node = FailThenSucceedNode::new(
+            usize::MAX,
+            "permanent-looking failure",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("never"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.with_default_aegis(retrying_aegis(5));
+        // The node's own Aegis carries NO retry policy -- must win
+        // wholesale over `default_aegis`'s retry policy, never merge
+        // field-by-field.
+        graph.set_aegis(
+            node_id,
+            Aegis {
+                retry: None,
+                ..Default::default()
+            },
+        );
+
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let thread = ThreadId::new("own-aegis-wholesale-override").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, RunOutcome::Failed { .. }));
+        assert_eq!(
+            node.run_count(),
+            1,
+            "the node's own retry:None Aegis wins wholesale over default_aegis's retry policy"
+        );
     }
 
     struct OrderRecordingInterceptor {

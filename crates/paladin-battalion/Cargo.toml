@@ -31,6 +31,15 @@ regex         = "1.11.1"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
+# `test-util` is NOT part of the workspace `tokio` feature set (`full` does
+# not imply it, deliberately -- it exists so a non-test build never links
+# tokio's fake-clock machinery). Added here, dev-dependencies-only, so
+# `#[tokio::test(start_paused = true)]` (`engine::retry`'s paused-clock
+# tests, Doc 04 plan 25-01) can pause/auto-advance the runtime's virtual
+# clock. A feature addition to the ALREADY-declared workspace `tokio`
+# dependency, not a new dependency (RESEARCH.md's "Don't Hand-Roll" note:
+# `tokio::time::pause` is the tool, never a fake-clock crate).
+tokio = { workspace = true, features = ["test-util"] }
 # In-memory WaypointPort fixture for the engine module's own unit tests
 # (Phase 22 Plan 01). No cycle: paladin-storage depends on paladin-core +
 # paladin-ports only, never on paladin-battalion.

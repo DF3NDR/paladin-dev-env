@@ -20,3 +20,12 @@ pub mod base;
 /// Core platform domain entities and containers.
 #[allow(missing_docs)]
 pub mod platform;
+
+// --- Crate prelude (D-09): re-exports only `Aegis` and `Transience`, never
+// the retry-policy type from either family -- the pre-existing v0.9
+// legacy battalion policy struct (see `platform::container::battalion`)
+// stays reachable only by its own path, so no glob import of this crate's
+// root can silently bind the wrong one (RESEARCH.md Pitfall 5). Do not
+// re-export it here, under any name, from this module.
+pub use platform::container::aegis::Aegis;
+pub use platform::container::transience::Transience;

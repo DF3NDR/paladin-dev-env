@@ -2,20 +2,45 @@
 //!
 //! Defines [`StateNode`], the pure state -> delta node trait `Function`
 //! variants of [`crate::engine::graph::NodeSpec`] implement, its execution
-//! context [`NodeContext`], and its error type [`NodeError`].
+//! context [`NodeContext`], and its error type [`StateNodeError`].
+//!
+//! `StateNodeError` (renamed from `NodeError`, D-06) is deliberately a
+//! bare-`String` newtype -- the same shape it has always had -- rather than
+//! the structured `paladin_core::platform::container::node_error::NodeError`
+//! Doc 04 introduces: a `StateNode` author still just returns a message, and
+//! `impl From<StateNodeError> for NodeErrorSource` is where that message
+//! crosses into the structured family, at the engine boundary where the
+//! node identity and attempt number are in scope (D-07).
 
 use async_trait::async_trait;
 use thiserror::Error;
 
 use paladin_core::platform::container::battlefield::Battlefield;
 use paladin_core::platform::container::directive::{Directive, MusterContext};
+use paladin_core::platform::container::node_error::NodeErrorSource;
 use paladin_core::platform::container::parley::ParleyResponse;
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 
 /// Error returned by a [`StateNode`]'s execution.
+///
+/// Renamed from `NodeError` (D-06): the PRD's own `NodeError` name is taken
+/// by the structured
+/// `paladin_core::platform::container::node_error::NodeError` this phase
+/// lands, so this pre-existing, new-in-`v0.10.0` engine newtype (absent at
+/// `v0.9.0`, so this rename breaks no published contract) moves aside.
 #[derive(Debug, Clone, PartialEq, Error)]
 #[error("{0}")]
-pub struct NodeError(pub String);
+pub struct StateNodeError(pub String);
+
+impl From<StateNodeError> for NodeErrorSource {
+    /// A `StateNode`'s own error becomes a `NodeErrorSource::Function`
+    /// (D-07): its message is already first-party text (never a
+    /// provider-sourced excerpt), so no redaction step applies here -- D-34
+    /// governs `Paladin`/`Llm` variant construction, not this one.
+    fn from(err: StateNodeError) -> Self {
+        NodeErrorSource::Function { message: err.0 }
+    }
+}
 
 /// The read-only context a [`StateNode`] runs with. Carries only what this
 /// phase needs; later plans extend this rather than changing its existing
@@ -79,5 +104,9 @@ pub trait StateNode: Send + Sync {
     /// `StateDelta` -- adopts this via `Ok(delta.into())`
     /// (`impl From<StateDelta> for Directive` defaults `next:
     /// NextStep::Edges`, preserving the prior behavior exactly).
-    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError>;
+    async fn run(
+        &self,
+        state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError>;
 }

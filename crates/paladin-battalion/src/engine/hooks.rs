@@ -28,7 +28,7 @@ use tokio::sync::mpsc;
 use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
 use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink};
 
-use crate::engine::node::{NodeContext, NodeError};
+use crate::engine::node::{NodeContext, StateNodeError};
 
 /// Default queue capacity for a [`TraceDispatcher`] constructed via
 /// [`TraceDispatcher::new`]. Arbitrary but generous for a single run's event
@@ -181,8 +181,8 @@ pub enum InterceptDecision {
     /// history, never a silent no-op (T-22-33).
     Skip(String),
     /// Do not execute the node; fail it exactly as if its own execution had
-    /// returned this `NodeError`.
-    Fail(NodeError),
+    /// returned this `StateNodeError`.
+    Fail(StateNodeError),
 }
 
 /// An ordered hook wrapping node execution (ENG-FR-22): observes or
@@ -214,6 +214,20 @@ pub enum InterceptDecision {
 /// decision could itself be retried as if it were a node's own transient
 /// failure, which is never the intended semantics — an interceptor's
 /// decision is deliberate policy, not a fault to recover from.
+///
+/// Landed (plan 25-01): the retry loop in `crate::engine::superstep::run`'s
+/// spawned per-node dispatch closure wraps the ENTIRE sequence this trait's
+/// `before`/`after` chain participates in -- the `NodeStarted` trace emit,
+/// this whole `before` chain, `execute_vanguard_node`, this whole `after`
+/// chain, and the `NodeFinished` trace emit -- once per attempt. `Skip` and
+/// `Fail` are decided fresh on every attempt (an interceptor cannot tell,
+/// from its own perspective, that it is being asked again), but a `Skip`/
+/// `Fail` decision itself is never retried BECAUSE it produces
+/// `NodeRunOutcome::Skipped`/`Failed(NodeFailure::Node(_))` immediately --
+/// exactly the outcomes `crate::engine::retry::should_retry` classifies via
+/// a `NodeError.transience`, so an interceptor's own policy decision is
+/// retried only if the caller's `Aegis` says a `Function`-sourced error at
+/// that transience is retryable, same as any other node failure.
 #[async_trait]
 pub trait NodeInterceptor: Send + Sync {
     /// Decide whether `ctx`'s node should execute against `state` this
@@ -426,7 +440,7 @@ mod tests {
         #[async_trait]
         impl NodeInterceptor for AlwaysFail {
             async fn before(&self, _ctx: &NodeContext, _state: &Battlefield) -> InterceptDecision {
-                InterceptDecision::Fail(NodeError("intercepted failure".to_string()))
+                InterceptDecision::Fail(StateNodeError("intercepted failure".to_string()))
             }
             async fn after(&self, _ctx: &NodeContext, _delta: &mut StateDelta) {}
         }
@@ -439,7 +453,7 @@ mod tests {
             )
             .await;
         match decision {
-            InterceptDecision::Fail(NodeError(msg)) => assert_eq!(msg, "intercepted failure"),
+            InterceptDecision::Fail(StateNodeError(msg)) => assert_eq!(msg, "intercepted failure"),
             other => panic!("expected Fail, got {other:?}"),
         }
     }

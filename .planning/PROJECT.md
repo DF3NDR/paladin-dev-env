@@ -109,6 +109,30 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 24 complete (2026-09-05)** — pause-resume-history-graceful-shutdown, the v0.10.0
+milestone's third planned phase: the Parley value types and the suspend-persist-resume spine (a
+node, or a first-class `Gate` node with Battlefield templating, raising `ParleyRequest`s suspends
+the run into one `AwaitingInput` Waypoint carrying every parley of the superstep, releases its
+resources, and resumes from a different process), the `parley.` directive envelope for LLM-raised
+parleys, `resume_with` total validation per response kind with typed errors that leave the thread
+suspended plus `expires_at`/`on_expire`, Chronicle lineage (`fork_of`, `child_on_branch`,
+`replay`/`fork`-with-edit through `ChronicleService` with the original chain byte-identical),
+graceful shutdown (`ShutdownCoordinator` grace handling, over-grace nodes `Skipped` and re-listed
+in the vanguard, SIGTERM/SIGINT drain wired in `paladin-server` with `k8s/` manifests and docs
+updated — M-B-02), the `ParleyPort` seam with `GraphRegistry`/`WaypointStoreConfig`, thread
+routes `GET /v1/threads/{id}/state`, `POST /v1/threads/{id}/resume`, `GET /v1/threads/{id}/history`
+with `openapi.json` regenerated, the graph fingerprint bumped to `v4`, and the mdBook
+`parley-and-chronicle` guide. 14/14 plans (12 executed + 2 gap closure); first verification
+`gaps_found` 5/6 (post-CR-01 documentation drift), re-verification 6/6 after 24-13 aligned
+CHANGELOG/MIGRATION §9.6/user guide to the admin-gated resume posture and 24-14 recorded the human
+read of the CR-02 fix as `approved`. Code review CR-01 (any authenticated role could resume any
+thread — now `require_admin` on resume, interim narrowing of D-24 pending PLAT-06) and CR-02
+(`MusterProgress` lost on a shutdown-grace abort mid-Muster) plus WR-01…03 fixed in tree; the
+post-fix re-review left 0 critical / 3 advisory warnings in `24-REVIEW.md` (in-memory
+`list_threads` ordering, `TraceDispatcher` lock-poison `expect`, the accepted any-role read
+routes). HITL-01 … HITL-05 complete. `24-SECURITY.md` not yet produced (`/gsd-secure-phase 24`
+outstanding).
+
 **Phase 23 complete (2026-09-04)** — control-flow-dynamic-routing-fan-out-subgraphs, the v0.10.0
 milestone's second planned phase: BUG-01 fixed fail-closed on both `CampaignExecutionService` and
 `WarEngine` (RED `b2d05045` → GREEN `8d5ef333`; an unregistered `EdgeCondition::Custom` now fails
@@ -572,7 +596,7 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
   epic by X-10.5/X-11.1 (Doc 01)
 - [x] **CF-01 … CF-05** (✓ Phase 23, 2026-09-04) — BUG-01 fail-closed custom edge conditions (the program's single
   sanctioned behavioral break), Directive routing, Muster fan-out, subgraphs, LLM routing (Doc 02)
-- [ ] **HITL-01 … HITL-05** — Parley pause, validated resume, Chronicle history/replay/fork,
+- [x] **HITL-01 … HITL-05** (✓ Phase 24, 2026-09-05) — Parley pause, validated resume, Chronicle history/replay/fork,
   graceful shutdown, minimal thread HTTP endpoints (Doc 03)
 - [ ] **FT-01 … FT-06** — Transience taxonomy + structured NodeError, Aegis retry/timeout/error
   handlers, model fallback, node caching (Doc 04)
@@ -1549,5 +1573,5 @@ requirements, 86 forward requirements across 16 phases, 60 variant entries acros
 69 warnings, 0 locked decisions, 0 blockers, 11 ADR candidates**)*
 
 ---
-*Last updated: 2026-09-04 after Phase 23 completion (v0.10.0 milestone; next: Phase 24
-pause/resume, history and graceful shutdown).*
+*Last updated: 2026-09-05 after Phase 24 completion (v0.10.0 milestone; next: Phase 25
+node-level fault tolerance).*

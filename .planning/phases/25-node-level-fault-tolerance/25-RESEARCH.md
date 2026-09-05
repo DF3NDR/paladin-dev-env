@@ -1099,7 +1099,9 @@ key composition, etc.) are `[CITED: .project/v0.10.0/04-fault-tolerance.md]` or
 CONTEXT.md's own framing, and this research independently re-verified every file:line anchor
 CONTEXT.md cites against it.
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+**RESOLVED at plan-phase (2026-09-05):** Q1 (D-12 Battalion-node `retry`/`cache` carve-out) is a live `checkpoint:decision` in plan 25-03 Task 1 (default `keep-d12`, `overturn-d12` offered); Q2 (D-26 `PaladinResult` FRU trade-off recurring) is informational and is surfaced at plan 25-08 Task 1's `checkpoint:decision` — no further action this phase.
 
 1. **Should D-12's Battalion-node `retry`/`cache` restriction be overturned at plan review?**
    - What we know: PRD 04 §2.1 states a blanket "`NodeSpec` gains `aegis`" with no node-kind

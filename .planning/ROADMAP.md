@@ -453,19 +453,45 @@ Plans:
 **Plans**: 14 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 25-01-PLAN.md — Tracer: core Transience/NodeError/Aegis value types, WarGraph aegis sidecar, superstep retry loop, backoff and predicate tests
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 25-02-PLAN.md — X-10 error taxonomy gate: transience() on both enums, LlmFailure/ProviderError/AllProvidersFailed/BattalionError::Node, three enums non-exhaustive, §9.2 rows
 - [ ] 25-03-PLAN.md — Aegis validation: EngineRegistries, fail-closed predicate/handler registries, node-kind matrix, fingerprint v4 → v5
 - [ ] 25-04-PLAN.md — Node cache port, CachedDelta, InMemory + Redis adapters under one contract suite, redis-cache feature, NodeCacheConfig
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 25-05-PLAN.md — One shared map_http_status helper (redact-then-bound) applied to all nine LLM provider adapters
 - [ ] 25-06-PLAN.md — LlmError → PaladinError::LlmFailure conversion helper and the eight erasure sites
 - [ ] 25-07-PLAN.md — Retry expansion: AttemptRecord history, per-attempt trace fields, structured failure path, per-task Muster retry
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 25-08-PLAN.md — FallbackLlmAdapter chain with streaming first-chunk rule, FallbackHop trace, PaladinResult.served_by
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 25-09-PLAN.md — Timeouts: HeartbeatHandle, defaulted PaladinPort::execute_observed, run/idle/EngineRun nesting, RunTimeoutExceeded
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 25-10-PLAN.md — Typed error handlers: Route/Absorb/Custom validation and dispatch, max_node_visits loop bound
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 25-11-PLAN.md — Handler composition: Muster delta-only rule, Parley from a handler, compensation-chain and loop-bound E2E
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [ ] 25-12-PLAN.md — E2E-3 seam replaced by real per-task retry, X-05 stress, kill-during-backoff, run-timeout E2E
 - [ ] 25-13-PLAN.md — Cache engine integration: key composition, hit/miss path, FieldSpec cache marker, correctness guardrails
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
 - [ ] 25-14-PLAN.md — Fault-tolerance guide, MIGRATION §9.1-§9.7 close-out, traceability anchors, semver/MSRV/security/coverage gate evidence
 
 ### Phase 26: Agent Runtime Enhancements

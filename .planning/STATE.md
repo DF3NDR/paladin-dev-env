@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 25
 current_phase_name: Node-Level Fault Tolerance
-status: planning
+status: executing
 stopped_at: Phase 25 context gathered
-last_updated: "2026-09-05T14:33:33.290Z"
+last_updated: "2026-09-05T15:45:16.727Z"
 last_activity: 2026-09-05
 last_activity_desc: Phase 24 complete, transitioned to Phase 25
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 50
+  total_plans: 64
   completed_plans: 50
 ---
 
@@ -53,7 +53,7 @@ names. See MILESTONES.md.
 
 Phase: 25 — Node-Level Fault Tolerance
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-05 — Phase 24 complete, transitioned to Phase 25
 
 ## Performance Metrics

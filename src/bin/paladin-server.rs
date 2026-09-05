@@ -16,9 +16,12 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use log::{error, info, warn};
 use paladin::config::agents::AuthConfig;
+use paladin::config::engine::EngineConfig;
+use paladin::config::env_utils::EnvOverridable;
 use paladin::config::settings::Settings;
 use paladin::infrastructure::adapters::auth::InMemoryTokenAuthAdapter;
 use paladin::infrastructure::web::agent_host::{bind_address, build_agent_registry};
@@ -27,6 +30,7 @@ use paladin::infrastructure::web::{
     AgentApiState, AgentAuthConfig, HttpLayersConfig, Principal, RateLimitConfig, TimeoutPolicy,
     agent_router, with_http_layers,
 };
+use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_ports::output::auth_port::AuthPort;
 use tokio::signal;
 
@@ -64,6 +68,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Resolve authentication (fail-closed: enabled + no credentials ⇒ refuse to start).
     let auth = build_auth_config(&http.auth)?;
+
+    // Graceful-shutdown coordinator (HITL-04, D-21/D-22): constructed once per
+    // process and handed forward to every component that starts an in-flight
+    // engine run. Today no such component registers yet -- the resume port's
+    // background continuation (plan 24-10) is the first real registrant --
+    // but `shutdown_signal` below already cancels this SAME instance on
+    // SIGTERM/SIGINT. `EngineConfig` (not `Settings`, X-10 avoidance) is the
+    // one config struct feeding both the engine and this process-level wait.
+    let mut engine_config = EngineConfig::default();
+    engine_config.apply_env_overrides();
+    engine_config
+        .validate()
+        .map_err(|e| format!("invalid engine configuration: {e}"))?;
+    let shutdown_coordinator = ShutdownCoordinator::new();
+    let shutdown_grace = Duration::from_secs(engine_config.shutdown_grace_secs);
+    let graceful_shutdown = engine_config.graceful_shutdown;
     let state = AgentApiState::new(Arc::new(registry))
         .with_provisioner(Arc::new(provisioner))
         .with_timeouts(TimeoutPolicy {
@@ -130,7 +150,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(shutdown_signal(
+        shutdown_coordinator,
+        shutdown_grace,
+        graceful_shutdown,
+    ))
     .await?;
 
     info!("paladin-server shut down cleanly");
@@ -229,7 +253,7 @@ fn config_path() -> String {
 }
 
 /// Resolve when the process receives `Ctrl-C` or (on Unix) `SIGTERM`.
-async fn shutdown_signal() {
+async fn wait_for_termination_signal() {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -251,6 +275,25 @@ async fn shutdown_signal() {
         _ = ctrl_c => info!("received Ctrl-C; shutting down"),
         _ = terminate => info!("received SIGTERM; shutting down"),
     }
+}
+
+/// Cancel `coordinator` and drain every registered in-flight engine run
+/// within `grace`, or skip the wait entirely when `graceful` is `false`
+/// (the `MIGRATION.md` M-B-02 disable switch for legacy-only deployments,
+/// D-20). Split out from [`shutdown_signal`] so the drain behaviour is
+/// exercised by a simulated trigger in tests rather than requiring a real
+/// OS signal (HITL-04, D-22).
+async fn drain_on_shutdown(_coordinator: &ShutdownCoordinator, _grace: Duration, _graceful: bool) {
+    // RED: not yet wired to the coordinator (Phase 24 Plan 09, HITL-04, D-22).
+}
+
+/// Wait for a termination signal, then cancel `coordinator` and drain every
+/// registered in-flight engine run within `grace` (skipped when `graceful`
+/// is `false`) before `axum::serve(...).with_graceful_shutdown` completes
+/// (HITL-04, D-22).
+async fn shutdown_signal(coordinator: ShutdownCoordinator, grace: Duration, graceful: bool) {
+    wait_for_termination_signal().await;
+    drain_on_shutdown(&coordinator, grace, graceful).await;
 }
 
 #[cfg(test)]
@@ -358,6 +401,191 @@ mod tests {
             result.is_err(),
             "authentication enabled with no API keys and the token store disabled must refuse \
              to start, not silently build an unauthenticated-but-enabled config"
+        );
+    }
+
+    // --- Phase 24 Plan 09: ShutdownCoordinator process wiring (HITL-04,
+    // D-22) -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn shutdown_signal_cancels_the_coordinator() {
+        let coordinator = ShutdownCoordinator::new();
+        let (child_token, guard) = coordinator.register();
+        // No real work outstanding for this registration -- drop immediately
+        // so the drain below returns fast rather than waiting on it.
+        drop(guard);
+
+        drain_on_shutdown(&coordinator, Duration::from_secs(5), true).await;
+
+        assert!(
+            child_token.is_cancelled(),
+            "a simulated signal must cancel the coordinator's root token, observed here via a \
+             registered run's child token"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_waits_up_to_grace_for_in_flight_runs() {
+        let coordinator = ShutdownCoordinator::new();
+        let (_child_token, guard) = coordinator.register();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            drop(guard);
+        });
+
+        let started = tokio::time::Instant::now();
+        drain_on_shutdown(&coordinator, Duration::from_secs(5), true).await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the wait must return as soon as the in-flight run drains, not at the grace \
+             deadline (elapsed: {elapsed:?})"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_stops_waiting_at_the_grace_deadline() {
+        let coordinator = ShutdownCoordinator::new();
+        let (_child_token, guard) = coordinator.register();
+
+        let started = tokio::time::Instant::now();
+        drain_on_shutdown(&coordinator, Duration::from_millis(50), true).await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed >= Duration::from_millis(50),
+            "the process must wait at least the configured grace before giving up on a run \
+             that never drains (elapsed: {elapsed:?})"
+        );
+        assert_eq!(
+            coordinator.in_flight(),
+            1,
+            "the never-dropped run is still registered after the deadline"
+        );
+        drop(guard);
+    }
+
+    #[tokio::test]
+    async fn graceful_shutdown_disabled_skips_the_wait() {
+        let coordinator = ShutdownCoordinator::new();
+        let (_child_token, guard) = coordinator.register();
+
+        let started = tokio::time::Instant::now();
+        drain_on_shutdown(&coordinator, Duration::from_secs(30), false).await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "graceful_shutdown = false must skip the wait entirely, even with a registered \
+             run in flight (elapsed: {elapsed:?})"
+        );
+        assert!(
+            coordinator.token().is_cancelled(),
+            "the root token must still be cancelled even when the wait itself is skipped"
+        );
+        drop(guard);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resume_continues_a_halted_thread_after_process_shutdown() {
+        use async_trait::async_trait;
+        use paladin_battalion::engine::node::{NodeContext, NodeError, StateNode};
+        use paladin_battalion::engine::{EngineLimits, NodeSpec, RunOutcome, WarEngine, WarGraph};
+        use paladin_core::platform::container::battlefield::StateDelta;
+        use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
+        use paladin_core::platform::container::directive::Directive;
+        use paladin_core::platform::container::paladin::Paladin;
+        use paladin_core::platform::container::paladin_error::PaladinError;
+        use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
+        use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+        use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+
+        // Minimal StateNode/PaladinPort test doubles built against the same
+        // PUBLIC engine API `src/config/engine.rs`'s own WarEngine tests use
+        // -- `paladin_battalion::engine::test_support` is `pub(crate)` to
+        // that crate and unreachable from here.
+        struct NoopNode;
+
+        #[async_trait]
+        impl StateNode for NoopNode {
+            async fn run(
+                &self,
+                _state: &Battlefield,
+                _ctx: &NodeContext,
+            ) -> Result<Directive, NodeError> {
+                Ok(StateDelta::new().into())
+            }
+        }
+
+        struct UnusedPaladinPort;
+
+        #[async_trait]
+        impl PaladinPort for UnusedPaladinPort {
+            async fn execute(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                unreachable!("this test's WarGraph has no NodeSpec::Paladin nodes")
+            }
+
+            async fn execute_stream(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                unreachable!("this test's WarGraph has no NodeSpec::Paladin nodes")
+            }
+
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+        }
+
+        let schema = BattlefieldSchema::new(vec![]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node = NodeId::new("only-node");
+        graph.add_node(node.clone(), NodeSpec::Function(Arc::new(NoopNode)));
+        graph.add_entry(node);
+
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let thread =
+            ThreadId::new("process-wiring-resume-after-shutdown").expect("valid thread id");
+
+        // Simulate the process-wiring path: a run registers with the SAME
+        // ShutdownCoordinator paladin-server.rs cancels on SIGTERM/SIGINT.
+        let coordinator = ShutdownCoordinator::new();
+        let (child_token, guard) = coordinator.register();
+        drop(guard); // no work in flight to wait for in this test
+        drain_on_shutdown(&coordinator, Duration::from_secs(5), true).await;
+
+        let halted_engine = WarEngine::new(Arc::new(UnusedPaladinPort), store.clone())
+            .with_cancellation_token(child_token);
+        let halted = halted_engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .expect("start returns Ok(RunOutcome) even when halted by cancellation");
+        assert!(
+            matches!(halted, RunOutcome::Halted { .. }),
+            "a run registered with an already-cancelled coordinator must Halt at the \
+             superstep boundary, got {halted:?}"
+        );
+
+        // A fresh engine instance, with no cancellation token, resumes the
+        // SAME thread and completes: the explicit HITL-FR-14 assertion at
+        // the process-wiring level (plan 24-01 already pins the equivalent
+        // engine-level behaviour).
+        let fresh_engine = WarEngine::new(Arc::new(UnusedPaladinPort), store);
+        let resumed = fresh_engine
+            .resume(&graph, thread)
+            .await
+            .expect("resume returns Ok(RunOutcome)");
+        assert!(
+            matches!(resumed, RunOutcome::Completed { .. }),
+            "resume must continue a Halted thread after a coordinator-driven process shutdown \
+             and complete, got {resumed:?}"
         );
     }
 }

@@ -139,10 +139,11 @@ mod tests {
     }
 
     /// Test 2: each thread path documents its full status set, including
-    /// `501` for the unwired case (every path) and both `409` codes on the
-    /// resume path (as a single response entry naming both, since OpenAPI's
-    /// per-status-code response map cannot hold two distinct entries under
-    /// the identical `409` key).
+    /// `501` for the unwired case (every path), `403` on the resume path for
+    /// the admin gate (`require_admin`, narrows D-24 pending PLAT-06), and
+    /// both `409` codes on the resume path (as a single response entry
+    /// naming both, since OpenAPI's per-status-code response map cannot hold
+    /// two distinct entries under the identical `409` key).
     #[test]
     fn openapi_thread_paths_document_every_status() {
         let api = openapi_spec();
@@ -166,7 +167,7 @@ mod tests {
             .get("/v1/threads/{id}/resume")
             .expect("resume path present");
         let post_op = resume_path.post.as_ref().expect("POST operation");
-        for status in ["202", "400", "401", "404", "409", "501"] {
+        for status in ["202", "400", "401", "403", "404", "409", "501"] {
             assert!(
                 post_op.responses.responses.contains_key(status),
                 "POST /threads/{{id}}/resume missing {status}"

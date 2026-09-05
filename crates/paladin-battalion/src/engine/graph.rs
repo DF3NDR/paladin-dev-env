@@ -90,6 +90,40 @@ pub enum NodeSpec {
         /// via [`NodeSpec::battalion`], but does not itself act on it.
         restart_on_resume: bool,
     },
+    /// A first-class human-input node (HITL-01, D-05): has **no `run` body
+    /// of its own**. On its first visit (`engine::superstep`'s dispatch)
+    /// it renders `request.prompt_template` and, if declared,
+    /// `request.payload_template` from the Battlefield and raises a
+    /// `ParleyRequest`, entering the same `NextStep::Parley` suspension
+    /// path (plan 24-01) any other node's `Directive` can enter. On the
+    /// post-resume visit it writes the delivered, normalised value to
+    /// `output_field` -- or, for `ParleyKind::StateEdit`, returns the
+    /// response's `StateDelta` as this node's own delta and writes no
+    /// field -- then routes via its static outgoing edges exactly like a
+    /// [`NodeSpec::Paladin`] node's `output_field` (D-06). An approval
+    /// gate is therefore three lines of graph: one `Gate` node plus a
+    /// `Contains("true")` and a `Contains("false")` edge.
+    ///
+    /// `output_field` is **required** for `ParleyKind::Approval`/`Choice`/
+    /// `FreeText` and **must be `None`** for `ParleyKind::StateEdit` --
+    /// [`WarGraph::validate`] rejects every other combination, and also
+    /// rejects an `output_field` absent from the schema or declared with an
+    /// incompatible type (D-05).
+    ///
+    /// **Limit (D-04):** a Gate raised inside a nested
+    /// [`NodeSpec::Battalion`] child is not supported this phase -- the
+    /// parent's dispatch of that Battalion node fails with the typed
+    /// `EngineError::ParleyInChildUnsupported` (landed in plan 24-01).
+    /// Raise the parley in the parent graph instead, today; propagating a
+    /// child's parley to the parent is a deferred idea a later phase may
+    /// promote.
+    Gate {
+        /// This Gate's declarative request template.
+        request: GateRequestTemplate,
+        /// The field the delivered value is written to, or `None` for
+        /// `ParleyKind::StateEdit`.
+        output_field: Option<FieldName>,
+    },
 }
 
 /// The declared channel between a [`NodeSpec::Battalion`] node's parent
@@ -198,6 +232,106 @@ impl NodeSpec {
             restart_on_resume: false,
         }
     }
+
+    /// Construct a `NodeSpec::Gate` (HITL-01, D-05): a first-class
+    /// human-input node with no `run` body of its own. `WarGraph::validate`
+    /// enforces `output_field`'s presence/absence and type against
+    /// `request.kind` -- see [`NodeSpec::Gate`]'s own rustdoc for the exact
+    /// rule.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_battalion::engine::graph::{GateRequestTemplate, NodeSpec};
+    /// use paladin_battalion::engine::InputMapping;
+    /// use paladin_core::platform::container::battlefield::FieldName;
+    /// use paladin_core::platform::container::parley::ParleyKind;
+    ///
+    /// let gate = NodeSpec::gate(
+    ///     GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("Proceed?")),
+    ///     Some(FieldName::new("approved").unwrap()),
+    /// );
+    /// assert!(matches!(gate, NodeSpec::Gate { .. }));
+    /// ```
+    pub fn gate(request: GateRequestTemplate, output_field: Option<FieldName>) -> Self {
+        NodeSpec::Gate {
+            request,
+            output_field,
+        }
+    }
+}
+
+/// A [`NodeSpec::Gate`] node's declarative request template (HITL-01,
+/// D-05): rendered from the Battlefield through [`InputMapping`] on the
+/// node's first visit, with `expires_at = now + expires_in` stamped at
+/// raise time (`engine::superstep`).
+///
+/// Carries no `serde` derive, and needs none: `NodeSpec` itself is never
+/// serialized -- it holds `Arc<dyn StateNode>` and `Box<Paladin>` (see this
+/// file's own top, where [`NodeSpec`] is declared) -- so a
+/// `GateRequestTemplate` is, like every other `NodeSpec` payload,
+/// Rust-constructed graph-building code, never round-tripped through
+/// serde. `expires_in` is therefore a plain [`std::time::Duration`] with no
+/// seconds-based wire representation to design (RESEARCH.md Open Question
+/// 2, settled).
+#[derive(Debug, Clone)]
+pub struct GateRequestTemplate {
+    /// The shape of input this Gate awaits.
+    pub kind: ParleyKind,
+    /// Renders the raised `ParleyRequest.prompt` from the Battlefield.
+    pub prompt_template: InputMapping,
+    /// Renders the raised `ParleyRequest.payload` from the Battlefield, if
+    /// declared. `None` raises with an empty object payload.
+    pub payload_template: Option<InputMapping>,
+    /// Valid choices, for [`ParleyKind::Choice`].
+    pub choices: Option<Vec<String>>,
+    /// How long after raising this request expires, if ever --
+    /// `expires_at = now + expires_in`, stamped at raise time.
+    pub expires_in: Option<Duration>,
+    /// What happens if this request expires unanswered.
+    pub on_expire: OnExpire,
+}
+
+impl GateRequestTemplate {
+    /// Construct a `GateRequestTemplate` of `kind`, rendering `prompt_template`,
+    /// with no payload template, no choices, no expiry, and
+    /// [`OnExpire::FailRun`] (its `Default`) -- the fluent `with_*` methods
+    /// below customize any of these.
+    pub fn new(kind: ParleyKind, prompt_template: InputMapping) -> Self {
+        Self {
+            kind,
+            prompt_template,
+            payload_template: None,
+            choices: None,
+            expires_in: None,
+            on_expire: OnExpire::default(),
+        }
+    }
+
+    /// Render the raised `ParleyRequest.payload` from `payload_template`.
+    pub fn with_payload_template(mut self, payload_template: InputMapping) -> Self {
+        self.payload_template = Some(payload_template);
+        self
+    }
+
+    /// Declare the valid choices for a [`ParleyKind::Choice`] gate.
+    pub fn with_choices(mut self, choices: Vec<String>) -> Self {
+        self.choices = Some(choices);
+        self
+    }
+
+    /// Set how long after raising this request expires
+    /// (`expires_at = now + expires_in`, stamped at raise time).
+    pub fn with_expires_in(mut self, expires_in: Duration) -> Self {
+        self.expires_in = Some(expires_in);
+        self
+    }
+
+    /// Set what happens if this request expires unanswered.
+    pub fn with_on_expire(mut self, on_expire: OnExpire) -> Self {
+        self.on_expire = on_expire;
+        self
+    }
 }
 
 impl std::fmt::Debug for NodeSpec {
@@ -226,6 +360,14 @@ impl std::fmt::Debug for NodeSpec {
                 .field("inputs_len", &state_map.inputs.len())
                 .field("outputs_len", &state_map.outputs.len())
                 .field("restart_on_resume", restart_on_resume)
+                .finish(),
+            NodeSpec::Gate {
+                request,
+                output_field,
+            } => f
+                .debug_struct("NodeSpec::Gate")
+                .field("kind", &request.kind)
+                .field("output_field", output_field)
                 .finish(),
         }
     }
@@ -577,6 +719,7 @@ impl WarGraph {
         }
 
         self.validate_muster_prefix_schema_fields()?;
+        self.validate_gates()?;
         self.validate_edge_evaluators(edge_evaluators)?;
         self.validate_worker_templates()?;
         self.validate_battalion_state_maps()?;
@@ -740,6 +883,82 @@ impl WarGraph {
                      never from the Battlefield -- rename the schema field"
                 .to_string(),
         })
+    }
+
+    /// HITL-01, D-05's Gate well-formedness clause: for every
+    /// [`NodeSpec::Gate`] node, `output_field` is required for
+    /// `ParleyKind::Approval`/`Choice`/`FreeText` and must be `None` for
+    /// `ParleyKind::StateEdit`; when present, the field must exist in the
+    /// graph's schema with a type compatible with the Gate's `kind`
+    /// (`Approval` -> `Bool` or `String`; `Choice`/`FreeText` -> `String`,
+    /// per [`gate_output_field_is_type_compatible`]). An
+    /// `on_expire: OnExpire::ResumeWithDefault` value is checked against its
+    /// own `kind` through [`validate_parley_value_for_kind`] -- the SAME
+    /// per-kind validator `WarEngine::resume_with` applies to a real
+    /// submitted response (D-12, T-24-06) -- never a second, weaker check.
+    ///
+    /// Checked one Gate at a time, in `node_order`, returning the FIRST
+    /// violation found -- unlike
+    /// [`WarGraph::validate_muster_prefix_schema_fields`]'s "report every
+    /// offender" discipline, a single Gate's several distinct rules produce
+    /// distinctly-shaped, differently-typed errors that do not collapse
+    /// into one `Vec<String>`.
+    fn validate_gates(&self) -> Result<(), EngineError> {
+        for id in &self.node_order {
+            let Some(NodeSpec::Gate {
+                request,
+                output_field,
+            }) = self.nodes.get(id)
+            else {
+                continue;
+            };
+
+            let requires_output_field = !matches!(request.kind, ParleyKind::StateEdit);
+            match (requires_output_field, output_field) {
+                (true, None) => {
+                    return Err(EngineError::GateOutputFieldRequired {
+                        node: id.clone(),
+                        kind: request.kind.clone(),
+                    });
+                }
+                (false, Some(field)) => {
+                    return Err(EngineError::GateOutputFieldMustBeAbsent {
+                        node: id.clone(),
+                        field: field.clone(),
+                    });
+                }
+                _ => {}
+            }
+
+            if let Some(field) = output_field {
+                let spec = self.schema.field_spec(field).ok_or_else(|| {
+                    EngineError::GateOutputFieldUnknown {
+                        node: id.clone(),
+                        field: field.clone(),
+                    }
+                })?;
+                if let Err(reason) = gate_output_field_is_type_compatible(&request.kind, spec) {
+                    return Err(EngineError::GateOutputFieldTypeIncompatible {
+                        node: id.clone(),
+                        field: field.clone(),
+                        kind: request.kind.clone(),
+                        reason,
+                    });
+                }
+            }
+
+            if let OnExpire::ResumeWithDefault(value) = &request.on_expire
+                && let Err(reason) =
+                    validate_parley_value_for_kind(&request.kind, request.choices.as_deref(), value)
+            {
+                return Err(EngineError::GateResumeWithDefaultInvalid {
+                    node: id.clone(),
+                    kind: request.kind.clone(),
+                    reason,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// CF-03 / D-12's worker-template well-formedness clause: a node marked
@@ -1233,6 +1452,137 @@ impl WarGraph {
 fn push_field(buf: &mut Vec<u8>, bytes: &[u8]) {
     buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
     buf.extend_from_slice(bytes);
+}
+
+/// Whether `spec`'s declared type is compatible with a Gate of `kind`
+/// (HITL-01, D-05): `ParleyKind::Approval` accepts a `Bool` or `String`
+/// field; `Choice`/`FreeText` accept only a `String` field.
+///
+/// `FieldSpec` carries no separate type declaration -- a field's "type" is
+/// inferred here from its schema `default` value, the only per-field type
+/// signal `BattlefieldSchema` carries. A field declared with **no**
+/// default cannot be type-checked and is therefore rejected: an
+/// `output_field` intended for a Gate must declare a default of the
+/// intended type (a Bool or empty-string default for a fresh field is a
+/// normal, cheap way to satisfy this).
+fn gate_output_field_is_type_compatible(kind: &ParleyKind, spec: &FieldSpec) -> Result<(), String> {
+    let Some(default) = spec.default.as_ref() else {
+        return Err(
+            "the field declares no schema default, so its type cannot be inferred -- declare a \
+             default value of the Gate's intended output type"
+                .to_string(),
+        );
+    };
+    match kind {
+        ParleyKind::Approval => match default {
+            serde_json::Value::Bool(_) | serde_json::Value::String(_) => Ok(()),
+            other => Err(format!(
+                "Approval requires a Bool or String output_field (inferred from its schema \
+                 default); found default {other}"
+            )),
+        },
+        ParleyKind::Choice | ParleyKind::FreeText => match default {
+            serde_json::Value::String(_) => Ok(()),
+            other => Err(format!(
+                "{kind:?} requires a String output_field (inferred from its schema default); \
+                 found default {other}"
+            )),
+        },
+        // `ParleyKind::StateEdit` never reaches here (`validate_gates`
+        // requires `output_field: None` for it, checked before this call
+        // is ever made) -- `ParleyKind` is `#[non_exhaustive]`, so a match
+        // in this crate still needs a catch-all for a future kind. Fails
+        // CLOSED (mirrors `EngineError::UnregisteredEdgeCondition`'s
+        // fail-closed stance): a Gate output_field type check for a kind
+        // this function does not yet know how to check is rejected, not
+        // silently passed.
+        other => Err(format!(
+            "no output_field type-compatibility rule is registered for ParleyKind {other:?} -- \
+             add one alongside the kind"
+        )),
+    }
+}
+
+/// Normalise an Approval [`ParleyResponse::value`](paladin_core::platform::container::parley::ParleyResponse)
+/// (or a Gate's `on_expire: OnExpire::ResumeWithDefault` value, checked at
+/// graph-validate time) to a canonical `bool` (HITL-FR-05, D-06): a JSON
+/// `Bool` passes through; a JSON `String` matches case-insensitively
+/// against `true`/`false`/`yes`/`no`/`approve`/`deny`. Every other shape,
+/// and every other string, is `None`.
+pub(crate) fn normalize_approval_value(value: &serde_json::Value) -> Option<bool> {
+    match value {
+        serde_json::Value::Bool(b) => Some(*b),
+        serde_json::Value::String(s) => match s.to_ascii_lowercase().as_str() {
+            "true" | "yes" | "approve" => Some(true),
+            "false" | "no" | "deny" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Validate a submitted or defaulted value against its own [`ParleyKind`]
+/// (D-12, T-24-06): the SAME validator [`WarGraph::validate`] applies to a
+/// Gate's `on_expire: OnExpire::ResumeWithDefault` value at graph-validate
+/// time, and the one a later plan's `WarEngine::resume_with` applies to a
+/// real submitted [`ParleyResponse::value`](paladin_core::platform::container::parley::ParleyResponse) --
+/// never a second, weaker check for either caller.
+///
+/// - `Approval`: accepted per [`normalize_approval_value`].
+/// - `Choice`: must be a JSON string; if `choices` is `Some`, the string
+///   must be a member of it.
+/// - `FreeText`: must be a JSON string (any content).
+/// - `StateEdit`: must deserialize as a
+///   [`StateDelta`](paladin_core::platform::container::battlefield::StateDelta)
+///   (its own schema-field compatibility is a later plan's concern, once a
+///   graph schema is in scope for the check).
+pub(crate) fn validate_parley_value_for_kind(
+    kind: &ParleyKind,
+    choices: Option<&[String]>,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    match kind {
+        ParleyKind::Approval => normalize_approval_value(value).map(|_| ()).ok_or_else(|| {
+            format!(
+                "Approval value must be a bool or one of true/false/yes/no/approve/deny \
+                 (case-insensitive); found {value}"
+            )
+        }),
+        ParleyKind::Choice => {
+            let Some(s) = value.as_str() else {
+                return Err(format!("Choice value must be a string; found {value}"));
+            };
+            if let Some(choices) = choices
+                && !choices.iter().any(|c| c == s)
+            {
+                return Err(format!(
+                    "Choice value '{s}' is not one of the declared choices: {choices:?}"
+                ));
+            }
+            Ok(())
+        }
+        ParleyKind::FreeText => {
+            if value.is_string() {
+                Ok(())
+            } else {
+                Err(format!("FreeText value must be a string; found {value}"))
+            }
+        }
+        ParleyKind::StateEdit => serde_json::from_value::<
+            paladin_core::platform::container::battlefield::StateDelta,
+        >(value.clone())
+        .map(|_| ())
+        .map_err(|e| format!("StateEdit value must deserialize as a StateDelta: {e}")),
+        // `ParleyKind` is `#[non_exhaustive]`: a future kind reaching here
+        // fails CLOSED rather than being accepted sight-unseen (T-24-06 --
+        // an unchecked `ResumeWithDefault` value is an elevation-of-
+        // privilege risk) -- a later plan adding the kind also adds its
+        // own arm here.
+        other => Err(format!(
+            "no value validator is registered for ParleyKind {other:?} -- add one alongside \
+             the kind"
+        )),
+    }
 }
 
 #[cfg(test)]

@@ -143,8 +143,7 @@ impl InputMapping {
         &self,
         state: &Battlefield,
         muster: Option<&MusterContext>,
-        // RED-STATE MARKER (Task 1, 24-03): this parameter is temporarily
-        // absent -- restored in the GREEN commit. See PLAN Task 1.
+        parley: Option<&ParleyResponse>,
     ) -> Result<String, InputMappingError> {
         let mut rendered = String::with_capacity(self.template.len());
         let mut rest = self.template.as_str();
@@ -160,7 +159,7 @@ impl InputMapping {
                 break;
             };
             let placeholder = &after_open[..rel_end];
-            rendered.push_str(&Self::resolve(placeholder, state, muster)?);
+            rendered.push_str(&Self::resolve(placeholder, state, muster, parley)?);
             rest = &after_open[rel_end + 1..];
         }
         rendered.push_str(rest);
@@ -169,14 +168,19 @@ impl InputMapping {
     }
 
     /// Resolve one `{field}` placeholder's text against `state`, or against
-    /// `muster` for a `muster.`-prefixed placeholder (CF-03/D-15).
+    /// `muster`/`parley` for a `muster.`/`parley.`-prefixed placeholder
+    /// (CF-03/D-15, HITL-01/D-07).
     fn resolve(
         placeholder: &str,
         state: &Battlefield,
         muster: Option<&MusterContext>,
+        parley: Option<&ParleyResponse>,
     ) -> Result<String, InputMappingError> {
         if let Some(name) = placeholder.strip_prefix("muster.") {
             return Self::resolve_muster(name, placeholder, muster);
+        }
+        if let Some(name) = placeholder.strip_prefix("parley.") {
+            return Self::resolve_parley(name, placeholder, parley);
         }
 
         let field =

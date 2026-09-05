@@ -51,6 +51,7 @@ pub mod graph;
 pub mod hooks;
 pub mod input_mapping;
 pub mod node;
+pub mod shutdown;
 mod superstep;
 #[cfg(test)]
 pub(crate) mod test_support;

@@ -75,10 +75,12 @@ use tokio_util::sync::CancellationToken;
 use crate::edge_evaluator::EdgeConditionEvaluator;
 use crate::error_handler::ErrorHandler;
 use crate::retry_predicate::RetryPredicateEvaluator;
+use paladin_core::platform::container::battalion::BattalionError;
 #[cfg(test)]
 use paladin_core::platform::container::battlefield::CustomDispatchResolver;
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
 use paladin_core::platform::container::battlefield_error::BattlefieldError;
+use paladin_core::platform::container::node_error::{NodeError, NodeErrorSource};
 #[cfg(test)]
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{
@@ -99,6 +101,48 @@ pub use hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 pub use input_mapping::{InputMapping, InputMappingError};
 pub use node::{NodeContext, StateNode, StateNodeError};
 pub use registries::EngineRegistries;
+
+/// The display line for an [`EngineError::NodeFailed`]: the failing
+/// source's own message (a `Function` node's `StateNodeError` text, or a
+/// `PaladinError`'s `Display`), so the rendered line matches what
+/// `EngineError::Node(StateNodeError(that_text))` rendered for the same
+/// failure before the structured variant existed. Sources that carry no
+/// message (`Timeout`, `Cancelled`) render through their own `Display`.
+fn node_failed_message(err: &NodeError) -> String {
+    match &err.source {
+        NodeErrorSource::Paladin { message, .. }
+        | NodeErrorSource::Llm { message, .. }
+        | NodeErrorSource::Function { message } => message.clone(),
+        other => other.to_string(),
+    }
+}
+
+impl EngineError {
+    /// The structured [`NodeError`] this error carries, if it is an
+    /// [`EngineError::NodeFailed`] -- `None` for every other variant,
+    /// including an engine-limit failure and a no-Aegis node failure.
+    pub fn node_error(&self) -> Option<&NodeError> {
+        match self {
+            EngineError::NodeFailed(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<EngineError> for BattalionError {
+    /// [`EngineError::NodeFailed`] maps to [`BattalionError::Node`] carrying
+    /// the identical [`NodeError`] (D-08); every other variant, which had no
+    /// `BattalionError` mapping before this phase, renders through the
+    /// existing generic [`BattalionError::CampaignError`] line (the graph
+    /// engine is the Campaign pattern's execution surface) so no other
+    /// variant gains a new structured shape here.
+    fn from(err: EngineError) -> Self {
+        match err {
+            EngineError::NodeFailed(node_error) => BattalionError::Node(node_error),
+            other => BattalionError::CampaignError(other.to_string()),
+        }
+    }
+}
 
 /// Whether a `WaypointPort::save` failure fails the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -158,6 +202,19 @@ pub enum RunOutcome {
         /// was attempted.
         waypoint: Option<WaypointId>,
     },
+}
+
+impl RunOutcome {
+    /// The structured [`NodeError`] a [`RunOutcome::Failed`] carries when its
+    /// `error` is an [`EngineError::NodeFailed`] -- the same value the
+    /// failed `Waypoint`'s `WaypointStatus::Failed.node_error` records
+    /// (D-08). `None` for every other outcome and every other failure.
+    pub fn node_error(&self) -> Option<&NodeError> {
+        match self {
+            RunOutcome::Failed { error, .. } => error.node_error(),
+            _ => None,
+        }
+    }
 }
 
 /// Errors returned by [`WarEngine::start`] and [`WarEngine::resume`].
@@ -265,6 +322,24 @@ pub enum EngineError {
     /// A node's execution returned an error.
     #[error("node execution error: {0}")]
     Node(#[from] StateNodeError),
+
+    /// An Aegis-governed node's execution failed (Doc 04 D-08, FT-FR-02):
+    /// its retries were exhausted, or its error was not retry-eligible
+    /// under its policy. Carries the structured [`NodeError`] the failed
+    /// `Waypoint`'s `WaypointStatus::Failed.node_error` also records, so
+    /// `RunOutcome::Failed` and `BattalionError::Node` expose the same
+    /// value. Renders as `node execution error: {message}` -- byte-identical
+    /// to the `EngineError::Node` line the same failure produced before
+    /// this variant existed, so the display line a human reads is unchanged
+    /// (X-03).
+    ///
+    /// Supersedes `EngineError::Node` ONLY on the exhausted-failure path of
+    /// a node that has a resolved Aegis; a node with no Aegis still fails
+    /// through `EngineError::Node` exactly as before Phase 25 (D-09), and
+    /// `EngineError::Node` remains the engine's generic internal-error
+    /// variant everywhere else (join errors, missing worker resources, ...).
+    #[error("node execution error: {}", node_failed_message(.0))]
+    NodeFailed(NodeError),
 
     /// `DispatchRegistry::register` was asked to register a custom
     /// dispatch rule under a name that collides with a built-in
@@ -1353,7 +1428,10 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         // continue a run the engine itself already declared over. Such a
         // thread is advanced only by `replay`/`fork` from an earlier
         // Waypoint (a later plan), never by `resume`/`resume_with` again.
-        if let WaypointStatus::Failed { error, failed_node } = &latest.status {
+        if let WaypointStatus::Failed {
+            error, failed_node, ..
+        } = &latest.status
+        {
             return Err(EngineError::ThreadAlreadyFailed {
                 thread: thread.clone(),
                 error: error.clone(),
@@ -1553,6 +1631,9 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
                         WaypointStatus::Failed {
                             error: reason,
                             failed_node: request.node_id.clone(),
+                            // A parley expiry is not an Aegis-governed node
+                            // failure (D-08): no structured `NodeError`.
+                            node_error: None,
                         },
                         latest.visit_counts.clone(),
                         latest.frontier.clone(),
@@ -1957,17 +2038,19 @@ mod tests {
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
     };
-    use paladin_core::platform::container::directive::{Directive, NextStep};
+    use paladin_core::platform::container::directive::{Directive, MusterTask, NextStep};
     use paladin_core::platform::container::paladin_error::PaladinError;
     use paladin_core::platform::container::parley::{OnExpire, ParleyKind};
+    use paladin_core::platform::container::transience::Transience;
     use paladin_core::platform::container::waypoint::{NodeOutcomeKind, Waypoint};
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream};
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
     use crate::engine::graph::{EdgeSpec, GateRequestTemplate};
     use crate::engine::test_support::{
-        CountingFunctionNode, FailThenSucceedNode, FixedDecisionInterceptor, RecordingInterceptor,
-        RecordingPaladinPort, RecordingWaypointStore,
+        AttemptObservingNode, CountingFunctionNode, FailThenSucceedNode, FailingFunctionNode,
+        FailingPaladinPort, FixedDecisionInterceptor, MusterFailThenSucceedWorker,
+        RecordingInterceptor, RecordingPaladinPort, RecordingWaypointStore,
     };
 
     struct UnimplementedPaladinPort;
@@ -5531,7 +5614,9 @@ mod tests {
 
         let latest = store.latest(&thread).await.unwrap().unwrap();
         match latest.status {
-            WaypointStatus::Failed { error, failed_node } => {
+            WaypointStatus::Failed {
+                error, failed_node, ..
+            } => {
                 assert!(error.contains(parley_id.to_string().as_str()));
                 assert_eq!(failed_node, node_id);
             }
@@ -7013,5 +7098,976 @@ mod tests {
             saves_before,
             "a schema-rejected edit must persist nothing"
         );
+    }
+
+    // --- Phase 25 Plan 07, Task 1: attempt history, per-attempt trace
+    //     events, cache_hit defaults (FT-FR-03, D-16) ---------------------
+
+    #[tokio::test]
+    async fn failed_attempts_are_recorded_in_order() {
+        let node_id = NodeId::new("flaky-history");
+        let node = FailThenSucceedNode::new(
+            3,
+            "transient failure",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("recovered"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("attempt-history-in-order").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(node.run_count(), 3);
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.node_id, node_id);
+        assert_eq!(record.attempt, 3, "the succeeding attempt is attempt 3");
+        assert_eq!(
+            record.attempts.len(),
+            2,
+            "exactly the two FAILED attempts, never the succeeding one"
+        );
+        let numbers: Vec<u32> = record.attempts.iter().map(|a| a.attempt).collect();
+        assert_eq!(numbers, vec![1, 2], "ascending by attempt number");
+        for attempt in &record.attempts {
+            assert_eq!(attempt.error.node_id, node_id);
+            assert_eq!(attempt.error.attempt, attempt.attempt);
+            assert!(matches!(
+                &attempt.error.source,
+                NodeErrorSource::Function { message } if message == "transient failure"
+            ));
+            assert!(attempt.started_at <= record.started_at);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_node_that_succeeds_first_time_records_an_empty_attempts_list() {
+        let node_id = NodeId::new("steady");
+        let node = FailThenSucceedNode::new(
+            1,
+            "never used",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("first-time"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("attempt-history-empty").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.attempt, 1);
+        assert!(record.attempts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn node_events_are_emitted_once_per_attempt_with_the_attempt_number() {
+        let node_id = NodeId::new("flaky-traced");
+        let node = FailThenSucceedNode::new(
+            2,
+            "transient failure",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("recovered"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone());
+        let thread = ThreadId::new("trace-per-attempt").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        // Give the background trace consumer a chance to drain.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let node_events: Vec<(&'static str, u32)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|event| match event {
+                TraceEvent::NodeStarted { attempt, .. } => Some(("NodeStarted", *attempt)),
+                TraceEvent::NodeFinished { attempt, .. } => Some(("NodeFinished", *attempt)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            node_events,
+            vec![
+                ("NodeStarted", 1),
+                ("NodeFinished", 1),
+                ("NodeStarted", 2),
+                ("NodeFinished", 2),
+            ],
+            "one NodeStarted/NodeFinished pair per attempt, each carrying its attempt number"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_hit_defaults_to_false_on_every_record_and_event() {
+        let node_id = NodeId::new("flaky-uncached");
+        let node = FailThenSucceedNode::new(
+            2,
+            "transient failure",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("recovered"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+
+        let sink = RecordingTraceSink::new();
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+            .with_trace_sink(sink.clone());
+        let thread = ThreadId::new("cache-hit-defaults-false").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert!(!waypoints.is_empty());
+        for record in waypoints.iter().flat_map(|w| w.completed.iter()) {
+            assert!(
+                !record.cache_hit,
+                "no cache is configured, so no record is a hit"
+            );
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let finished: Vec<bool> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|event| match event {
+                TraceEvent::NodeFinished { cache_hit, .. } => Some(*cache_hit),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            finished,
+            vec![false, false],
+            "one NodeFinished per attempt, none a hit"
+        );
+    }
+
+    // --- Phase 25 Plan 07, Task 2: the structured failure path (D-08) ----
+
+    /// An always-failing Function node under `retrying_aegis(max_attempts)`,
+    /// run to its `Failed` Waypoint. Returns the run outcome and the store.
+    async fn run_exhausting_node(
+        thread: &str,
+        aegis: Option<Aegis>,
+    ) -> (NodeId, RunOutcome, Arc<RecordingWaypointStore>) {
+        let node_id = NodeId::new("always-down");
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(FailingFunctionNode::new("always down")),
+        );
+        graph.add_entry(node_id.clone());
+        if let Some(aegis) = aegis {
+            graph.set_aegis(node_id.clone(), aegis);
+        }
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let outcome = engine
+            .start(&graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap();
+        (node_id, outcome, store)
+    }
+
+    fn failed_status(waypoint: &Waypoint) -> (&str, &NodeId, Option<&NodeError>) {
+        match &waypoint.status {
+            WaypointStatus::Failed {
+                error,
+                failed_node,
+                node_error,
+            } => (error.as_str(), failed_node, node_error.as_ref()),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn exhausted_retry_writes_a_failed_waypoint_carrying_the_structured_error() {
+        let (node_id, outcome, store) =
+            run_exhausting_node("exhausted-structured", Some(retrying_aegis(2))).await;
+        assert!(
+            matches!(outcome, RunOutcome::Failed { .. }),
+            "got {outcome:?}"
+        );
+        let thread = ThreadId::new("exhausted-structured").unwrap();
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(waypoints.len(), 1);
+        let (_, failed_node, node_error) = failed_status(&waypoints[0]);
+        assert_eq!(failed_node, &node_id);
+        let ne = node_error.expect("an Aegis-governed exhausted failure carries a NodeError");
+        assert_eq!(ne.node_id, node_id);
+        assert_eq!(ne.attempt, 2, "the last (exhausted) attempt number");
+        // A `StateNodeError` carries no typed transience: `Unknown`, the
+        // same classification the retry predicate saw.
+        assert_eq!(ne.transience, Transience::Unknown);
+        assert!(matches!(
+            &ne.source,
+            NodeErrorSource::Function { message } if message == "always down"
+        ));
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.attempt, 2);
+        assert_eq!(
+            record.attempts.len(),
+            1,
+            "attempt 1 failed before the exhausted attempt 2"
+        );
+        assert_eq!(record.attempts[0].attempt, 1);
+    }
+
+    #[tokio::test]
+    async fn the_display_line_on_a_failed_waypoint_is_unchanged() {
+        let legacy_line = EngineError::Node(StateNodeError("always down".to_string())).to_string();
+
+        let (_, outcome, store) =
+            run_exhausting_node("display-with-aegis", Some(retrying_aegis(2))).await;
+        let thread = ThreadId::new("display-with-aegis").unwrap();
+        let with_aegis = store.saved_waypoints(&thread).await;
+        let (line, _, node_error) = failed_status(&with_aegis[0]);
+        assert_eq!(
+            line, legacy_line,
+            "the human-readable line is byte-identical"
+        );
+        assert!(node_error.is_some());
+        match &outcome {
+            RunOutcome::Failed { error, .. } => assert_eq!(error.to_string(), legacy_line),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+
+        let (_, _, store) = run_exhausting_node("display-without-aegis", None).await;
+        let thread = ThreadId::new("display-without-aegis").unwrap();
+        let without_aegis = store.saved_waypoints(&thread).await;
+        let (line, _, _) = failed_status(&without_aegis[0]);
+        assert_eq!(line, legacy_line);
+    }
+
+    #[tokio::test]
+    async fn pre_aegis_and_limit_failures_carry_none() {
+        // (a) A node failure with no Aegis at all: the pre-Phase-25 path,
+        //     byte-identical (D-09) -- generic `EngineError::Node`, no
+        //     structured error.
+        let (node_id, outcome, store) = run_exhausting_node("pre-aegis-none", None).await;
+        assert!(matches!(
+            &outcome,
+            RunOutcome::Failed {
+                error: EngineError::Node(_),
+                ..
+            }
+        ));
+        assert!(outcome.node_error().is_none());
+        let thread = ThreadId::new("pre-aegis-none").unwrap();
+        let waypoints = store.saved_waypoints(&thread).await;
+        let (_, failed_node, node_error) = failed_status(&waypoints[0]);
+        assert_eq!(failed_node, &node_id);
+        assert!(node_error.is_none());
+
+        // (b) An engine-limit failure: a self-loop that never resolves trips
+        //     `NodeVisitLimitExceeded`; it is not a node's own failure, so no
+        //     structured error either -- even though the node HAS an Aegis.
+        let status = FieldName::new("result").unwrap();
+        let looping = CountingFunctionNode::new({
+            let status = status.clone();
+            move |_run, _state| {
+                let mut d = StateDelta::new();
+                d.set_raw(status.clone(), serde_json::json!("looping"));
+                d
+            }
+        });
+        let mut graph = WarGraph::new(
+            one_field_schema(),
+            EngineLimits {
+                max_node_visits: 3,
+                ..EngineLimits::default()
+            },
+        );
+        let a = NodeId::new("a");
+        graph.add_node(a.clone(), NodeSpec::Function(looping));
+        graph.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: a.clone(),
+            condition: Some(EdgeCondition::Contains("looping".to_string())),
+        });
+        graph.add_entry(a.clone());
+        graph.set_aegis(a.clone(), retrying_aegis(3));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("limit-none").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(
+            &outcome,
+            RunOutcome::Failed {
+                error: EngineError::NodeVisitLimitExceeded { .. },
+                ..
+            }
+        ));
+        assert!(outcome.node_error().is_none());
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .into_iter()
+            .next()
+            .unwrap();
+        let (_, failed_node, node_error) = failed_status(&latest);
+        assert_eq!(failed_node, &a);
+        assert!(node_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_outcome_failed_exposes_the_same_node_error() {
+        let (_, outcome, store) =
+            run_exhausting_node("outcome-same-node-error", Some(retrying_aegis(2))).await;
+        let thread = ThreadId::new("outcome-same-node-error").unwrap();
+        let waypoints = store.saved_waypoints(&thread).await;
+        let (_, _, recorded) = failed_status(&waypoints[0]);
+        let recorded = recorded.expect("the Waypoint records the NodeError");
+        let exposed = outcome
+            .node_error()
+            .expect("RunOutcome::Failed exposes the NodeError");
+        assert_eq!(exposed, recorded, "identical value on both surfaces");
+        match &outcome {
+            RunOutcome::Failed { error, .. } => {
+                assert!(matches!(error, EngineError::NodeFailed(ne) if ne == recorded));
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn engine_error_node_failed_maps_to_battalion_error_node() {
+        let ne = NodeError {
+            node_id: NodeId::new("n"),
+            attempt: 3,
+            transience: Transience::Permanent,
+            source: NodeErrorSource::Function {
+                message: "boom".to_string(),
+            },
+        };
+        let mapped = BattalionError::from(EngineError::NodeFailed(ne.clone()));
+        assert!(
+            matches!(&mapped, BattalionError::Node(inner) if inner == &ne),
+            "got {mapped:?}"
+        );
+
+        // Every other variant keeps a rendered, non-structured mapping.
+        let other = BattalionError::from(EngineError::Node(StateNodeError("x".to_string())));
+        assert!(matches!(other, BattalionError::CampaignError(msg) if msg.contains("x")));
+    }
+
+    async fn run_failing_paladin_node(
+        thread: &str,
+        port: Arc<FailingPaladinPort>,
+    ) -> (NodeId, RunOutcome, Arc<RecordingWaypointStore>) {
+        let field_name = FieldName::new("result").unwrap();
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("summarizer");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin("summarizer"),
+                InputMapping::new("summarize"),
+                field_name,
+            ),
+        );
+        graph.add_entry(node_id.clone());
+        // An Aegis with a single-attempt retry policy: policy-governed (so
+        // the structured error is recorded) without any actual retry.
+        graph.set_aegis(node_id.clone(), retrying_aegis(1));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(port, store.clone());
+        let outcome = engine
+            .start(&graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap();
+        (node_id, outcome, store)
+    }
+
+    #[tokio::test]
+    async fn a_paladin_node_failure_becomes_node_error_source_paladin() {
+        // A non-LLM Paladin failure: `Paladin { kind: <variant name>, .. }`.
+        let port = FailingPaladinPort::new(|| PaladinError::ExecutionError("paladin down".into()));
+        let (node_id, outcome, _) = run_failing_paladin_node("paladin-source", port.clone()).await;
+        assert_eq!(port.call_count(), 1);
+        let ne = outcome.node_error().expect("structured error").clone();
+        assert_eq!(ne.node_id, node_id);
+        assert_eq!(
+            ne.transience,
+            PaladinError::ExecutionError(String::new()).transience()
+        );
+        match &ne.source {
+            NodeErrorSource::Paladin {
+                kind,
+                status,
+                provider,
+                message,
+            } => {
+                assert_eq!(kind, "ExecutionError");
+                assert_eq!(*status, None);
+                assert_eq!(*provider, None);
+                assert!(message.contains("paladin down"));
+            }
+            other => panic!("expected Paladin, got {other:?}"),
+        }
+
+        // An LLM failure underneath: `Llm { .. }` carrying the typed status
+        // and provider -- never `Function`, and distinguishable from any
+        // other Paladin failure.
+        let port = FailingPaladinPort::new(|| PaladinError::LlmFailure {
+            transience: Transience::Transient,
+            status: Some(503),
+            provider: Some("openai".to_string()),
+            message: "upstream unavailable".to_string(),
+        });
+        let (_, outcome, store) = run_failing_paladin_node("llm-source", port.clone()).await;
+        assert_eq!(port.call_count(), 1, "max_attempts 1: no retry");
+        let ne = outcome.node_error().expect("structured error").clone();
+        assert_eq!(
+            ne.transience,
+            Transience::Transient,
+            "read from the typed field"
+        );
+        match &ne.source {
+            NodeErrorSource::Llm {
+                status, provider, ..
+            } => {
+                assert_eq!(*status, Some(503));
+                assert_eq!(provider.as_deref(), Some("openai"));
+            }
+            other => panic!("expected Llm, got {other:?}"),
+        }
+        let thread = ThreadId::new("llm-source").unwrap();
+        let waypoints = store.saved_waypoints(&thread).await;
+        let (line, _, recorded) = failed_status(&waypoints[0]);
+        assert_eq!(recorded, Some(&ne));
+        // The display line is the legacy `StateNodeError(e.to_string())` one.
+        assert_eq!(
+            line,
+            EngineError::Node(StateNodeError(
+                "LLM error: upstream unavailable".to_string()
+            ))
+            .to_string()
+        );
+    }
+
+    // --- Phase 25 Plan 07, Task 3: per-task retry inside a Muster, and the
+    //     Waypoint and Parley interactions (D-17, FT-FR-06, FT-FR-07) -----
+
+    fn retrying_aegis_with_interval(max_attempts: u32, interval: std::time::Duration) -> Aegis {
+        Aegis {
+            retry: Some(RetryPolicy {
+                max_attempts,
+                retry_on: RetryPredicate::TransientAndUnknown,
+                jitter: false,
+                initial_interval: interval,
+                ..RetryPolicy::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// `planner -> Muster(a..e) -> worker` over an `Append` field, the
+    /// worker being `worker_node` with `worker_aegis` set on the template.
+    fn muster_graph(
+        results_field: &FieldName,
+        worker_node: Arc<MusterFailThenSucceedWorker>,
+        worker_aegis: Aegis,
+    ) -> (WarGraph, NodeId) {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            results_field.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(
+                    ["a", "b", "c", "d", "e"]
+                        .iter()
+                        .map(|k| MusterTask {
+                            worker: worker.clone(),
+                            payload: serde_json::json!(*k),
+                            task_key: k.to_string(),
+                        })
+                        .collect(),
+                ),
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node));
+        graph.set_aegis(worker.clone(), worker_aegis);
+        graph.add_entry(planner);
+        (graph, worker)
+    }
+
+    #[tokio::test]
+    async fn one_mustered_task_retries_without_re_running_siblings() {
+        let results = FieldName::new("results").unwrap();
+        let worker_node = MusterFailThenSucceedWorker::new(results.clone(), [("c", 2)], None);
+        let (graph, _worker) = muster_graph(&results, worker_node.clone(), retrying_aegis(3));
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("muster-one-task-retries").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+
+        for sibling in ["a", "b", "d", "e"] {
+            assert_eq!(
+                worker_node.run_count(sibling),
+                1,
+                "sibling {sibling} ran exactly once"
+            );
+        }
+        assert_eq!(
+            worker_node.run_count("c"),
+            3,
+            "the failing task ran three times"
+        );
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                let mut aggregated: Vec<String> = final_state.get(&results).unwrap().unwrap();
+                aggregated.sort();
+                assert_eq!(
+                    aggregated,
+                    vec!["a", "b", "c", "d", "e"],
+                    "five results aggregated"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sibling_tasks_do_not_wait_for_a_retrying_task_to_finish() {
+        let results = FieldName::new("results").unwrap();
+        let worker_node = MusterFailThenSucceedWorker::new(results.clone(), [("c", 2)], None);
+        let interval = std::time::Duration::from_millis(500);
+        let (graph, _worker) = muster_graph(
+            &results,
+            worker_node.clone(),
+            retrying_aegis_with_interval(3, interval),
+        );
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("muster-siblings-do-not-wait").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let calls = worker_node.calls();
+        let c_final = calls
+            .iter()
+            .filter(|c| c.task_key == "c")
+            .map(|c| c.at)
+            .max()
+            .expect("c ran");
+        let c_first = calls
+            .iter()
+            .filter(|c| c.task_key == "c")
+            .map(|c| c.at)
+            .min()
+            .expect("c ran");
+        assert!(
+            c_final - c_first >= interval + interval * 2,
+            "c's final attempt waited out the 500ms + 1000ms backoffs on the paused clock"
+        );
+        for call in calls.iter().filter(|c| c.task_key != "c") {
+            assert!(
+                call.at < c_final,
+                "sibling {} ran at {:?}, before c's final attempt at {:?}",
+                call.task_key,
+                call.at,
+                c_final
+            );
+            assert!(
+                call.at - c_first < interval,
+                "sibling {} did not wait for any of c's backoffs",
+                call.task_key
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn each_muster_task_has_its_own_attempt_counter() {
+        let results = FieldName::new("results").unwrap();
+        let worker_node =
+            MusterFailThenSucceedWorker::new(results.clone(), [("b", 1), ("d", 1)], None);
+        let (graph, worker) = muster_graph(&results, worker_node.clone(), retrying_aegis(3));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("muster-own-attempt-counters").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(worker_node.run_count("b"), 2);
+        assert_eq!(worker_node.run_count("d"), 2);
+        for other in ["a", "c", "e"] {
+            assert_eq!(worker_node.run_count(other), 1);
+        }
+
+        // The muster superstep's consolidated Waypoint (no progress payload)
+        // carries one record per task: exactly two at `attempt: 2`, each
+        // with exactly one failed attempt in its history, and three at
+        // `attempt: 1` -- neither retrying task observed the other's count.
+        let waypoints = store.saved_waypoints(&thread).await;
+        let consolidated = waypoints
+            .iter()
+            .find(|w| w.superstep == 2 && w.muster_progress.is_none())
+            .expect("the muster superstep's consolidated Waypoint");
+        let worker_records: Vec<_> = consolidated
+            .completed
+            .iter()
+            .filter(|r| r.node_id == worker)
+            .collect();
+        assert_eq!(worker_records.len(), 5);
+        let mut attempts: Vec<u32> = worker_records.iter().map(|r| r.attempt).collect();
+        attempts.sort_unstable();
+        assert_eq!(attempts, vec![1, 1, 1, 2, 2]);
+        for record in &worker_records {
+            assert_eq!(record.attempts.len(), (record.attempt - 1) as usize);
+        }
+    }
+
+    #[tokio::test]
+    async fn no_waypoint_is_written_between_attempts() {
+        let node_id = NodeId::new("flaky-observer");
+        let store = Arc::new(RecordingWaypointStore::new());
+        let node =
+            AttemptObservingNode::new(3, FieldName::new("result").unwrap(), store.clone(), None);
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(3));
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("no-waypoint-between-attempts").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(node.run_count(), 3);
+        let seen = node.saves_seen();
+        assert_eq!(seen.len(), 3);
+        assert_eq!(
+            seen[1] - seen[0],
+            0,
+            "zero saves between attempt 1's failure and attempt 2's start"
+        );
+        assert_eq!(seen[2] - seen[1], 0, "and between attempts 2 and 3");
+        assert_eq!(
+            store.save_call_count(),
+            1,
+            "the superstep's one Waypoint, after the loop"
+        );
+    }
+
+    #[tokio::test]
+    async fn muster_progress_waypoints_record_only_completed_tasks() {
+        let results = FieldName::new("results").unwrap();
+        let store = Arc::new(RecordingWaypointStore::new());
+        let worker_node =
+            MusterFailThenSucceedWorker::new(results.clone(), [("c", 2)], Some(store.clone()));
+        let (graph, _worker) = muster_graph(&results, worker_node.clone(), retrying_aegis(3));
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("muster-progress-only-completed").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        // (1) No progress Waypoint was written while `c` was mid-retry: every
+        //     one of c's attempts observed the same save count, so nothing
+        //     was persisted between its failures and its success.
+        let c_saves: Vec<usize> = worker_node
+            .calls()
+            .iter()
+            .filter(|call| call.task_key == "c")
+            .map(|call| call.saves_seen)
+            .collect();
+        assert_eq!(c_saves.len(), 3);
+        assert!(c_saves.iter().all(|&n| n == c_saves[0]), "{c_saves:?}");
+
+        // (2) Every progress Waypoint's `completed` map lists only tasks
+        //     that had already succeeded, growing in task_key order; `c`
+        //     first appears in the third one (after a and b), never before
+        //     its succeeding attempt, and the payload shape is Phase 23's.
+        let mut progress: Vec<&Waypoint> = Vec::new();
+        let waypoints = store.saved_waypoints(&thread).await;
+        for w in waypoints.iter().rev() {
+            if w.muster_progress.is_some() {
+                progress.push(w);
+            }
+        }
+        assert_eq!(
+            progress.len(),
+            5,
+            "one progress Waypoint per completed task"
+        );
+        for (index, w) in progress.iter().enumerate() {
+            let p = w.muster_progress.as_ref().unwrap();
+            assert_eq!(p.tasks.len(), 5);
+            let keys: Vec<&String> = p.completed.keys().collect();
+            let expected: Vec<String> = ["a", "b", "c", "d", "e"][..=index]
+                .iter()
+                .map(|k| k.to_string())
+                .collect();
+            assert_eq!(keys, expected.iter().collect::<Vec<_>>());
+            assert_eq!(p.completed.contains_key("c"), index >= 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_re_executes_an_interrupted_node_from_attempt_one() {
+        let node_id = NodeId::new("interrupted");
+        let store = Arc::new(RecordingWaypointStore::new());
+        let token = CancellationToken::new();
+        // Fails on run 1 (cancelling the run from inside that failure, so
+        // the backoff wait observes the cancellation and the run halts
+        // mid-retry), succeeds on run 2 -- which must be attempt 1 of the
+        // resumed run.
+        let node = AttemptObservingNode::new(
+            2,
+            FieldName::new("result").unwrap(),
+            store.clone(),
+            Some(token.clone()),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+            .with_cancellation_token(token);
+        let thread = ThreadId::new("resume-from-attempt-one").unwrap();
+        let halted = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            engine.start(&graph, thread.clone(), StateDelta::new()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(halted, RunOutcome::Halted { .. }),
+            "got {halted:?}"
+        );
+        assert_eq!(
+            node.run_count(),
+            1,
+            "attempt 1 ran; the interrupted backoff never retried"
+        );
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(latest.status, WaypointStatus::Halted);
+        assert!(
+            latest.vanguard.contains(&node_id),
+            "the interrupted node is re-listed on the Halted vanguard so resume re-runs it"
+        );
+
+        let resume_engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let resumed = resume_engine.resume(&graph, thread.clone()).await.unwrap();
+        assert!(
+            matches!(resumed, RunOutcome::Completed { .. }),
+            "got {resumed:?}"
+        );
+        assert_eq!(node.run_count(), 2);
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .into_iter()
+            .next()
+            .unwrap();
+        let record = latest
+            .completed
+            .iter()
+            .find(|r| r.node_id == node_id)
+            .expect("the resumed run recorded the node");
+        assert_eq!(
+            record.attempt, 1,
+            "a resume re-executes from attempt 1 (FT-FR-07)"
+        );
+        assert!(record.attempts.is_empty());
+        assert_eq!(record.outcome, NodeOutcomeKind::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn a_parley_directive_is_never_retried() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let node = {
+            let node_id = node_id.clone();
+            CountingFunctionNode::with_context_directive(move |_run, _state, _ctx| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Parley(sample_parley_request(node_id.clone(), parley_id)),
+            })
+        };
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("parley-never-retried").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(
+            matches!(outcome, RunOutcome::AwaitingInput { .. }),
+            "got {outcome:?}"
+        );
+        assert_eq!(
+            node.run_count(),
+            1,
+            "a Parley is a success: exactly one execution"
+        );
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .into_iter()
+            .next()
+            .unwrap();
+        let record = &latest.completed[0];
+        assert_eq!(record.outcome, NodeOutcomeKind::Parleyed);
+        assert_eq!(record.attempt, 1);
+        assert!(record.attempts.is_empty(), "no retry budget consumed");
+    }
+
+    #[tokio::test]
+    async fn post_resume_rerun_of_a_parleying_node_starts_at_attempt_one() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let node = {
+            let node_id = node_id.clone();
+            CountingFunctionNode::with_context_directive(move |run, _state, ctx| {
+                if run == 0 {
+                    Directive {
+                        delta: StateDelta::new(),
+                        next: NextStep::Parley(sample_parley_request(node_id.clone(), parley_id)),
+                    }
+                } else {
+                    let value = ctx
+                        .parley_response()
+                        .expect("parley_response is set on the post-resume re-run")
+                        .value
+                        .clone();
+                    let mut delta = StateDelta::new();
+                    delta.set_raw(FieldName::new("result").unwrap(), value);
+                    delta.into()
+                }
+            })
+        };
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("parley-rerun-attempt-one").unwrap();
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(suspended, RunOutcome::AwaitingInput { .. }));
+
+        let response = ParleyResponse {
+            parley_id,
+            kind: ParleyKind::Approval,
+            prompt: String::new(),
+            value: serde_json::json!("approve"),
+            responded_by: Some("tester".to_string()),
+            responded_at: Utc::now(),
+            defaulted: false,
+        };
+        let resumed = engine
+            .resume_with(&graph, thread.clone(), vec![response])
+            .await
+            .unwrap();
+        assert!(
+            matches!(resumed, RunOutcome::Completed { .. }),
+            "got {resumed:?}"
+        );
+        assert_eq!(node.run_count(), 2);
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .into_iter()
+            .next()
+            .unwrap();
+        let record = latest
+            .completed
+            .iter()
+            .find(|r| r.node_id == node_id)
+            .expect("the re-run is recorded");
+        assert_eq!(
+            record.attempt, 1,
+            "the post-resume re-run is a fresh attempt 1"
+        );
+        assert!(record.attempts.is_empty());
+        assert_eq!(record.outcome, NodeOutcomeKind::Succeeded);
     }
 }

@@ -42,8 +42,9 @@ use paladin_core::platform::container::battlefield::{
 use paladin_core::platform::container::directive::{
     Directive, MusterContext, MusterTask, NextStep,
 };
-use paladin_core::platform::container::node_error::{NodeError, NodeErrorSource};
+use paladin_core::platform::container::node_error::{AttemptRecord, NodeError, NodeErrorSource};
 use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::{
     ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
@@ -66,6 +67,7 @@ use crate::engine::node::{NodeContext, StateNode, StateNodeError};
 use crate::engine::registries::EngineRegistries;
 use crate::engine::retry;
 use crate::engine::{EngineError, RunOutcome, WaypointDurability};
+use crate::llm_failure;
 
 /// Every parent engine resource D-21 requires forwarding into a
 /// `NodeSpec::Battalion` node's child run (CF-FR-16): the `WaypointPort`,
@@ -253,6 +255,12 @@ enum NodeFailure {
     /// internal engine error -- everything that was `StateNodeError` before this
     /// phase, unchanged.
     Node(StateNodeError),
+    /// A `NodeSpec::Paladin` node's `PaladinPort::execute` call failed
+    /// (Doc 04 D-07): the live `PaladinError` is kept until the engine
+    /// boundary converts it, so its typed `transience()`, `status` and
+    /// `provider` reach the structured `NodeError` instead of being erased
+    /// to a string one line early. Retry-eligible exactly like `Node`.
+    Paladin(PaladinError),
     /// A `NodeSpec::Paladin` node's `DirectiveParser::StructuredDirective`
     /// call under `OnParseError::FailRun` (CF-02, D-11).
     DirectiveParse(DirectiveParseError),
@@ -262,6 +270,39 @@ enum NodeFailure {
     /// interpolated string), built where the child's own thread id is in
     /// scope and passed through here unchanged.
     Battalion(EngineError),
+}
+
+impl NodeFailure {
+    /// The structured [`NodeError`] this failure converts to at the engine
+    /// boundary (Doc 04 D-07), for `node_id`'s 1-indexed `attempt`:
+    ///
+    /// - `Node(StateNodeError)` -> `NodeErrorSource::Function { message }`
+    ///   classified `Transience::Unknown` -- a `StateNode` author returns
+    ///   only a message, so nothing typed exists to classify from (the
+    ///   retry predicate's `TransientAndUnknown` is how a Function node
+    ///   opts into retrying these; `TransientOnly`, the default, does not).
+    /// - `Paladin(PaladinError)` -> `NodeErrorSource::Paladin { kind, .. }`,
+    ///   or `NodeErrorSource::Llm { status, provider, .. }` for a
+    ///   `PaladinError::LlmFailure`, classified by the error's own typed
+    ///   `PaladinError::transience()` (D-05) -- via
+    ///   `llm_failure::to_node_error_source`, the one conversion beside
+    ///   `to_paladin_error` so both read the same typed fields.
+    /// - `DirectiveParse`/`Battalion` -> `None`: neither is a node-execution
+    ///   failure the Aegis governs (each has its own typed `EngineError`
+    ///   and is never retried, D-14).
+    fn node_error(&self, node_id: &NodeId, attempt: u32) -> Option<NodeError> {
+        let (transience, source) = match self {
+            NodeFailure::Node(err) => (Transience::Unknown, NodeErrorSource::from(err.clone())),
+            NodeFailure::Paladin(err) => (err.transience(), llm_failure::to_node_error_source(err)),
+            NodeFailure::DirectiveParse(_) | NodeFailure::Battalion(_) => return None,
+        };
+        Some(NodeError {
+            node_id: node_id.clone(),
+            attempt,
+            transience,
+            source,
+        })
+    }
 }
 
 /// [`execute_vanguard_node`]'s per-node result: `paladin_id`/`token_count`
@@ -494,11 +535,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             }
                         }
                     }
-                    Err(e) => (
-                        paladin_id,
-                        0,
-                        Err(NodeFailure::Node(StateNodeError(e.to_string()))),
-                    ),
+                    Err(e) => (paladin_id, 0, Err(NodeFailure::Paladin(e))),
                 }
             }
             NodeDispatch::Battalion {
@@ -834,6 +871,15 @@ enum NodeRunOutcome {
     /// `OnParseError::FailRun` (CF-02, D-11), or a `NodeInterceptor::before`
     /// returned `Fail(error)` before the node could run.
     Failed(NodeFailure),
+    /// The run was cancelled while this node was waiting out a retry
+    /// backoff (D-15, FT-FR-07): its last attempt failed, no further
+    /// attempt ran, and nothing of it merges. Recorded exactly like a
+    /// grace-deadline abort -- `Skipped { reason: "shutdown" }` on the
+    /// record AND re-listed on the Halted Waypoint's vanguard (or, for a
+    /// Muster task, left unfinished in the preserved `MusterProgress`) --
+    /// so `resume` re-executes the node from attempt 1 rather than
+    /// silently dropping it as an ordinary skip would.
+    Interrupted,
 }
 
 /// What one spawned node-dispatch task (the `tokio::spawn`'d async block in
@@ -842,18 +888,30 @@ enum NodeRunOutcome {
 /// rather than relying on completion order, can still cross-check it),
 /// when its FINAL (succeeding or exhausted) attempt started, how long that
 /// attempt ran, its Paladin identity if any, its token count, its
-/// [`NodeRunOutcome`], and the 1-indexed attempt number that produced it
+/// [`NodeRunOutcome`], the 1-indexed attempt number that produced it
 /// (D-15: populates `NodeExecutionRecord.attempt`, `1` for a node with no
-/// `Aegis` retry policy, exactly as before this phase).
-type NodeTaskOutput = (
-    NodeId,
-    chrono::DateTime<chrono::Utc>,
-    u64,
-    Option<Uuid>,
-    u64,
-    NodeRunOutcome,
-    u32,
-);
+/// `Aegis` retry policy, exactly as before this phase), and the history of
+/// every failed attempt before it (populates `NodeExecutionRecord.attempts`).
+struct NodeTaskOutput {
+    node_id: NodeId,
+    started_at: chrono::DateTime<chrono::Utc>,
+    duration_ms: u64,
+    paladin_id: Option<Uuid>,
+    token_count: u64,
+    outcome: NodeRunOutcome,
+    attempt: u32,
+    /// Every FAILED attempt before the final one, ascending by attempt
+    /// number (FT-FR-03, D-16) -- built in order by the retry loop, so it
+    /// is asserted (never sorted) at the record construction site.
+    failed_attempts: Vec<AttemptRecord>,
+    /// The structured error of the FINAL attempt when it failed and the
+    /// node has a resolved Aegis (D-08) -- what the exhausted-failure path
+    /// surfaces as `EngineError::NodeFailed` and records on the `Failed`
+    /// Waypoint. `None` for a success, a skip, a no-Aegis node's failure
+    /// (the byte-identical pre-Phase-25 path, D-09), and a
+    /// `DirectiveParse`/`Battalion` failure.
+    node_error: Option<NodeError>,
+}
 
 /// The `tasks.len() > limits.max_muster_tasks` comparison (D-13's
 /// `precision` edge truth), factored out of [`validate_muster_tasks`] so it
@@ -1224,6 +1282,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Failed {
                     error: error.to_string(),
                     failed_node: starved[0].clone(),
+                    node_error: None,
                 },
                 visit_counts,
                 entry_frontier.snapshot(graph),
@@ -1348,6 +1407,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         .cloned()
                         .or_else(|| pending_muster.as_ref().map(|(node, _)| node.clone()))
                         .unwrap_or_else(|| NodeId::new(String::new())),
+                    node_error: None,
                 },
                 visit_counts,
                 frontier.snapshot(graph),
@@ -1390,6 +1450,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Failed {
                     error: error.to_string(),
                     failed_node: node,
+                    node_error: None,
                 },
                 visit_counts,
                 frontier.snapshot(graph),
@@ -1583,12 +1644,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     // exactly once, byte-identical to pre-Phase-25 behavior
                     // (D-09's "no policy, no change" truth).
                     let mut attempt: u32 = 0;
+                    // --- FT-FR-03, D-16: one `AttemptRecord` per FAILED
+                    // attempt, pushed in attempt order as each retry is
+                    // decided, so the vector is ascending by construction.
+                    let mut failed_attempts: Vec<AttemptRecord> = Vec::new();
                     loop {
                         attempt += 1;
                         node_trace.emit(TraceEvent::NodeStarted {
                             thread_id: ctx.thread_id.clone(),
                             superstep: ctx.superstep,
                             node_id: nid.clone(),
+                            attempt,
                         });
                         let started_at = Utc::now();
 
@@ -1664,69 +1730,87 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             thread_id: ctx.thread_id.clone(),
                             superstep: ctx.superstep,
                             node_id: nid.clone(),
+                            attempt,
+                            // Plan 25-13 is the only plan that sets this
+                            // `true` (a served-from-cache outcome).
+                            cache_hit: false,
                         });
 
-                        // --- D-14, D-15: only a `NodeFailure::Node` (a
-                        // `Function`/`Paladin` node's own error, an
-                        // `InputMapping`/`PaladinPort` failure, or an
-                        // `InterceptDecision::Fail` decision -- everything
-                        // carrying a `StateNodeError`) is retry-eligible. A
+                        // --- D-14, D-15, D-07: only a `NodeFailure::Node`
+                        // (a `Function` node's own error, an `InputMapping`
+                        // failure, or an `InterceptDecision::Fail` decision
+                        // -- everything carrying a `StateNodeError`) or a
+                        // `NodeFailure::Paladin` (a `PaladinPort::execute`
+                        // error, classified by its own typed transience) is
+                        // retry-eligible -- exactly the failures
+                        // `NodeFailure::node_error` converts. A
                         // `DirectiveParse`/`Battalion` failure, a `Skipped`
-                        // outcome, or a `Succeeded` outcome never enters
-                        // this block.
-                        if let NodeRunOutcome::Failed(NodeFailure::Node(ref state_err)) = outcome
+                        // outcome, a `Succeeded` outcome (including a
+                        // `NextStep::Parley` Directive, which is a success
+                        // that leaves this loop at once and consumes no
+                        // retry budget, D-17) never enters this block.
+                        //
+                        // FT-FR-07: NO Waypoint is written anywhere inside
+                        // this loop -- a retry is never a durable checkpoint
+                        // boundary, so a run interrupted between attempts
+                        // resumes by re-executing this node from attempt 1.
+                        if let NodeRunOutcome::Failed(ref failure) = outcome
                             && let Some(retry_policy) =
                                 node_aegis.as_ref().and_then(|a| a.retry.as_ref())
                             && attempt < retry_policy.max_attempts
+                            && let Some(node_error) = failure.node_error(&nid, attempt)
+                            && retry::should_retry(retry_policy, &node_error, attempt)
                         {
-                            // --- D-05/D-07 stand-in: this plan lands no
-                            // adapter-sourced error classifier yet (plan
-                            // 25-02's `PaladinError::transience`/
-                            // `LlmError::transience`) -- every
-                            // `StateNodeError` -> `NodeErrorSource`
-                            // conversion here classifies as
-                            // `Transience::Unknown` until then, which is why
-                            // `transient_function_node_failure_is_retried_and_run_completes`
-                            // sets `retry_on: RetryPredicate::TransientAndUnknown`
-                            // explicitly rather than relying on the
-                            // `TransientOnly` default.
-                            let node_error = NodeError {
-                                node_id: nid.clone(),
+                            failed_attempts.push(AttemptRecord {
                                 attempt,
-                                transience: Transience::Unknown,
-                                source: NodeErrorSource::from(state_err.clone()),
-                            };
-                            if retry::should_retry(retry_policy, &node_error, attempt) {
-                                let delay = retry::backoff_delay(retry_policy, attempt + 1);
-                                if retry::wait_backoff(delay, &node_cancellation).await {
-                                    continue;
-                                }
-                                // --- D-15, RESEARCH.md Pitfall 7: the run is
-                                // shutting down mid-backoff -- stop retrying
-                                // and report this dispatch entry `Skipped {
-                                // reason: "shutdown" }` rather than a
-                                // failure, exactly like the grace-race abort
-                                // path below.
-                                break (
-                                    nid,
-                                    started_at,
-                                    duration_ms,
-                                    paladin_id,
-                                    token_count,
-                                    NodeRunOutcome::Skipped("shutdown".to_string()),
-                                    attempt,
-                                );
+                                started_at,
+                                duration_ms,
+                                error: node_error,
+                            });
+                            let delay = retry::backoff_delay(retry_policy, attempt + 1);
+                            if retry::wait_backoff(delay, &node_cancellation).await {
+                                continue;
                             }
+                            // --- D-15, RESEARCH.md Pitfall 7: the run is
+                            // shutting down mid-backoff -- stop retrying and
+                            // report this dispatch entry `Interrupted`, which
+                            // the bookkeeping loop records `Skipped { reason:
+                            // "shutdown" }` and re-lists for resume, exactly
+                            // like the grace-race abort path below (FT-FR-07:
+                            // a resume re-executes it from attempt 1).
+                            break NodeTaskOutput {
+                                node_id: nid,
+                                started_at,
+                                duration_ms,
+                                paladin_id,
+                                token_count,
+                                outcome: NodeRunOutcome::Interrupted,
+                                attempt,
+                                failed_attempts,
+                                node_error: None,
+                            };
                         }
-                        break (
-                            nid,
+                        // --- D-08: the structured error travels with a
+                        // FINAL failed attempt only when this node has a
+                        // resolved Aegis; a no-Aegis node's failure stays on
+                        // the byte-identical pre-Phase-25 path (D-09).
+                        let node_error = match (&outcome, node_aegis.as_ref()) {
+                            (NodeRunOutcome::Failed(failure), Some(_)) => {
+                                failure.node_error(&nid, attempt)
+                            }
+                            _ => None,
+                        };
+                        break NodeTaskOutput {
+                            node_id: nid,
                             started_at,
                             duration_ms,
                             paladin_id,
                             token_count,
                             outcome,
                             attempt,
-                        );
+                            failed_attempts,
+                            node_error,
+                        };
                     }
                 }),
             });
@@ -1734,7 +1818,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
 
         let mut deltas = Vec::with_capacity(handles.len());
         let mut completed_records = Vec::with_capacity(handles.len());
-        let mut node_failure: Option<(NodeId, NodeFailure)> = None;
+        let mut node_failure: Option<(NodeId, NodeFailure, Option<NodeError>)> = None;
         // --- CF-02: per-superstep runtime values derived from this
         // superstep's `Directive`s, NOT `Frontier` state (RESEARCH.md
         // Pattern 3) -- rebuilt fresh every superstep, never persisted.
@@ -1860,8 +1944,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         for (dispatch_index, entry) in dispatch_entries.iter().enumerate() {
             let (entry_node_id, entry_muster_ctx) = entry;
             let is_muster_task = entry_muster_ctx.is_some();
-            let Some((node_id, started_at, duration_ms, paladin_id, token_count, outcome, attempt)) =
-                results[dispatch_index].take()
+            let Some(NodeTaskOutput {
+                node_id,
+                started_at,
+                duration_ms,
+                paladin_id,
+                token_count,
+                outcome,
+                attempt,
+                failed_attempts,
+                node_error,
+            }) = results[dispatch_index].take()
             else {
                 // --- D-19: aborted past the shared grace deadline. Recorded
                 // `Skipped { reason: "shutdown" }`, exactly like an
@@ -1879,9 +1972,19 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         reason: "shutdown".to_string(),
                     },
                     attempt: 1,
+                    attempts: Vec::new(),
+                    cache_hit: false,
                 });
                 continue;
             };
+            // --- FT-FR-03, D-16: built in attempt order by the retry loop
+            // (asserted, never sorted, so a regression there is loud).
+            debug_assert!(
+                failed_attempts
+                    .windows(2)
+                    .all(|w| w[0].attempt < w[1].attempt),
+                "attempt history must ascend by attempt number"
+            );
             match outcome {
                 NodeRunOutcome::Succeeded(directive) => {
                     let Directive { delta, next } = directive;
@@ -1967,6 +2070,8 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         token_count,
                         outcome: outcome_kind,
                         attempt,
+                        attempts: failed_attempts,
+                        cache_hit: false,
                     });
 
                     if is_muster_task {
@@ -2028,7 +2133,36 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         token_count,
                         outcome: NodeOutcomeKind::Skipped { reason },
                         attempt,
+                        attempts: failed_attempts,
+                        cache_hit: false,
                     });
+                }
+                NodeRunOutcome::Interrupted => {
+                    // --- D-15, FT-FR-07: cancelled mid-backoff. Recorded
+                    // like a grace-deadline abort (`Skipped { reason:
+                    // "shutdown" }`, never merged, edges left `Pending`) and
+                    // re-listed the same way, so the Halted Waypoint's
+                    // vanguard (or its preserved `MusterProgress`) brings
+                    // the node back at attempt 1 on resume instead of
+                    // dropping it as an ordinary skip would.
+                    completed_records.push(NodeExecutionRecord {
+                        node_id: node_id.clone(),
+                        paladin_id,
+                        started_at,
+                        duration_ms,
+                        token_count,
+                        outcome: NodeOutcomeKind::Skipped {
+                            reason: "shutdown".to_string(),
+                        },
+                        attempt,
+                        attempts: failed_attempts,
+                        cache_hit: false,
+                    });
+                    if is_muster_task {
+                        muster_task_aborted = true;
+                    } else {
+                        aborted_node_ids.push(node_id);
+                    }
                 }
                 NodeRunOutcome::Failed(e) => {
                     completed_records.push(NodeExecutionRecord {
@@ -2039,23 +2173,38 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         token_count,
                         outcome: NodeOutcomeKind::Failed,
                         attempt,
+                        attempts: failed_attempts,
+                        cache_hit: false,
                     });
                     if node_failure.is_none() {
-                        node_failure = Some((node_id, e));
+                        node_failure = Some((node_id, e, node_error));
                     }
                 }
             }
         }
         completed_records.sort_by(|a, b| a.node_id.cmp(&b.node_id));
 
-        if let Some((node_id, err)) = node_failure {
+        if let Some((node_id, err, node_error)) = node_failure {
+            // --- D-08, X-06: an Aegis-governed node's exhausted (or
+            // non-retryable) failure surfaces as the structured
+            // `EngineError::NodeFailed`, rendering the SAME display line
+            // the generic `EngineError::Node` rendered for it before -- so
+            // `WaypointStatus::Failed.error` is unchanged while
+            // `node_error` beside it carries the structure. A no-Aegis
+            // node's failure keeps the generic path byte-identically
+            // (D-09); a `PaladinError` on that path is erased to the exact
+            // `StateNodeError(e.to_string())` it always was.
             // --- CF-02, D-11: a `DirectiveParser` parse failure gets its
             // own typed `EngineError` naming the node (X-06), rather than
             // routing through the generic `EngineError::Node` every other
             // node-execution failure uses.
-            let error = match err {
-                NodeFailure::Node(e) => EngineError::Node(e),
-                NodeFailure::DirectiveParse(e) => EngineError::DirectiveParseFailed {
+            let error = match (err, node_error) {
+                (NodeFailure::Node(_) | NodeFailure::Paladin(_), Some(node_error)) => {
+                    EngineError::NodeFailed(node_error)
+                }
+                (NodeFailure::Node(e), None) => EngineError::Node(e),
+                (NodeFailure::Paladin(e), None) => EngineError::Node(StateNodeError(e.to_string())),
+                (NodeFailure::DirectiveParse(e), _) => EngineError::DirectiveParseFailed {
                     node: node_id.clone(),
                     reason: e.reason,
                 },
@@ -2063,8 +2212,9 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 // `EngineError::BattalionChildFailed` built in
                 // `execute_vanguard_node`, where the child thread id was
                 // in scope -- passed through unchanged.
-                NodeFailure::Battalion(e) => e,
+                (NodeFailure::Battalion(e), _) => e,
             };
+            let node_error = error.node_error().cloned();
             let waypoint = build_waypoint(
                 &thread,
                 parent_waypoint_id,
@@ -2076,6 +2226,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Failed {
                     error: error.to_string(),
                     failed_node: node_id,
+                    node_error,
                 },
                 visit_counts,
                 frontier.snapshot(graph),
@@ -2108,6 +2259,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Failed {
                     error: error.to_string(),
                     failed_node,
+                    node_error: None,
                 },
                 visit_counts,
                 frontier.snapshot(graph),
@@ -2188,6 +2340,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             .first()
                             .cloned()
                             .unwrap_or_else(|| dispatch_entries[0].0.clone()),
+                        node_error: None,
                     },
                     visit_counts,
                     frontier.snapshot(graph),
@@ -2437,6 +2590,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     WaypointStatus::Failed {
                         error: error.to_string(),
                         failed_node: starved[0].clone(),
+                        node_error: None,
                     },
                     visit_counts.clone(),
                     frontier.snapshot(graph),

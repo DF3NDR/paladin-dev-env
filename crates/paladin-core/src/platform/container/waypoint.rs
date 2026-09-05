@@ -18,6 +18,7 @@ use crate::platform::container::battlefield::{
     BATTLEFIELD_SCHEMA_VERSION, Battlefield, StateDelta,
 };
 use crate::platform::container::directive::MusterTask;
+use crate::platform::container::node_error::{AttemptRecord, NodeError};
 pub use crate::platform::container::parley::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
@@ -558,9 +559,29 @@ pub struct NodeExecutionRecord {
     pub token_count: u64,
     /// The node's outcome.
     pub outcome: NodeOutcomeKind,
-    /// Attempt number for this node this run. Populated meaningfully once
-    /// per-node retry lands (Doc 04); `1` until then.
+    /// The 1-indexed attempt number that produced this record's `outcome`
+    /// (Doc 04 FT-FR-03, D-16): the SUCCEEDING attempt for a `Succeeded`/
+    /// `Ended`/`Parleyed` record, the EXHAUSTED (last) attempt for a
+    /// `Failed` one, and `1` for a node with no Aegis retry policy -- exactly
+    /// what it always was before per-node retry existed. Never counts the
+    /// attempts of an earlier run of the same node: a resume re-executes an
+    /// interrupted node from attempt `1` (FT-FR-07).
     pub attempt: u32,
+    /// Every FAILED attempt of this node this superstep, ordered by attempt
+    /// number ascending (D-16, FT-FR-03). A node that succeeds on attempt
+    /// `1` has an empty list; the succeeding attempt itself is never in it
+    /// -- `attempt` above records that one. Additive, `#[serde(default)]`,
+    /// following `visit_counts`/`frontier`/`fork_of`'s precedent, so a
+    /// `Waypoint` written before Phase 25 deserialises with an empty
+    /// history and `BATTLEFIELD_SCHEMA_VERSION` is unchanged.
+    #[serde(default)]
+    pub attempts: Vec<AttemptRecord>,
+    /// Whether this record's outcome was served from the node cache
+    /// (FT-06) rather than by executing the node. `false` at every
+    /// engine construction site until plan 25-13 wires the cache lookup;
+    /// additive and `#[serde(default)]` like `attempts`.
+    #[serde(default)]
+    pub cache_hit: bool,
 }
 
 /// The status of a run as of a given `Waypoint`.
@@ -573,10 +594,22 @@ pub enum WaypointStatus {
     Completed,
     /// The run failed.
     Failed {
-        /// A human-readable description of the failure.
+        /// A human-readable description of the failure (unchanged by D-08).
         error: String,
         /// The node whose execution caused the failure.
         failed_node: NodeId,
+        /// The structured failure (Doc 04 D-08, FT-FR-02), `Some` only when
+        /// an Aegis-governed node's execution failed (its retries exhausted,
+        /// or its error was not retry-eligible). `None` for a node with no
+        /// Aegis (byte-identical pre-Phase-25 behaviour, D-09), for every
+        /// engine-limit failure (`NodeVisitLimitExceeded`,
+        /// `RecursionLimitExceeded`, starvation, ...) and for every `Failed`
+        /// payload written before this field existed -- so a reader can
+        /// tell a policy-driven node failure from a limit breach without
+        /// inspecting `error`. Additive and `#[serde(default)]`, following
+        /// the `visit_counts`/`frontier`/`fork_of` precedent; no reshape.
+        #[serde(default)]
+        node_error: Option<NodeError>,
     },
     /// The run is paused awaiting external input (HITL-01, D-02): every
     /// `ParleyRequest` raised in the suspending superstep, plus every
@@ -1635,5 +1668,103 @@ mod tests {
         let restored: Waypoint = serde_json::from_str(&json).unwrap();
         assert_eq!(waypoint, restored);
         assert_eq!(restored.fork_of, Some(root));
+    }
+
+    // --- FT-FR-03 / D-16: attempt history and cache_hit on the record ------
+
+    /// A record fixture with `failed_attempts` failed attempts numbered
+    /// `1..=failed_attempts`, whose succeeding attempt is the next number.
+    fn record_with_attempt_history(failed_attempts: u32) -> NodeExecutionRecord {
+        use crate::platform::container::node_error::{NodeError, NodeErrorSource};
+        use crate::platform::container::transience::Transience;
+
+        let node_id = NodeId::new("flaky");
+        let attempts = (1..=failed_attempts)
+            .map(|attempt| AttemptRecord {
+                attempt,
+                started_at: Utc::now(),
+                duration_ms: u64::from(attempt) * 10,
+                error: NodeError {
+                    node_id: node_id.clone(),
+                    attempt,
+                    transience: Transience::Transient,
+                    source: NodeErrorSource::Function {
+                        message: format!("attempt {attempt} failed"),
+                    },
+                },
+            })
+            .collect();
+        NodeExecutionRecord {
+            node_id,
+            paladin_id: None,
+            started_at: Utc::now(),
+            duration_ms: 5,
+            token_count: 0,
+            outcome: NodeOutcomeKind::Succeeded,
+            attempt: failed_attempts + 1,
+            attempts,
+            cache_hit: false,
+        }
+    }
+
+    #[test]
+    fn failed_attempts_are_recorded_in_order() {
+        let record = record_with_attempt_history(2);
+        assert_eq!(record.attempt, 3, "the succeeding attempt is attempt 3");
+        assert_eq!(record.attempts.len(), 2, "exactly the two FAILED attempts");
+        let numbers: Vec<u32> = record.attempts.iter().map(|a| a.attempt).collect();
+        assert_eq!(numbers, vec![1, 2], "ascending by attempt number");
+        for attempt in &record.attempts {
+            assert_eq!(attempt.error.attempt, attempt.attempt);
+            assert_eq!(attempt.error.node_id, record.node_id);
+        }
+
+        // The order survives serde: a Vec is a JSON array, never re-sorted.
+        let json = serde_json::to_string(&record).unwrap();
+        let restored: NodeExecutionRecord = serde_json::from_str(&json).unwrap();
+        let restored_numbers: Vec<u32> = restored.attempts.iter().map(|a| a.attempt).collect();
+        assert_eq!(restored_numbers, vec![1, 2]);
+        assert_eq!(restored, record);
+    }
+
+    #[test]
+    fn record_round_trips_with_the_new_fields_and_without_them() {
+        // With the fields: byte-for-byte round trip.
+        let record = record_with_attempt_history(1);
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains("\"attempts\""));
+        assert!(json.contains("\"cache_hit\""));
+        let restored: NodeExecutionRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, record);
+
+        // Without them: a pre-Phase-25 payload with BOTH keys genuinely
+        // stripped deserialises with an empty history and `cache_hit: false`
+        // (the `visit_counts`/`frontier`/`fork_of` strip-key precedent).
+        let mut value = serde_json::to_value(&record).unwrap();
+        let object = value
+            .as_object_mut()
+            .expect("NodeExecutionRecord serializes to a JSON object");
+        object.remove("attempts");
+        object.remove("cache_hit");
+        let stripped = value.to_string();
+        assert!(!stripped.contains("attempts") && !stripped.contains("cache_hit"));
+
+        let legacy: NodeExecutionRecord = serde_json::from_value(value).unwrap();
+        assert!(legacy.attempts.is_empty());
+        assert!(!legacy.cache_hit);
+        assert_eq!(
+            legacy.attempt, record.attempt,
+            "every other field is untouched"
+        );
+        assert_eq!(legacy.node_id, record.node_id);
+    }
+
+    #[test]
+    fn battlefield_schema_version_is_unchanged() {
+        // Every Phase 25 Waypoint addition is `#[serde(default)]`, so the
+        // schema version pinned on `main` before this phase must still hold
+        // (X-04 does not require a bump for a purely additive change).
+        assert_eq!(BATTLEFIELD_SCHEMA_VERSION, "1.0.0");
+        assert_eq!(Waypoint::current_schema_version(), "1.0.0");
     }
 }

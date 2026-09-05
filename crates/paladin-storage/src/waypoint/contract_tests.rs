@@ -17,12 +17,15 @@ use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema, FieldName};
 use paladin_core::platform::container::directive::MusterTask;
+use paladin_core::platform::container::node_error::{AttemptRecord, NodeError, NodeErrorSource};
 use paladin_core::platform::container::parley::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
+use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::waypoint::{
-    FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeId, ThreadId,
-    Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
+    FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeExecutionRecord,
+    NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus,
+    canonical_edge_condition,
 };
 use paladin_ports::output::waypoint_port::WaypointPort;
 
@@ -924,6 +927,148 @@ pub async fn latest_prefers_most_recently_created_across_branches(port: &dyn Way
     assert_eq!(history[1].waypoint_id, mainline.waypoint_id);
 }
 
+// ── FT-FR-03 / D-16: attempt history on the execution record ─────────────
+
+/// A `NodeError` fixture for `node` at `attempt`, carrying a `Function`
+/// source so every backend exercises byte-identical inputs.
+fn sample_node_error(node: &NodeId, attempt: u32) -> NodeError {
+    NodeError {
+        node_id: node.clone(),
+        attempt,
+        transience: Transience::Transient,
+        source: NodeErrorSource::Function {
+            message: format!("attempt {attempt}: connection reset"),
+        },
+    }
+}
+
+/// A `NodeExecutionRecord` fixture whose node failed twice (attempts `1`
+/// and `2`, each with its own `AttemptRecord`) before succeeding on attempt
+/// `3`, with `cache_hit: false`.
+fn record_with_two_failed_attempts() -> NodeExecutionRecord {
+    let node = NodeId::new("flaky");
+    let started_at = Utc::now();
+    NodeExecutionRecord {
+        node_id: node.clone(),
+        paladin_id: None,
+        started_at,
+        duration_ms: 7,
+        token_count: 0,
+        outcome: NodeOutcomeKind::Succeeded,
+        attempt: 3,
+        attempts: vec![
+            AttemptRecord {
+                attempt: 1,
+                started_at,
+                duration_ms: 3,
+                error: sample_node_error(&node, 1),
+            },
+            AttemptRecord {
+                attempt: 2,
+                started_at,
+                duration_ms: 5,
+                error: sample_node_error(&node, 2),
+            },
+        ],
+        cache_hit: false,
+    }
+}
+
+/// A `Waypoint` whose `completed` carries a record with two failed
+/// `AttemptRecord`s (attempt history, FT-FR-03 / D-16) round-trips through
+/// `save` -> `latest` -> `get`, byte-identical after a serde round trip and
+/// equal field-for-field, with the attempts still ordered `1` then `2`.
+pub async fn waypoint_with_attempt_history_round_trips(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-attempt-history-round-trip").unwrap();
+    let mut wp = sample_waypoint(&thread, 1);
+    wp.completed = vec![record_with_two_failed_attempts()];
+    port.save(&wp).await.unwrap();
+
+    let expected_json = serde_json::to_string(&wp).unwrap();
+
+    let latest = port.latest(&thread).await.unwrap().unwrap();
+    assert_eq!(serde_json::to_string(&latest).unwrap(), expected_json);
+    assert_eq!(latest.completed, wp.completed);
+    let numbers: Vec<u32> = latest.completed[0]
+        .attempts
+        .iter()
+        .map(|a| a.attempt)
+        .collect();
+    assert_eq!(numbers, vec![1, 2]);
+    assert_eq!(latest.completed[0].attempt, 3);
+    assert!(!latest.completed[0].cache_hit);
+
+    let fetched = port.get(&thread, &wp.waypoint_id).await.unwrap().unwrap();
+    assert_eq!(serde_json::to_string(&fetched).unwrap(), expected_json);
+    assert_eq!(fetched, wp);
+}
+
+// ── D-08 / FT-FR-02: the structured NodeError on a Failed Waypoint ──────
+
+/// A `Failed` Waypoint carrying `node_error: Some(..)` (an Aegis-governed
+/// node's exhausted failure) round-trips through `save` -> `latest` ->
+/// `get`, byte-identical after a serde round trip; and a `Failed` payload
+/// written BEFORE `node_error` existed -- the key genuinely absent, not
+/// `null` -- still deserialises (as `None`) and round-trips through the
+/// backend unchanged, proving the field is additive with no reshape
+/// (D-08, the Phase 22.1 D-21…D-25 precedent).
+pub async fn failed_waypoint_with_node_error_round_trips(port: &dyn WaypointPort) {
+    // --- Some(..)
+    let thread = ThreadId::new("contract-failed-node-error-some").unwrap();
+    let failed_node = NodeId::new("flaky");
+    let mut wp = sample_waypoint(&thread, 3);
+    wp.status = WaypointStatus::Failed {
+        error: "node execution error: attempt 2: connection reset".to_string(),
+        failed_node: failed_node.clone(),
+        node_error: Some(sample_node_error(&failed_node, 2)),
+    };
+    port.save(&wp).await.unwrap();
+    let expected_json = serde_json::to_string(&wp).unwrap();
+    let latest = port.latest(&thread).await.unwrap().unwrap();
+    assert_eq!(serde_json::to_string(&latest).unwrap(), expected_json);
+    assert_eq!(latest.status, wp.status);
+    let fetched = port.get(&thread, &wp.waypoint_id).await.unwrap().unwrap();
+    assert_eq!(fetched, wp);
+
+    // --- key absent (pre-D-08 payload)
+    let thread = ThreadId::new("contract-failed-node-error-absent").unwrap();
+    let mut wp = sample_waypoint(&thread, 3);
+    wp.status = WaypointStatus::Failed {
+        error: "node execution error: boom".to_string(),
+        failed_node: failed_node.clone(),
+        node_error: None,
+    };
+    let mut value = serde_json::to_value(&wp).unwrap();
+    let status = value
+        .get_mut("status")
+        .and_then(|s| s.get_mut("Failed"))
+        .and_then(|f| f.as_object_mut())
+        .expect("Failed serializes to an externally-tagged object");
+    status.remove("node_error");
+    assert!(
+        !value.to_string().contains("node_error"),
+        "the node_error key must be genuinely absent from the fixture payload"
+    );
+    let restored: Waypoint = serde_json::from_value(value).unwrap();
+    assert_eq!(restored.status, wp.status);
+    assert!(matches!(
+        &restored.status,
+        WaypointStatus::Failed {
+            node_error: None,
+            ..
+        }
+    ));
+
+    port.save(&restored).await.unwrap();
+    let loaded = port.latest(&thread).await.unwrap().unwrap();
+    assert_eq!(loaded, restored);
+    assert!(matches!(
+        &loaded.status,
+        WaypointStatus::Failed { error, failed_node: fnode, node_error: None }
+            if error == "node execution error: boom" && fnode == &failed_node
+    ));
+}
+
 /// Runs every contract function above against `port`.
 ///
 /// **Requires a freshly constructed, still-empty `port`** — call this once,
@@ -968,4 +1113,6 @@ pub async fn run_all(port: &dyn WaypointPort) {
     awaiting_input_payload_round_trips(port).await;
     fork_of_round_trips(port).await;
     latest_prefers_most_recently_created_across_branches(port).await;
+    waypoint_with_attempt_history_round_trips(port).await;
+    failed_waypoint_with_node_error_round_trips(port).await;
 }

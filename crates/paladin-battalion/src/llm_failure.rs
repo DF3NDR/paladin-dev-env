@@ -40,6 +40,7 @@
 //!   `src/infrastructure/resilience/circuit_breaker.rs` is not edited and its
 //!   accounting does not drift.
 
+use paladin_core::platform::container::node_error::NodeErrorSource;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_ports::output::llm_port::LlmError;
 
@@ -115,10 +116,148 @@ fn typed_origin(err: &LlmError) -> (Option<u16>, Option<String>) {
     }
 }
 
+/// Convert a `PaladinPort::execute` failure into the structured
+/// [`NodeErrorSource`] the superstep engine records (Doc 04 D-07).
+///
+/// The one place a `PaladinError` crosses into the `NodeError` family, kept
+/// beside [`to_paladin_error`] so the two conversions read the SAME typed
+/// fields: a [`PaladinError::LlmFailure`] becomes
+/// [`NodeErrorSource::Llm`] carrying the `status` and `provider`
+/// `to_paladin_error` put there (so an LLM failure is distinguishable from
+/// any other Paladin failure), and every other variant becomes
+/// [`NodeErrorSource::Paladin`] whose `kind` is the variant name and whose
+/// `status`/`provider` are `None` -- never a sentinel, never parsed out of
+/// a message (T-25-24). `message` is the error's own `Display` in both
+/// cases, so the `WaypointStatus::Failed.error` display line built from it
+/// is byte-identical to the legacy `StateNodeError(e.to_string())` path
+/// (X-03). Redaction happened upstream, before the text entered
+/// `LlmFailure` (D-34); this function adds no new unredacted path.
+///
+/// Replaces plan 25-01's temporary "every failure is
+/// `NodeErrorSource::Function`" mapping for Paladin nodes.
+///
+/// # Examples
+///
+/// ```rust
+/// use paladin_battalion::llm_failure::to_node_error_source;
+/// use paladin_core::platform::container::node_error::NodeErrorSource;
+/// use paladin_core::platform::container::paladin_error::PaladinError;
+/// use paladin_core::platform::container::transience::Transience;
+///
+/// let err = PaladinError::LlmFailure {
+///     transience: Transience::Transient,
+///     status: Some(503),
+///     provider: Some("openai".to_string()),
+///     message: "upstream unavailable".to_string(),
+/// };
+/// match to_node_error_source(&err) {
+///     NodeErrorSource::Llm { kind, status, provider, message } => {
+///         assert_eq!(kind, "LlmFailure");
+///         assert_eq!(status, Some(503));
+///         assert_eq!(provider.as_deref(), Some("openai"));
+///         assert_eq!(message, err.to_string());
+///     }
+///     other => panic!("expected Llm, got {other:?}"),
+/// }
+/// ```
+pub fn to_node_error_source(err: &PaladinError) -> NodeErrorSource {
+    match err {
+        PaladinError::LlmFailure {
+            status, provider, ..
+        } => NodeErrorSource::Llm {
+            kind: "LlmFailure".to_string(),
+            status: *status,
+            provider: provider.clone(),
+            message: err.to_string(),
+        },
+        other => NodeErrorSource::Paladin {
+            kind: paladin_error_kind(other).to_string(),
+            status: None,
+            provider: None,
+            message: other.to_string(),
+        },
+    }
+}
+
+/// The variant name of a [`PaladinError`], the machine-stable `kind` a
+/// [`NodeErrorSource::Paladin`] carries.
+///
+/// `PaladinError` is `#[non_exhaustive]` from this crate's point of view
+/// (D-04), so the wildcard arm is compiler-required; a future variant
+/// surfaces as `"Other"` until it is given its own arm here.
+fn paladin_error_kind(err: &PaladinError) -> &'static str {
+    match err {
+        PaladinError::ConfigurationError(_) => "ConfigurationError",
+        PaladinError::ExecutionError(_) => "ExecutionError",
+        PaladinError::LlmError(_) => "LlmError",
+        PaladinError::LlmFailure { .. } => "LlmFailure",
+        PaladinError::Timeout(_) => "Timeout",
+        PaladinError::StopWordDetected(_) => "StopWordDetected",
+        PaladinError::CircuitBreakerOpen => "CircuitBreakerOpen",
+        PaladinError::MaxRetriesExceeded(_) => "MaxRetriesExceeded",
+        PaladinError::GarrisonError(_) => "GarrisonError",
+        PaladinError::GarrisonRequired => "GarrisonRequired",
+        PaladinError::ArsenalError(_) => "ArsenalError",
+        _ => "Other",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use paladin_core::platform::container::transience::Transience;
+
+    #[test]
+    fn llm_failure_becomes_node_error_source_llm_with_its_typed_fields() {
+        let err = to_paladin_error(&LlmError::ProviderError {
+            provider: "openai".to_string(),
+            status: 503,
+            message: "upstream unavailable".to_string(),
+        });
+        match to_node_error_source(&err) {
+            NodeErrorSource::Llm {
+                kind,
+                status,
+                provider,
+                message,
+            } => {
+                assert_eq!(kind, "LlmFailure");
+                assert_eq!(status, Some(503));
+                assert_eq!(provider.as_deref(), Some("openai"));
+                assert_eq!(message, err.to_string());
+            }
+            other => panic!("expected Llm, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_llm_paladin_failures_become_node_error_source_paladin_named_by_variant() {
+        let cases = [
+            (
+                PaladinError::ExecutionError("boom".to_string()),
+                "ExecutionError",
+            ),
+            (PaladinError::Timeout(30), "Timeout"),
+            (PaladinError::CircuitBreakerOpen, "CircuitBreakerOpen"),
+            (PaladinError::LlmError("legacy".to_string()), "LlmError"),
+        ];
+        for (err, expected_kind) in cases {
+            match to_node_error_source(&err) {
+                NodeErrorSource::Paladin {
+                    kind,
+                    status,
+                    provider,
+                    message,
+                } => {
+                    assert_eq!(kind, expected_kind);
+                    assert_eq!(status, None, "never a sentinel");
+                    assert_eq!(provider, None);
+                    assert_eq!(message, err.to_string());
+                }
+                other => panic!("expected Paladin for {err:?}, got {other:?}"),
+            }
+        }
+    }
 
     /// One instance of every `LlmError` variant.
     ///

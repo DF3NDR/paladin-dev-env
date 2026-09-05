@@ -76,7 +76,11 @@ pub enum TraceEvent {
         /// The superstep index that began.
         superstep: u64,
     },
-    /// A node's execution began.
+    /// One attempt of a node's execution began (Doc 04 D-16): emitted once
+    /// PER ATTEMPT, so a node retried under an Aegis retry policy produces
+    /// one `NodeStarted`/`NodeFinished` pair per attempt, each carrying its
+    /// own `attempt` number. Field names match PRD 07 §2's span-per-attempt
+    /// shape so Phase 28's OTel export renames nothing.
     NodeStarted {
         /// The thread this execution belongs to.
         thread_id: ThreadId,
@@ -84,8 +88,13 @@ pub enum TraceEvent {
         superstep: u64,
         /// The node that started executing.
         node_id: NodeId,
+        /// The 1-indexed attempt this event belongs to; `1` for a node
+        /// with no retry policy.
+        attempt: u32,
     },
-    /// A node's execution finished, successfully or not.
+    /// One attempt of a node's execution finished, successfully or not
+    /// (Doc 04 D-16): emitted once per attempt, paired with the
+    /// `NodeStarted` carrying the same `attempt`.
     NodeFinished {
         /// The thread this execution belongs to.
         thread_id: ThreadId,
@@ -93,6 +102,13 @@ pub enum TraceEvent {
         superstep: u64,
         /// The node that finished executing.
         node_id: NodeId,
+        /// The 1-indexed attempt this event belongs to; `1` for a node
+        /// with no retry policy.
+        attempt: u32,
+        /// Whether this attempt's outcome was served from the node cache
+        /// (FT-06) instead of by executing the node. Always `false` until
+        /// plan 25-13 wires the cache lookup.
+        cache_hit: bool,
     },
     /// A superstep's collected deltas were merged into the Battlefield.
     DeltaMerged {
@@ -193,11 +209,14 @@ mod tests {
             thread_id: thread_id.clone(),
             superstep: 1,
             node_id: NodeId::new("n1"),
+            attempt: 1,
         };
         let _ = TraceEvent::NodeFinished {
             thread_id: thread_id.clone(),
             superstep: 1,
             node_id: NodeId::new("n1"),
+            attempt: 1,
+            cache_hit: false,
         };
         let _ = TraceEvent::DeltaMerged {
             thread_id: thread_id.clone(),

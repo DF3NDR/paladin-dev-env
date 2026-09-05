@@ -230,6 +230,34 @@ mod tests {
     }
 
     #[test]
+    fn node_error_json_field_order_is_stable() {
+        // Serialising the same value twice yields byte-identical JSON with
+        // the keys in declaration order (`node_id`, `attempt`, `transience`,
+        // `source`), so an `error_field` comparison (plan 25-10) or a
+        // stored-Waypoint diff is deterministic. `serde_json::to_string`
+        // (not `to_value`) is what pins the order -- see the sibling test.
+        let err = sample_error();
+        let first = serde_json::to_string(&err).expect("serialize once");
+        let second = serde_json::to_string(&err).expect("serialize twice");
+        assert_eq!(first, second, "byte-identical across serialisations");
+        assert!(
+            first.starts_with("{\"node_id\":"),
+            "node_id is the first key: {first}"
+        );
+        let keys: Vec<&str> = ["\"node_id\"", "\"attempt\"", "\"transience\"", "\"source\""]
+            .into_iter()
+            .collect();
+        let positions: Vec<usize> = keys
+            .iter()
+            .map(|k| first.find(k).expect("every declared key is present"))
+            .collect();
+        assert!(positions.is_sorted(), "declaration order, got {first}");
+        // The nested `source` variant's own fields are likewise declaration-
+        // ordered (a `Function` source has exactly one key).
+        assert!(first.ends_with("\"source\":{\"Function\":{\"message\":\"boom\"}}}"));
+    }
+
+    #[test]
     fn display_includes_node_id_and_message() {
         let err = sample_error();
         let text = err.to_string();

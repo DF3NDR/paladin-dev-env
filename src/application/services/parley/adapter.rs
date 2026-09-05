@@ -149,15 +149,26 @@ impl<W: WaypointPort + 'static> ParleyPort for ParleyPortAdapter<W> {
                 let thread_for_task = thread.clone();
                 tokio::spawn(async move {
                     let _guard = guard;
-                    let _ = engine
-                        .resume_with(graph_for_task.as_ref(), thread_for_task, responses)
-                        .await;
-                    // No synchronous caller remains to report a failure
-                    // to (a race against a concurrent resume_with call, or
-                    // a shadow-validation divergence) -- the thread's own
-                    // state, read through a separate poll path, is the
-                    // source of truth, exactly like any other
-                    // fire-and-forget background job.
+                    // --- WR-03 (24-REVIEW.md): no synchronous caller
+                    // remains to report a failure to (a race against a
+                    // concurrent resume_with call, or a shadow-validation
+                    // divergence) -- the thread's own state, read through a
+                    // separate poll path, stays the source of truth,
+                    // exactly like any other fire-and-forget background
+                    // job. But a losing race must not be SILENT: logging at
+                    // `warn` with the thread id and error is the minimum
+                    // that makes it observable to an operator, since the
+                    // caller already received a `202` it cannot retract.
+                    if let Err(error) = engine
+                        .resume_with(graph_for_task.as_ref(), thread_for_task.clone(), responses)
+                        .await
+                    {
+                        log::warn!(
+                            "background parley resume_with failed for thread '{thread_for_task}': \
+                             {error} -- the caller already received 202 Accepted for this \
+                             submission, which had no effect"
+                        );
+                    }
                 });
                 Ok(ResumeAccepted::new(thread.clone()))
             }
@@ -428,8 +439,10 @@ mod tests {
     use paladin_core::platform::container::paladin_error::PaladinError;
     use paladin_core::platform::container::waypoint::{GraphFingerprint, NodeId, ParleyId};
     use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    use paladin_ports::output::waypoint_port::{ThreadSummary, WaypointError, WaypointSummary};
     use paladin_storage::waypoint::contract_tests::sample_waypoint_at;
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     struct UnimplementedPaladinPort;
@@ -718,6 +731,154 @@ mod tests {
         let _accepted = adapter.resume_with(&t, vec![response]).await.unwrap();
         let outcome = coordinator.cancel_and_wait(Duration::from_secs(5)).await;
         assert!(outcome.drained());
+    }
+
+    // --- WR-03 (24-REVIEW.md): a losing background race is logged, not silent
+
+    /// A `WaypointPort` wrapper that answers every call by delegating to
+    /// `inner`, except `latest`: the FIRST call per test (the adapter's own
+    /// outer read) passes through unchanged, but every call AFTER that
+    /// fabricates `WaypointStatus::Completed` regardless of what `inner`
+    /// actually holds -- deterministically simulating the losing half of
+    /// WR-03's concurrent-`resume_with` race (a concurrent winner already
+    /// completed the thread by the time THIS call's spawned background task
+    /// makes its own, real `WarEngine::resume_with` call) without needing
+    /// genuine racing tasks.
+    struct RaceSimulatingWaypointStore {
+        inner: Arc<InMemoryWaypointStore>,
+        latest_calls: AtomicUsize,
+    }
+
+    #[async_trait_attr]
+    impl WaypointPort for RaceSimulatingWaypointStore {
+        async fn save(
+            &self,
+            wp: &paladin_core::platform::container::waypoint::Waypoint,
+        ) -> Result<(), WaypointError> {
+            self.inner.save(wp).await
+        }
+
+        async fn latest(
+            &self,
+            thread: &ThreadId,
+        ) -> Result<Option<paladin_core::platform::container::waypoint::Waypoint>, WaypointError>
+        {
+            let call_index = self.latest_calls.fetch_add(1, Ordering::SeqCst);
+            let real = self.inner.latest(thread).await?;
+            if call_index == 0 {
+                Ok(real)
+            } else {
+                Ok(real.map(|mut wp| {
+                    wp.status = WaypointStatus::Completed;
+                    wp
+                }))
+            }
+        }
+
+        async fn get(
+            &self,
+            thread: &ThreadId,
+            id: &paladin_core::platform::container::waypoint::WaypointId,
+        ) -> Result<Option<paladin_core::platform::container::waypoint::Waypoint>, WaypointError>
+        {
+            self.inner.get(thread, id).await
+        }
+
+        async fn history(
+            &self,
+            thread: &ThreadId,
+            limit: Option<u32>,
+            before: Option<paladin_core::platform::container::waypoint::WaypointId>,
+        ) -> Result<Vec<WaypointSummary>, WaypointError> {
+            self.inner.history(thread, limit, before).await
+        }
+
+        async fn list_threads(
+            &self,
+            limit: Option<u32>,
+            before: Option<chrono::DateTime<Utc>>,
+        ) -> Result<Vec<ThreadSummary>, WaypointError> {
+            self.inner.list_threads(limit, before).await
+        }
+
+        async fn delete_thread(&self, thread: &ThreadId) -> Result<u64, WaypointError> {
+            self.inner.delete_thread(thread).await
+        }
+
+        async fn delete_waypoint(
+            &self,
+            thread: &ThreadId,
+            id: &paladin_core::platform::container::waypoint::WaypointId,
+        ) -> Result<bool, WaypointError> {
+            self.inner.delete_waypoint(thread, id).await
+        }
+    }
+
+    /// WR-03 (24-REVIEW.md): when the spawned background continuation's own
+    /// `WarEngine::resume_with` call loses a race (sees the thread already
+    /// advanced past `AwaitingInput` by the time it runs), the caller
+    /// already received `202 Accepted` and cannot be told -- but the
+    /// process must not panic, the `ShutdownCoordinator` must still drain
+    /// the guard, and the underlying store must be left exactly as the
+    /// (fabricated) "winner" left it, never overwritten by the loser's
+    /// discarded error. The discarded error is additionally logged at
+    /// `warn` (not independently asserted here -- this crate has no
+    /// existing log-capture test harness -- but this test exercises that
+    /// exact code path deterministically).
+    #[tokio::test]
+    async fn losing_background_race_is_discarded_without_panicking() {
+        let inner = Arc::new(InMemoryWaypointStore::new());
+        let graph = approval_graph();
+        let t = thread("wr-03-losing-race");
+        let request = sample_request(ParleyKind::Approval, None);
+        let parley_id = request.parley_id;
+        seed_awaiting_input(&inner, &t, &graph, vec![request], Vec::new()).await;
+
+        let registry = Arc::new(GraphRegistry::new());
+        registry.register(graph);
+
+        let race_store = Arc::new(RaceSimulatingWaypointStore {
+            inner: Arc::clone(&inner),
+            latest_calls: AtomicUsize::new(0),
+        });
+        let engine = Arc::new(
+            WarEngine::new(Arc::new(UnimplementedPaladinPort), Arc::clone(&race_store))
+                .with_durability(WaypointDurability::Strict),
+        );
+        let coordinator = ShutdownCoordinator::new();
+        let adapter = ParleyPortAdapter::new(engine, race_store, registry, coordinator.clone());
+
+        let response = approve_response(parley_id);
+        let accepted = adapter.resume_with(&t, vec![response]).await.unwrap();
+        assert_eq!(
+            accepted.thread_id(),
+            &t,
+            "the caller still receives 202 Accepted even though the background call will lose"
+        );
+
+        for _ in 0..50 {
+            if coordinator.in_flight() == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            coordinator.in_flight(),
+            0,
+            "the spawned task's guard must still drain even though its own resume_with call \
+             lost the race and returned an error"
+        );
+
+        // The real, underlying store is untouched by the losing call (it
+        // returned an error before persisting anything) -- proving the
+        // discarded error was correctly discarded, not silently
+        // overwriting the "winner"'s state with something else.
+        let after = inner.latest(&t).await.unwrap().unwrap();
+        assert!(
+            matches!(after.status, WaypointStatus::AwaitingInput { .. }),
+            "the losing background call must never have persisted anything, got {:?}",
+            after.status
+        );
     }
 
     /// Every `EngineError` variant the real validation path can produce

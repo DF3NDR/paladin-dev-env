@@ -4,6 +4,7 @@ use crate::core::platform::container::prompt::{
     PromptData, PromptItem, PromptParameters, PromptType, UserPrompt,
 };
 use log::{debug, info};
+use paladin_battalion::llm_failure::to_paladin_error;
 use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -175,7 +176,7 @@ impl TemperatureService {
             .llm_port
             .generate(request)
             .await
-            .map_err(|e| PaladinError::LlmError(e.to_string()))?;
+            .map_err(|e| to_paladin_error(&e))?;
 
         // Parse response
         let task_type = self.parse_task_type(&response.content)?;
@@ -373,6 +374,106 @@ mod tests {
                 supports_system_messages: true,
                 temperature_range: None,
             }
+        }
+    }
+
+    /// An `LlmPort` whose `generate` fails with a caller-chosen real
+    /// `LlmError`, so the site migrated by plan 25-06 (D-02) can be observed
+    /// converting it through `llm_failure::to_paladin_error`.
+    struct FailingLlmPort(fn() -> LlmError);
+
+    #[async_trait]
+    impl LlmPort for FailingLlmPort {
+        async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Err((self.0)())
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            Err((self.0)())
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "failing"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    fn provider_503() -> LlmError {
+        LlmError::ProviderError {
+            provider: "openai".to_string(),
+            status: 503,
+            message: "upstream unavailable".to_string(),
+        }
+    }
+
+    fn auth_failure() -> LlmError {
+        LlmError::AuthenticationError("invalid API key".to_string())
+    }
+
+    /// Plan 25-06 Test 4 (D-02, X-03): the temperature-detection site
+    /// surfaces a real `LlmError` as the structured `LlmFailure` -- typed
+    /// transience/status/provider intact -- while rendering exactly what the
+    /// legacy `PaladinError::LlmError(e.to_string())` rendered.
+    #[tokio::test]
+    async fn temperature_service_surfaces_structured_llm_failure() {
+        use paladin_core::platform::container::transience::Transience;
+
+        // Transient, status-carrying.
+        let service = TemperatureService::new(Arc::new(FailingLlmPort(provider_503)));
+        let err = service
+            .calculate_optimal_temperature("A creative storyteller", None)
+            .await
+            .expect_err("a provider 503 must fail detection");
+        match &err {
+            PaladinError::LlmFailure {
+                transience,
+                status,
+                provider,
+                ..
+            } => {
+                assert_eq!(*transience, Transience::Transient);
+                assert_eq!(*status, Some(503));
+                assert_eq!(provider.as_deref(), Some("openai"));
+            }
+            other => panic!("expected PaladinError::LlmFailure, got {other:?}"),
+        }
+        assert_eq!(err.to_string(), format!("LLM error: {}", provider_503()));
+
+        // Permanent, no status.
+        let service = TemperatureService::new(Arc::new(FailingLlmPort(auth_failure)));
+        let err = service
+            .calculate_optimal_temperature("A creative storyteller", None)
+            .await
+            .expect_err("an authentication failure must fail detection");
+        match err {
+            PaladinError::LlmFailure {
+                transience,
+                status,
+                provider,
+                ..
+            } => {
+                assert_eq!(transience, Transience::Permanent);
+                assert_eq!(status, None);
+                assert_eq!(provider, None);
+            }
+            other => panic!("expected PaladinError::LlmFailure, got {other:?}"),
         }
     }
 

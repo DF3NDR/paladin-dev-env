@@ -83,9 +83,14 @@ use paladin_ports::output::llm_port::{
     StreamingResponse, TokenUsage,
 };
 
+use crate::http_status::map_http_status;
 use crate::redaction::{
     RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, diagnostic_excerpt, redact_credentials,
 };
+
+/// The provider name this adapter reports through [`LlmPort::get_provider_name`]
+/// and stamps on every [`LlmError::ProviderError`] it emits (Phase 25 D-03).
+const GEMINI_PROVIDER: &str = "gemini";
 
 /// Default Gemini API base URL — the `v1beta` surface, current as of this
 /// writing `[CITED: ai.google.dev/api]`.
@@ -496,8 +501,8 @@ impl GeminiAdapter {
     /// A `401` or `403` is **always** classified as
     /// [`LlmError::AuthenticationError`], regardless of the RPC status
     /// string and whether or not the envelope parses at all. The
-    /// alternative is a fall-through to the retryable
-    /// [`LlmError::ProcessingError`] catch-all, and
+    /// alternative is a fall-through to the shared helper's generic
+    /// [`LlmError::ProviderError`] (retried by this adapter), and
     /// [`Self::execute_with_retry`]'s non-retryable set already halts on
     /// `AuthenticationError` — so misclassifying an unrecognised auth
     /// failure would re-transmit a live `x-goog-api-key` credential to an
@@ -582,27 +587,44 @@ impl GeminiAdapter {
             // whose previously-working `GEMINI_BASE_URL` now fails gets an
             // actionable message rather than an opaque one.
             //
-            // `LlmError::ProcessingError` is this adapter's retryable set
-            // (see `execute_with_retry`), so a redirecting host is retried
-            // up to `max_retries` before this surfaces — the same accepted
-            // cost recorded for the compat presets (T-17-54): adding a new
-            // `LlmError` variant would breach PROV-02's "existing variants
-            // only" rule, and no existing non-retryable variant means
-            // "refused redirect".
-            300..=399 => LlmError::ProcessingError(format!(
-                "Gemini request failed (HTTP {status}): the configured GEMINI_BASE_URL \
-                 responded with a redirect (HTTP {status}), which this client refuses to \
-                 follow because doing so would forward the x-goog-api-key credential header \
-                 to a different, potentially attacker-influenced host. Correct the \
-                 GEMINI_BASE_URL setting to point directly at the intended endpoint. \
-                 Response excerpt: {excerpt}"
-            )),
-            _ => LlmError::ProcessingError(format!(
-                "Gemini request failed (HTTP {status}{}): {excerpt}",
-                rpc_status
-                    .map(|s| format!(", status={s}"))
-                    .unwrap_or_default()
-            )),
+            // The VARIANT is the one the shared helper would choose for a
+            // `3xx` (`ProviderError`, classified Permanent by value —
+            // FT-FR-01); only the message is enriched. It is outside
+            // `execute_with_retry`'s non-retryable set, so a redirecting
+            // host is still retried up to `max_retries` before this
+            // surfaces — the accepted cost recorded as T-17-54. The "no new
+            // variant" rationale that once forced this onto
+            // `ProcessingError` is superseded by plan 25-02's
+            // `ProviderError`.
+            300..=399 => LlmError::ProviderError {
+                provider: GEMINI_PROVIDER.to_string(),
+                status,
+                message: format!(
+                    "the configured GEMINI_BASE_URL responded with a redirect (HTTP {status}), \
+                     which this client refuses to follow because doing so would forward the \
+                     x-goog-api-key credential header to a different, potentially \
+                     attacker-influenced host. Correct the GEMINI_BASE_URL setting to point \
+                     directly at the intended endpoint. Response excerpt: {excerpt}"
+                ),
+            },
+            // Phase 25 (FT-FR-01, D-03): every remaining status goes through
+            // the crate-wide helper, which redacts before bounding and
+            // carries the status as a typed field. The body handed over is
+            // the envelope's extracted `error.message` (not the raw JSON)
+            // with Google's RPC status string appended, so the diagnostic
+            // keeps both without the helper needing to know the envelope.
+            _ => {
+                let envelope_text = match rpc_status {
+                    Some(rpc) => format!("{raw_message} (status={rpc})"),
+                    None => raw_message.to_string(),
+                };
+                map_http_status(
+                    GEMINI_PROVIDER,
+                    status,
+                    &envelope_text,
+                    &self.config.api_key,
+                )
+            }
         }
     }
 
@@ -904,7 +926,7 @@ impl LlmPort for GeminiAdapter {
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "gemini"
+        GEMINI_PROVIDER
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -1682,21 +1704,69 @@ mod tests {
         );
     }
 
+    /// Phase 25 (FT-FR-01, D-03): the successor to
+    /// `map_error_unrecognised_status_maps_to_processing_error_carrying_http_code_and_status`.
+    /// Gemini's envelope is still parsed first — its `error.message` and
+    /// RPC `status` string reach the helper as the body — and the HTTP
+    /// status is read from `ProviderError`'s typed field, never from text.
     #[test]
-    fn map_error_unrecognised_status_maps_to_processing_error_carrying_http_code_and_status() {
+    fn gemini_error_envelope_still_parses_before_mapping() {
         let adapter = test_adapter("https://example.invalid");
         let body = json!({
             "error": {"code": 500, "message": "Internal error", "status": "INTERNAL"}
         })
         .to_string();
 
-        let error = adapter.map_error(500, &body);
-        match error {
-            LlmError::ProcessingError(msg) => {
-                assert!(msg.contains("500"), "got {msg}");
-                assert!(msg.contains("INTERNAL"), "got {msg}");
+        match adapter.map_error(500, &body) {
+            LlmError::ProviderError {
+                provider,
+                status,
+                message,
+            } => {
+                assert_eq!(provider, "gemini");
+                assert_eq!(status, 500);
+                assert!(
+                    message.contains("Internal error"),
+                    "envelope message must reach the helper as the body: {message}"
+                );
+                assert!(
+                    message.contains("INTERNAL"),
+                    "RPC status string must survive into the diagnostic: {message}"
+                );
+                assert!(
+                    !message.contains("\"code\""),
+                    "raw envelope JSON must not be the body: {message}"
+                );
             }
-            other => panic!("expected ProcessingError, got {other:?}"),
+            other => panic!("expected ProviderError {{ status: 500 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gemini_non_2xx_routes_through_the_shared_mapper() {
+        let adapter = test_adapter("https://example.invalid");
+        match adapter.map_error(503, "Service Unavailable") {
+            LlmError::ProviderError {
+                provider, status, ..
+            } => {
+                assert_eq!(provider, "gemini");
+                assert_eq!(status, 503);
+            }
+            other => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gemini_refused_redirect_is_a_typed_provider_error_naming_the_redirect() {
+        let adapter = test_adapter("https://example.invalid");
+        match adapter.map_error(302, "moved") {
+            LlmError::ProviderError {
+                status, message, ..
+            } => {
+                assert_eq!(status, 302);
+                assert!(message.contains("redirect"), "got {message}");
+            }
+            other => panic!("expected ProviderError {{ status: 302 }}, got {other:?}"),
         }
     }
 
@@ -2013,10 +2083,11 @@ mod tests {
     //      exactly `max_retries` = 3 total attempts on a retryable error.
     //   2. HTTP 500 is retryable: it falls through every named arm in
     //      `map_error` (401/403, 400/INVALID_ARGUMENT, 404/NOT_FOUND, 429,
-    //      RESOURCE_EXHAUSTED, 300..=399) into the catch-all at
-    //      gemini/adapter.rs:575, which returns the retryable
-    //      `LlmError::ProcessingError` — and 500 is outside the
-    //      300..=399 refused-redirect range plan 17-10 added.
+    //      RESOURCE_EXHAUSTED, 300..=399) into the crate-wide
+    //      `map_http_status`, which returns `LlmError::ProviderError
+    //      { status: 500 }` — outside `execute_with_retry`'s
+    //      non-retryable set, so retried (Phase 25 D-03; this comment
+    //      previously named the pre-25-05 `ProcessingError` catch-all).
     //   3. No existing streaming mock-transport scaffolding was reused for
     //      this file — Gemini is a bespoke adapter (D-08), never built on
     //      `CompatEngine`, so these tests are new.
@@ -2669,11 +2740,12 @@ mod tests {
                     redirect_target.url()
                 ),
             )
-            // `ProcessingError` (what the refused-redirect arm returns once
-            // fixed) is retryable, so the fixed adapter may hit `primary`
-            // more than once (up to `max_retries` = 3); today, before the
-            // fix, the redirect is followed transparently and the call
-            // succeeds on the first attempt. `expect_at_least(1)` holds in
+            // The refused-redirect arm's error (`ProviderError { 3xx }`
+            // since Phase 25 D-03; `ProcessingError` before) is outside the
+            // adapter's non-retryable set, so the fixed adapter may hit
+            // `primary` more than once (up to `max_retries` = 3); before
+            // the fix, the redirect was followed transparently and the call
+            // succeeded on the first attempt. `expect_at_least(1)` holds in
             // both the RED and GREEN states.
             .expect_at_least(1)
             .create_async()

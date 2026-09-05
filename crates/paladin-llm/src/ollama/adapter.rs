@@ -153,6 +153,10 @@ impl OllamaConfig {
     }
 }
 
+/// The provider name this adapter reports through [`LlmPort::get_provider_name`]
+/// and that its engine stamps on every `LlmError::ProviderError` (Phase 25 D-03).
+const OLLAMA_PROVIDER: &str = "ollama";
+
 /// Ollama (self-hosted, keyless) LLM Adapter implementing [`LlmPort`].
 ///
 /// Every method delegates to an owned [`CompatEngine`] (D-05) — this struct
@@ -217,7 +221,9 @@ impl OllamaAdapter {
         };
 
         Ok(Self {
-            engine: CompatEngine::new(engine_config)?,
+            // Phase 25 D-03: name the engine so every `ProviderError` it
+            // emits carries "ollama", not the engine's generic default.
+            engine: CompatEngine::new(engine_config)?.with_provider_name(OLLAMA_PROVIDER),
         })
     }
 }
@@ -244,7 +250,7 @@ impl LlmPort for OllamaAdapter {
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "ollama"
+        OLLAMA_PROVIDER
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -255,6 +261,7 @@ impl LlmPort for OllamaAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http_status::map_http_status;
     use mockito::Server;
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
     use paladin_ports::output::llm_port::FinishReason;
@@ -396,6 +403,83 @@ mod tests {
 
         assert_eq!(assembled, "Hello world");
         assert!(matches!(last_finish_reason, Some(FinishReason::Stop)));
+    }
+
+    // ── Phase 25 (FT-FR-01, D-03): non-2xx routes through map_http_status ──
+
+    /// The preset's non-2xx path is the shared `map_http_status` — proven
+    /// by comparing the adapter's error against the helper's own output for
+    /// the same status, body and (placeholder) key.
+    #[tokio::test]
+    async fn ollama_non_2xx_routes_through_the_shared_mapper() {
+        let body = r#"{"error":"model is loading"}"#;
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(503)
+            .with_body(body)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let config = OllamaConfig::new(server.url(), "llama3".to_string());
+        let adapter = OllamaAdapter::new(config).unwrap();
+
+        let result = adapter.generate(build_request("llama3")).await;
+        let expected = map_http_status("ollama", 503, body, OLLAMA_PLACEHOLDER_API_KEY);
+        match (result, expected) {
+            (
+                Err(LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                }),
+                LlmError::ProviderError {
+                    provider: want_provider,
+                    status: want_status,
+                    message: want_message,
+                },
+            ) => {
+                assert_eq!(provider, want_provider);
+                assert_eq!(status, want_status);
+                assert_eq!(message, want_message);
+            }
+            (other, _) => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+        }
+    }
+
+    /// A local Ollama server's 4xx semantics are not OpenAI's: a status with
+    /// no dedicated variant (here 409) must arrive as a typed
+    /// `ProviderError`, never erased into `ProcessingError`. Only one
+    /// request is expected: 409 classifies Permanent, but the engine's
+    /// retry loop is by-exclusion, so `expect_at_least(1)` is the honest
+    /// bound.
+    #[tokio::test]
+    async fn ollama_local_server_4xx_maps_without_a_dedicated_variant() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(409)
+            .with_body(r#"{"error":"conflict"}"#)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let config = OllamaConfig::new(server.url(), "llama3".to_string());
+        let adapter = OllamaAdapter::new(config).unwrap();
+
+        match adapter.generate(build_request("llama3")).await {
+            Err(LlmError::ProviderError {
+                provider, status, ..
+            }) => {
+                assert_eq!(provider, "ollama");
+                assert_eq!(status, 409);
+            }
+            Err(LlmError::ProcessingError(msg)) => {
+                panic!("409 must not be erased into ProcessingError: {msg}")
+            }
+            other => panic!("expected ProviderError {{ status: 409 }}, got {other:?}"),
+        }
     }
 
     // ── Model list: live catalog vs. curated fallback (D-13) ──

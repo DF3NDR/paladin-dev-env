@@ -714,7 +714,7 @@ pub fn agent_openapi_router(state: AgentApiState) -> OpenApiRouter {
         // applies only to these routes, so the merged health probes stay open.
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            crate::agent_auth::require_authentication,
+            crate::agent_auth::require_authentication::<AgentApiState>,
         ))
         .with_state(state)
 }

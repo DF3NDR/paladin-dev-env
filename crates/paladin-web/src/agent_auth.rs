@@ -81,6 +81,25 @@ impl AgentAuthConfig {
     }
 }
 
+/// Trait for extracting the shared [`AgentAuthConfig`] from router state, so
+/// [`require_authentication`] can be reused, unmodified in behavior, by every
+/// stateful router in this crate rather than each duplicating its ~15 lines.
+///
+/// Added alongside `thread_controller` (Phase 24 Plan 11, D-24): the thread
+/// routes' `ThreadApiState` layers the SAME `require_authentication` function
+/// `AgentApiState`'s routes already use, via this trait rather than a second,
+/// copy-pasted middleware.
+pub trait HasAgentAuth {
+    /// Borrow this state's [`AgentAuthConfig`].
+    fn agent_auth(&self) -> &AgentAuthConfig;
+}
+
+impl HasAgentAuth for AgentApiState {
+    fn agent_auth(&self) -> &AgentAuthConfig {
+        &self.auth
+    }
+}
+
 /// Constant-time byte equality (length difference short-circuits).
 fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -143,18 +162,28 @@ pub async fn authenticate(
 
 /// Axum middleware that authenticates the request and attaches a [`Principal`].
 ///
+/// Generic over any router state exposing an [`AgentAuthConfig`] via
+/// [`HasAgentAuth`] -- both `AgentApiState` (the agent routes) and
+/// `thread_controller::ThreadApiState` (the thread routes, D-24) layer this
+/// SAME function via `route_layer(axum::middleware::from_fn_with_state(...))`
+/// rather than each carrying its own copy.
+///
 /// When auth is disabled it attaches an open-access principal and passes through; when
 /// enabled it returns `401` on failure.
-pub async fn require_authentication(
-    State(state): State<AgentApiState>,
+pub async fn require_authentication<S>(
+    State(state): State<S>,
     mut request: Request,
     next: Next,
-) -> Response {
-    if !state.auth.enabled {
+) -> Response
+where
+    S: HasAgentAuth + Clone + Send + Sync + 'static,
+{
+    let auth = state.agent_auth();
+    if !auth.enabled {
         request.extensions_mut().insert(Principal::open_access());
         return next.run(request).await;
     }
-    match authenticate(request.headers(), &state.auth).await {
+    match authenticate(request.headers(), auth).await {
         Ok(principal) => {
             request.extensions_mut().insert(principal);
             next.run(request).await

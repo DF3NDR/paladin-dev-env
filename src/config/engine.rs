@@ -267,6 +267,96 @@ mod tests {
         assert_eq!(config.run_timeout_secs, None);
     }
 
+    // --- Phase 24 Plan 08: shutdown_grace_secs / graceful_shutdown (HITL-04,
+    // D-20) -- RED: neither field exists on EngineConfig yet.
+
+    #[test]
+    fn engine_config_defaults_shutdown_fields() {
+        let config = EngineConfig::default();
+        assert_eq!(config.shutdown_grace_secs, 30);
+        assert!(config.graceful_shutdown);
+    }
+
+    #[test]
+    #[serial]
+    fn engine_config_reads_shutdown_env_overrides() {
+        let default = EngineConfig::default();
+
+        unsafe { env::set_var("APP_ENGINE_SHUTDOWN_GRACE_SECS", "45") };
+        let mut config = EngineConfig::default();
+        config.apply_env_overrides();
+        assert_eq!(config.shutdown_grace_secs, 45);
+        assert_eq!(config.graceful_shutdown, default.graceful_shutdown);
+        unsafe { env::remove_var("APP_ENGINE_SHUTDOWN_GRACE_SECS") };
+
+        unsafe { env::set_var("APP_ENGINE_GRACEFUL_SHUTDOWN", "false") };
+        let mut config = EngineConfig::default();
+        config.apply_env_overrides();
+        assert!(!config.graceful_shutdown);
+        assert_eq!(config.shutdown_grace_secs, default.shutdown_grace_secs);
+        unsafe { env::remove_var("APP_ENGINE_GRACEFUL_SHUTDOWN") };
+    }
+
+    #[test]
+    fn engine_config_validates_shutdown_grace() {
+        let config = EngineConfig {
+            shutdown_grace_secs: 0,
+            ..EngineConfig::default()
+        };
+        assert!(
+            config.validate().is_ok(),
+            "Duration::ZERO (immediate abort) is an explicitly supported value, not an error"
+        );
+
+        let config = EngineConfig {
+            shutdown_grace_secs: 3601,
+            ..EngineConfig::default()
+        };
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .contains("shutdown_grace_secs"),
+            "a value past the documented bound (3600s = 1 hour) must be rejected"
+        );
+    }
+
+    #[test]
+    fn shutdown_grace_does_not_change_the_graph_fingerprint() {
+        // shutdown_grace_secs/graceful_shutdown must never enter
+        // `impl From<EngineConfig> for EngineLimits` (D-20): two configs
+        // differing ONLY in these two fields produce byte-identical
+        // `EngineLimits`, which is what `WarGraph::fingerprint()` hashes.
+        let quick = EngineConfig {
+            shutdown_grace_secs: 1,
+            graceful_shutdown: false,
+            ..EngineConfig::default()
+        };
+        let slow = EngineConfig {
+            shutdown_grace_secs: 3600,
+            graceful_shutdown: true,
+            ..EngineConfig::default()
+        };
+
+        let quick_limits: EngineLimits = quick.into();
+        let slow_limits: EngineLimits = slow.into();
+        assert_eq!(
+            quick_limits, slow_limits,
+            "shutdown_grace_secs/graceful_shutdown must never leak into EngineLimits, which the \
+             graph fingerprint hashes"
+        );
+
+        let schema = BattlefieldSchema::new(Vec::new());
+        let graph_a = WarGraph::new(schema.clone(), quick_limits);
+        let graph_b = WarGraph::new(schema, slow_limits);
+        assert_eq!(
+            graph_a.fingerprint(),
+            graph_b.fingerprint(),
+            "identical EngineLimits (the only thing derived from EngineConfig the fingerprint \
+             can see) must produce identical fingerprints regardless of shutdown_grace_secs"
+        );
+    }
+
     #[test]
     #[serial]
     fn env_overrides_apply_for_every_field() {

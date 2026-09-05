@@ -283,8 +283,17 @@ async fn wait_for_termination_signal() {
 /// D-20). Split out from [`shutdown_signal`] so the drain behaviour is
 /// exercised by a simulated trigger in tests rather than requiring a real
 /// OS signal (HITL-04, D-22).
-async fn drain_on_shutdown(_coordinator: &ShutdownCoordinator, _grace: Duration, _graceful: bool) {
-    // RED: not yet wired to the coordinator (Phase 24 Plan 09, HITL-04, D-22).
+async fn drain_on_shutdown(coordinator: &ShutdownCoordinator, grace: Duration, graceful: bool) {
+    if graceful {
+        let outcome = coordinator.cancel_and_wait(grace).await;
+        info!("graceful shutdown drain complete: {outcome:?}");
+    } else {
+        coordinator.token().cancel();
+        info!(
+            "graceful_shutdown disabled (APP_ENGINE_GRACEFUL_SHUTDOWN=false); cancelling \
+             in-flight runs without waiting"
+        );
+    }
 }
 
 /// Wait for a termination signal, then cancel `coordinator` and drain every

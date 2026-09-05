@@ -53,6 +53,11 @@ pub mod config;
 /// Error types returned by provider adapters.
 #[allow(missing_docs)]
 pub mod error;
+/// The one shared HTTP-status-to-`LlmError` mapping every provider adapter
+/// routes its non-2xx branch through (FT-FR-01, D-03) — redacts before it
+/// bounds, and emits a typed `ProviderError { status }` for every status
+/// without a dedicated variant. Not feature-gated.
+pub mod http_status;
 /// LLM-backed content analysis service orchestration.
 #[allow(missing_docs)]
 pub mod llm_analysis_service;
@@ -63,11 +68,6 @@ pub mod provider_factory;
 /// — reused by the shared compatible core and by bespoke adapters alike).
 #[allow(missing_docs)]
 pub mod redaction;
-/// The one shared HTTP-status-to-`LlmError` mapping every provider adapter
-/// routes its non-2xx branch through (FT-FR-01, D-03) — redacts before it
-/// bounds, and emits a typed `ProviderError { status }` for every status
-/// without a dedicated variant. Not feature-gated.
-pub mod http_status;
 
 #[cfg(any(
     feature = "kimi",

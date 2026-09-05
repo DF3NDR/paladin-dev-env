@@ -21,6 +21,101 @@ use paladin_ports::output::llm_port::LlmError;
 
 use crate::redaction::{RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, redact_credentials};
 
+/// The phrase an OpenAI-family `400` body carries when the prompt overflowed
+/// the model's context window. Reused verbatim from the original
+/// `openai/adapter.rs` predicate so the `400 -> TokenLimitExceeded`
+/// disambiguation is byte-identical to what it was before this helper.
+const CONTEXT_LENGTH_OVERFLOW_SIGNATURE: &str = "maximum context length";
+
+/// Whether a (redacted) `400` body signals a context-length overflow rather
+/// than a malformed prompt.
+fn signals_context_length_overflow(redacted_body: &str) -> bool {
+    redacted_body.contains(CONTEXT_LENGTH_OVERFLOW_SIGNATURE)
+}
+
+/// Map a non-2xx provider response to the [`LlmError`] variant that
+/// classifies it — the one shared mapping for every adapter (D-03).
+///
+/// `body` is the raw response text; `api_key` is the credential the adapter
+/// sent, so an echoed request can be scrubbed exactly. The excerpt placed in
+/// the returned error is **redacted first, then bounded** to
+/// [`RESPONSE_EXCERPT_CHAR_BUDGET`] characters on character boundaries —
+/// never byte-sliced, never bounded before redaction. Bounding first can
+/// slice a credential across the truncation boundary and leak its tail
+/// (T-25-20), which is why this ordering lives in exactly one place.
+///
+/// Dedicated mappings (unchanged from the per-adapter blocks they replace):
+///
+/// | status | variant |
+/// |--------|---------|
+/// | 401 | [`LlmError::AuthenticationError`] |
+/// | 429 | [`LlmError::RateLimitExceeded`] |
+/// | 402 | [`LlmError::UsageLimitExceeded`] (no regain hint) |
+/// | 404 | [`LlmError::ModelNotAvailable`] |
+/// | 400 | [`LlmError::TokenLimitExceeded`] when the body signals a context-length overflow, else [`LlmError::InvalidPrompt`] |
+/// | anything else | [`LlmError::ProviderError`] carrying `status` as a typed `u16` |
+///
+/// The 5xx range, 408 and every 4xx without a row above all reach
+/// `ProviderError` through the final arm, so [`LlmError::transience`] can
+/// classify them by value (408/429/5xx transient, other 4xx permanent).
+/// A provider-specific pre-check (Anthropic's `403`, Gemini's RPC-status
+/// envelope) may run *before* this helper, but never after it and never as a
+/// second copy of the table.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_llm::http_status::map_http_status;
+/// use paladin_ports::output::llm_port::LlmError;
+///
+/// let err = map_http_status("openai", 503, r#"{"error":"overloaded"}"#, "sk-secret");
+/// match err {
+///     LlmError::ProviderError { provider, status, message } => {
+///         assert_eq!(provider, "openai");
+///         assert_eq!(status, 503);
+///         assert!(message.contains("overloaded"));
+///     }
+///     other => panic!("expected ProviderError, got {other:?}"),
+/// }
+///
+/// assert!(matches!(
+///     map_http_status("openai", 429, "", "sk-secret"),
+///     LlmError::RateLimitExceeded
+/// ));
+/// ```
+pub fn map_http_status(provider: &str, status: u16, body: &str, api_key: &str) -> LlmError {
+    // Redact BEFORE bounding — see the module docs for why the order is
+    // load-bearing. The overflow predicate reads the full redacted body (not
+    // the bounded excerpt) so a signature past the character budget is not
+    // missed; only the bounded excerpt is ever emitted.
+    let redacted = redact_credentials(body, api_key);
+    let message = bounded_excerpt(&redacted, RESPONSE_EXCERPT_CHAR_BUDGET);
+
+    match status {
+        401 => LlmError::AuthenticationError(format!(
+            "Invalid API key for provider '{provider}'. Error: {message}"
+        )),
+        429 => LlmError::RateLimitExceeded,
+        402 => LlmError::UsageLimitExceeded {
+            provider: provider.to_string(),
+            regain_hint: None,
+        },
+        404 => LlmError::ModelNotAvailable(message),
+        400 => {
+            if signals_context_length_overflow(&redacted) {
+                LlmError::TokenLimitExceeded
+            } else {
+                LlmError::InvalidPrompt(message)
+            }
+        }
+        _ => LlmError::ProviderError {
+            provider: provider.to_string(),
+            status,
+            message,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,10 +205,8 @@ mod tests {
 
         // Wrong-order control, computed here so the test proves the helper
         // does not match it rather than merely asserting a happy path.
-        let wrong_order = redact_credentials(
-            &bounded_excerpt(&body, RESPONSE_EXCERPT_CHAR_BUDGET),
-            KEY,
-        );
+        let wrong_order =
+            redact_credentials(&bounded_excerpt(&body, RESPONSE_EXCERPT_CHAR_BUDGET), KEY);
         let leaked_head = &KEY[..5];
         assert!(
             wrong_order.contains(leaked_head),

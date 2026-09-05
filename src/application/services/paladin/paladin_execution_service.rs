@@ -67,6 +67,7 @@ use crate::core::platform::container::vision::VisionContent;
 use crate::infrastructure::adapters::arsenal::tool_result_formatter::ToolResultFormatter;
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use log::{debug, error, info, warn};
+use paladin_battalion::llm_failure::to_paladin_error;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
 use paladin_ports::output::llm_port::{FunctionCall, LlmPort, LlmRequest};
@@ -1604,7 +1605,7 @@ impl PaladinExecutionService {
                 .call_async(async move {
                     match llm_port.generate(request).await {
                         Ok(response) => Ok(response),
-                        Err(e) => Err(PaladinError::LlmError(e.to_string())),
+                        Err(e) => Err(to_paladin_error(&e)),
                     }
                 })
                 .await;
@@ -1728,7 +1729,7 @@ impl PaladinExecutionService {
                 .call_async(async move {
                     match llm_port.generate(request).await {
                         Ok(response) => Ok(response),
-                        Err(e) => Err(PaladinError::LlmError(e.to_string())),
+                        Err(e) => Err(to_paladin_error(&e)),
                     }
                 })
                 .await;
@@ -1898,7 +1899,7 @@ impl StreamingExecutorPort for PaladinExecutionService {
             .llm_port
             .generate_stream(request)
             .await
-            .map_err(|e| PaladinError::LlmError(e.to_string()))?;
+            .map_err(|e| to_paladin_error(&e))?;
 
         let (tx, rx) = mpsc::channel::<Result<PaladinStreamChunk, PaladinError>>(64);
 
@@ -1923,7 +1924,7 @@ impl StreamingExecutorPort for PaladinExecutionService {
                         }
                     }
                     Err(e) => {
-                        let _ = tx.send(Err(PaladinError::LlmError(e.to_string()))).await;
+                        let _ = tx.send(Err(to_paladin_error(&e))).await;
                         return;
                     }
                 }
@@ -2003,6 +2004,259 @@ mod tests {
         };
 
         Node::new(data, Some("TestPaladin".to_string()))
+    }
+
+    /// Where a [`FailingLlmPort`] surfaces its `LlmError`.
+    #[derive(Clone, Copy)]
+    enum FailAt {
+        /// `generate` and `generate_stream` both return `Err` up front.
+        Open,
+        /// `generate_stream` opens, then the stream's first item is `Err`.
+        MidStream,
+    }
+
+    /// An `LlmPort` that fails with a caller-chosen real `LlmError`, so the
+    /// sites migrated by plan 25-06 (D-02) can be observed converting it
+    /// through `llm_failure::to_paladin_error`.
+    struct FailingLlmPort {
+        make: fn() -> LlmError,
+        fail_at: FailAt,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FailingLlmPort {
+        fn new(make: fn() -> LlmError, fail_at: FailAt) -> Arc<Self> {
+            Arc::new(Self {
+                make,
+                fail_at,
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for FailingLlmPort {
+        async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err((self.make)())
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match self.fail_at {
+                FailAt::Open => Err((self.make)()),
+                FailAt::MidStream => Ok(Box::new(futures::stream::iter(vec![Err((self.make)())]))),
+            }
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "failing"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    fn provider_503() -> LlmError {
+        LlmError::ProviderError {
+            provider: "openai".to_string(),
+            status: 503,
+            message: "upstream unavailable".to_string(),
+        }
+    }
+
+    fn auth_failure() -> LlmError {
+        LlmError::AuthenticationError("invalid API key".to_string())
+    }
+
+    fn failing_service(
+        make: fn() -> LlmError,
+        fail_at: FailAt,
+        circuit_breaker: Arc<CircuitBreaker>,
+    ) -> (Arc<FailingLlmPort>, PaladinExecutionService) {
+        let port = FailingLlmPort::new(make, fail_at);
+        let llm: Arc<dyn LlmPort> = port.clone();
+        (
+            port,
+            PaladinExecutionService::new(llm, circuit_breaker, None, None),
+        )
+    }
+
+    fn default_breaker() -> Arc<CircuitBreaker> {
+        Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60)))
+    }
+
+    /// Plan 25-06 Test 1 (D-02): a provider 503 reaching `execute_stream`'s
+    /// open-stream site surfaces as the structured `LlmFailure`, carrying the
+    /// typed transience/status/provider -- not the stringly `LlmError(String)`.
+    #[tokio::test]
+    async fn paladin_execution_service_surfaces_structured_llm_failure() {
+        use paladin_core::platform::container::transience::Transience;
+
+        let (_, service) = failing_service(provider_503, FailAt::Open, default_breaker());
+        let paladin = create_test_paladin();
+
+        let err = match service.execute_stream(&paladin, "hello").await {
+            Err(err) => err,
+            Ok(_) => panic!("a provider 503 must fail the stream open"),
+        };
+
+        match err {
+            PaladinError::LlmFailure {
+                transience,
+                status,
+                provider,
+                ..
+            } => {
+                assert_eq!(transience, Transience::Transient);
+                assert_eq!(status, Some(503));
+                assert_eq!(provider.as_deref(), Some("openai"));
+            }
+            other => panic!("expected PaladinError::LlmFailure, got {other:?}"),
+        }
+    }
+
+    /// Plan 25-06 Test 2 (D-02): a permanent provider failure surfaces as
+    /// `Permanent`, both at stream open and from inside a live stream (the
+    /// channel-send site).
+    #[tokio::test]
+    async fn permanent_provider_failure_surfaces_as_permanent() {
+        use paladin_core::platform::container::transience::Transience;
+
+        let paladin = create_test_paladin();
+
+        // Stream-open site.
+        let (_, service) = failing_service(auth_failure, FailAt::Open, default_breaker());
+        match service.execute_stream(&paladin, "hello").await {
+            Err(PaladinError::LlmFailure {
+                transience,
+                status,
+                provider,
+                ..
+            }) => {
+                assert_eq!(transience, Transience::Permanent);
+                assert_eq!(status, None);
+                assert_eq!(provider, None);
+            }
+            other => panic!("expected Err(LlmFailure), got {other:?}"),
+        }
+
+        // Mid-stream site: the error rides the mpsc channel.
+        let (_, service) = failing_service(auth_failure, FailAt::MidStream, default_breaker());
+        let mut stream = service
+            .execute_stream(&paladin, "hello")
+            .await
+            .expect("stream opens before the first item fails");
+        match stream.recv().await {
+            Some(Err(PaladinError::LlmFailure { transience, .. })) => {
+                assert_eq!(transience, Transience::Permanent);
+            }
+            other => panic!("expected Some(Err(LlmFailure)), got {other:?}"),
+        }
+        assert!(
+            stream.recv().await.is_none(),
+            "the producer stops after forwarding the failure"
+        );
+    }
+
+    /// Plan 25-06 (T-25-25): the two buffered retry-loop sites feed the
+    /// converted failure to the circuit breaker, whose `is_retryable()`
+    /// accounting must not drift -- `LlmFailure` counts as a failure exactly
+    /// as the legacy `LlmError(_)` did. With a threshold of one failure, the
+    /// first attempt trips the breaker and the second attempt fails fast with
+    /// `CircuitBreakerOpen`, so the loop's control flow is observably unchanged
+    /// (one provider call, not two).
+    #[tokio::test]
+    async fn buffered_retry_sites_trip_the_circuit_breaker_like_the_legacy_variant() {
+        use crate::core::platform::container::paladin::MaxLoops;
+
+        let mut paladin = create_test_paladin();
+        paladin.node.max_loops = MaxLoops::Fixed(2);
+
+        // Site: execute_with_retry_and_temperature.
+        let trips_after_one = Arc::new(CircuitBreaker::new(1, 1, Duration::from_secs(60)));
+        let (port, service) = failing_service(provider_503, FailAt::Open, trips_after_one);
+        let result = service
+            .execute_with_retry_and_temperature(&paladin, "hello", 0.5, Uuid::new_v4(), 1)
+            .await;
+        assert!(
+            matches!(result, Err(PaladinError::CircuitBreakerOpen)),
+            "expected CircuitBreakerOpen on the second attempt, got {result:?}"
+        );
+        assert_eq!(
+            port.calls(),
+            1,
+            "the breaker must reject the second attempt"
+        );
+
+        // Site: execute_with_retry.
+        let trips_after_one = Arc::new(CircuitBreaker::new(1, 1, Duration::from_secs(60)));
+        let (port, service) = failing_service(provider_503, FailAt::Open, trips_after_one);
+        let result = service
+            .execute_with_retry(&paladin, "hello", Uuid::new_v4(), 1)
+            .await;
+        assert!(
+            matches!(result, Err(PaladinError::CircuitBreakerOpen)),
+            "expected CircuitBreakerOpen on the second attempt, got {result:?}"
+        );
+        assert_eq!(
+            port.calls(),
+            1,
+            "the breaker must reject the second attempt"
+        );
+    }
+
+    /// Plan 25-06 Test 5 (X-03, T-25-27): for a fixed `LlmError`, what each
+    /// migrated site in this file returns renders exactly what the legacy
+    /// `PaladinError::LlmError(e.to_string())` rendered -- `LLM error: {e}`.
+    ///
+    /// The two buffered retry-loop sites never return the converted error to
+    /// a caller (they log it and end in `MaxRetriesExceeded` or
+    /// `CircuitBreakerOpen`, unchanged); their rendering is pinned by the same
+    /// helper's own every-variant test in `paladin_battalion::llm_failure`.
+    #[tokio::test]
+    async fn rendered_error_text_at_every_migrated_site_is_unchanged() {
+        let expected = format!("LLM error: {}", provider_503());
+        let paladin = create_test_paladin();
+
+        // Stream-open site.
+        let (_, service) = failing_service(provider_503, FailAt::Open, default_breaker());
+        let err = service
+            .execute_stream(&paladin, "hello")
+            .await
+            .expect_err("stream open fails");
+        assert_eq!(err.to_string(), expected);
+
+        // Mid-stream channel-send site.
+        let (_, service) = failing_service(provider_503, FailAt::MidStream, default_breaker());
+        let mut stream = service
+            .execute_stream(&paladin, "hello")
+            .await
+            .expect("stream opens");
+        let err = match stream.recv().await {
+            Some(Err(err)) => err,
+            other => panic!("expected Some(Err(_)), got {other:?}"),
+        };
+        assert_eq!(err.to_string(), expected);
     }
 
     #[tokio::test]

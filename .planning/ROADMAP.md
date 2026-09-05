@@ -455,7 +455,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 25-01-PLAN.md — Tracer: core Transience/NodeError/Aegis value types, WarGraph aegis sidecar, superstep retry loop, backoff and predicate tests
+- [x] 25-01-PLAN.md — Tracer: core Transience/NodeError/Aegis value types, WarGraph aegis sidecar, superstep retry loop, backoff and predicate tests
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

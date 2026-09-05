@@ -6,9 +6,9 @@ current_phase: 25
 current_phase_name: Node-Level Fault Tolerance
 status: executing
 stopped_at: Phase 25 context gathered
-last_updated: "2026-09-05T15:45:16.727Z"
+last_updated: "2026-09-05T15:47:51.542Z"
 last_activity: 2026-09-05
-last_activity_desc: Phase 24 complete, transitioned to Phase 25
+last_activity_desc: Phase 25 execution started
 progress:
   total_phases: 5
   completed_phases: 4
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-05 after Phase 24)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 25 — Node-Level Fault Tolerance (ready to plan)
+**Current focus:** Phase 25 — Node-Level Fault Tolerance
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
 **Progress:** [████░░░░░░] v0.10.0 — 4 of 9 phases complete (22, 22.1, 23, 24); 50/50 planned plans executed (Phase 25 not yet planned)
@@ -51,10 +51,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 25 — Node-Level Fault Tolerance
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-05 — Phase 24 complete, transitioned to Phase 25
+Phase: 25 (Node-Level Fault Tolerance) — EXECUTING
+Plan: 1 of 14
+Status: Executing Phase 25
+Last activity: 2026-09-05 — Phase 25 execution started
 
 ## Performance Metrics
 

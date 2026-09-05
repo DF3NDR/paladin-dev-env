@@ -165,3 +165,71 @@ impl PaladinResult {
         self.handoff_history.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// D-26: `served_by: None` leaves the serialised JSON byte-identical to
+    /// what the same value produced before the field existed.
+    #[test]
+    fn served_by_is_absent_from_legacy_json() {
+        let result = PaladinResult {
+            output: "answer".to_string(),
+            token_count: 3,
+            execution_time_ms: 7,
+            loop_count: 1,
+            stop_reason: StopReason::Completed,
+            plan: None,
+            handoff_history: Vec::new(),
+            served_by: None,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+
+        assert!(!json.contains("served_by"), "{json}");
+        assert_eq!(
+            json,
+            r#"{"output":"answer","token_count":3,"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#
+        );
+    }
+
+    /// D-26: a payload written before the field existed deserialises with
+    /// `served_by: None`.
+    #[test]
+    fn legacy_json_deserialises_with_served_by_none() {
+        let legacy = r#"{"output":"answer","token_count":3,"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#;
+
+        let result: PaladinResult = serde_json::from_str(legacy).unwrap();
+
+        assert_eq!(result.output, "answer");
+        assert!(result.served_by.is_none());
+    }
+
+    /// A fallback-served result round-trips its serving provider.
+    #[test]
+    fn served_by_round_trips_when_present() {
+        let result = PaladinResult {
+            served_by: Some("anthropic".to_string()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains(r#""served_by":"anthropic""#), "{json}");
+        let back: PaladinResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.served_by.as_deref(), Some("anthropic"));
+    }
+
+    /// FT-FR-17: `Default` and `new()` both still work and leave `served_by`
+    /// unset.
+    #[test]
+    fn default_still_constructs() {
+        let by_default = PaladinResult::default();
+        let by_new = PaladinResult::new("text".to_string(), 10, 20, 1, StopReason::Completed);
+
+        assert!(by_default.served_by.is_none());
+        assert!(by_new.served_by.is_none());
+        assert_eq!(by_new.output, "text");
+        assert_eq!(by_new.token_count, 10);
+    }
+}

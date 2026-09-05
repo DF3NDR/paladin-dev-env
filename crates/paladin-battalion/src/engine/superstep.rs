@@ -1759,38 +1759,36 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                 node_aegis.as_ref().and_then(|a| a.retry.as_ref())
                             && attempt < retry_policy.max_attempts
                             && let Some(node_error) = failure.node_error(&nid, attempt)
+                            && retry::should_retry(retry_policy, &node_error, attempt)
                         {
-                            if retry::should_retry(retry_policy, &node_error, attempt) {
-                                failed_attempts.push(AttemptRecord {
-                                    attempt,
-                                    started_at,
-                                    duration_ms,
-                                    error: node_error,
-                                });
-                                let delay = retry::backoff_delay(retry_policy, attempt + 1);
-                                if retry::wait_backoff(delay, &node_cancellation).await {
-                                    continue;
-                                }
-                                // --- D-15, RESEARCH.md Pitfall 7: the run is
-                                // shutting down mid-backoff -- stop retrying
-                                // and report this dispatch entry
-                                // `Interrupted`, which the bookkeeping loop
-                                // records `Skipped { reason: "shutdown" }`
-                                // and re-lists for resume, exactly like the
-                                // grace-race abort path below (FT-FR-07: a
-                                // resume re-executes it from attempt 1).
-                                break NodeTaskOutput {
-                                    node_id: nid,
-                                    started_at,
-                                    duration_ms,
-                                    paladin_id,
-                                    token_count,
-                                    outcome: NodeRunOutcome::Interrupted,
-                                    attempt,
-                                    failed_attempts,
-                                    node_error: None,
-                                };
+                            failed_attempts.push(AttemptRecord {
+                                attempt,
+                                started_at,
+                                duration_ms,
+                                error: node_error,
+                            });
+                            let delay = retry::backoff_delay(retry_policy, attempt + 1);
+                            if retry::wait_backoff(delay, &node_cancellation).await {
+                                continue;
                             }
+                            // --- D-15, RESEARCH.md Pitfall 7: the run is
+                            // shutting down mid-backoff -- stop retrying and
+                            // report this dispatch entry `Interrupted`, which
+                            // the bookkeeping loop records `Skipped { reason:
+                            // "shutdown" }` and re-lists for resume, exactly
+                            // like the grace-race abort path below (FT-FR-07:
+                            // a resume re-executes it from attempt 1).
+                            break NodeTaskOutput {
+                                node_id: nid,
+                                started_at,
+                                duration_ms,
+                                paladin_id,
+                                token_count,
+                                outcome: NodeRunOutcome::Interrupted,
+                                attempt,
+                                failed_attempts,
+                                node_error: None,
+                            };
                         }
                         // --- D-08: the structured error travels with a
                         // FINAL failed attempt only when this node has a

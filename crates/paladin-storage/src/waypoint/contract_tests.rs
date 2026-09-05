@@ -927,7 +927,6 @@ pub async fn latest_prefers_most_recently_created_across_branches(port: &dyn Way
     assert_eq!(history[1].waypoint_id, mainline.waypoint_id);
 }
 
-/// Runs every contract function above against `port`.
 // ── FT-FR-03 / D-16: attempt history on the execution record ─────────────
 
 /// A `NodeError` fixture for `node` at `attempt`, carrying a `Function`
@@ -1004,7 +1003,6 @@ pub async fn waypoint_with_attempt_history_round_trips(port: &dyn WaypointPort) 
     assert_eq!(fetched, wp);
 }
 
-///
 // ── D-08 / FT-FR-02: the structured NodeError on a Failed Waypoint ──────
 
 /// A `Failed` Waypoint carrying `node_error: Some(..)` (an Aegis-governed
@@ -1071,6 +1069,8 @@ pub async fn failed_waypoint_with_node_error_round_trips(port: &dyn WaypointPort
     ));
 }
 
+/// Runs every contract function above against `port`.
+///
 /// **Requires a freshly constructed, still-empty `port`** — call this once,
 /// before any other operation touches the store, as a single backend's
 /// smoke aggregate. `list_threads_empty_then_three_threads_newest_activity_first`

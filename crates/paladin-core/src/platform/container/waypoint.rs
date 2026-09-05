@@ -594,9 +594,7 @@ pub enum WaypointStatus {
     Completed,
     /// The run failed.
     Failed {
-        /// A human-readable description of the failure -- the display line
-        /// a human reads and existing consumers parse. Its content is
-        /// unchanged by the structured `node_error` beside it (D-08).
+        /// A human-readable description of the failure (unchanged by D-08).
         error: String,
         /// The node whose execution caused the failure.
         failed_node: NodeId,

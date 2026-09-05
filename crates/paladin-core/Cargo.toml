@@ -38,3 +38,14 @@ futures = "0.3.31"
 # runtime; `rand` is already a vetted workspace dependency used elsewhere
 # (paladin-battalion, paladin-llm).
 rand = { workspace = true }
+
+# X-10.6 deliberate-breaking suppression (D-04, MIGRATION.md §9.2, FT-01, Phase 25).
+# `BattalionError` gained the `Node(NodeError)` variant (FT-FR-02, D-06) and
+# `PaladinError` gained the structured `LlmFailure` variant and a new
+# `transience()` method (D-02); both enums are marked `#[non_exhaustive]` so
+# this typed-classification error taxonomy can grow without a semver-major
+# bump. Register/remove this suppression only in the same commit as the
+# matching MIGRATION.md §9.2 rows and `.cargo/semver-checks-allowlist.toml`
+# entries (kept set-equal by CI's `semver` job).
+[package.metadata.cargo-semver-checks.lints]
+enum_marked_non_exhaustive = "allow"

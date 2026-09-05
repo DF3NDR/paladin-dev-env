@@ -320,6 +320,10 @@ pub(crate) fn llm_error_class(error: &LlmError) -> &'static str {
         LlmError::Timeout(_) => "timeout",
         LlmError::ProviderError { .. } => "provider error",
         LlmError::AllProvidersFailed { .. } => "all providers failed",
+        // X-10.2 (D-04): `LlmError` is `#[non_exhaustive]`; a future variant
+        // gets this generic classification until this match is updated with
+        // its own arm.
+        _ => "unknown error",
     }
 }
 

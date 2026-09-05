@@ -16,7 +16,16 @@ use thiserror::Error;
 /// let error = PaladinError::ConfigurationError("Invalid temperature".to_string());
 /// assert_eq!(error.to_string(), "Configuration error: Invalid temperature");
 /// ```
+///
+/// # Non-exhaustive (X-10.2, D-04)
+///
+/// Marked `#[non_exhaustive]` so a future variant can be added without a
+/// semver-major bump. Registered as deliberate-breaking in `MIGRATION.md`
+/// §9.2 and `.cargo/semver-checks-allowlist.toml` (the `enum_marked_non_exhaustive`
+/// lint) in the same commit that added this attribute. Every downstream
+/// exhaustive match gained a wildcard arm at that commit.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum PaladinError {
     /// Configuration validation failed
     #[error("Configuration error: {0}")]

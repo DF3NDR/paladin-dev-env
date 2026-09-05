@@ -38,3 +38,24 @@ lint = "function_requires_different_generic_type_params"
 migration_row = "paladin-web | require_authentication (fn)"
 requirement_id = "HITL-FR-16"
 justification = "require_authentication gained a generic type parameter (S: HasAgentAuth) so ThreadApiState's routes (24-11) can reuse the SAME middleware AgentApiState's routes already layer, instead of a duplicated copy -- accepted as the minimal, intentional cost of that reuse."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_marked_non_exhaustive"
+migration_row = "paladin-core | BattalionError"
+requirement_id = "FT-01"
+justification = "BattalionError gained the Node(NodeError) variant (FT-FR-02, D-06) and is marked #[non_exhaustive] so the superstep engine's structured node-execution errors can be extended later without a semver-major bump."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_marked_non_exhaustive"
+migration_row = "paladin-core | PaladinError"
+requirement_id = "FT-01"
+justification = "PaladinError gained the structured LlmFailure variant and the transience() method (D-02); marked #[non_exhaustive] so a typed-classification error taxonomy can grow without a semver-major bump. LlmFailure's Display is byte-identical to the legacy LlmError(String) arm and is_retryable() answers true exactly as that legacy arm did, so circuit_breaker.rs is unaffected (X-03, X-06)."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "enum_marked_non_exhaustive"
+migration_row = "paladin-ports | LlmError"
+requirement_id = "FT-01, FT-05"
+justification = "LlmError gained ProviderError and AllProvidersFailed (status-carrying variants for the FT-05 fallback chain, D-03) and the transience() method; marked #[non_exhaustive] so the provider-error taxonomy can grow without a semver-major bump."

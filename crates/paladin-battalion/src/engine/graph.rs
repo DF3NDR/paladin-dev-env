@@ -14,10 +14,11 @@ use std::time::Duration;
 
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
-    BattlefieldSchema, CustomDispatchResolver, DispatchRule, FieldName,
+    BattlefieldSchema, CustomDispatchResolver, DispatchRule, FieldName, FieldSpec,
 };
 use paladin_core::platform::container::battlefield_error::BattlefieldError;
 use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::parley::{OnExpire, ParleyKind};
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, canonical_edge_condition,
 };
@@ -1482,6 +1483,232 @@ mod tests {
         assert!(
             graph
                 .validate(&registry, &EdgeEvaluatorRegistry::new())
+                .is_ok()
+        );
+    }
+
+    fn field_with_default(name: &str, default: serde_json::Value) -> FieldSpec {
+        FieldSpec::new(
+            FieldName::new(name).unwrap(),
+            DispatchRule::LastWrite,
+            Some(default),
+            false,
+        )
+    }
+
+    #[test]
+    fn gate_requires_output_field_for_approval_choice_freetext() {
+        for kind in [
+            ParleyKind::Approval,
+            ParleyKind::Choice,
+            ParleyKind::FreeText,
+        ] {
+            let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+            graph.add_node(
+                NodeId::new("gate"),
+                NodeSpec::gate(
+                    GateRequestTemplate::new(kind.clone(), InputMapping::new("go?")),
+                    None,
+                ),
+            );
+            graph.add_entry(NodeId::new("gate"));
+
+            let err = graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new(),
+                )
+                .unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    EngineError::GateOutputFieldRequired { node, kind: k }
+                        if *node == NodeId::new("gate") && *k == kind
+                ),
+                "expected GateOutputFieldRequired for kind {kind:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gate_rejects_output_field_for_state_edit() {
+        let schema = BattlefieldSchema::new(vec![field_with_default(
+            "approved",
+            serde_json::json!(false),
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::StateEdit, InputMapping::new("edit?")),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        graph.add_entry(NodeId::new("gate"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::GateOutputFieldMustBeAbsent { node, field }
+                if node == NodeId::new("gate") && field == FieldName::new("approved").unwrap()
+        ));
+    }
+
+    #[test]
+    fn gate_output_field_must_exist_in_schema() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?")),
+                Some(FieldName::new("missing").unwrap()),
+            ),
+        );
+        graph.add_entry(NodeId::new("gate"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::GateOutputFieldUnknown { node, field }
+                if node == NodeId::new("gate") && field == FieldName::new("missing").unwrap()
+        ));
+    }
+
+    #[test]
+    fn gate_output_field_type_must_be_compatible() {
+        let schema = BattlefieldSchema::new(vec![
+            field_with_default("b", serde_json::json!(false)),
+            field_with_default("s", serde_json::json!("")),
+            field_with_default("n", serde_json::json!(0)),
+        ]);
+
+        let cases: &[(ParleyKind, &str, bool)] = &[
+            (ParleyKind::Approval, "b", true),
+            (ParleyKind::Approval, "s", true),
+            (ParleyKind::Approval, "n", false),
+            (ParleyKind::Choice, "s", true),
+            (ParleyKind::Choice, "n", false),
+            (ParleyKind::Choice, "b", false),
+            (ParleyKind::FreeText, "s", true),
+            (ParleyKind::FreeText, "b", false),
+        ];
+
+        for (kind, field, expect_ok) in cases {
+            let mut graph = WarGraph::new(schema.clone(), EngineLimits::default());
+            graph.add_node(
+                NodeId::new("gate"),
+                NodeSpec::gate(
+                    GateRequestTemplate::new(kind.clone(), InputMapping::new("go?")),
+                    Some(FieldName::new(*field).unwrap()),
+                ),
+            );
+            graph.add_entry(NodeId::new("gate"));
+
+            let result = graph.validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            );
+            if *expect_ok {
+                assert!(
+                    result.is_ok(),
+                    "expected {kind:?} + field '{field}' to validate, got {result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Err(EngineError::GateOutputFieldTypeIncompatible { .. })
+                    ),
+                    "expected {kind:?} + field '{field}' to be rejected as type-incompatible, \
+                     got {result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gate_resume_with_default_value_is_validated_at_graph_validate_time() {
+        let schema = BattlefieldSchema::new(vec![field_with_default(
+            "approved",
+            serde_json::json!(false),
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let bad_request = GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("go?"))
+            .with_on_expire(OnExpire::ResumeWithDefault(serde_json::json!(42)));
+        graph.add_node(
+            NodeId::new("gate"),
+            NodeSpec::gate(bad_request, Some(FieldName::new("approved").unwrap())),
+        );
+        graph.add_entry(NodeId::new("gate"));
+
+        let err = graph
+            .validate(
+                &CustomDispatchResolver::new(),
+                &EdgeEvaluatorRegistry::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::GateResumeWithDefaultInvalid {
+                node,
+                kind: ParleyKind::Approval,
+                ..
+            } if node == NodeId::new("gate")
+        ));
+    }
+
+    #[test]
+    fn gate_with_valid_wiring_passes_validation() {
+        // The E2E-2 shape: one Approval Gate node plus two conditional
+        // edges is a complete approval gate.
+        let schema = BattlefieldSchema::new(vec![field_with_default(
+            "approved",
+            serde_json::json!(false),
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(
+            NodeId::new("approve"),
+            NodeSpec::gate(
+                GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("Proceed?")),
+                Some(FieldName::new("approved").unwrap()),
+            ),
+        );
+        graph.add_node(
+            NodeId::new("act"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_node(
+            NodeId::new("cancel"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("approve"),
+            to: NodeId::new("act"),
+            condition: Some(EdgeCondition::Contains("true".to_string())),
+        });
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("approve"),
+            to: NodeId::new("cancel"),
+            condition: Some(EdgeCondition::Contains("false".to_string())),
+        });
+        graph.add_entry(NodeId::new("approve"));
+
+        assert!(
+            graph
+                .validate(
+                    &CustomDispatchResolver::new(),
+                    &EdgeEvaluatorRegistry::new()
+                )
                 .is_ok()
         );
     }

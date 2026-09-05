@@ -33,6 +33,9 @@ struct MockState {
     finish_reason: FinishReason,
     available_models: Vec<String>,
     call_count: usize,
+    provider_name: &'static str,
+    stream_script: Option<Vec<Result<String, LlmError>>>,
+    model_query_error: Option<LlmError>,
 }
 
 impl Default for MockState {
@@ -49,6 +52,9 @@ impl Default for MockState {
             finish_reason: FinishReason::Stop,
             available_models: vec!["mock-model".to_string()],
             call_count: 0,
+            provider_name: "MockLLM",
+            stream_script: None,
+            model_query_error: None,
         }
     }
 }
@@ -155,7 +161,38 @@ impl MockLlmAdapter {
         self
     }
 
-    /// Return the number of times [`LlmPort::generate`] has been called.
+    /// Set the name [`LlmPort::get_provider_name`] reports (default `"MockLLM"`).
+    ///
+    /// Lets a test compose several distinguishable mocks into one chain —
+    /// the `FallbackLlmAdapter` (FT-05) identifies providers by this name.
+    pub fn with_provider_name(self, name: &'static str) -> Self {
+        self.state.lock().unwrap().provider_name = name;
+        self
+    }
+
+    /// Script exactly what [`LlmPort::generate_stream`] yields, item by item.
+    ///
+    /// Each `Ok(text)` becomes one `StreamingResponse` chunk carrying `text`
+    /// as its delta and no finish reason; each `Err(e)` is yielded as-is,
+    /// in place. The scripted stream counts as one call in
+    /// [`call_count`](Self::call_count) and does not consult the
+    /// `generate` response queue, so a test can put an error FIRST (before
+    /// any chunk) or AFTER a chunk to drive the fallback chain's
+    /// first-chunk rule (D-25).
+    pub fn with_stream_items(self, items: Vec<Result<String, LlmError>>) -> Self {
+        self.state.lock().unwrap().stream_script = Some(items);
+        self
+    }
+
+    /// Make [`LlmPort::validate_model`] and [`LlmPort::get_available_models`]
+    /// answer `Err(error)` instead of consulting the configured model list.
+    pub fn with_model_query_error(self, error: LlmError) -> Self {
+        self.state.lock().unwrap().model_query_error = Some(error);
+        self
+    }
+
+    /// Return the number of times [`LlmPort::generate`] or a scripted
+    /// [`LlmPort::generate_stream`] has been called.
     pub fn call_count(&self) -> usize {
         self.state.lock().unwrap().call_count
     }
@@ -231,6 +268,28 @@ impl LlmPort for MockLlmAdapter {
         request: LlmRequest,
     ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
     {
+        let scripted = {
+            let mut state = self.state.lock().unwrap();
+            let script = state.stream_script.clone();
+            if script.is_some() {
+                state.call_count += 1;
+            }
+            script
+        };
+        if let Some(items) = scripted {
+            let chunks: Vec<Result<StreamingResponse, LlmError>> = items
+                .into_iter()
+                .map(|item| {
+                    item.map(|delta| StreamingResponse {
+                        id: Uuid::new_v4(),
+                        delta,
+                        finish_reason: None,
+                    })
+                })
+                .collect();
+            return Ok(Box::new(stream::iter(chunks)));
+        }
+
         let response = self.generate(request).await?;
         // Emit the full response as a single streaming chunk, then stop.
         let chunks = vec![
@@ -250,15 +309,22 @@ impl LlmPort for MockLlmAdapter {
 
     async fn validate_model(&self, model: &str) -> Result<bool, LlmError> {
         let state = self.state.lock().unwrap();
-        Ok(state.available_models.contains(&model.to_string()))
+        if let Some(error) = &state.model_query_error {
+            return Err(error.clone());
+        }
+        Ok(state.available_models.iter().any(|m| m == model))
     }
 
     async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
-        Ok(self.state.lock().unwrap().available_models.clone())
+        let state = self.state.lock().unwrap();
+        if let Some(error) = &state.model_query_error {
+            return Err(error.clone());
+        }
+        Ok(state.available_models.clone())
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "MockLLM"
+        self.state.lock().unwrap().provider_name
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {

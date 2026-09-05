@@ -57,7 +57,8 @@ pub enum TraceSinkError {
 }
 
 /// One typed observability event emitted by the superstep engine
-/// (ENG-FR-21). Exactly these seven variants; marked `#[non_exhaustive]`
+/// (ENG-FR-21) — plus [`TraceEvent::FallbackHop`], emitted by the
+/// `FallbackLlmAdapter` below the engine (Doc 04 D-25). Marked `#[non_exhaustive]`
 /// because Doc 07 is expected to extend this set for the eval harness and
 /// OTel export without that being a breaking change for existing sinks (a
 /// `match` over `TraceEvent` must always carry a wildcard arm).
@@ -131,6 +132,22 @@ pub enum TraceEvent {
     RunFinished {
         /// The thread whose run finished.
         thread_id: ThreadId,
+    },
+    /// A `FallbackLlmAdapter` chain (Doc 04 FT-FR-16, D-25) gave up on one
+    /// provider and moved to the next. Emitted once PER HOP, before the next
+    /// provider is called, so a three-provider chain that lands on its third
+    /// element produces exactly two of these. Field names match PRD 07 §2's
+    /// shape so Phase 28's OTel export renames nothing.
+    FallbackHop {
+        /// The node the hop happened on behalf of. Always `None` when the
+        /// event comes from the adapter itself: a plain `LlmPort` composed
+        /// below the superstep engine cannot know which node it is serving.
+        /// Phase 28 may enrich this from the engine side.
+        node_id: Option<NodeId>,
+        /// `get_provider_name()` of the provider that failed.
+        from_provider: String,
+        /// `get_provider_name()` of the provider the chain moves to.
+        to_provider: String,
     },
 }
 
@@ -228,5 +245,28 @@ mod tests {
             waypoint_id: WaypointId::generate(),
         };
         let _ = TraceEvent::RunFinished { thread_id };
+    }
+
+    /// D-25: the fallback adapter's hop event carries an OPTIONAL node id
+    /// (always `None` from the adapter) plus both provider names.
+    #[test]
+    fn fallback_hop_variant_constructs_with_no_node_id() {
+        let event = TraceEvent::FallbackHop {
+            node_id: None,
+            from_provider: "openai".to_string(),
+            to_provider: "anthropic".to_string(),
+        };
+        match event {
+            TraceEvent::FallbackHop {
+                node_id,
+                from_provider,
+                to_provider,
+            } => {
+                assert!(node_id.is_none());
+                assert_eq!(from_provider, "openai");
+                assert_eq!(to_provider, "anthropic");
+            }
+            _ => panic!("expected FallbackHop"),
+        }
     }
 }

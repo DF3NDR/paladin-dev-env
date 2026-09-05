@@ -276,6 +276,10 @@ path = "tests/integration/subgraph_formation_in_campaign_test.rs"
 name = "e2e_muster_defer_order"
 path = "tests/integration/e2e_muster_defer_order_test.rs"
 
+[[test]]
+name = "e2e_approval_gate"
+path = "tests/integration/e2e_approval_gate_test.rs"
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"

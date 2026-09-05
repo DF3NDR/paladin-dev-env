@@ -98,14 +98,14 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
 
 ### Pause/Resume, History, Shutdown (Doc 03, epic `HITL`)
 
-- [ ] **HITL-01**: A workflow can pause indefinitely without holding compute: nodes (and a
+- [x] **HITL-01**: A workflow can pause indefinitely without holding compute: nodes (and a
   first-class `Gate` node with Battlefield templating) raise `ParleyRequest`s; suspension merges
   peer deltas, persists an `AwaitingInput` Waypoint carrying **all** of the superstep's parleys,
   releases every resource, and survives full process termination (resumable from a different
   process sharing the backend — integration-tested); partially-answered suspension is queryable
   (HITL-FR-01…03)
 
-- [ ] **HITL-02**: `resume_with(graph, thread, responses)` validates responses per kind
+- [x] **HITL-02**: `resume_with(graph, thread, responses)` validates responses per kind
   (Approval/Choice/FreeText/StateEdit) with typed errors that leave the thread suspended, honors
   `expires_at` with an `on_expire` policy, and delivers values to the paused node's continuation
   — proven by program scenario E2E-2 (approval gate, both branches, across process
@@ -361,8 +361,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CF-03 | Phase 23 | Complete |
 | CF-04 | Phase 23 | Complete |
 | CF-05 | Phase 23 | Complete |
-| HITL-01 | Phase 24 | Pending |
-| HITL-02 | Phase 24 | Pending |
+| HITL-01 | Phase 24 | Complete |
+| HITL-02 | Phase 24 | Complete |
 | HITL-03 | Phase 24 | Pending |
 | HITL-04 | Phase 24 | Pending |
 | HITL-05 | Phase 24 | Pending |

@@ -1353,6 +1353,10 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
                         latest.frontier.clone(),
                         None,
                         latest.checkpoint_ns.clone(),
+                        // --- HITL-03, D-14: a FailRun expiry's own `Failed`
+                        // Waypoint stays on the SAME branch `latest` was on
+                        // -- propagated verbatim, never reset to mainline.
+                        latest.fork_of,
                     );
                     superstep::persist_waypoint(
                         self.waypoint_port.as_ref(),
@@ -1463,6 +1467,9 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
                 latest.frontier.clone(),
                 None,
                 latest.checkpoint_ns.clone(),
+                // --- HITL-03, D-14: a partial-answer Waypoint stays on the
+                // SAME branch `latest` was on -- propagated verbatim.
+                latest.fork_of,
             );
             superstep::persist_waypoint(
                 self.waypoint_port.as_ref(),
@@ -1529,6 +1536,11 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.cancellation_token,
             Some(Arc::clone(&self.waypoint_port)),
             None,
+            // --- HITL-03, D-14: the resumed run's own Waypoints stay on the
+            // SAME branch `latest` (the just-loaded `AwaitingInput`
+            // Waypoint) was on -- propagated verbatim, so a suspended
+            // branch's resume never silently reverts to mainline.
+            latest.fork_of,
             Some(responses_by_node),
         )
         .await;

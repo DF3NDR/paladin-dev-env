@@ -154,6 +154,89 @@ impl ThreadId {
         );
         Self::new(encoded)
     }
+
+    /// Derive a branch-scoped child `ThreadId` (HITL-03, D-18): the durable
+    /// identity under which a `NodeSpec::Battalion` node's embedded child run
+    /// addresses its own Waypoints when the PARENT run is on a fork, so a
+    /// branch's subgraph child never resolves the mainline child's history
+    /// and the mainline child's own Waypoints stay untouched by the branch.
+    ///
+    /// Mainline runs keep calling [`ThreadId::child`] unchanged -- this
+    /// method exists only for the branch case, where `parent`, `branch_root`
+    /// and `node` together must derive an id that can never collide with
+    /// `ThreadId::child(parent, node)`'s own result (Test 2,
+    /// `child_on_branch_differs_from_child`), nor with any other
+    /// `(parent, branch_root, node)` triple (Test 1,
+    /// `child_on_branch_is_injective`).
+    ///
+    /// # Injectivity
+    ///
+    /// Identical mechanism to [`ThreadId::child`], extended from two
+    /// components to three: each of `parent`, `branch_root` and `node` is
+    /// encoded as a FIXED-WIDTH (16 lowercase-hex-digit, i.e. 64-bit),
+    /// length-prefixed segment immediately followed by that component's own
+    /// bytes --
+    /// `format!("{:016x}{parent}{:016x}{branch_root}{:016x}{node}", ...)`.
+    /// Because every prefix width is FIXED (never variable-width or
+    /// delimiter-terminated), the byte offset at which each component starts
+    /// and ends is always fully determined by the three length values alone
+    /// -- no byte sequence occurring INSIDE any component (including one
+    /// that happens to look like a length prefix) can ever be reinterpreted
+    /// as a different split between the three segments. This deliberately
+    /// reuses [`ThreadId::child`]'s fix for the exact collision class Phase
+    /// 22.1's CR-01 found and fixed once already in
+    /// `WarGraph::fingerprint()`'s canonical byte encoding
+    /// (`paladin-battalion/src/engine/graph.rs`) -- a bare delimiter join
+    /// (`format!("{parent}/{branch_root}/{node}")`-style) would reopen that
+    /// same hazard, since neither `ThreadId::new` nor `NodeId::new` rejects
+    /// every delimiter character a caller might choose.
+    ///
+    /// `branch_root`'s own `Display` (a plain UUID string, no ambiguous
+    /// characters) is used as its encoded bytes rather than any raw byte
+    /// representation, keeping every encoded component valid UTF-8 the
+    /// resulting `String` can safely wrap.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same [`ThreadIdError`] [`ThreadId::child`] would, for the
+    /// identical reasons: `Empty` is unreachable (the encoded result always
+    /// contains at least the three 16-character length prefixes);
+    /// `ContainsWhitespace` is reachable if `node`'s own bytes contain
+    /// whitespace; `TooLong` is reachable for a sufficiently long
+    /// `parent`/`branch_root`/`node` combination. The derivation FAILS TYPED
+    /// in every such case rather than silently truncating the encoded
+    /// result.
+    ///
+    /// ```
+    /// # use paladin_core::platform::container::waypoint::{NodeId, ThreadId, WaypointId};
+    /// let parent = ThreadId::new("run-1").unwrap();
+    /// let branch_root = WaypointId::new();
+    /// let node = NodeId::new("subgraph");
+    ///
+    /// let mainline_child = ThreadId::child(&parent, &node).unwrap();
+    /// let branch_child = ThreadId::child_on_branch(&parent, &branch_root, &node).unwrap();
+    ///
+    /// // A branch's subgraph child never resolves the mainline child's
+    /// // history -- the two ids are always distinct.
+    /// assert_ne!(branch_child.as_str(), mainline_child.as_str());
+    /// ```
+    pub fn child_on_branch(
+        parent: &ThreadId,
+        branch_root: &WaypointId,
+        node: &NodeId,
+    ) -> Result<Self, ThreadIdError> {
+        let branch_root_str = branch_root.to_string();
+        let encoded = format!(
+            "{:016x}{}{:016x}{}{:016x}{}",
+            parent.as_str().len(),
+            parent.as_str(),
+            branch_root_str.len(),
+            branch_root_str,
+            node.as_str().len(),
+            node.as_str(),
+        );
+        Self::new(encoded)
+    }
 }
 
 impl std::fmt::Display for ThreadId {
@@ -590,6 +673,34 @@ pub struct Waypoint {
     /// than failing to deserialize.
     #[serde(default)]
     pub checkpoint_ns: Option<String>,
+    /// The ROOT `WaypointId` of the branch this `Waypoint` belongs to
+    /// (HITL-03, D-14) -- `None` for every mainline `Waypoint`.
+    ///
+    /// Marks the branch ROOT and is INHERITED by every subsequent `Waypoint`
+    /// on that branch: the fork's first `Waypoint` carries
+    /// `parent_waypoint_id = Some(from)` and `fork_of = Some(from)`, and
+    /// every later `Waypoint` this run writes also carries
+    /// `fork_of = Some(from)` -- the same value, propagated verbatim, never
+    /// re-derived per `Waypoint`. A fork of a fork carries the NEWER root:
+    /// forking again from a `Waypoint` whose own `fork_of` is `Some(a)`
+    /// yields `Some(b)` where `b` is the new branch point, not `Some(a)`.
+    ///
+    /// This makes a branch a queryable ATTRIBUTE rather than something that
+    /// must be re-derived by walking `parent_waypoint_id` back to a root on
+    /// every read: `latest_on_branch(thread, branch_root)` is a plain filter
+    /// over `history`, and the whole branch tree is reconstructible from a
+    /// `WaypointSummary` list alone (`paladin-ports`, which carries this
+    /// same field), without loading a single full `Waypoint`.
+    ///
+    /// `#[serde(default)]`, matching `visit_counts`'/`frontier`'s/
+    /// `muster_progress`'s/`checkpoint_ns`'s precedent: a `Waypoint` payload
+    /// written before this field existed still loads, with `None` -- a
+    /// resume over such a payload behaves exactly as it did before this
+    /// field existed, rather than failing to deserialize. No SQL migration:
+    /// both SQL backends store the whole `Waypoint` as a JSON payload
+    /// column, so an additive field here needs no schema change.
+    #[serde(default)]
+    pub fork_of: Option<WaypointId>,
 }
 
 impl Waypoint {
@@ -639,6 +750,7 @@ impl Waypoint {
             frontier,
             muster_progress: None,
             checkpoint_ns: None,
+            fork_of: None,
         }
     }
 
@@ -679,6 +791,7 @@ impl Waypoint {
             frontier,
             muster_progress: None,
             checkpoint_ns: None,
+            fork_of: None,
         }
     }
 }
@@ -848,6 +961,90 @@ mod tests {
         );
     }
 
+    // --- HITL-03 / D-18: ThreadId::child_on_branch ---------------------
+
+    /// Test 1: distinct `(parent, branch_root, node)` triples yield distinct
+    /// thread ids, including the adversarial CR-01 shape (a bare delimiter
+    /// join of `parent`/`node` would collide) held fixed against a shared
+    /// `branch_root`, and the case where only `branch_root` itself differs.
+    #[test]
+    fn child_on_branch_is_injective() {
+        let root = WaypointId::new();
+
+        // The same CR-01 regression shape `child_thread_derivation_is_injective_under_adversarial_names`
+        // proves for `ThreadId::child`, extended with a fixed `branch_root`
+        // in the middle position: a bare delimiter join would produce the
+        // identical string for both triples below.
+        let pair_a =
+            ThreadId::child_on_branch(&ThreadId::new("t").unwrap(), &root, &NodeId::new("a/b"))
+                .unwrap();
+        let pair_b =
+            ThreadId::child_on_branch(&ThreadId::new("t/a").unwrap(), &root, &NodeId::new("b"))
+                .unwrap();
+        assert_ne!(
+            pair_a, pair_b,
+            "length-prefixed derivation must not collide on the CR-01 shape"
+        );
+
+        // Distinct branch_root alone, same parent/node, must also differ --
+        // a fork of a fork carrying two different roots must not collide.
+        let root_a = WaypointId::new();
+        let root_b = WaypointId::new();
+        let parent = ThreadId::new("run-1").unwrap();
+        let node = NodeId::new("subgraph");
+        let a = ThreadId::child_on_branch(&parent, &root_a, &node).unwrap();
+        let b = ThreadId::child_on_branch(&parent, &root_b, &node).unwrap();
+        assert_ne!(a, b);
+    }
+
+    /// Test 2: `child_on_branch(parent, root, node)` never equals
+    /// `child(parent, node)`, so a branch's subgraph child never resolves
+    /// the mainline child's history.
+    #[test]
+    fn child_on_branch_differs_from_child() {
+        let parent = ThreadId::new("run-1").unwrap();
+        let root = WaypointId::new();
+        let node = NodeId::new("subgraph");
+
+        let mainline = ThreadId::child(&parent, &node).unwrap();
+        let branch = ThreadId::child_on_branch(&parent, &root, &node).unwrap();
+        assert_ne!(mainline, branch);
+    }
+
+    /// Test 3: the same triple yields the same id across calls.
+    #[test]
+    fn child_on_branch_is_deterministic() {
+        let parent = ThreadId::new("run-1").unwrap();
+        let root = WaypointId::new();
+        let node = NodeId::new("subgraph");
+
+        let a = ThreadId::child_on_branch(&parent, &root, &node).unwrap();
+        let b = ThreadId::child_on_branch(&parent, &root, &node).unwrap();
+        assert_eq!(a, b);
+    }
+
+    /// Test 4: the same `ThreadIdError` conditions `ThreadId::child` already
+    /// enforces apply identically here.
+    #[test]
+    fn child_on_branch_rejects_invalid_inputs() {
+        let parent = ThreadId::new("run-1").unwrap();
+        let root = WaypointId::new();
+
+        let node_with_whitespace = NodeId::new("has space");
+        assert_eq!(
+            ThreadId::child_on_branch(&parent, &root, &node_with_whitespace),
+            Err(ThreadIdError::ContainsWhitespace)
+        );
+
+        let over_long_parent = ThreadId::new("a".repeat(200)).unwrap();
+        let over_long_node = NodeId::new("b".repeat(200));
+        let result = ThreadId::child_on_branch(&over_long_parent, &root, &over_long_node);
+        assert!(
+            matches!(result, Err(ThreadIdError::TooLong { .. })),
+            "an over-long derivation must fail typed, not silently truncate: {result:?}"
+        );
+    }
+
     #[test]
     fn waypoint_id_is_time_ordered() {
         let a = WaypointId::new();
@@ -902,6 +1099,7 @@ mod tests {
             frontier: FrontierSnapshot::default(),
             muster_progress: None,
             checkpoint_ns: None,
+            fork_of: None,
         };
 
         let json = serde_json::to_string(&waypoint).unwrap();
@@ -1055,6 +1253,7 @@ mod tests {
             },
             muster_progress: None,
             checkpoint_ns: None,
+            fork_of: None,
         };
 
         // Simulate a pre-BUG-04 payload: serialize, then strip the
@@ -1177,6 +1376,7 @@ mod tests {
                 completed: BTreeMap::new(),
             }),
             checkpoint_ns: None,
+            fork_of: None,
         };
 
         // Simulate a pre-CF-FR-12 payload: serialize, then strip the
@@ -1288,6 +1488,7 @@ mod tests {
             frontier: FrontierSnapshot::default(),
             muster_progress: None,
             checkpoint_ns: Some("outer/inner/".to_string()),
+            fork_of: None,
         };
 
         // Simulate a pre-CF-FR-15 payload: serialize, then strip the
@@ -1329,6 +1530,7 @@ mod tests {
             frontier: FrontierSnapshot::default(),
             muster_progress: None,
             checkpoint_ns: Some("outer_node/inner_node/".to_string()),
+            fork_of: None,
         };
 
         let json = serde_json::to_string(&waypoint).unwrap();
@@ -1338,5 +1540,87 @@ mod tests {
             restored.checkpoint_ns,
             Some("outer_node/inner_node/".to_string())
         );
+    }
+
+    // --- HITL-03 / D-14: fork_of ---------------------------------------------
+
+    /// Test 1 (Phase 24 Plan 06): a serialised `Waypoint` with the `fork_of`
+    /// key removed entirely deserialises with `fork_of: None` -- the
+    /// strip-key test, not a round-trip of a value that was already present,
+    /// exactly mirroring `waypoint_payload_without_checkpoint_ns_deserializes_as_none`.
+    #[test]
+    fn waypoint_payload_without_fork_of_deserializes_as_none() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("result").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let waypoint = Waypoint {
+            thread_id: ThreadId::new("thread-1").unwrap(),
+            waypoint_id: WaypointId::new(),
+            parent_waypoint_id: Some(WaypointId::new()),
+            superstep: 5,
+            graph_fingerprint: GraphFingerprint::from_canonical_bytes(b"fixture"),
+            battlefield: Battlefield::new(schema),
+            vanguard: vec![],
+            completed: vec![],
+            status: WaypointStatus::Running,
+            created_at: Utc::now(),
+            schema_version: Waypoint::current_schema_version(),
+            visit_counts: BTreeMap::new(),
+            frontier: FrontierSnapshot::default(),
+            muster_progress: None,
+            checkpoint_ns: None,
+            fork_of: Some(WaypointId::new()),
+        };
+
+        // Simulate a pre-D-14 payload: serialize, then strip the `fork_of`
+        // key entirely before deserializing back, rather than merely
+        // round-tripping the value already present.
+        let mut value = serde_json::to_value(&waypoint).unwrap();
+        value
+            .as_object_mut()
+            .expect("Waypoint serializes to a JSON object")
+            .remove("fork_of");
+        assert!(
+            !value.to_string().contains("fork_of"),
+            "the fork_of key must be genuinely absent from the fixture payload"
+        );
+
+        let restored: Waypoint = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.fork_of, None);
+        // Every other field is untouched by the missing key.
+        assert_eq!(restored.thread_id, waypoint.thread_id);
+        assert_eq!(restored.superstep, waypoint.superstep);
+    }
+
+    #[test]
+    fn fork_of_round_trips_through_serde_json() {
+        let schema = BattlefieldSchema::new(vec![]);
+        let root = WaypointId::new();
+        let waypoint = Waypoint {
+            thread_id: ThreadId::new("thread-1").unwrap(),
+            waypoint_id: WaypointId::new(),
+            parent_waypoint_id: Some(root),
+            superstep: 1,
+            graph_fingerprint: GraphFingerprint::from_canonical_bytes(b"fixture"),
+            battlefield: Battlefield::new(schema),
+            vanguard: vec![],
+            completed: vec![],
+            status: WaypointStatus::Running,
+            created_at: Utc::now(),
+            schema_version: Waypoint::current_schema_version(),
+            visit_counts: BTreeMap::new(),
+            frontier: FrontierSnapshot::default(),
+            muster_progress: None,
+            checkpoint_ns: None,
+            fork_of: Some(root),
+        };
+
+        let json = serde_json::to_string(&waypoint).unwrap();
+        let restored: Waypoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(waypoint, restored);
+        assert_eq!(restored.fork_of, Some(root));
     }
 }

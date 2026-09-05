@@ -17,6 +17,9 @@ use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema, FieldName};
 use paladin_core::platform::container::directive::MusterTask;
+use paladin_core::platform::container::parley::{
+    OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
+};
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeId, ThreadId,
     Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
@@ -55,6 +58,7 @@ pub fn sample_waypoint_at(
         frontier: FrontierSnapshot::default(),
         muster_progress: None,
         checkpoint_ns: None,
+        fork_of: None,
     }
 }
 
@@ -750,6 +754,176 @@ pub async fn checkpoint_ns_none_round_trips(port: &dyn WaypointPort) {
     assert_eq!(loaded, wp);
 }
 
+// ── D-02: AwaitingInput { parleys, responses } payload round-trips ───────
+
+/// A fixture `ParleyRequest` carrying a non-trivial payload/choices, shared
+/// by both new HITL contract cases so every backend exercises byte-identical
+/// inputs, matching [`frontier_fixture`]'s precedent.
+fn sample_parley_request(node: &str) -> ParleyRequest {
+    ParleyRequest {
+        parley_id: ParleyId::new(),
+        node_id: NodeId::new(node),
+        kind: ParleyKind::Choice,
+        prompt: "which option?".to_string(),
+        payload: serde_json::json!({ "context": "contract-suite" }),
+        choices: Some(vec!["a".to_string(), "b".to_string()]),
+        expires_at: None,
+        created_at: Utc::now(),
+        on_expire: OnExpire::FailRun,
+    }
+}
+
+/// A fixture `ParleyResponse` answering `request`, carrying the full D-07
+/// field set (`kind`/`prompt` stamped, as `WarEngine::resume_with` always
+/// does).
+fn sample_parley_response(request: &ParleyRequest, responded_by: &str) -> ParleyResponse {
+    ParleyResponse {
+        parley_id: request.parley_id,
+        kind: request.kind.clone(),
+        prompt: request.prompt.clone(),
+        value: serde_json::json!("a"),
+        responded_by: Some(responded_by.to_string()),
+        responded_at: Utc::now(),
+        defaulted: false,
+    }
+}
+
+/// Case 1 (D-02): a Waypoint with `AwaitingInput { parleys, responses }`
+/// carrying two requests and one response saves and loads with every field
+/// of every request and response preserved.
+pub async fn awaiting_input_payload_round_trips(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-awaiting-input-round-trip").unwrap();
+    let request_a = sample_parley_request("asker-a");
+    let request_b = sample_parley_request("asker-b");
+    let response_a = sample_parley_response(&request_a, "alice");
+
+    let mut wp = sample_waypoint(&thread, 0);
+    wp.status = WaypointStatus::AwaitingInput {
+        parleys: vec![request_a.clone(), request_b.clone()],
+        responses: vec![response_a.clone()],
+    };
+    wp.vanguard = vec![request_a.node_id.clone(), request_b.node_id.clone()];
+    port.save(&wp).await.unwrap();
+
+    let expected_json = serde_json::to_string(&wp).unwrap();
+
+    let latest = port.latest(&thread).await.unwrap().unwrap();
+    let latest_json = serde_json::to_string(&latest).unwrap();
+    assert_eq!(latest_json, expected_json);
+    match &latest.status {
+        WaypointStatus::AwaitingInput { parleys, responses } => {
+            assert_eq!(parleys, &vec![request_a.clone(), request_b.clone()]);
+            assert_eq!(responses, &vec![response_a.clone()]);
+        }
+        other => panic!("expected AwaitingInput, got {other:?}"),
+    }
+
+    let fetched = port.get(&thread, &wp.waypoint_id).await.unwrap().unwrap();
+    let fetched_json = serde_json::to_string(&fetched).unwrap();
+    assert_eq!(fetched_json, expected_json);
+    assert_eq!(fetched.status, wp.status);
+
+    let history = port.history(&thread, None, None).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].waypoint_id, wp.waypoint_id);
+    assert!(matches!(
+        history[0].status,
+        WaypointStatus::AwaitingInput { .. }
+    ));
+}
+
+// ── HITL-03 / D-14: fork_of round-trips ───────────────────────────────────
+
+/// Case 2 (D-14): a Waypoint with `fork_of: Some(id)` saves and loads with
+/// the value preserved; a Waypoint with `None` loads as `None`; `history`
+/// returns summaries carrying the same `fork_of`.
+pub async fn fork_of_round_trips(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-fork-of-round-trip").unwrap();
+    let branch_root = WaypointId::generate();
+
+    let mut on_branch = sample_waypoint(&thread, 1);
+    on_branch.status = WaypointStatus::Running;
+    on_branch.fork_of = Some(branch_root);
+    port.save(&on_branch).await.unwrap();
+
+    let mut mainline = sample_waypoint(&thread, 2);
+    mainline.status = WaypointStatus::Running;
+    assert_eq!(mainline.fork_of, None);
+    port.save(&mainline).await.unwrap();
+
+    let loaded_on_branch = port
+        .get(&thread, &on_branch.waypoint_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded_on_branch.fork_of, Some(branch_root));
+
+    let loaded_mainline = port
+        .get(&thread, &mainline.waypoint_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded_mainline.fork_of, None);
+
+    // `latest` picks up whichever was saved most recently (superstep 2,
+    // mainline here) -- confirm it too carries the correct (`None`) value,
+    // proving `latest`'s own read path is not somehow special-cased.
+    let latest = port.latest(&thread).await.unwrap().unwrap();
+    assert_eq!(latest.waypoint_id, mainline.waypoint_id);
+    assert_eq!(latest.fork_of, None);
+
+    // `history` returns summaries carrying the SAME `fork_of` values --
+    // reconstructible without loading a single full Waypoint.
+    let history = port.history(&thread, None, None).await.unwrap();
+    assert_eq!(history.len(), 2);
+    let on_branch_summary = history
+        .iter()
+        .find(|s| s.waypoint_id == on_branch.waypoint_id)
+        .expect("branch waypoint must appear in history");
+    assert_eq!(on_branch_summary.fork_of, Some(branch_root));
+    let mainline_summary = history
+        .iter()
+        .find(|s| s.waypoint_id == mainline.waypoint_id)
+        .expect("mainline waypoint must appear in history");
+    assert_eq!(mainline_summary.fork_of, None);
+}
+
+// ── HITL-03 / D-15: branch-aware `latest` ordering ────────────────────────
+
+/// Case 3 (D-15): a fork's newest Waypoint (later `created_at`, LOWER
+/// `superstep`) is returned by `latest(thread)` over a mainline Waypoint
+/// with a HIGHER `superstep` but EARLIER `created_at` -- pinning D-15's
+/// "most-recently-created wins across branches" as a load-bearing contract
+/// case rather than an incidental property of the ordering.
+pub async fn latest_prefers_most_recently_created_across_branches(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-latest-across-branches").unwrap();
+    let branch_root = WaypointId::generate();
+    let base = Utc::now();
+
+    // Mainline: higher superstep, EARLIER created_at.
+    let mut mainline = sample_waypoint_at(&thread, 5, base);
+    mainline.status = WaypointStatus::Running;
+    port.save(&mainline).await.unwrap();
+
+    // A fork's Waypoint: lower superstep, LATER created_at.
+    let mut on_branch = sample_waypoint_at(&thread, 2, base + chrono::Duration::seconds(1));
+    on_branch.status = WaypointStatus::Running;
+    on_branch.fork_of = Some(branch_root);
+    port.save(&on_branch).await.unwrap();
+
+    let latest = port.latest(&thread).await.unwrap().unwrap();
+    assert_eq!(
+        latest.waypoint_id, on_branch.waypoint_id,
+        "the fork's newer-created waypoint must win over the mainline's higher-superstep one"
+    );
+    assert_eq!(latest.fork_of, Some(branch_root));
+
+    // `history`'s own ordering agrees: the branch waypoint is newest-first.
+    let history = port.history(&thread, None, None).await.unwrap();
+    assert_eq!(history[0].waypoint_id, on_branch.waypoint_id);
+    assert_eq!(history[1].waypoint_id, mainline.waypoint_id);
+}
+
 /// Runs every contract function above against `port`.
 ///
 /// **Requires a freshly constructed, still-empty `port`** — call this once,
@@ -791,4 +965,7 @@ pub async fn run_all(port: &dyn WaypointPort) {
     muster_progress_none_round_trips_as_none(port).await;
     checkpoint_ns_round_trips(port).await;
     checkpoint_ns_none_round_trips(port).await;
+    awaiting_input_payload_round_trips(port).await;
+    fork_of_round_trips(port).await;
+    latest_prefers_most_recently_created_across_branches(port).await;
 }

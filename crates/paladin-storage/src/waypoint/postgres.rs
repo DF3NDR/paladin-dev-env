@@ -25,8 +25,15 @@ use crate::waypoint::redact::redact_database_url_password;
 /// `history()` with no `before` cursor. See `sqlite.rs`'s sibling constant
 /// for the ordering rationale -- identical here, `?` placeholders replaced
 /// with `$N`.
+/// `fork_of` (HITL-03, D-14) is not a dedicated column -- it rides in the
+/// existing `payload` JSONB column exactly like `visit_counts`/`frontier`/
+/// `muster_progress`/`checkpoint_ns` do on the full `Waypoint`, so no SQL
+/// migration is needed. `payload->>'fork_of'` reads just that one field out
+/// of `payload` without deserializing the whole (potentially large)
+/// payload, keeping `history`'s summary query cheap.
 const HISTORY_QUERY_NO_CURSOR: &str = r#"
-    SELECT waypoint_id, parent_id, superstep, status, created_at
+    SELECT waypoint_id, parent_id, superstep, status, created_at,
+           payload->>'fork_of' AS fork_of
     FROM waypoints
     WHERE thread_id = $1
     ORDER BY created_at DESC, superstep DESC
@@ -36,7 +43,8 @@ const HISTORY_QUERY_NO_CURSOR: &str = r#"
 /// `history()` with a `before` cursor, resolved to its own
 /// `(created_at, superstep)` first (see `history`'s body).
 const HISTORY_QUERY_WITH_CURSOR: &str = r#"
-    SELECT waypoint_id, parent_id, superstep, status, created_at
+    SELECT waypoint_id, parent_id, superstep, status, created_at,
+           payload->>'fork_of' AS fork_of
     FROM waypoints
     WHERE thread_id = $1
       AND (created_at < $2 OR (created_at = $3 AND superstep < $4))
@@ -181,12 +189,25 @@ impl PostgresWaypointStore {
             .try_get("created_at")
             .map_err(|e| WaypointError::Backend { source: e.into() })?;
 
+        // --- HITL-03, D-14: `fork_of` is extracted from the `payload`
+        // JSONB column via `->>'fork_of'`, never a dedicated column -- see
+        // `HISTORY_QUERY_NO_CURSOR`'s doc comment. `NULL` covers both a
+        // pre-D-14 payload (key absent) and a genuine JSON `null`
+        // (mainline waypoint), exactly like `parent_id` above.
+        let fork_of_str: Option<String> = row
+            .try_get("fork_of")
+            .map_err(|e| WaypointError::Backend { source: e.into() })?;
+        let fork_of = fork_of_str
+            .map(|s| Self::parse_waypoint_id(&s))
+            .transpose()?;
+
         Ok(WaypointSummary {
             waypoint_id,
             parent_waypoint_id,
             superstep: superstep as u64,
             status,
             created_at,
+            fork_of,
         })
     }
 
@@ -777,6 +798,36 @@ mod tests {
             return;
         };
         contract_tests::checkpoint_ns_none_round_trips(&store).await;
+    }
+
+    // ── D-02 / D-14 / D-15: AwaitingInput payload, fork_of, branch-aware
+    //    latest ordering (Phase 24 Plan 06). Tier 2 -- Docker is unavailable
+    //    in this devcontainer, so these three wrappers are skipped locally
+    //    (`store_or_skip`) and run only in CI's `postgres-integration` job;
+    //    they are NOT recorded as passed from a local run.
+
+    #[tokio::test]
+    async fn awaiting_input_payload_round_trips() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::awaiting_input_payload_round_trips(&store).await;
+    }
+
+    #[tokio::test]
+    async fn fork_of_round_trips() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::fork_of_round_trips(&store).await;
+    }
+
+    #[tokio::test]
+    async fn latest_prefers_most_recently_created_across_branches() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::latest_prefers_most_recently_created_across_branches(&store).await;
     }
 
     #[tokio::test]

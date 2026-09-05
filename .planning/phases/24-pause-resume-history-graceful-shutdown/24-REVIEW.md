@@ -1,8 +1,8 @@
 ---
 phase: 24-pause-resume-history-graceful-shutdown
-reviewed: 2026-09-05T08:25:13Z
+reviewed: 2026-09-05T12:01:21Z
 depth: standard
-files_reviewed: 36
+files_reviewed: 51
 files_reviewed_list:
   - .cargo/semver-checks-allowlist.toml
   - .project/v0.10.0/08-traceability-matrix.md
@@ -59,284 +59,215 @@ files_reviewed_list:
   - tests/integration/subgraph_formation_in_campaign_test.rs
   - tests/integration/waypoint_retention_fault_injection_test.rs
 findings:
-  critical: 2
+  critical: 0
   warning: 3
   info: 0
-  total: 5
+  total: 3
 status: issues_found
 ---
 
 # Phase 24: Code Review Report
 
-**Reviewed:** 2026-09-05T08:25:13Z
+**Reviewed:** 2026-09-05T12:01:21Z
 **Depth:** standard
-**Files Reviewed:** 36 (of the listed 51; the remainder are docs/yaml/json/traceability files given a light consistency pass only, plus integration test files reviewed for reliability only per house rule)
+**Files Reviewed:** 51
 **Status:** issues_found
 
 ## Summary
 
-This phase lands Parley pause/resume (Gate nodes, `resume_with`'s total-validation matrix),
-Chronicle history/branch inspection, a `ShutdownCoordinator` for graceful-shutdown draining, and
-the `paladin-web` HTTP surface (`thread_controller.rs`) plus the `ParleyPortAdapter` facade that
-lets `paladin-web` trigger a resume without depending on `paladin-battalion`. The engineering in
-`shutdown.rs`, `parley.rs`, `parley_port.rs`, `waypoint.rs`'s `child_on_branch`/`fork_of`
-additions, and the storage layer's parameterized-SQL retention/pruning is careful and
-well-documented — no SQL injection, no credential leakage, no unwrap/expect/panic newly
-introduced in the storage or ports layers, and the project's fail-closed conventions
-(`#[non_exhaustive]` catch-alls) are followed consistently.
+This is the post-fix re-review of Phase 24 (Parley pause/resume, Chronicle history/branch
+inspection, graceful shutdown, and the `paladin-web` thread HTTP surface). The prior review
+(2026-09-05T08:25Z) found 2 critical and 3 warning findings; `24-REVIEW-FIX.md` reports all five
+fixed. I independently re-verified both critical fixes against the current tree rather than
+trusting the fix report:
 
-Two BLOCKER-class problems were found, both load-bearing for this phase's own stated goals:
+- **CR-01** (`/v1/threads/*` had no per-thread authorization): confirmed fixed.
+  `resume_thread` (`crates/paladin-web/src/thread_controller.rs:548-594`) now calls
+  `crate::agent_auth::require_admin(&principal)` before doing anything else, and the accompanying
+  HTTP-level tests (`post_resume_with_non_admin_role_is_403`, `post_resume_with_admin_role_is_202`)
+  exercise the 403/202 split. The reads (`get_thread_state`, `get_thread_history`) remain
+  authenticated-any-role by deliberate, documented design (see WR-03 below for the residual risk
+  this narrowing leaves open).
+- **CR-02** (a shutdown-grace abort mid-Muster discarded `MusterProgress`): confirmed fixed.
+  `crates/paladin-battalion/src/engine/superstep.rs` now tracks `muster_task_aborted` separately
+  from ordinary `aborted_node_ids` (lines 1645-1720), skips re-adding the aborted Muster worker's
+  `NodeId` to `halted_vanguard`, preserves the round's `MusterProgress` (lines 2129-2168) instead
+  of hard-coding `None`, and additionally gates the completed-task fold-into-`deltas` step on
+  `!muster_task_aborted` (lines 2009-2028) to avoid the double-merge-on-resume regression the fix
+  report describes finding while implementing this. The regression test
+  `shutdown_grace_abort_mid_muster_preserves_progress_for_resume` covers it.
+- **WR-01/WR-02/WR-03** (registry lock `.unwrap()`, `shadow_validate` drift guard, silent losing
+  race): all three fixes are present and match their described shape in
+  `src/application/services/parley/registry.rs` and
+  `src/application/services/parley/adapter.rs`.
 
-1. **`GET/POST /v1/threads/{id}/*` has no per-thread authorization** — any principal who clears
-   `require_authentication` (including the lowest-privileged configured role) can read, resume,
-   or page through the history of *any* thread by id, with zero ownership/role scoping. This
-   contradicts the stricter posture `agent_controller.rs`'s sibling routes already enforce
-   (`authorize_invoke`, `require_admin`) and directly exposes Battlefield-derived content
-   (`parleys[].payload`, response values, full history) that may carry sensitive
-   author/business data.
-2. **A shutdown-grace abort mid-Muster discards the round's `MusterProgress`**, so resuming a
-   thread halted while Muster worker tasks were in flight re-dispatches the aborted worker as an
-   *ordinary* vanguard node (losing its `task_key`/`payload` context) and forgets which sibling
-   tasks in that same round had already completed — undermining the "Halted is always a
-   consistent restart point" contract HITL-04 exists to provide, for exactly the Muster case.
+Since that review, only `crates/paladin-web/src/openapi.rs` changed in the reviewed scope (a
+`"403"` status literal added to the resume-path status-set test, plus a rustdoc sentence) — this
+is consistent with the CR-01 fix and introduces no new issue.
 
-Three WARNING-class findings round out the review: a `RwLock::unwrap()` pair newly added to
-`GraphRegistry` (library-code panic-on-poison, against the project's own house rule demonstrated
-correctly elsewhere in this same phase's `superstep.rs`), an unguarded validation-drift risk
-between `ParleyPortAdapter::shadow_validate`'s hand-maintained re-implementation and the real
-`WarEngine::resume_with`, and a fire-and-forget race in the same adapter that can hand a losing
-concurrent `resume_with` caller a `202 Accepted` for a submission that silently has no effect.
+I did not stop at re-verifying the prior findings. A fresh pass over the storage layer, the
+graceful-shutdown coordinator, the Parley/Chronicle value types, and the config layer surfaced
+three new WARNING-class findings, none of them re-treads of anything already fixed: an ordering
+bug in `InMemoryWaypointStore::list_threads` that diverges from the same store's own `latest()`/
+`history()` methods and from the SQL backends' correct behavior; a `Mutex::lock().expect(...)`
+pair in `paladin-battalion`'s trace dispatcher that is the same "panic on lock poison in library
+code" anti-pattern WR-01 fixed elsewhere in this same phase, left unaddressed here; and the
+already-flagged, already-documented residual IDOR exposure on the two GET thread routes, which
+CR-01's fix deliberately left open pending PLAT-06 and which I am re-surfacing here as a tracked,
+open risk rather than a regression.
 
-## Critical Issues
-
-### CR-01: `/v1/threads/*` routes have no per-thread authorization — any authenticated principal can read/resume/list any thread
-
-**File:** `crates/paladin-web/src/thread_controller.rs:475-633` (handlers `get_thread_state`,
-`resume_thread`, `get_thread_history`); wiring at `crates/paladin-web/src/thread_controller.rs:646-655`
-(`thread_openapi_router`) and `src/bin/paladin-server.rs` (`build_thread_state`/
-`thread_state_over_store`, which layers the SAME `AgentAuthConfig` the agent routes use via
-`.with_auth(auth)`).
-
-**Issue:** `thread_openapi_router` layers only `crate::agent_auth::require_authentication`
-(authenticates — proves *a* valid credential was presented) via `route_layer`. Unlike
-`agent_controller.rs`, which extracts `Extension<Principal>` in every sensitive handler and
-calls `authorize_invoke(&principal, &entry.allowed_roles)` or `require_admin(&principal)`
-(`crates/paladin-web/src/agent_controller.rs:251,259,358,361,423,426,527,534,611,619`), none of
-`get_thread_state`, `resume_thread`, or `get_thread_history` ever extract a `Principal` or
-perform any authorization check. `ThreadApiState` carries no notion of thread ownership, and
-`ThreadId`/`Waypoint` (`crates/paladin-core/src/platform/container/waypoint.rs`) carry no
-owner/principal field either — there is no mechanism, anywhere in this call path, that could
-restrict *which* threads a given credential may touch.
-
-Concretely: any caller holding a single low-privilege API key (`role: UserRole::User`, per
-`agent_auth.rs`'s own `Principal`) can call `GET /v1/threads/{any-id}/state` for a thread they
-have no business relationship to, receiving the full `ThreadStateResponse` — including every
-outstanding `ParleyRequestDto.payload` (`thread_controller.rs:209`, author-supplied context
-explicitly *not* guaranteed secret-free beyond "no credential", per `parley.rs:143-146`'s own
-comment) and every `ParleyResponseDto.value`/`responded_by`. The same caller can also submit
-`POST /v1/threads/{any-id}/resume` and drive that thread's execution forward, and can page
-through its entire `GET /v1/threads/{any-id}/history`. `src/application/services/chronicle.rs`'s
-own module doc states "authorisation is enforced at the HTTP adapter's `route_layer`" — but the
-route layer that exists only *authenticates*, it never *authorizes* per-thread, so that
-documented contract is not actually met by the code that ships in this phase.
-
-This is a broken object-level authorization (IDOR-class) gap: authentication alone is not
-authorization, and the sibling `agent_controller.rs` routes in this exact same crate demonstrate
-the project already has the pattern (`authorize_invoke`/`require_admin`) to close it.
-
-**Fix:** At minimum, gate `resume_thread` behind `require_admin` (or a new, thread-scoped role
-check) the way `agent_controller.rs`'s admin-only routes do, and/or introduce a thread-ownership
-concept threaded through from creation so `authorize_invoke`-style scoping can apply to
-`get_thread_state`/`get_thread_history` too. Example minimal fix (admin-gated, matching the
-existing `require_admin` idiom used elsewhere in this same crate):
-
-```rust
-pub async fn resume_thread(
-    State(state): State<ThreadApiState>,
-    Extension(principal): Extension<crate::agent_auth::Principal>,
-    Path(id): Path<String>,
-    Json(body): Json<ResumeRequest>,
-) -> Result<(StatusCode, JsonValue), ApiError> {
-    crate::agent_auth::require_admin(&principal)?;
-    // ...unchanged...
-}
-```
-and equivalently for `get_thread_state`/`get_thread_history` (or a coarser `authorize_invoke`
-check once a real per-thread role/ownership model exists). At minimum this must be resolved
-before shipping to any multi-tenant or multi-role deployment; until it is, document loudly that
-every credential configured for `/v1/threads/*` must be treated as admin-equivalent.
-
-### CR-02: A shutdown-grace abort mid-Muster discards `MusterProgress`, breaking resumability of the interrupted round
-
-**File:** `crates/paladin-battalion/src/engine/superstep.rs:2094-2121` (the Halted-on-abort
-branch), in conjunction with the dispatch-entry abort bookkeeping at
-`crates/paladin-battalion/src/engine/superstep.rs:1698-1701` and the resume-side reconstruction
-at `crates/paladin-battalion/src/engine/mod.rs:1245-1287` / `crates/paladin-battalion/src/engine/superstep.rs:1417-1433` (dispatch-entries assembly from `vanguard` + `pending_muster.unfinished_tasks()`).
-
-**Issue:** When the mid-superstep grace deadline fires while a Muster round is dispatching
-worker tasks (`dispatch_entries` mixes ordinary vanguard nodes with `muster_dispatch` entries —
-`superstep.rs:1417-1433`), every still-outstanding handle is aborted and its dispatch-order
-`NodeId` (which for a Muster task is the **worker template's** `NodeId`, not a per-task
-identifier) is pushed into `aborted_node_ids` with no distinction between "this was an ordinary
-vanguard node" and "this was one Muster task among several sharing this worker" (`superstep.rs:1698-1701`).
-
-The Halted Waypoint built afterward (`superstep.rs:2102-2115`) does two things that together lose
-the round's state:
-
-1. It unions every aborted node id — including a Muster worker's `NodeId` — into
-   `halted_vanguard` (`superstep.rs:2095-2101`), which becomes the persisted `vanguard`.
-2. It passes `muster_progress: None` explicitly (`superstep.rs:2113`), even though
-   `muster_node`/`muster_tasks`/`muster_completed_so_far` (populated earlier in this same
-   function, e.g. `superstep.rs:1409,1439,1836-1847`) are still in scope and may be non-empty —
-   i.e. this round had already-completed sibling tasks and a real, resumable `MusterProgress`
-   the individual per-task progress Waypoints (`superstep.rs:1842-1865`) captured moments
-   earlier, but which the *newer*, `latest()`-returned Halted Waypoint now shadows.
-
-On resume (`WarEngine::resume`/`resume_with_options`, `mod.rs:1275-1296`), `latest.muster_progress`
-is `None`, so `pending_muster` is `None` and `unfinished_tasks()` never runs
-(`superstep.rs:1386-1416`); the aborted worker's bare `NodeId` instead re-enters as an *ordinary*
-`dispatch_entries` tuple with `muster_ctx: None` (`superstep.rs:1429-1433`). This means:
-
-- The worker re-executes with `NodeContext.muster` = `None` — any `InputMapping` template
-  referencing `{muster.payload}`/`{muster.task_key}` (the whole point of a worker template,
-  per `node.rs:31-37`) either fails to render or silently resolves to nothing, producing
-  incorrect input for a re-run that is supposed to be resuming a specific task.
-- Every sibling task's completion state accumulated in `muster_completed_so_far` before the
-  abort (already durably written to a progress Waypoint) becomes unreachable through the
-  documented resume path, since resume reads `latest.muster_progress` directly rather than
-  walking `parent_waypoint_id` back to the last non-`None` `MusterProgress`.
-- No test in this phase exercises the abort+Muster intersection (`grep` across
-  `superstep.rs`/`mod.rs` for a muster+halt/cancel/abort test finds none), so this regression
-  would not be caught by the existing suite.
-
-This directly contradicts `ShutdownCoordinator`'s own module doc and `RunOutcome::Halted`'s
-rustdoc promise ("a `Halted` `Waypoint` was persisted, so it is always a consistent restart
-point") for the specific, reachable case of a shutdown landing mid-Muster.
-
-**Fix:** When building the Halted Waypoint, preserve the in-flight `MusterProgress` instead of
-hard-coding `None`, and only add a *non-muster* aborted node's id to `halted_vanguard` (an
-aborted muster task must be recoverable via `unfinished_tasks()`, not via the ordinary vanguard):
-
-```rust
-if !aborted_node_ids.is_empty() {
-    let mut halted_vanguard = next_vanguard.clone();
-    let mut seen: HashSet<NodeId> = halted_vanguard.iter().cloned().collect();
-    let aborted_muster_progress = muster_node.as_ref().map(|node| MusterProgress {
-        node: node.clone(),
-        tasks: muster_tasks.clone(),
-        completed: muster_completed_so_far.clone(),
-    });
-    for node in aborted_node_ids {
-        // A muster worker's own progress is recovered via `unfinished_tasks()`
-        // below, not by re-adding it to the ordinary vanguard.
-        if aborted_muster_progress.is_some() && node == /* the muster node id */ {
-            continue;
-        }
-        if seen.insert(node.clone()) {
-            halted_vanguard.push(node);
-        }
-    }
-    let waypoint = build_waypoint(
-        // ...
-        aborted_muster_progress, // was: None
-        // ...
-    );
-    // ...
-}
-```
-Add a regression test that starts a Muster round, aborts mid-dispatch via a zero/near-zero
-`shutdown_grace` and a cancelled token, and asserts the resumed run dispatches exactly the
-unfinished `task_key`s with their original payloads (mirroring the existing
-`resume_mid_muster_runs_exactly_the_unfinished_tasks` test's assertions, but triggered by
-cancellation instead of a fresh `start`/`resume` boundary).
+No SQL injection, hardcoded credential, unsafe deserialization, or new `unwrap()`/`expect()`/
+`panic!` in non-test/non-binary library code was found beyond what is listed below. The SQLite and
+Postgres `WaypointPort` implementations use bound parameters throughout (verified against their own
+adversarial `...with_sql_metacharacters_round_trip_as_data` tests), and the `ThreadId::child`/
+`child_on_branch` length-prefixed encoding correctly avoids the delimiter-collision hazard its own
+rustdoc describes fixing.
 
 ## Warnings
 
-### WR-01: `GraphRegistry` panics on lock poisoning via `.unwrap()` on `RwLock`, against this project's own house rule
+### WR-01: `InMemoryWaypointStore::list_threads` computes "latest" by insertion order, not by the documented `created_at`/`superstep` ordering its own `latest()` and `history()` methods use
 
-**File:** `src/application/services/parley/registry.rs:65,74`
+**File:** `crates/paladin-storage/src/waypoint/in_memory.rs:133-161` (specifically line 142,
+`wps.last()`)
 
-**Issue:** `register` and `resolve` call `self.graphs.write().unwrap()` /
-`self.graphs.read().unwrap()`. CLAUDE.md and `.github/instructions/rust.instructions.md` both
-state "Avoid `unwrap()`/`expect()` and `panic!` in library code — return `Result`", and this
-same phase's `superstep.rs:1567-1582` explicitly documents the correct alternative pattern for an
-analogous "this should be unreachable, but must not panic" situation ("library code must not
-`.expect()` an invariant it cannot enforce"). If any writer holding the lock panics elsewhere in
-the process (e.g. a bug in a future caller building a `WarGraph`), every subsequent
-`register`/`resolve` call across the whole process panics on poison, taking down the parley
-resume path with it — a poisoned-lock panic in a shared, `Arc`-held registry is far more likely
-to cascade than a normal single-owner panic.
-
-**Fix:** Use `.unwrap_or_else(|e| e.into_inner())` (recovering the guard after poisoning, which
-is safe here since the map itself cannot be left in a torn state by a panic mid-`insert`/`get`),
-or thread a `Result`/log-and-recover path through `register`/`resolve` instead of panicking:
+**Issue:** `WaypointPort::list_threads`'s contract (`crates/paladin-ports/src/output/waypoint_port.rs:219-234`)
+states: "Ordering is descending `last_updated_at` (the `created_at` of each thread's latest
+waypoint)." `InMemoryWaypointStore::latest` (`in_memory.rs:72-83`) and `::history`
+(`in_memory.rs:96-131`) both honour this correctly, via an explicit `max_by`/`sort_by` over
+`created_at` (with `superstep` as tiebreak) — never insertion order. `::list_threads`, however,
+computes each thread's summary via `wps.last()` (plain `Vec` insertion order), assuming the last
+element pushed is also the most-recently-created one:
 
 ```rust
-pub fn register(&self, graph: WarGraph) -> GraphFingerprint {
-    let fingerprint = graph.fingerprint();
-    self.graphs
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(fingerprint.clone(), Arc::new(graph));
-    fingerprint
-}
+let mut summaries: Vec<ThreadSummary> = threads
+    .iter()
+    .filter_map(|(thread_id, wps)| {
+        wps.last().map(|latest| ThreadSummary {   // <-- insertion order, not created_at order
+            thread_id: thread_id.clone(),
+            latest_status: latest.status.clone(),
+            last_updated_at: latest.created_at,
+        })
+    })
+    .collect();
 ```
 
-### WR-02: `ParleyPortAdapter::shadow_validate` is a hand-maintained re-implementation of `WarEngine::resume_with`'s validation with no automated drift guard
+`save`'s own contract is upsert-in-place for an existing `waypoint_id` and append for a new one
+(`in_memory.rs:56-70`), so `wps`'s Vec order is exactly the order `save()` was called in, not the
+order `created_at` values fall in. This phase's own `latest_prefers_most_recently_created_across_branches`
+contract test (`contract_tests.rs:898-925`) proves the two orders CAN legitimately diverge for a
+single thread — a fork's own Waypoint can carry a `created_at` earlier or later than a mainline
+waypoint already saved for the same `ThreadId`, independent of which was `save()`d first. The same
+`WR-03` scenario this phase's own `adapter.rs` test suite exercises (two concurrent `resume_with`
+calls racing against the same thread) is exactly the shape of event that can make append order and
+`created_at` order diverge in production: a task's `created_at` is captured before its async
+continuation completes, so completion (and thus `save()` call) order is not guaranteed to match
+`created_at` order under concurrent writers.
 
-**File:** `src/application/services/parley/adapter.rs:186-374` (`shadow_validate`,
-`shadow_validate_response_shape`, `shadow_validate_parley_value_for_kind`,
-`shadow_normalize_approval_value`), mirroring `crates/paladin-battalion/src/engine/mod.rs:1350-1509`
-and crate-private helpers in `graph.rs`.
+The practical blast radius is bounded today: no HTTP route in this phase's `thread_controller.rs`
+calls `list_threads`, and `waypoint_retention.rs`'s `prune()` (the one production caller) only reads
+`thread_summary.thread_id` from the result, never `latest_status`/`last_updated_at` — so this bug
+does not currently corrupt retention behaviour. But `InMemoryWaypointStore` is this crate's
+reference/test-default implementation (used throughout this phase's own test suite as the
+substitute for a real backend), and the two production-grade backends
+(`sqlite.rs`'s `LIST_THREADS_QUERY_NO_CURSOR`/`_WITH_CURSOR`, `postgres.rs`'s equivalents) compute
+this correctly via a `ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY created_at DESC, superstep
+DESC)` window function — making the in-memory store the one backend whose `list_threads` violates
+its own trait's documented contract. There is no test in `in_memory.rs`'s own suite analogous to
+`latest_prefers_most_recently_created_across_branches` that would have caught this (the existing
+`list_threads_empty_then_three_threads_newest_activity_first` test only ever saves ONE waypoint per
+thread, in increasing `created_at` AND insertion order, so it cannot distinguish the two orderings).
 
-**Issue:** The module's own docs are candid that this duplication is a deliberate, accepted
-tradeoff (`paladin-battalion`'s validators are `pub(crate)` and unreachable from this crate), and
-that a prediction/reality mismatch always resolves in the real engine's favor. That mitigates
-*correctness* of the persisted result, but not *observability*: if a future change to
-`WarEngine::resume_with`'s validation ordering, a new `OnExpire`/`ParleyKind` variant, or a new
-`EngineError` variant is made in `paladin-battalion` without a matching update here, the failure
-mode is not a compile error or an obviously-failing test — it is `shadow_validate` predicting
-`DelegateSynchronously` when the real call would actually reach the continuation (or vice versa),
-silently flipping whether a caller gets an immediate `202` versus a background-spawned one, or
-`map_engine_error`'s catch-all (`adapter.rs:411-413`) silently downgrading a new, more specific
-`EngineError` variant to the generic `ParleyError::Rejected`, erasing an HTTP status distinction
-`thread_controller.rs`'s `map_parley_error` depends on. There is no property/fuzz test in this
-module (or anywhere in the reviewed scope) that exercises both `shadow_validate` and a real
-`WarEngine::resume_with` call against the *same* randomized parley/response fixture and asserts
-their outcomes agree.
+**Fix:** Compute each thread's most-recent waypoint the same way `latest()` does — `max_by` over
+`(created_at, superstep)` — rather than `Vec::last()`:
 
-**Fix:** Add a property-style test (or at minimum a fixture table) that runs both
-`shadow_validate` and a real `WarEngine::resume_with` call over the same set of
-parley/response/expiry combinations and asserts the `ShadowOutcome` variant matches whether the
-real call reached the continuation — so a future validation change in `paladin-battalion` that
-silently desyncs this adapter fails a test in *this* crate, not just in production.
+```rust
+let mut summaries: Vec<ThreadSummary> = threads
+    .iter()
+    .filter_map(|(thread_id, wps)| {
+        wps.iter()
+            .max_by(|a, b| {
+                a.created_at
+                    .cmp(&b.created_at)
+                    .then_with(|| a.superstep.cmp(&b.superstep))
+            })
+            .map(|latest| ThreadSummary {
+                thread_id: thread_id.clone(),
+                latest_status: latest.status.clone(),
+                last_updated_at: latest.created_at,
+            })
+    })
+    .collect();
+```
 
-### WR-03: A losing concurrent `resume_with` race can hand the caller a `202 Accepted` for a submission that silently has no effect
+Add a regression test mirroring `latest_prefers_most_recently_created_across_branches`, but
+asserting on `list_threads`'s `latest_status`/`last_updated_at` for a thread whose waypoints are
+saved out of `created_at` order.
 
-**File:** `src/application/services/parley/adapter.rs:141-164` (`ShadowOutcome::Complete` arm)
+### WR-02: `TraceDispatcher`'s background consumer panics on lock poisoning via `.expect(...)`, the same anti-pattern WR-01 fixed elsewhere in this phase
 
-**Issue:** When `shadow_validate` predicts `Complete`, the adapter registers with the
-`ShutdownCoordinator`, spawns the real `engine.resume_with(...)` call in the background, and
-immediately returns `Ok(ResumeAccepted::new(...))` to the caller — before the spawned task has
-even started running, let alone validated anything against the real, current Waypoint state. The
-spawned task's own result is discarded (`let _ = engine.resume_with(...).await;`,
-`adapter.rs:152-154`), with the comment acknowledging "no synchronous caller remains to report a
-failure to." If two concurrent `resume_with` calls for the same thread both observe (via their
-own `latest()` snapshot) a state where the submission looks complete, both requests receive an
-immediate `202`, but only one of the two spawned background calls can actually succeed against
-`WarEngine::resume_with`'s own total-validation (the loser fails, e.g. with
-`ParleyAlreadyAnswered`, entirely silently). The losing caller has no way to distinguish "still
-processing" from "silently dropped" — polling `GET /threads/{id}/state` shows the thread exactly
-as it was before their (accepted, but ineffective) call, indefinitely.
+**File:** `crates/paladin-battalion/src/engine/hooks.rs:105,146`
 
-**Fix:** At minimum, log the discarded error at `warn`/`error` level (currently nothing is
-logged) so an operator can detect the race from server logs, and consider surfacing it via
-tracing (`TraceEvent`) so `thread_controller.rs`'s poll path could eventually expose "last resume
-attempt failed" on the Waypoint rather than leaving a silently-dropped submission
-indistinguishable from one still in flight.
+**Issue:** Both the background consumer task and `TraceDispatcher::emit` call
+`queue.buffer.lock().expect("trace queue mutex poisoned")`. CLAUDE.md and
+`.github/instructions/rust.instructions.md` both state "Avoid `unwrap()`/`expect()` and `panic!` in
+library code — return `Result`," and this same phase's own fix for WR-01
+(`src/application/services/parley/registry.rs:71-74`) replaced an identical
+`RwLock::write().unwrap()` pattern with `.unwrap_or_else(std::sync::PoisonError::into_inner)`,
+explicitly reasoning that "a panic elsewhere while some OTHER writer held this lock must not
+cascade into every subsequent call ... safe here: the map/buffer itself cannot be left torn by a
+panic mid-`insert`/`get`" — an argument that applies identically to `TraceQueue.buffer`, whose only
+operations are `push_back`/`pop_front` on a `VecDeque`. If anything ever panics while holding this
+lock (e.g. a future change to the critical section, or a panic propagating from an adjacent
+`std::sync::Mutex`-guarded operation added later), `TraceDispatcher::emit` — the one function the
+whole superstep loop calls for every trace event, on every run sharing this dispatcher — starts
+panicking on every subsequent call, for the lifetime of the process. This crate's own module doc
+for this exact file states the design goal plainly: "A slow or permanently blocking `TraceSink`
+must never stall a run, and a sink erroring on every call must never fail one" — a poisoned-lock
+panic is a strictly worse failure mode than either of those, since it is not scoped to one run.
+
+**Fix:** Recover the guard on poison, exactly as WR-01 did for `GraphRegistry`:
+
+```rust
+let mut buf = consumer_queue
+    .buffer
+    .lock()
+    .unwrap_or_else(std::sync::PoisonError::into_inner);
+```
+
+and the identical change at `emit`'s `queue.buffer.lock()` call. Add a test mirroring
+`register_and_resolve_survive_a_poisoned_lock` (`registry.rs`), poisoning `TraceQueue.buffer` from
+a panicking thread and asserting `emit`/the consumer still function afterward.
+
+### WR-03: The two read-only thread routes still perform no per-thread authorization — an accepted, documented gap, re-surfaced here as a still-open risk
+
+**File:** `crates/paladin-web/src/thread_controller.rs:470-518` (`get_thread_state`), `596-668`
+(`get_thread_history`); module doc `1-46`
+
+**Issue:** CR-01's fix closed the mutating route (`POST .../resume`) behind `require_admin`, but
+`get_thread_state` and `get_thread_history` remain authenticated-any-role by deliberate decision,
+documented in the module doc, in `docs/src/user-guides/parley-and-chronicle.md:301-308`, and in the
+fix report. This is not an oversight — it is a consciously scoped, tracked interim posture pending
+Phase 27's `PLAT-06` per-thread ownership. I am re-flagging it, at WARNING rather than CRITICAL,
+because the underlying exposure the original CR-01 finding described (any authenticated caller,
+including the lowest-privileged configured role, can read the full `ThreadStateResponse` —
+including every outstanding `ParleyRequestDto.payload` and `ParleyResponseDto.value`/
+`responded_by` — and the entire `GET .../history` page set, for *any* thread by id) is still
+exactly true for these two routes today. `ThreadId`/`Waypoint` still carry no owner/principal field
+(confirmed: `crates/paladin-core/src/platform/container/waypoint.rs` has no such field), so nothing
+in this call path can scope a read to "threads this caller is entitled to see." A deployment that
+configures more than one role/tenant behind these routes is trusting every credential holder with
+every thread's contents, for reads, indefinitely until `PLAT-06` lands.
+
+**Fix:** No action required to "fix" this finding in isolation — it is accepted, tracked scope
+narrowing, not a regression. Confirm `PLAT-06` (Phase 27) is still on the roadmap and scoped to
+close this gap; until then, keep the operator-facing warning in
+`docs/src/user-guides/parley-and-chronicle.md` prominent, and consider a minimal interim mitigation
+(e.g. gating the two read routes behind the same `require_admin` check the resume route now uses,
+narrowing the read surface too, at the cost of requiring admin-equivalent credentials for read-only
+polling) if a multi-tenant deployment is anticipated before `PLAT-06` ships.
 
 ---
 
-_Reviewed: 2026-09-05T08:25:13Z_
+_Reviewed: 2026-09-05T12:01:21Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_

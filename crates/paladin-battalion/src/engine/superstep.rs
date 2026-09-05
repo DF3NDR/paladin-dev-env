@@ -1643,6 +1643,15 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         let handle_count = dispatch_entries.len();
         let mut results: Vec<Option<NodeTaskOutput>> = (0..handle_count).map(|_| None).collect();
         let mut aborted_node_ids: Vec<NodeId> = Vec::new();
+        // --- CR-02 (24-REVIEW.md): a Muster worker task aborted at the
+        // grace deadline must NOT re-enter as an ordinary vanguard node on
+        // resume (it would lose its `task_key`/`payload` `MusterContext`,
+        // per `node.rs`'s worker-template contract). Tracked separately
+        // from `aborted_node_ids` -- which stays exactly "ordinary vanguard
+        // nodes aborted this superstep" -- so the Halted-branch below can
+        // preserve the round's `MusterProgress` instead of folding a
+        // worker's `NodeId` into `halted_vanguard`.
+        let mut muster_task_aborted = false;
         let mut remaining: FuturesUnordered<IndexedHandle<NodeTaskOutput>> =
             handles.into_iter().collect();
         let mut cancel_observed_at: Option<tokio::time::Instant> = cancellation
@@ -1697,7 +1706,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             // handle still registered in `remaining`.
                             for handle in remaining.iter() {
                                 handle.abort();
-                                aborted_node_ids.push(dispatch_entries[handle.index].0.clone());
+                                let (aborted_node_id, aborted_muster_ctx) =
+                                    &dispatch_entries[handle.index];
+                                if aborted_muster_ctx.is_some() {
+                                    // A Muster worker's own dispatch-order id
+                                    // is recovered on resume via
+                                    // `MusterProgress::unfinished_tasks`, not
+                                    // by re-adding it to the plain vanguard.
+                                    muster_task_aborted = true;
+                                } else {
+                                    aborted_node_ids.push(aborted_node_id.clone());
+                                }
                             }
                             break;
                         }
@@ -1986,9 +2005,25 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         // `muster_tasks` is non-empty only when `muster_node` is `Some`
         // (they are always constructed together above); iterating it
         // unconditionally is a no-op when no Muster was in play this round.
-        for task in &muster_tasks {
-            if let Some(delta) = muster_completed_so_far.get(&task.task_key) {
-                deltas.push((task.worker.clone(), delta.clone()));
+        //
+        // --- CR-02 (24-REVIEW.md): SKIPPED entirely when a sibling task was
+        // aborted this round (`muster_task_aborted`). Folding-and-merging
+        // the tasks that DID complete here, then ALSO persisting them
+        // unmerged inside the Halted Waypoint's own `MusterProgress.completed`
+        // (below) so a resumed run can re-fold them, would double-merge:
+        // the resumed round re-runs this exact fold once it (genuinely)
+        // finishes the whole cohort, over a battlefield that must still be
+        // the pre-this-round snapshot for that fold to be correct -- exactly
+        // how a mid-muster crash/resume already works (the per-task progress
+        // Waypoint the loop above persists is deliberately never merged,
+        // for the same reason). Ordinary (non-muster) peers that completed
+        // this same aborted round are unaffected: their deltas were pushed
+        // to `deltas` directly, above, and merge normally regardless.
+        if !muster_task_aborted {
+            for task in &muster_tasks {
+                if let Some(delta) = muster_completed_so_far.get(&task.task_key) {
+                    deltas.push((task.worker.clone(), delta.clone()));
+                }
             }
         }
 
@@ -2091,7 +2126,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         // NO aborted node -- Test 1's case -- changes nothing here; the
         // very next loop iteration's existing top-of-loop boundary check
         // Halts before the next superstep ever dispatches).
-        if !aborted_node_ids.is_empty() {
+        if !aborted_node_ids.is_empty() || muster_task_aborted {
             let mut halted_vanguard = next_vanguard.clone();
             let mut seen: HashSet<NodeId> = halted_vanguard.iter().cloned().collect();
             for node in aborted_node_ids {
@@ -2099,6 +2134,23 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     halted_vanguard.push(node);
                 }
             }
+            // --- CR-02 (24-REVIEW.md): preserve this round's in-flight
+            // `MusterProgress` instead of hard-coding `None` -- otherwise
+            // resume forgets every sibling task `muster_completed_so_far`
+            // already recorded, and re-dispatches the aborted worker as an
+            // ordinary node with `NodeContext.muster == None`. Built ONLY
+            // when a Muster task was actually aborted (`muster_node` may be
+            // `Some` from an EARLIER superstep's now-fully-drained round
+            // that produced no new tasks this superstep).
+            let aborted_muster_progress = if muster_task_aborted {
+                muster_node.as_ref().map(|node| MusterProgress {
+                    node: node.clone(),
+                    tasks: muster_tasks.clone(),
+                    completed: muster_completed_so_far.clone(),
+                })
+            } else {
+                None
+            };
             let waypoint = build_waypoint(
                 &thread,
                 parent_waypoint_id,
@@ -2110,7 +2162,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Halted,
                 visit_counts,
                 frontier.snapshot(graph),
-                None,
+                aborted_muster_progress,
                 checkpoint_ns.clone(),
                 fork_of,
             );
@@ -5150,6 +5202,201 @@ mod tests {
             serde_json::to_string(&resumed_final).unwrap(),
             serde_json::to_string(&control_final).unwrap(),
             "a resumed mid-muster run must reach the uninterrupted run's final Battlefield"
+        );
+    }
+
+    /// A five-task Muster worker where one designated `task_key` cancels the
+    /// shared shutdown token the instant it starts (before its own `.await`
+    /// point, mirroring `SlowFunctionNode::cancelling`'s determinism), then
+    /// sleeps well past the test's grace window; every other task_key
+    /// completes immediately. Used to deterministically abort exactly one
+    /// Muster task mid-round (CR-02, 24-REVIEW.md).
+    fn five_task_muster_graph_with_one_slow_task(
+        results_field: &FieldName,
+        executed_keys: Arc<Mutex<Vec<String>>>,
+        slow_key: &'static str,
+        slow_hold: std::time::Duration,
+        token: CancellationToken,
+    ) -> (WarGraph, NodeId) {
+        struct SlowKeyRecordingWorkerNode {
+            field: FieldName,
+            executed_keys: Arc<Mutex<Vec<String>>>,
+            slow_key: &'static str,
+            slow_hold: std::time::Duration,
+            token: CancellationToken,
+        }
+        #[async_trait::async_trait]
+        impl StateNode for SlowKeyRecordingWorkerNode {
+            async fn run(
+                &self,
+                _state: &Battlefield,
+                ctx: &crate::engine::node::NodeContext,
+            ) -> Result<Directive, NodeError> {
+                let key = ctx.task_key().unwrap_or_default().to_string();
+                if key == self.slow_key {
+                    self.token.cancel();
+                    tokio::time::sleep(self.slow_hold).await;
+                }
+                self.executed_keys.lock().unwrap().push(key.clone());
+                let mut delta = StateDelta::new();
+                delta.set_raw(self.field.clone(), serde_json::json!(key));
+                Ok(delta.into())
+            }
+        }
+
+        let s = schema(vec![FieldSpec::new(
+            results_field.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(
+                    ["a", "b", "c", "d", "e"]
+                        .iter()
+                        .map(|k| muster_task(&worker, serde_json::json!(*k), k))
+                        .collect(),
+                ),
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(
+            worker.clone(),
+            NodeSpec::Function(std::sync::Arc::new(SlowKeyRecordingWorkerNode {
+                field: results_field.clone(),
+                executed_keys,
+                slow_key,
+                slow_hold,
+                token,
+            })),
+        );
+        graph.add_entry(planner);
+        (graph, worker)
+    }
+
+    /// CR-02 (24-REVIEW.md) regression: a shutdown-grace abort landing
+    /// mid-Muster must preserve the round's `MusterProgress` on the Halted
+    /// Waypoint (not `None`), must NOT re-list the aborted worker's
+    /// `NodeId` in the plain `vanguard`, and resume must re-dispatch
+    /// exactly the unfinished task(s) -- with a populated `MusterContext`,
+    /// not as an ordinary vanguard node.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shutdown_grace_abort_mid_muster_preserves_progress_for_resume() {
+        let results_field = field("results");
+        let token = CancellationToken::new();
+        let executed_keys = Arc::new(Mutex::new(Vec::new()));
+        let (graph, worker) = five_task_muster_graph_with_one_slow_task(
+            &results_field,
+            executed_keys.clone(),
+            "c",
+            std::time::Duration::from_secs(2),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-abort-mid-muster").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+        assert!(
+            matches!(outcome, RunOutcome::Halted { .. }),
+            "aborting one Muster task past the grace deadline must Halt the run, got {outcome:?}"
+        );
+
+        // Exactly the four fast siblings ran before the abort; "c" never
+        // reached its own push (aborted mid-sleep).
+        let mut completed_before_abort = executed_keys.lock().unwrap().clone();
+        completed_before_abort.sort();
+        assert_eq!(completed_before_abort, vec!["a", "b", "d", "e"]);
+
+        let saved = store.saved_waypoints(&thread).await;
+        let halted = saved.first().expect("a Halted waypoint was saved");
+        assert_eq!(halted.status, WaypointStatus::Halted);
+        assert!(
+            !halted.vanguard.contains(&worker),
+            "the aborted Muster worker's NodeId must NOT be re-listed in the plain \
+             vanguard -- it is recovered via MusterProgress::unfinished_tasks() instead, \
+             got vanguard {:?}",
+            halted.vanguard
+        );
+
+        let progress = halted
+            .muster_progress
+            .clone()
+            .expect("the Halted waypoint must preserve the in-flight MusterProgress");
+        assert_eq!(progress.node, NodeId::new("planner"));
+        assert_eq!(progress.tasks.len(), 5, "the full task list is preserved");
+        let mut completed_keys: Vec<&String> = progress.completed.keys().collect();
+        completed_keys.sort();
+        assert_eq!(
+            completed_keys,
+            vec!["a", "b", "d", "e"],
+            "every sibling task completed before the abort must be recorded"
+        );
+        let unfinished = progress.unfinished_tasks();
+        assert_eq!(
+            unfinished.len(),
+            1,
+            "exactly the one aborted task must be unfinished"
+        );
+        assert_eq!(unfinished[0].task_key, "c");
+        assert_eq!(unfinished[0].worker, worker);
+
+        // Resume: mirrors `WarEngine::resume_with_options`'s own mid-muster
+        // re-entry (SAME superstep, never `+ 1`), dispatching only
+        // `progress.unfinished_tasks()` with its `MusterContext` populated.
+        let resumed_keys = Arc::new(Mutex::new(Vec::new()));
+        let (resume_graph, _worker) = five_task_muster_graph(&results_field, resumed_keys.clone());
+        let resume_store = RecordingWaypointStore::new();
+        let resumed_outcome = run_resumed_mid_muster(
+            &resume_graph,
+            thread.clone(),
+            &resume_store,
+            halted.battlefield.clone(),
+            halted.vanguard.clone(),
+            halted.visit_counts.clone(),
+            halted.frontier.clone(),
+            progress,
+            halted.superstep,
+        )
+        .await;
+        assert!(
+            matches!(resumed_outcome, RunOutcome::Completed { .. }),
+            "resume must complete the interrupted round, got {resumed_outcome:?}"
+        );
+        assert_eq!(
+            resumed_keys.lock().unwrap().clone(),
+            vec!["c".to_string()],
+            "resume must re-dispatch EXACTLY the one unfinished task, with its \
+             MusterContext populated (a bare, muster_ctx-less re-entry would either \
+             fail to render {{muster.task_key}} or run every task again)"
+        );
+
+        let final_state = match resumed_outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected Completed, got {other:?}"),
+        };
+        let mut merged = final_state
+            .get::<Vec<String>>(&results_field)
+            .unwrap()
+            .unwrap();
+        merged.sort();
+        assert_eq!(
+            merged,
+            vec!["a", "b", "c", "d", "e"],
+            "the resumed run's final Battlefield must reflect all five tasks, the four \
+             restored via MusterProgress.completed plus the one re-run"
         );
     }
 

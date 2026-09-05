@@ -405,8 +405,8 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 24-05-PLAN.md — E2E-2, multi-parley, cross-process and 10-thread stress tests
-- [ ] 24-06-PLAN.md — `fork_of` lineage, `child_on_branch`, three-backend contract cases
+- [x] 24-05-PLAN.md — E2E-2, multi-parley, cross-process and 10-thread stress tests
+- [x] 24-06-PLAN.md — `fork_of` lineage, `child_on_branch`, three-backend contract cases
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

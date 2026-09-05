@@ -427,7 +427,7 @@ Plans:
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
-- [ ] 24-12-PLAN.md — mdBook page, MIGRATION/CHANGELOG/traceability, gate evidence
+- [x] 24-12-PLAN.md — mdBook page, MIGRATION/CHANGELOG/traceability, gate evidence
 
 ### Phase 25: Node-Level Fault Tolerance
 

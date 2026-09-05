@@ -162,7 +162,7 @@ pub struct ParleyRequest {
 ///
 /// ```
 /// # fn main() -> Result<(), serde_json::Error> {
-/// use paladin_core::platform::container::parley::{ParleyId, ParleyResponse};
+/// use paladin_core::platform::container::parley::{ParleyId, ParleyKind, ParleyResponse};
 /// use chrono::Utc;
 ///
 /// let response = ParleyResponse {

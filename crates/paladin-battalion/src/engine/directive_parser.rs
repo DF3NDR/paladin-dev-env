@@ -141,10 +141,6 @@ enum EnvelopeNextStep {
     /// see the module-level rustdoc for the full field shape and the
     /// engine-supplied `parley_id`/`node_id`/`created_at`/`expires_at`
     /// stamps this module's own conversion adds.
-    // RED-STATE MARKER (Task 2, 24-03): renamed so no envelope actually
-    // deserializes into this variant yet -- restored (`"parley"`) in the
-    // GREEN commit. See PLAN Task 2.
-    #[serde(rename = "not_yet_wired_parley")]
     Parley(EnvelopeParleyRequest),
 }
 
@@ -180,7 +176,9 @@ struct EnvelopeParleyRequest {
 /// engine-supplied stamps ([`build_parley_request`]) and a raise-time
 /// validation check (T-24-06) that can fail, so this is a free function
 /// rather than an infallible `From` impl.
-fn envelope_next_step_to_next_step(next: EnvelopeNextStep) -> Result<NextStep, DirectiveParseError> {
+fn envelope_next_step_to_next_step(
+    next: EnvelopeNextStep,
+) -> Result<NextStep, DirectiveParseError> {
     Ok(match next {
         EnvelopeNextStep::Edges => NextStep::Edges,
         EnvelopeNextStep::Goto(targets) => NextStep::Goto(targets),
@@ -201,7 +199,9 @@ fn envelope_next_step_to_next_step(next: EnvelopeNextStep) -> Result<NextStep, D
 /// default is checked against at graph-validate time (T-24-06) -- a value
 /// that fails this check is a hard [`DirectiveParseError`], never silently
 /// accepted.
-fn build_parley_request(entry: EnvelopeParleyRequest) -> Result<ParleyRequest, DirectiveParseError> {
+fn build_parley_request(
+    entry: EnvelopeParleyRequest,
+) -> Result<ParleyRequest, DirectiveParseError> {
     if let OnExpire::ResumeWithDefault(value) = &entry.on_expire
         && let Err(reason) =
             validate_parley_value_for_kind(&entry.kind, entry.choices.as_deref(), value)
@@ -260,6 +260,37 @@ impl DirectiveParser {
     ///     directive.delta.values.get(&FieldName::new("verdict").unwrap()),
     ///     Some(&serde_json::json!("approved"))
     /// );
+    /// ```
+    ///
+    /// A Paladin node asking a human for approval through `next.parley`
+    /// (HITL-01, D-07):
+    ///
+    /// ```
+    /// use paladin_battalion::engine::directive_parser::{DirectiveParser, OnParseError};
+    /// use paladin_core::platform::container::battlefield::FieldName;
+    /// use paladin_core::platform::container::directive::NextStep;
+    ///
+    /// let parser = DirectiveParser::StructuredDirective {
+    ///     on_parse_error: OnParseError::FailRun,
+    /// };
+    /// let output = r#"{
+    ///     "delta": {},
+    ///     "next": {"parley": {
+    ///         "kind": "Approval",
+    ///         "prompt": "Deploy build #482 to production?",
+    ///         "payload": {"build": 482}
+    ///     }}
+    /// }"#;
+    /// let directive = parser
+    ///     .parse(output, &FieldName::new("raw_output").unwrap())
+    ///     .unwrap();
+    ///
+    /// match directive.next {
+    ///     NextStep::Parley(request) => {
+    ///         assert_eq!(request.prompt, "Deploy build #482 to production?");
+    ///     }
+    ///     other => panic!("expected NextStep::Parley, got {other:?}"),
+    /// }
     /// ```
     pub fn parse(
         &self,
@@ -538,8 +569,7 @@ mod tests {
         };
 
         let before = Utc::now();
-        let output =
-            r#"{"delta": {}, "next": {"parley": {"kind": "FreeText", "prompt": "?", "expires_in_secs": 60}}}"#;
+        let output = r#"{"delta": {}, "next": {"parley": {"kind": "FreeText", "prompt": "?", "expires_in_secs": 60}}}"#;
         let directive = parser.parse(output, &field("out")).unwrap();
         match directive.next {
             NextStep::Parley(request) => {
@@ -550,7 +580,8 @@ mod tests {
             other => panic!("expected NextStep::Parley, got {other:?}"),
         }
 
-        let output_no_expiry = r#"{"delta": {}, "next": {"parley": {"kind": "FreeText", "prompt": "?"}}}"#;
+        let output_no_expiry =
+            r#"{"delta": {}, "next": {"parley": {"kind": "FreeText", "prompt": "?"}}}"#;
         let directive = parser.parse(output_no_expiry, &field("out")).unwrap();
         match directive.next {
             NextStep::Parley(request) => assert_eq!(request.expires_at, None),
@@ -616,7 +647,8 @@ mod tests {
         };
         let directive = fallback.parse(output, &field("out")).unwrap();
         assert_eq!(
-            directive.next, NextStep::Edges,
+            directive.next,
+            NextStep::Edges,
             "a malformed parley entry must never be coerced into NextStep::Parley"
         );
         assert_eq!(

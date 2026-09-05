@@ -325,11 +325,17 @@ async fn test_anthropic_server_error_500() {
     let response = adapter.generate(request).await;
 
     assert!(response.is_err());
-    let error = response.unwrap_err();
-    assert!(matches!(
-        error,
-        paladin_ports::output::llm_port::LlmError::ProcessingError(_)
-    ));
+    // Phase 25 (FT-FR-01, D-03): a 5xx is a typed `ProviderError` whose
+    // status is read from the field, never from rendered text.
+    match response.unwrap_err() {
+        paladin_ports::output::llm_port::LlmError::ProviderError {
+            provider, status, ..
+        } => {
+            assert_eq!(provider, "anthropic");
+            assert_eq!(status, 500);
+        }
+        other => panic!("expected ProviderError {{ status: 500 }}, got {other:?}"),
+    }
 }
 
 #[tokio::test]

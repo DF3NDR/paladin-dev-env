@@ -21,6 +21,12 @@ use std::pin::Pin;
 use std::time::Duration;
 use uuid::Uuid;
 
+use crate::http_status::map_http_status;
+
+/// The provider name this adapter reports through [`LlmPort::get_provider_name`]
+/// and stamps on every [`LlmError::ProviderError`] it emits.
+const OPENAI_PROVIDER: &str = "openai";
+
 /// Configuration for the OpenAI adapter.
 #[derive(Debug, Clone)]
 pub struct OpenAIConfig {
@@ -372,27 +378,14 @@ impl OpenAIAdapter {
             .map_err(|e| LlmError::ProcessingError(format!("Failed to read response: {}", e)))?;
 
         if !status.is_success() {
-            return match status.as_u16() {
-                401 => Err(LlmError::AuthenticationError(
-                    "Invalid OpenAI API key".to_string(),
-                )),
-                429 => Err(LlmError::RateLimitExceeded),
-                400 => {
-                    if response_text.contains("maximum context length") {
-                        Err(LlmError::TokenLimitExceeded)
-                    } else {
-                        Err(LlmError::InvalidPrompt(response_text))
-                    }
-                }
-                500..=599 => Err(LlmError::ProcessingError(format!(
-                    "OpenAI server error: {}",
-                    response_text
-                ))),
-                _ => Err(LlmError::ProcessingError(format!(
-                    "HTTP {}: {}",
-                    status, response_text
-                ))),
-            };
+            // One shared status-to-variant mapping for every adapter (D-03,
+            // FT-FR-01); it redacts the body before bounding it.
+            return Err(map_http_status(
+                OPENAI_PROVIDER,
+                status.as_u16(),
+                &response_text,
+                &self.config.api_key,
+            ));
         }
 
         serde_json::from_str::<OpenAIResponse>(&response_text)
@@ -425,12 +418,14 @@ impl OpenAIAdapter {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(match status.as_u16() {
-                401 => LlmError::AuthenticationError("Invalid OpenAI API key".to_string()),
-                429 => LlmError::RateLimitExceeded,
-                400 => LlmError::InvalidPrompt(error_text),
-                _ => LlmError::ProcessingError(format!("HTTP {}: {}", status, error_text)),
-            });
+            // Same shared mapping as the generate path, so a status yields
+            // the same typed variant whether or not the call streams.
+            return Err(map_http_status(
+                OPENAI_PROVIDER,
+                status.as_u16(),
+                &error_text,
+                &self.config.api_key,
+            ));
         }
 
         let stream = response.bytes_stream().map(|chunk_result| {
@@ -611,10 +606,14 @@ impl LlmPort for OpenAIAdapter {
             .map_err(|e| LlmError::NetworkError(format!("Failed to fetch models: {}", e)))?;
 
         if !response.status().is_success() {
-            return Err(LlmError::ProcessingError(format!(
-                "HTTP {}",
-                response.status()
-            )));
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(map_http_status(
+                OPENAI_PROVIDER,
+                status.as_u16(),
+                &error_text,
+                &self.config.api_key,
+            ));
         }
 
         let response_text = response
@@ -636,7 +635,7 @@ impl LlmPort for OpenAIAdapter {
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "openai"
+        OPENAI_PROVIDER
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -737,5 +736,126 @@ mod tests {
             max_retries: 3,
         };
         assert!(config.validate().is_err());
+    }
+
+    // ── Phase 25 (FT-FR-01, D-03): non-2xx routes through map_http_status ──
+
+    mod status_mapping {
+        use super::*;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+        /// `max_retries: 0` so a retryable status surfaces after one attempt
+        /// instead of sleeping through the adapter's 1s-base backoff.
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request(stream: bool) -> LlmRequest {
+            LlmRequest {
+                id: Uuid::new_v4(),
+                model: "gpt-4o".to_string(),
+                prompt: PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+                attachments: vec![],
+                stream,
+                metadata: HashMap::new(),
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_non_2xx_routes_through_the_shared_mapper() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(503)
+                .with_body(r#"{"error":{"message":"overloaded"}}"#)
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await;
+            match result {
+                Err(LlmError::ProviderError {
+                    provider, status, ..
+                }) => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(status, 503);
+                }
+                other => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_dedicated_status_mappings_are_unchanged() {
+            for (status, body, expect) in [
+                (401u16, r#"{"error":"invalid key"}"#, "AuthenticationError"),
+                (429, r#"{"error":"slow down"}"#, "RateLimitExceeded"),
+                (400, r#"{"error":"bad request"}"#, "InvalidPrompt"),
+                (
+                    400,
+                    r#"{"error":"This model's maximum context length is 8192 tokens"}"#,
+                    "TokenLimitExceeded",
+                ),
+            ] {
+                let mut server = Server::new_async().await;
+                server
+                    .mock("POST", "/chat/completions")
+                    .with_status(status.into())
+                    .with_body(body)
+                    .create_async()
+                    .await;
+
+                let err = adapter_at(&server.url())
+                    .generate(build_request(false))
+                    .await
+                    .expect_err("non-2xx must be an error");
+                let ok = matches!(
+                    (expect, &err),
+                    ("AuthenticationError", LlmError::AuthenticationError(_))
+                        | ("RateLimitExceeded", LlmError::RateLimitExceeded)
+                        | ("InvalidPrompt", LlmError::InvalidPrompt(_))
+                        | ("TokenLimitExceeded", LlmError::TokenLimitExceeded)
+                );
+                assert!(ok, "status {status}: expected {expect}, got {err:?}");
+            }
+        }
+
+        #[tokio::test]
+        async fn streaming_non_2xx_routes_through_the_shared_mapper() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(503)
+                .with_body(r#"{"error":{"message":"overloaded"}}"#)
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url())
+                .generate_stream(build_request(true))
+                .await;
+            // `Ok` carries a boxed `dyn Stream` with no `Debug`, so match by hand.
+            match &result {
+                Err(LlmError::ProviderError {
+                    provider, status, ..
+                }) => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(*status, 503);
+                }
+                Ok(_) => panic!("expected Err(ProviderError), got Ok(<stream>)"),
+                Err(other) => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+            }
+        }
     }
 }

@@ -158,6 +158,10 @@ impl KimiConfig {
     }
 }
 
+/// The provider name this adapter reports through [`LlmPort::get_provider_name`]
+/// and that its engine stamps on every `LlmError::ProviderError` (Phase 25 D-03).
+const KIMI_PROVIDER: &str = "kimi";
+
 /// Kimi (Moonshot AI) LLM Adapter implementing [`LlmPort`].
 ///
 /// Every method delegates to an owned [`CompatEngine`] (D-05) — this struct
@@ -261,7 +265,9 @@ impl KimiAdapter {
         };
 
         Ok(Self {
-            engine: CompatEngine::new(engine_config)?,
+            // Phase 25 D-03: name the engine so every `ProviderError` it
+            // emits carries "kimi", not the engine's generic default.
+            engine: CompatEngine::new(engine_config)?.with_provider_name(KIMI_PROVIDER),
         })
     }
 }
@@ -288,7 +294,7 @@ impl LlmPort for KimiAdapter {
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "kimi"
+        KIMI_PROVIDER
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -299,6 +305,7 @@ impl LlmPort for KimiAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http_status::map_http_status;
     use mockito::{Matcher, Server};
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
     use paladin_ports::output::llm_port::FinishReason;
@@ -707,8 +714,11 @@ mod tests {
         assert!(matches!(result, Err(LlmError::InvalidPrompt(_))));
     }
 
+    /// Phase 25 (FT-FR-01, D-03): the successor to
+    /// `http_500_maps_to_processing_error_carrying_status` — the status is
+    /// read from `ProviderError`'s typed field, never from rendered text.
     #[tokio::test]
-    async fn http_500_maps_to_processing_error_carrying_status() {
+    async fn kimi_http_500_carries_a_typed_status() {
         let mut server = Server::new_async().await;
         server
             .mock("POST", "/chat/completions")
@@ -727,8 +737,58 @@ mod tests {
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
         match result {
-            Err(LlmError::ProcessingError(msg)) => assert!(msg.contains("500")),
-            other => panic!("expected ProcessingError carrying the status code, got {other:?}"),
+            Err(LlmError::ProviderError {
+                provider, status, ..
+            }) => {
+                assert_eq!(provider, "kimi");
+                assert_eq!(status, 500);
+            }
+            other => panic!("expected ProviderError {{ status: 500 }}, got {other:?}"),
+        }
+    }
+
+    /// Phase 25 (FT-FR-01, D-03): the preset's non-2xx path is the shared
+    /// `map_http_status` — proven by comparing the adapter's error against
+    /// the helper's own output for the same status, body and key.
+    #[tokio::test]
+    async fn kimi_non_2xx_routes_through_the_shared_mapper() {
+        let body = r#"{"error":"overloaded"}"#;
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(503)
+            .with_body(body)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let config = KimiConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            KIMI_DEFAULT_MODEL.to_string(),
+        );
+        let adapter = KimiAdapter::new(config).unwrap();
+
+        let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
+        let expected = map_http_status("kimi", 503, body, "test-key");
+        match (result, expected) {
+            (
+                Err(LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                }),
+                LlmError::ProviderError {
+                    provider: want_provider,
+                    status: want_status,
+                    message: want_message,
+                },
+            ) => {
+                assert_eq!(provider, want_provider);
+                assert_eq!(status, want_status);
+                assert_eq!(message, want_message);
+            }
+            (other, _) => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
         }
     }
 
@@ -1252,12 +1312,13 @@ mod tests {
                 "location",
                 &format!("{}/chat/completions", redirect_target.url()),
             )
-            // `ProcessingError` (what the refused-redirect arm returns once
-            // fixed) is retryable, so the fixed engine may hit `primary`
-            // more than once (up to `max_retries + 1` = 4); today, before
-            // the fix, the redirect is followed transparently and the call
-            // succeeds on the first attempt. `expect_at_least(1)` holds in
-            // both the RED and GREEN states.
+            // The refused-redirect arm's error (`ProviderError { 3xx }`
+            // since Phase 25 D-03; `ProcessingError` before) is outside the
+            // engine's non-retryable set, so the fixed engine may hit
+            // `primary` more than once (up to `max_retries + 1` = 4);
+            // before the fix, the redirect was followed transparently and
+            // the call succeeded on the first attempt. `expect_at_least(1)`
+            // holds in both the RED and GREEN states.
             .expect_at_least(1)
             .create_async()
             .await;

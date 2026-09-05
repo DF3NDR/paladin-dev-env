@@ -22,6 +22,12 @@ use paladin_ports::output::llm_port::{
     StreamingResponse, TokenUsage,
 };
 
+use crate::http_status::map_http_status;
+
+/// The provider name this adapter reports through [`LlmPort::get_provider_name`]
+/// and stamps on every [`LlmError::ProviderError`] it emits.
+const DEEPSEEK_PROVIDER: &str = "deepseek";
+
 /// Configuration for DeepSeek LLM adapter.
 #[derive(Debug, Clone)]
 pub struct DeepSeekConfig {
@@ -497,29 +503,17 @@ impl DeepSeekAdapter {
         bounded_excerpt(&redacted, RESPONSE_EXCERPT_CHAR_BUDGET)
     }
 
-    /// Map DeepSeek API errors to LlmError.
-    fn map_error(&self, status: u16, message: &str) -> LlmError {
-        match status {
-            401 => LlmError::AuthenticationError(format!(
-                "Invalid API key for DeepSeek. Check DEEPSEEK_API_KEY. Error: {}",
-                message
-            )),
-            429 => LlmError::RateLimitExceeded,
-            // DeepSeek's documented insufficient-balance/quota-exhausted status
-            // is 402. `regain_hint` is `None` because DeepSeek's 402 body
-            // shape is not first-party-confirmed (RESEARCH Assumption A1 —
-            // corroborated by multiple third-party sources, not by
-            // DeepSeek's own API reference), so there is no prose to parse
-            // yet. This is D-05's "explicitly-empty, documented branch" —
-            // expressed as a real arm with a `None` hint, not as an absence.
-            402 => LlmError::UsageLimitExceeded {
-                provider: "deepseek".to_string(),
-                regain_hint: None,
-            },
-            404 => LlmError::ModelNotAvailable(message.to_string()),
-            400 => LlmError::InvalidPrompt(message.to_string()),
-            _ => LlmError::ProcessingError(format!("DeepSeek API error ({}): {}", status, message)),
-        }
+    /// Map a non-2xx DeepSeek response to [`LlmError`].
+    ///
+    /// Delegates wholesale to the crate-wide [`map_http_status`] (Phase 25
+    /// D-03, FT-FR-01): `body` is the RAW response text, redacted and
+    /// bounded once inside the helper — never pre-excerpted here, which
+    /// would bound twice. DeepSeek's documented insufficient-balance status
+    /// is 402; the helper's 402 arm carries `regain_hint: None` because
+    /// DeepSeek's 402 body shape is not first-party-confirmed (Phase 41
+    /// RESEARCH Assumption A1), so there is no prose to parse yet.
+    fn map_error(&self, status: u16, body: &str) -> LlmError {
+        map_http_status(DEEPSEEK_PROVIDER, status, body, &self.config.api_key)
     }
 
     /// Perform API call with retry logic.
@@ -626,7 +620,7 @@ impl LlmPort for DeepSeekAdapter {
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status.as_u16(), &self.diagnostic_excerpt(&error_text)));
+                return Err(self.map_error(status.as_u16(), &error_text));
             }
 
             // Read the body to text FIRST, then deserialize it separately.
@@ -798,7 +792,7 @@ impl LlmPort for DeepSeekAdapter {
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "deepseek"
+        DEEPSEEK_PROVIDER
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -1175,6 +1169,43 @@ mod tests {
     /// `crates/audit-agents/src/fuzz.rs:2912` in the downstream superproject.
     const LIVE_BODY_DECODE_ERROR: &str =
         "Failed to parse DeepSeek response: error decoding response body";
+
+    // ── Phase 25 (FT-FR-01, D-03): non-2xx routes through map_http_status ──
+
+    #[test]
+    fn deepseek_non_2xx_routes_through_the_shared_mapper() {
+        let adapter = test_adapter();
+        match adapter.map_error(503, r#"{"error":{"message":"overloaded"}}"#) {
+            LlmError::ProviderError {
+                provider, status, ..
+            } => {
+                assert_eq!(provider, "deepseek");
+                assert_eq!(status, 503);
+            }
+            other => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deepseek_dedicated_status_mappings_are_unchanged() {
+        let adapter = test_adapter();
+        assert!(matches!(
+            adapter.map_error(401, "bad key"),
+            LlmError::AuthenticationError(_)
+        ));
+        assert!(matches!(
+            adapter.map_error(429, "slow down"),
+            LlmError::RateLimitExceeded
+        ));
+        assert!(matches!(
+            adapter.map_error(404, "no model"),
+            LlmError::ModelNotAvailable(_)
+        ));
+        assert!(matches!(
+            adapter.map_error(400, "bad prompt"),
+            LlmError::InvalidPrompt(_)
+        ));
+    }
 
     #[test]
     fn map_error_402_maps_to_usage_limit_exceeded_not_processing_error() {

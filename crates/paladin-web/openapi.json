@@ -646,6 +646,279 @@
           }
         ]
       }
+    },
+    "/v1/threads/{id}/history": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`GET /threads/{id}/history` -- paginated Chronicle history.",
+        "description": "`limit` (at most [`MAX_HISTORY_LIMIT`]) and an opaque `cursor` whose\ncontent is the last returned item's `waypoint_id` (D-27). Returns\n`400 Bad Request` for `limit > 100` or an unparseable `cursor`.",
+        "operationId": "get_thread_history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return (at most 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of waypoint summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "limit exceeds 100, or cursor is not a valid waypoint id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/threads/{id}/resume": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`POST /threads/{id}/resume` -- deliver parley responses.",
+        "description": "Validates synchronously through [`ParleyPort::resume_with`] and returns\n`202 Accepted` immediately; the run itself continues on a background task\n(D-25) -- a client polls `GET .../state` to observe the outcome. Maps\n[`ParleyError`] per [`map_parley_error`].",
+        "operationId": "resume_thread",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Resume accepted; poll GET /threads/{id}/state for the outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeAcceptedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "One of unknown_parley_id / parley_already_answered / response_shape_invalid / parley_expired; the offending parley_id is in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Same HTTP status, two distinct envelope codes: `thread_not_awaiting_input` (the thread is not suspended) or `graph_not_registered` (the thread's graph fingerprint has no registered WarGraph in this process)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/threads/{id}/state": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`GET /threads/{id}/state` -- the thread's latest status, plus outstanding\nparleys/responses when suspended.",
+        "description": "Returns:\n- `200 OK` with [`ThreadStateResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` if no Waypoint exists for `id`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "operationId": "get_thread_state",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thread state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadStateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -837,6 +1110,29 @@
           }
         }
       },
+      "HistoryResponse": {
+        "type": "object",
+        "description": "Response body for `GET /threads/{id}/history`.\n\n`next_cursor` is `None` on the last page; otherwise it is the last\nreturned item's `waypoint_id`, opaque to clients (D-27) -- its internal\nstructure may change (PLAT-06) without this being a breaking change.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaypointSummaryDto"
+            },
+            "description": "The page of waypoint summaries, newest-first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or `None` on the last page."
+          }
+        }
+      },
       "JobRecord": {
         "type": "object",
         "description": "A stored job: its status plus, when finished, a result or error.\n\n`result` is the serialized success payload (an `ExecuteResponse` as JSON), kept as a\n[`Value`] so the store stays decoupled from the controller's wire types.",
@@ -873,6 +1169,263 @@
           "failed",
           "timed_out"
         ]
+      },
+      "ParleyRequestDto": {
+        "type": "object",
+        "description": "Wire projection of a [`ParleyRequest`] (a `paladin-core` type) into a\n`utoipa::ToSchema` type this crate owns (ADR-0038).",
+        "required": [
+          "parley_id",
+          "node_id",
+          "kind",
+          "prompt",
+          "payload",
+          "created_at"
+        ],
+        "properties": {
+          "choices": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Valid choices, populated for `\"choice\"`; `None` otherwise."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this parley was raised."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this parley expires, if ever."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The shape of input awaited (`\"approval\"`, `\"choice\"`, `\"free_text\"`, `\"state_edit\"`)."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "The node that raised this parley."
+          },
+          "parley_id": {
+            "type": "string",
+            "description": "The outstanding parley's identity."
+          },
+          "payload": {
+            "type": "object",
+            "description": "Author-supplied context rendered alongside `prompt`."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Free-form prompt describing what input is being awaited."
+          }
+        }
+      },
+      "ParleyResponseDto": {
+        "type": "object",
+        "description": "Wire projection of a [`ParleyResponse`].",
+        "required": [
+          "parley_id",
+          "kind",
+          "prompt",
+          "value",
+          "responded_at",
+          "defaulted"
+        ],
+        "properties": {
+          "defaulted": {
+            "type": "boolean",
+            "description": "Whether this response was substituted by an `on_expire` default\nrather than submitted by a caller."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The originating parley's `kind`."
+          },
+          "parley_id": {
+            "type": "string",
+            "description": "The parley this response answers."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The originating parley's `prompt`."
+          },
+          "responded_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this response was recorded."
+          },
+          "responded_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who submitted this response, if known."
+          },
+          "value": {
+            "type": "object",
+            "description": "The submitted value."
+          }
+        }
+      },
+      "ParleyResponseInput": {
+        "type": "object",
+        "description": "One submitted answer inside a [`ResumeRequest`].\n\n`kind`/`prompt` are intentionally absent: `WarEngine::resume_with`\nstamps both onto the persisted response from the matching request's own\nfields, regardless of what a caller supplies (D-07) -- so this DTO never\nasks a client to know or repeat them.",
+        "required": [
+          "parley_id",
+          "value"
+        ],
+        "properties": {
+          "parley_id": {
+            "type": "string",
+            "description": "The parley this response answers."
+          },
+          "responded_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who is submitting this response, if the caller wants it recorded."
+          },
+          "value": {
+            "type": "object",
+            "description": "The submitted value, validated per the parley's own `kind`."
+          }
+        }
+      },
+      "ResumeAcceptedResponse": {
+        "type": "object",
+        "description": "Response body for a successful `POST /threads/{id}/resume` (`202 Accepted`).",
+        "required": [
+          "thread_id",
+          "state_url"
+        ],
+        "properties": {
+          "state_url": {
+            "type": "string",
+            "description": "The URL a client polls (`GET .../state`) to observe the outcome."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread whose resume was accepted."
+          }
+        }
+      },
+      "ResumeRequest": {
+        "type": "object",
+        "description": "Request body for `POST /threads/{id}/resume`.",
+        "properties": {
+          "responses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParleyResponseInput"
+            },
+            "description": "Every response to submit in this call."
+          }
+        }
+      },
+      "ThreadStateResponse": {
+        "type": "object",
+        "description": "Response body for `GET /threads/{id}/state`.\n\n`parleys`/`responses` are always present, empty unless `status` is\n`\"awaiting_input\"` (Test 2: a running/completed thread carries the\nsummary fields with no outstanding parleys, not an omitted key).",
+        "required": [
+          "thread_id",
+          "status",
+          "superstep",
+          "waypoint_id",
+          "parleys",
+          "responses"
+        ],
+        "properties": {
+          "fork_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ROOT `WaypointId` of the branch this Waypoint belongs to;\n`None` for a mainline Waypoint (HITL-03, D-14)."
+          },
+          "parleys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParleyRequestDto"
+            },
+            "description": "Every parley raised in the suspending superstep, when `status` is\n`\"awaiting_input\"`; empty otherwise."
+          },
+          "responses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParleyResponseDto"
+            },
+            "description": "The accepted subset of responses so far, when `status` is\n`\"awaiting_input\"`; empty otherwise."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable, lowercase status label."
+          },
+          "superstep": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The superstep index of the returned Waypoint.",
+            "minimum": 0
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread's identity."
+          },
+          "waypoint_id": {
+            "type": "string",
+            "description": "The returned Waypoint's own identity."
+          }
+        }
+      },
+      "WaypointSummaryDto": {
+        "type": "object",
+        "description": "Wire projection of a [`WaypointSummary`].",
+        "required": [
+          "waypoint_id",
+          "superstep",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this waypoint was created."
+          },
+          "fork_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ROOT `WaypointId` of the branch this waypoint belongs to;\n`None` for a mainline waypoint."
+          },
+          "parent_waypoint_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The waypoint this one was checkpointed from."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable, lowercase status label."
+          },
+          "superstep": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The superstep index that produced this waypoint.",
+            "minimum": 0
+          },
+          "waypoint_id": {
+            "type": "string",
+            "description": "The summarized waypoint's identity."
+          }
+        }
       }
     },
     "securitySchemes": {

@@ -63,9 +63,9 @@ fn decorate(api: &mut OpenApi) {
 /// since the paths and their `#[utoipa::path]` annotations (including the `501` response) are
 /// static, independent of any runtime state.
 pub fn build_openapi(state: AgentApiState) -> OpenApi {
-    // RED-STATE MARKER (Phase 24 Plan 11, Task 2): the thread paths are not
-    // yet merged into the document.
     let (_router, mut api) = versioned_agent_parts(state);
+    let (_thread_router, thread_api) = versioned_thread_parts(ThreadApiState::new());
+    api.merge(thread_api);
     decorate(&mut api);
     api
 }

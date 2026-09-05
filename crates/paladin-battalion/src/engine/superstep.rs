@@ -871,6 +871,15 @@ enum NodeRunOutcome {
     /// `OnParseError::FailRun` (CF-02, D-11), or a `NodeInterceptor::before`
     /// returned `Fail(error)` before the node could run.
     Failed(NodeFailure),
+    /// The run was cancelled while this node was waiting out a retry
+    /// backoff (D-15, FT-FR-07): its last attempt failed, no further
+    /// attempt ran, and nothing of it merges. Recorded exactly like a
+    /// grace-deadline abort -- `Skipped { reason: "shutdown" }` on the
+    /// record AND re-listed on the Halted Waypoint's vanguard (or, for a
+    /// Muster task, left unfinished in the preserved `MusterProgress`) --
+    /// so `resume` re-executes the node from attempt 1 rather than
+    /// silently dropping it as an ordinary skip would.
+    Interrupted,
 }
 
 /// What one spawned node-dispatch task (the `tokio::spawn`'d async block in
@@ -1764,17 +1773,19 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                 }
                                 // --- D-15, RESEARCH.md Pitfall 7: the run is
                                 // shutting down mid-backoff -- stop retrying
-                                // and report this dispatch entry `Skipped {
-                                // reason: "shutdown" }` rather than a
-                                // failure, exactly like the grace-race abort
-                                // path below.
+                                // and report this dispatch entry
+                                // `Interrupted`, which the bookkeeping loop
+                                // records `Skipped { reason: "shutdown" }`
+                                // and re-lists for resume, exactly like the
+                                // grace-race abort path below (FT-FR-07: a
+                                // resume re-executes it from attempt 1).
                                 break NodeTaskOutput {
                                     node_id: nid,
                                     started_at,
                                     duration_ms,
                                     paladin_id,
                                     token_count,
-                                    outcome: NodeRunOutcome::Skipped("shutdown".to_string()),
+                                    outcome: NodeRunOutcome::Interrupted,
                                     attempt,
                                     failed_attempts,
                                     node_error: None,
@@ -2127,6 +2138,33 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         attempts: failed_attempts,
                         cache_hit: false,
                     });
+                }
+                NodeRunOutcome::Interrupted => {
+                    // --- D-15, FT-FR-07: cancelled mid-backoff. Recorded
+                    // like a grace-deadline abort (`Skipped { reason:
+                    // "shutdown" }`, never merged, edges left `Pending`) and
+                    // re-listed the same way, so the Halted Waypoint's
+                    // vanguard (or its preserved `MusterProgress`) brings
+                    // the node back at attempt 1 on resume instead of
+                    // dropping it as an ordinary skip would.
+                    completed_records.push(NodeExecutionRecord {
+                        node_id: node_id.clone(),
+                        paladin_id,
+                        started_at,
+                        duration_ms,
+                        token_count,
+                        outcome: NodeOutcomeKind::Skipped {
+                            reason: "shutdown".to_string(),
+                        },
+                        attempt,
+                        attempts: failed_attempts,
+                        cache_hit: false,
+                    });
+                    if is_muster_task {
+                        muster_task_aborted = true;
+                    } else {
+                        aborted_node_ids.push(node_id);
+                    }
                 }
                 NodeRunOutcome::Failed(e) => {
                     completed_records.push(NodeExecutionRecord {

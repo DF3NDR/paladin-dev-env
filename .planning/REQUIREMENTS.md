@@ -129,7 +129,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
 
 ### Node-Level Fault Tolerance (Doc 04, epic `FT`)
 
-- [ ] **FT-01**: Errors carry machine-usable transience: `transience()` on `PaladinError` and
+- [x] **FT-01**: Errors carry machine-usable transience: `transience()` on `PaladinError` and
   `LlmError` with per-variant table-driven tests, provider adapters gaining status-carrying
   variants (no string parsing), a structured `NodeError` carried through engine execution, and
   `BattalionError::Node(NodeError)` — all three touched pre-existing public enums handled per
@@ -366,7 +366,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | HITL-03 | Phase 24 | Complete |
 | HITL-04 | Phase 24 | Complete |
 | HITL-05 | Phase 24 | Complete |
-| FT-01 | Phase 25 | Pending |
+| FT-01 | Phase 25 | Complete |
 | FT-02 | Phase 25 | Pending |
 | FT-03 | Phase 25 | Pending |
 | FT-04 | Phase 25 | Pending |

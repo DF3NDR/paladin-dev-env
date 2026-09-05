@@ -93,8 +93,19 @@ pub struct WaypointSummary {
     pub status: WaypointStatus,
     /// When this waypoint was created.
     pub created_at: DateTime<Utc>,
-    // RED-STATE MARKER (Phase 24 Plan 06): `fork_of` deliberately absent --
-    // restored in the GREEN commit.
+    /// The ROOT `WaypointId` of the branch this waypoint belongs to
+    /// (HITL-03, D-14) -- `None` for every mainline waypoint, carrying the
+    /// SAME value `Waypoint.fork_of` carries for the full checkpoint this
+    /// summarizes. See `Waypoint::fork_of`'s rustdoc (`paladin-core`) for
+    /// the full branch-inheritance contract; carried here too so the whole
+    /// branch tree is reconstructible from a `WaypointSummary` list alone,
+    /// without loading a single full `Waypoint`.
+    ///
+    /// `#[serde(default)]`, matching `Waypoint.fork_of`'s own precedent: a
+    /// `WaypointSummary` payload written before this field existed still
+    /// loads, with `None`, rather than failing to deserialize.
+    #[serde(default)]
+    pub fork_of: Option<WaypointId>,
 }
 
 /// A lightweight summary of one thread, returned by

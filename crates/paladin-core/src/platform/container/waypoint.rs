@@ -155,8 +155,88 @@ impl ThreadId {
         Self::new(encoded)
     }
 
-    // RED-STATE MARKER (Phase 24 Plan 06): `child_on_branch` deliberately
-    // absent -- restored in the GREEN commit.
+    /// Derive a branch-scoped child `ThreadId` (HITL-03, D-18): the durable
+    /// identity under which a `NodeSpec::Battalion` node's embedded child run
+    /// addresses its own Waypoints when the PARENT run is on a fork, so a
+    /// branch's subgraph child never resolves the mainline child's history
+    /// and the mainline child's own Waypoints stay untouched by the branch.
+    ///
+    /// Mainline runs keep calling [`ThreadId::child`] unchanged -- this
+    /// method exists only for the branch case, where `parent`, `branch_root`
+    /// and `node` together must derive an id that can never collide with
+    /// `ThreadId::child(parent, node)`'s own result (Test 2,
+    /// `child_on_branch_differs_from_child`), nor with any other
+    /// `(parent, branch_root, node)` triple (Test 1,
+    /// `child_on_branch_is_injective`).
+    ///
+    /// # Injectivity
+    ///
+    /// Identical mechanism to [`ThreadId::child`], extended from two
+    /// components to three: each of `parent`, `branch_root` and `node` is
+    /// encoded as a FIXED-WIDTH (16 lowercase-hex-digit, i.e. 64-bit),
+    /// length-prefixed segment immediately followed by that component's own
+    /// bytes --
+    /// `format!("{:016x}{parent}{:016x}{branch_root}{:016x}{node}", ...)`.
+    /// Because every prefix width is FIXED (never variable-width or
+    /// delimiter-terminated), the byte offset at which each component starts
+    /// and ends is always fully determined by the three length values alone
+    /// -- no byte sequence occurring INSIDE any component (including one
+    /// that happens to look like a length prefix) can ever be reinterpreted
+    /// as a different split between the three segments. This deliberately
+    /// reuses [`ThreadId::child`]'s fix for the exact collision class Phase
+    /// 22.1's CR-01 found and fixed once already in
+    /// `WarGraph::fingerprint()`'s canonical byte encoding
+    /// (`paladin-battalion/src/engine/graph.rs`) -- a bare delimiter join
+    /// (`format!("{parent}/{branch_root}/{node}")`-style) would reopen that
+    /// same hazard, since neither `ThreadId::new` nor `NodeId::new` rejects
+    /// every delimiter character a caller might choose.
+    ///
+    /// `branch_root`'s own `Display` (a plain UUID string, no ambiguous
+    /// characters) is used as its encoded bytes rather than any raw byte
+    /// representation, keeping every encoded component valid UTF-8 the
+    /// resulting `String` can safely wrap.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same [`ThreadIdError`] [`ThreadId::child`] would, for the
+    /// identical reasons: `Empty` is unreachable (the encoded result always
+    /// contains at least the three 16-character length prefixes);
+    /// `ContainsWhitespace` is reachable if `node`'s own bytes contain
+    /// whitespace; `TooLong` is reachable for a sufficiently long
+    /// `parent`/`branch_root`/`node` combination. The derivation FAILS TYPED
+    /// in every such case rather than silently truncating the encoded
+    /// result.
+    ///
+    /// ```
+    /// # use paladin_core::platform::container::waypoint::{NodeId, ThreadId, WaypointId};
+    /// let parent = ThreadId::new("run-1").unwrap();
+    /// let branch_root = WaypointId::new();
+    /// let node = NodeId::new("subgraph");
+    ///
+    /// let mainline_child = ThreadId::child(&parent, &node).unwrap();
+    /// let branch_child = ThreadId::child_on_branch(&parent, &branch_root, &node).unwrap();
+    ///
+    /// // A branch's subgraph child never resolves the mainline child's
+    /// // history -- the two ids are always distinct.
+    /// assert_ne!(branch_child.as_str(), mainline_child.as_str());
+    /// ```
+    pub fn child_on_branch(
+        parent: &ThreadId,
+        branch_root: &WaypointId,
+        node: &NodeId,
+    ) -> Result<Self, ThreadIdError> {
+        let branch_root_str = branch_root.to_string();
+        let encoded = format!(
+            "{:016x}{}{:016x}{}{:016x}{}",
+            parent.as_str().len(),
+            parent.as_str(),
+            branch_root_str.len(),
+            branch_root_str,
+            node.as_str().len(),
+            node.as_str(),
+        );
+        Self::new(encoded)
+    }
 }
 
 impl std::fmt::Display for ThreadId {
@@ -593,8 +673,34 @@ pub struct Waypoint {
     /// than failing to deserialize.
     #[serde(default)]
     pub checkpoint_ns: Option<String>,
-    // RED-STATE MARKER (Phase 24 Plan 06): `fork_of` deliberately absent --
-    // restored in the GREEN commit.
+    /// The ROOT `WaypointId` of the branch this `Waypoint` belongs to
+    /// (HITL-03, D-14) -- `None` for every mainline `Waypoint`.
+    ///
+    /// Marks the branch ROOT and is INHERITED by every subsequent `Waypoint`
+    /// on that branch: the fork's first `Waypoint` carries
+    /// `parent_waypoint_id = Some(from)` and `fork_of = Some(from)`, and
+    /// every later `Waypoint` this run writes also carries
+    /// `fork_of = Some(from)` -- the same value, propagated verbatim, never
+    /// re-derived per `Waypoint`. A fork of a fork carries the NEWER root:
+    /// forking again from a `Waypoint` whose own `fork_of` is `Some(a)`
+    /// yields `Some(b)` where `b` is the new branch point, not `Some(a)`.
+    ///
+    /// This makes a branch a queryable ATTRIBUTE rather than something that
+    /// must be re-derived by walking `parent_waypoint_id` back to a root on
+    /// every read: `latest_on_branch(thread, branch_root)` is a plain filter
+    /// over `history`, and the whole branch tree is reconstructible from a
+    /// `WaypointSummary` list alone (`paladin-ports`, which carries this
+    /// same field), without loading a single full `Waypoint`.
+    ///
+    /// `#[serde(default)]`, matching `visit_counts`'/`frontier`'s/
+    /// `muster_progress`'s/`checkpoint_ns`'s precedent: a `Waypoint` payload
+    /// written before this field existed still loads, with `None` -- a
+    /// resume over such a payload behaves exactly as it did before this
+    /// field existed, rather than failing to deserialize. No SQL migration:
+    /// both SQL backends store the whole `Waypoint` as a JSON payload
+    /// column, so an additive field here needs no schema change.
+    #[serde(default)]
+    pub fork_of: Option<WaypointId>,
 }
 
 impl Waypoint {

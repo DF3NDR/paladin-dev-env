@@ -57,6 +57,7 @@ use crate::application::services::sanctum::rag_retrieval_service::RagRetrievalSe
 use crate::core::base::entity::node::Node;
 use crate::core::platform::container::arsenal::{ArmamentCall, ArsenalError};
 use crate::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
+use crate::core::platform::container::heartbeat::HeartbeatHandle;
 use crate::core::platform::container::herald::Herald;
 use crate::core::platform::container::paladin::Paladin;
 use crate::core::platform::container::prompt::{
@@ -482,11 +483,78 @@ impl PaladinExecutionService {
             input.len()
         );
 
+        self.execute_bounded(paladin, input, execution_id, None)
+            .await
+    }
+
+    /// Execute a Paladin while reporting progress on `heartbeat` (Doc 04
+    /// FT-FR-09, D-19; plan 25-09).
+    ///
+    /// Runs EXACTLY the path [`PaladinExecutionService::execute`] runs --
+    /// same reasoning loop, same timeout wrapper, identical result for
+    /// identical inputs -- and additionally beats `heartbeat` at each
+    /// progress event: after every completed LLM call and after every
+    /// Armament invocation (a streamed chunk is the third event, reported
+    /// by [`PaladinExecutionService::execute_stream_observed`]). Each beat
+    /// resets the superstep engine's per-attempt `idle_timeout` timer,
+    /// which is how a node that is merely slow is told apart from one that
+    /// has stalled.
+    ///
+    /// This is the service's implementation of the defaulted
+    /// `PaladinPort::execute_observed` contract: the service itself
+    /// implements `PaladinExecutorPort` (not `PaladinPort`), so the
+    /// progress-reporting entry point is exposed as an inherent method the
+    /// `PaladinPort` adapter over this service delegates to.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+    /// # use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
+    /// # use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+    /// # use paladin_ports::output::llm_port::LlmPort;
+    /// # use std::sync::Arc;
+    /// # async fn example(llm_port: Arc<dyn LlmPort>, service: PaladinExecutionService) -> Result<(), Box<dyn std::error::Error>> {
+    /// # let paladin = PaladinBuilder::new(llm_port).system_prompt("test").build().await?;
+    /// let heartbeat = HeartbeatHandle::new();
+    /// let result = service.execute_observed(&paladin, "Summarise", &heartbeat).await?;
+    /// assert!(heartbeat.beats() >= 1, "at least one LLM call completed");
+    /// println!("{}", result.output);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn execute_observed(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        heartbeat: &HeartbeatHandle,
+    ) -> Result<PaladinResult, PaladinError> {
+        let execution_id = uuid::Uuid::new_v4();
+        info!(
+            "Starting observed Paladin execution: id={}, name={}, input_len={}",
+            execution_id,
+            paladin.node.name,
+            input.len()
+        );
+        self.execute_bounded(paladin, input, execution_id, Some(heartbeat))
+            .await
+    }
+
+    /// The shared body of `execute` and `execute_observed`: the same
+    /// per-execution timeout wrapper around [`Self::execute_internal`],
+    /// differing only in whether a heartbeat is threaded through.
+    async fn execute_bounded(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        execution_id: uuid::Uuid,
+        heartbeat: Option<&HeartbeatHandle>,
+    ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let timeout_duration = Duration::from_secs(paladin.node.max_loops.as_u32() as u64 * 60);
 
         // Wrap execution with timeout
-        let execution_future = self.execute_internal(paladin, input, execution_id);
+        let execution_future = self.execute_internal(paladin, input, execution_id, heartbeat);
 
         match timeout(timeout_duration, execution_future).await {
             Ok(result) => {
@@ -653,12 +721,18 @@ impl PaladinExecutionService {
         }
     }
 
-    /// Internal execution logic without timeout wrapper
+    /// Internal execution logic without timeout wrapper.
+    ///
+    /// `heartbeat` is `Some` only on the `execute_observed` path (D-19):
+    /// it is beaten after every completed LLM call and after every
+    /// Armament invocation, and never consulted otherwise, so the
+    /// unobserved `execute` path is byte-identical to before plan 25-09.
     async fn execute_internal(
         &self,
         paladin: &Paladin,
         input: &str,
         execution_id: uuid::Uuid,
+        heartbeat: Option<&HeartbeatHandle>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let mut total_tokens = 0u32;
@@ -794,6 +868,11 @@ impl PaladinExecutionService {
                 )
                 .await?;
 
+            // --- FT-FR-09, D-19: an LLM call completed -- progress.
+            if let Some(heartbeat) = heartbeat {
+                heartbeat.beat();
+            }
+
             // Update accumulated output and token count
             accumulated_output = response.content.clone();
             total_tokens += response.usage.total_tokens;
@@ -846,10 +925,17 @@ impl PaladinExecutionService {
                         execution_id, function_call.name, loop_num
                     );
 
-                    match self
+                    let tool_outcome = self
                         .handle_tool_call(function_call, arsenal.as_ref(), execution_id)
-                        .await
-                    {
+                        .await;
+                    // --- FT-FR-09, D-19: an Armament invocation resolved
+                    // (succeeded OR failed -- either way the node made
+                    // observable progress, not a stall).
+                    if let Some(heartbeat) = heartbeat {
+                        heartbeat.beat();
+                    }
+
+                    match tool_outcome {
                         Ok(formatted_result) => {
                             debug!(
                                 "Tool execution succeeded: id={}, tool={}",
@@ -1864,6 +1950,64 @@ impl StreamingExecutorPort for PaladinExecutionService {
         paladin: &Paladin,
         input: &str,
     ) -> Result<PaladinStream, PaladinError> {
+        self.execute_stream_inner(paladin, input, None).await
+    }
+}
+
+impl PaladinExecutionService {
+    /// Streaming execution that beats `heartbeat` once per forwarded chunk
+    /// (Doc 04 FT-FR-09, D-19; plan 25-09).
+    ///
+    /// Identical to [`StreamingExecutorPort::execute_stream`] -- same prompt
+    /// composition, same provider stream, same chunk forwarding -- with one
+    /// addition: every chunk sent to the returned receiver first beats
+    /// `heartbeat`, so a stream that emits a chunk every 100 ms keeps its
+    /// node's `idle_timeout` timer reset while one that stalls past the idle
+    /// window does not. The beat happens BEFORE the send, so a slow
+    /// consumer never delays the progress report.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+    /// # use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
+    /// # use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+    /// # use paladin_ports::output::llm_port::LlmPort;
+    /// # use std::sync::Arc;
+    /// # async fn example(llm_port: Arc<dyn LlmPort>, service: PaladinExecutionService) -> Result<(), Box<dyn std::error::Error>> {
+    /// # let paladin = PaladinBuilder::new(llm_port).system_prompt("test").build().await?;
+    /// let heartbeat = HeartbeatHandle::new();
+    /// let mut stream = service.execute_stream_observed(&paladin, "Report", &heartbeat).await?;
+    /// while let Some(chunk) = stream.recv().await {
+    ///     let chunk = chunk?;
+    ///     if chunk.is_final {
+    ///         break;
+    ///     }
+    /// }
+    /// assert!(heartbeat.beats() >= 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn execute_stream_observed(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        heartbeat: &HeartbeatHandle,
+    ) -> Result<PaladinStream, PaladinError> {
+        self.execute_stream_inner(paladin, input, Some(heartbeat.clone()))
+            .await
+    }
+
+    /// The shared body of `execute_stream` and `execute_stream_observed`:
+    /// `heartbeat` is `Some` only on the observed path and is beaten once
+    /// per forwarded chunk; the unobserved path is byte-identical to before
+    /// plan 25-09.
+    async fn execute_stream_inner(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        heartbeat: Option<HeartbeatHandle>,
+    ) -> Result<PaladinStream, PaladinError> {
         // Compose the prompt (mirrors the buffered no-history path).
         let prompt = format!("{}\n\nUser: {}\n", paladin.node.system_prompt, input);
 
@@ -1926,6 +2070,12 @@ impl StreamingExecutorPort for PaladinExecutionService {
                             is_final,
                             metadata: None,
                         };
+                        // --- FT-FR-09, D-19: a chunk arrived -- progress.
+                        // Beaten BEFORE the send so a slow consumer never
+                        // delays the report.
+                        if let Some(heartbeat) = &heartbeat {
+                            heartbeat.beat();
+                        }
                         // A send error means the receiver was dropped — stop producing.
                         if tx.send(Ok(chunk)).await.is_err() {
                             return;
@@ -2101,7 +2251,8 @@ mod tests {
         async fn invoke(
             &self,
             call: ArmamentCall,
-        ) -> Result<crate::core::platform::container::arsenal::ArmamentResult, ArsenalError> {
+        ) -> Result<crate::core::platform::container::arsenal::ArmamentResult, ArsenalError>
+        {
             self.invocations
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(

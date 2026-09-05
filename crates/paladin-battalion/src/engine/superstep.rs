@@ -60,6 +60,7 @@ use paladin_ports::output::waypoint_port::WaypointPort;
 use crate::edge_evaluator::EdgeEvaluatorRegistry;
 use crate::engine::directive_parser::{DirectiveParseError, DirectiveParser};
 use crate::engine::graph::{EngineLimits, GateRequestTemplate, NodeSpec, StateMap, WarGraph};
+use crate::engine::heartbeat::HeartbeatHandle;
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::{NodeContext, StateNode, StateNodeError};
@@ -520,7 +521,18 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         );
                     }
                 };
-                match paladin_port.execute(&paladin, &rendered).await {
+                // --- FT-FR-09, D-19: ALWAYS `execute_observed`, never
+                // `execute` directly, passing this attempt's own handle --
+                // a port that overrides the defaulted method beats it on
+                // every LLM completion / stream chunk / Armament call, and
+                // each beat resets this node's `idle_timeout` timer. The
+                // trait's default delegates to `execute` and beats nothing,
+                // so a non-observing port's `idle_timeout` degrades to a
+                // per-attempt wall clock rather than to no bound at all.
+                match paladin_port
+                    .execute_observed(&paladin, &rendered, &ctx.heartbeat)
+                    .await
+                {
                     Ok(result) => {
                         let token_count = u64::from(result.token_count);
                         // --- CF-02, D-11: the `DirectiveParser` call replacing
@@ -789,6 +801,11 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     // own rustdoc) -- a runtime setting shared by the whole
                     // run tree, exactly like `fork_of` above.
                     resources.shutdown_grace,
+                    // --- FT-FR-09, D-19: a child Battalion beats the
+                    // PARENT node's own attempt handle once per child
+                    // superstep, so a parent `idle_timeout` over a
+                    // Battalion node measures child-superstep progress.
+                    Some(ctx.heartbeat.clone()),
                 ));
                 let outcome = child_fut.await;
 
@@ -1116,6 +1133,10 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         // stays unchanged by this plan, exactly like `checkpoint_ns` above.
         None,
         shutdown_grace,
+        // --- FT-FR-09, D-19: a top-level run has no parent node whose
+        // idle timer it could feed -- only a `NodeSpec::Battalion` child
+        // dispatch ever passes `Some` here.
+        None,
     )
     .await
 }
@@ -1196,6 +1217,12 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // `NodeSpec::Battalion` child run inherits the SAME value via
     // `ChildEngineResources::shutdown_grace`.
     shutdown_grace: std::time::Duration,
+    // --- FT-FR-09, D-19: `Some(handle)` ONLY when this call is a
+    // `NodeSpec::Battalion` child run -- the PARENT node's own attempt
+    // handle, beaten once at the top of every child superstep below so a
+    // parent `idle_timeout` over a Battalion node observes child progress.
+    // `None` for every top-level `start`/`resume`/`fork` call.
+    parent_heartbeat: Option<HeartbeatHandle>,
 ) -> Result<RunOutcome, EngineError> {
     // --- CF-FR-16, D-21: gathered ONCE per `run()` call, never per
     // dispatch -- see `ChildEngineResources`'s own rustdoc for why a
@@ -1335,6 +1362,13 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // is never mistakenly reapplied to a later, unrelated Muster).
 
     loop {
+        // --- FT-FR-09, D-19: a child Battalion run reports progress to its
+        // parent node once per child superstep -- here, at the boundary,
+        // before any of this superstep's work begins.
+        if let Some(handle) = &parent_heartbeat {
+            handle.beat();
+        }
+
         // --- ENG-FR-23: cancellation is observed only at a superstep
         // BOUNDARY -- here, at the top of the loop -- never mid-superstep.
         // `vanguard` at this point is exactly the set of nodes that would
@@ -1615,12 +1649,20 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             let port = Arc::clone(paladin_port);
             let node_trace = Arc::clone(trace);
             let node_interceptors = interceptors.to_vec();
-            let ctx = crate::engine::node::NodeContext {
+            // --- D-18: the attempt-INVARIANT part of this dispatch's
+            // context. `attempt` and `heartbeat` are per attempt (the retry
+            // loop below rebuilds `ctx` from this base on every iteration
+            // with the current attempt number and a FRESH handle), so the
+            // values placed here are placeholders overwritten before any
+            // node, interceptor or trace ever sees the context.
+            let base_ctx = crate::engine::node::NodeContext {
                 node_id: node_id.clone(),
                 thread_id: thread.clone(),
                 superstep: superstep_number,
                 muster: muster_ctx.clone(),
                 parley_response: parley_responses_this_round.get(node_id).cloned(),
+                attempt: 0,
+                heartbeat: HeartbeatHandle::new(),
             };
             let nid = node_id.clone();
             // --- D-09, D-10, D-14: this node's resolved Aegis (its own
@@ -1650,6 +1692,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     let mut failed_attempts: Vec<AttemptRecord> = Vec::new();
                     loop {
                         attempt += 1;
+                        // --- D-18: rebuilt per attempt with the CURRENT
+                        // attempt number and a FRESH `HeartbeatHandle`, so a
+                        // straggling task from a cancelled (timed-out)
+                        // previous attempt can never reset THIS attempt's
+                        // idle timer, and a `StateNode` never observes a
+                        // stale `ctx.attempt`.
+                        let ctx = crate::engine::node::NodeContext {
+                            attempt,
+                            heartbeat: HeartbeatHandle::new(),
+                            ..base_ctx.clone()
+                        };
                         node_trace.emit(TraceEvent::NodeStarted {
                             thread_id: ctx.thread_id.clone(),
                             superstep: ctx.superstep,
@@ -9915,7 +9968,8 @@ mod tests {
         Aegis {
             retry: Some(paladin_core::platform::container::aegis::RetryPolicy {
                 max_attempts,
-                retry_on: paladin_core::platform::container::aegis::RetryPredicate::TransientAndUnknown,
+                retry_on:
+                    paladin_core::platform::container::aegis::RetryPredicate::TransientAndUnknown,
                 jitter: false,
                 initial_interval: std::time::Duration::from_millis(1),
                 ..paladin_core::platform::container::aegis::RetryPolicy::default()
@@ -10005,7 +10059,11 @@ mod tests {
         let node_id = NodeId::new("scribe");
         graph.add_node(
             node_id.clone(),
-            NodeSpec::paladin(make_paladin("scribe"), InputMapping::new("scribe"), out.clone()),
+            NodeSpec::paladin(
+                make_paladin("scribe"),
+                InputMapping::new("scribe"),
+                out.clone(),
+            ),
         );
         graph.add_entry(node_id);
 

@@ -255,6 +255,8 @@ mod tests {
             superstep: 1,
             muster: None,
             parley_response: None,
+            attempt: 1,
+            heartbeat: crate::engine::heartbeat::HeartbeatHandle::new(),
         }
     }
 

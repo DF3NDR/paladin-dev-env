@@ -21,6 +21,8 @@ use paladin_core::platform::container::node_error::NodeErrorSource;
 use paladin_core::platform::container::parley::ParleyResponse;
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 
+use crate::engine::heartbeat::HeartbeatHandle;
+
 /// Error returned by a [`StateNode`]'s execution.
 ///
 /// Renamed from `NodeError` (D-06): the PRD's own `NodeError` name is taken
@@ -69,9 +71,43 @@ pub struct NodeContext {
     /// reachable only through this field and its accessor, and through the
     /// `parley.` `InputMapping` namespace (a later plan).
     pub parley_response: Option<ParleyResponse>,
+    /// The 1-indexed attempt this execution is (Doc 04 D-18): `1` for a
+    /// node's first run, `2` for its first RETRY under an Aegis retry
+    /// policy, and so on. A node with no retry policy always sees `1`. The
+    /// context is rebuilt per attempt, so a `StateNode` never observes a
+    /// stale value from a previous attempt.
+    pub attempt: u32,
+    /// This attempt's progress channel (D-18, D-19): fresh per attempt,
+    /// beaten by [`NodeContext::heartbeat`], by `PaladinPort::execute_observed`
+    /// for a Paladin node, and once per child superstep for a Battalion
+    /// node. Only an `idle_timeout` on this node's resolved
+    /// `TimeoutPolicy` ever subscribes to it; without one the handle exists
+    /// but nothing is watching, so beating it is a cheap no-op. Never
+    /// merged into the Battlefield and never part of a context's identity
+    /// (any two handles compare equal).
+    pub heartbeat: HeartbeatHandle,
 }
 
 impl NodeContext {
+    /// The 1-indexed attempt this execution is (D-18); `1` for a node with
+    /// no retry policy.
+    pub fn attempt(&self) -> u32 {
+        self.attempt
+    }
+
+    /// Report progress (D-18, FT-FR-09): resets this attempt's
+    /// `TimeoutPolicy::idle_timeout` timer, if the node has one. On a node
+    /// with no `idle_timeout` this is a cheap no-op -- the handle exists
+    /// but nothing subscribes to it, so a `StateNode` author can call this
+    /// unconditionally inside a long loop without checking the policy.
+    ///
+    /// A `StateNode` that never calls this under an `idle_timeout` is
+    /// bounded by that timeout exactly as a stalled node would be: the idle
+    /// bound degrades to a per-attempt wall clock (D-19).
+    pub fn heartbeat(&self) {
+        self.heartbeat.beat();
+    }
+
     /// This execution's Muster task payload (CF-FR-10), or `None` outside a
     /// Muster worker-task dispatch.
     pub fn muster_payload(&self) -> Option<&serde_json::Value> {

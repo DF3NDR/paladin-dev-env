@@ -26,6 +26,13 @@ spec:
         prometheus.io/port: "9090"
         prometheus.io/path: "/metrics"
     spec:
+      # 2x the default APP_ENGINE_SHUTDOWN_GRACE_SECS (30s, src/config/engine.rs)
+      # so the kubelet's SIGKILL deadline never lands while the process is
+      # still inside its own graceful-shutdown drain window (HITL-04, D-23).
+      # If you raise APP_ENGINE_SHUTDOWN_GRACE_SECS, raise this to at least
+      # 2x that new value too.
+      terminationGracePeriodSeconds: 60
+
       # Security context for pod
       securityContext:
         runAsNonRoot: true

@@ -166,6 +166,31 @@ Health check endpoints:
 - `/health` - Overall health status
 - `/ready` - Readiness status
 
+## Graceful Shutdown
+
+Both `server/deployment.yaml` and `deployment.yaml` set
+`terminationGracePeriodSeconds: 60` on the pod spec (HITL-04, D-23). **The rule: set
+`terminationGracePeriodSeconds` to at least twice the configured
+`APP_ENGINE_SHUTDOWN_GRACE_SECS`.** 60 is 2x the 30-second default — if you tune the grace
+window via the env var below, raise `terminationGracePeriodSeconds` to match, or the
+kubelet's SIGKILL deadline can fire while the process is still mid-drain.
+
+Two env vars, both read by `EngineConfig` (`src/config/engine.rs`), control the wait:
+
+- `APP_ENGINE_SHUTDOWN_GRACE_SECS` (default `30`) — how long the process waits, after
+  SIGTERM/SIGINT, for in-flight superstep runs to finish before giving up on the
+  stragglers.
+- `APP_ENGINE_GRACEFUL_SHUTDOWN` (default `true`) — set to `false` to restore the legacy
+  no-wait behavior: the process exits immediately on SIGTERM/SIGINT without waiting for
+  any in-flight run to drain.
+
+On SIGTERM, an operator observes one of two outcomes per in-flight run: it finishes
+inside the grace window and its Waypoint records completion normally, or it is still
+running at the deadline, in which case it is aborted, its `NodeExecutionRecord` reads
+`Skipped { reason: "shutdown" }`, and its node id is re-listed in the Halted Waypoint's
+vanguard so `resume`/`WarEngine::resume` re-runs it exactly once on the next process
+start — no work silently vanishes.
+
 ## Monitoring
 
 ### Prometheus Metrics

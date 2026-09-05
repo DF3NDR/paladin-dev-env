@@ -2,33 +2,33 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 24
-current_phase_name: pause-resume-history-graceful-shutdown
-status: executing
-stopped_at: Phase 24 --gaps-only in progress — 24-13 complete (wave 11 merged 8566dd10; hook, build, test, mdbook gates green; tracking cd97d712); 24-14 blocked at its human-verify checkpoint (CR-02 diff read of commit 9802ce60) awaiting the human verdict, approved or defect found; re-run /gsd-execute-phase 24 --gaps-only to re-present it
-last_updated: "2026-09-05T11:17:16.340Z"
+current_phase: 25
+current_phase_name: Node-Level Fault Tolerance
+status: planning
+stopped_at: Phase 24 complete (14/14 plans — 12 executed + 2 gap closure; re-verification passed 6/6; post-fix re-review 0 critical / 3 advisory warnings in 24-REVIEW.md; 24-SECURITY.md not yet produced) — next: plan Phase 25 Node-Level Fault Tolerance
+last_updated: "2026-09-05T12:07:01.328Z"
 last_activity: 2026-09-05
-last_activity_desc: Phase 24 execution started
+last_activity_desc: Phase 24 complete, transitioned to Phase 25
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 50
-  completed_plans: 48
+  completed_plans: 50
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-04 after Phase 23)
+See: .planning/PROJECT.md (updated 2026-09-05 after Phase 24)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 24 — pause-resume-history-graceful-shutdown
+**Current focus:** Phase 25 — Node-Level Fault Tolerance (ready to plan)
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
-**Progress:** [███░░░░░░░] v0.10.0 — 3 of 9 phases complete (22, 22.1, 23); 36/36 planned plans executed (Phase 24 not yet planned)
+**Progress:** [████░░░░░░] v0.10.0 — 4 of 9 phases complete (22, 22.1, 23, 24); 50/50 planned plans executed (Phase 25 not yet planned)
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -51,16 +51,16 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 24 (pause-resume-history-graceful-shutdown) — EXECUTING
-Plan: 1 of 14
-Status: Executing Phase 24
-Last activity: 2026-09-05 — Phase 24 execution started
+Phase: 25 — Node-Level Fault Tolerance
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-05 — Phase 24 complete, transitioned to Phase 25
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 223
+- Total plans completed: 237
 - Average duration: —
 - Total execution time: —
 
@@ -90,6 +90,7 @@ Last activity: 2026-09-05 — Phase 24 execution started
 | 22 | 17 | - | - |
 | 22.1 | 7 | - | - |
 | 23 | 12 | - | - |
+| 24 | 14 | - | - |
 
 *Updated after each plan completion*
 

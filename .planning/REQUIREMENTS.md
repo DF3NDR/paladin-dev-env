@@ -98,31 +98,31 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
 
 ### Pause/Resume, History, Shutdown (Doc 03, epic `HITL`)
 
-- [ ] **HITL-01**: A workflow can pause indefinitely without holding compute: nodes (and a
+- [x] **HITL-01**: A workflow can pause indefinitely without holding compute: nodes (and a
   first-class `Gate` node with Battlefield templating) raise `ParleyRequest`s; suspension merges
   peer deltas, persists an `AwaitingInput` Waypoint carrying **all** of the superstep's parleys,
   releases every resource, and survives full process termination (resumable from a different
   process sharing the backend — integration-tested); partially-answered suspension is queryable
   (HITL-FR-01…03)
 
-- [ ] **HITL-02**: `resume_with(graph, thread, responses)` validates responses per kind
+- [x] **HITL-02**: `resume_with(graph, thread, responses)` validates responses per kind
   (Approval/Choice/FreeText/StateEdit) with typed errors that leave the thread suspended, honors
   `expires_at` with an `on_expire` policy, and delivers values to the paused node's continuation
   — proven by program scenario E2E-2 (approval gate, both branches, across process
   drop/recreate) (HITL-FR-04…06; overview §6 E2E-2)
 
-- [ ] **HITL-03**: The Chronicle is inspectable and forkable: history/inspect over `WaypointPort`,
+- [x] **HITL-03**: The Chronicle is inspectable and forkable: history/inspect over `WaypointPort`,
   `replay` and `fork`-with-edit create new chains with `fork_of` lineage while the original
   chain stays byte-identical (immutability hard invariant), branch-aware latest resolution, and
   defined subgraph-fork semantics (HITL-FR-07…12)
 
-- [ ] **HITL-04**: Graceful shutdown loses no work: cancellation finishes the in-flight superstep
+- [x] **HITL-04**: Graceful shutdown loses no work: cancellation finishes the in-flight superstep
   within `shutdown_grace` (default 30 s; over-grace nodes recorded `Skipped` and re-listed in
   the vanguard), `resume` continues a `Halted` thread, and the facade wires SIGTERM/SIGINT to
   all in-flight runs with `k8s/` manifests and docs updated and a documented disable switch —
   registered as `MIGRATION.md` M-B-02 (HITL-FR-13…15)
 
-- [ ] **HITL-05**: Engine-backed threads are reachable over HTTP: `GET /threads/{id}/state`,
+- [x] **HITL-05**: Engine-backed threads are reachable over HTTP: `GET /threads/{id}/state`,
   `POST /threads/{id}/resume` (409/400/404 semantics), `GET /threads/{id}/history` (paginated),
   following existing utoipa + error-envelope conventions with `openapi.json` regenerated
   (HITL-FR-16)
@@ -361,11 +361,11 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CF-03 | Phase 23 | Complete |
 | CF-04 | Phase 23 | Complete |
 | CF-05 | Phase 23 | Complete |
-| HITL-01 | Phase 24 | Gaps Found |
-| HITL-02 | Phase 24 | Gaps Found |
-| HITL-03 | Phase 24 | Gaps Found |
-| HITL-04 | Phase 24 | Gaps Found |
-| HITL-05 | Phase 24 | Gaps Found |
+| HITL-01 | Phase 24 | Complete |
+| HITL-02 | Phase 24 | Complete |
+| HITL-03 | Phase 24 | Complete |
+| HITL-04 | Phase 24 | Complete |
+| HITL-05 | Phase 24 | Complete |
 | FT-01 | Phase 25 | Pending |
 | FT-02 | Phase 25 | Pending |
 | FT-03 | Phase 25 | Pending |

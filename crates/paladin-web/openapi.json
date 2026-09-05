@@ -653,7 +653,7 @@
           "threads"
         ],
         "summary": "`GET /threads/{id}/history` -- paginated Chronicle history.",
-        "description": "`limit` (at most [`MAX_HISTORY_LIMIT`]) and an opaque `cursor` whose\ncontent is the last returned item's `waypoint_id` (D-27). Returns\n`400 Bad Request` for `limit > 100` or an unparseable `cursor`.",
+        "description": "Authenticated, any role (D-24) -- see [`get_thread_state`]'s docs on why\nreads are not admin-gated the way [`resume_thread`] is.\n\n`limit` (at most [`MAX_HISTORY_LIMIT`]) and an opaque `cursor` whose\ncontent is the last returned item's `waypoint_id` (D-27). Returns\n`400 Bad Request` for `limit > 100` or an unparseable `cursor`.",
         "operationId": "get_thread_history",
         "parameters": [
           {
@@ -744,7 +744,7 @@
           "threads"
         ],
         "summary": "`POST /threads/{id}/resume` -- deliver parley responses.",
-        "description": "Validates synchronously through [`ParleyPort::resume_with`] and returns\n`202 Accepted` immediately; the run itself continues on a background task\n(D-25) -- a client polls `GET .../state` to observe the outcome. Maps\n[`ParleyError`] per [`map_parley_error`].",
+        "description": "Requires an admin principal ([`require_admin`]) -- see the module-level\n\"Authorization\" docs: this narrows D-24's \"any role\" default for the one\n*mutating* thread route (CR-01, 24-REVIEW.md), pending PLAT-06's real\nper-thread ownership scoping.\n\nValidates synchronously through [`ParleyPort::resume_with`] and returns\n`202 Accepted` immediately; the run itself continues on a background task\n(D-25) -- a client polls `GET .../state` to observe the outcome. Maps\n[`ParleyError`] per [`map_parley_error`].",
         "operationId": "resume_thread",
         "parameters": [
           {
@@ -790,6 +790,16 @@
           },
           "401": {
             "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
             "content": {
               "application/json": {
                 "schema": {
@@ -845,7 +855,7 @@
           "threads"
         ],
         "summary": "`GET /threads/{id}/state` -- the thread's latest status, plus outstanding\nparleys/responses when suspended.",
-        "description": "Returns:\n- `200 OK` with [`ThreadStateResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` if no Waypoint exists for `id`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "description": "Authenticated, any role (D-24) -- reads carry lower blast radius than\n`resume_thread`; per-thread ownership scoping is PLAT-06 (Phase 27). The\n`Principal` is extracted (unused today) so this handler's signature is\nalready shaped for that scoping to land as a body-only change.\n\nReturns:\n- `200 OK` with [`ThreadStateResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` if no Waypoint exists for `id`;\n- `501 Not Implemented` if no waypoint backend is configured.",
         "operationId": "get_thread_state",
         "parameters": [
           {

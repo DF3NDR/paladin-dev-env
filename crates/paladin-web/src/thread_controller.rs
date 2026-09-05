@@ -27,11 +27,28 @@
 //! envelope `code`s, same HTTP status); `400` for `unknown_parley_id` /
 //! `parley_already_answered` / `response_shape_invalid` / `parley_expired`
 //! (the offending `parley_id` in `details`); `501` when unwired.
+//!
+//! ## Authorization (narrows D-24 pending PLAT-06)
+//!
+//! D-24 scoped these routes to "the same auth middleware as `/v1/agents/*`,
+//! authenticated callers, any role; scopes are PLAT-06 (Phase 27)". Per
+//! CR-01 (24-REVIEW.md), that was too permissive for the one *mutating*
+//! route: any authenticated credential -- including the lowest-privileged
+//! configured role -- could drive `POST .../resume` for a thread it had no
+//! relationship to, since neither `ThreadId` nor `Waypoint` carry an
+//! owner/principal to scope against yet. Until PLAT-06 lands real per-thread
+//! ownership, `resume_thread` additionally requires [`crate::agent_auth::require_admin`]
+//! (matching `agent_controller.rs`'s own admin-gated routes); `get_thread_state`
+//! and `get_thread_history` remain authenticated-any-role, as D-24 specified --
+//! reads carry lower blast radius than driving execution forward, and a
+//! coarser per-thread read scope is exactly what PLAT-06 is expected to add.
+//! Every credential configured for `/v1/threads/*/resume` must be treated as
+//! admin-equivalent until then.
 
 use std::sync::Arc;
 
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Path, Query, State},
     http::StatusCode,
 };
@@ -46,7 +63,7 @@ use paladin_ports::output::waypoint_port::{WaypointPort, WaypointSummary};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use crate::agent_auth::HasAgentAuth;
+use crate::agent_auth::{HasAgentAuth, Principal, require_admin};
 use crate::agent_controller::{JsonValue, ok_body};
 use crate::error::{ApiError, ApiErrorBody};
 
@@ -453,6 +470,11 @@ fn map_parley_error(err: ParleyError) -> ApiError {
 /// `GET /threads/{id}/state` -- the thread's latest status, plus outstanding
 /// parleys/responses when suspended.
 ///
+/// Authenticated, any role (D-24) -- reads carry lower blast radius than
+/// `resume_thread`; per-thread ownership scoping is PLAT-06 (Phase 27). The
+/// `Principal` is extracted (unused today) so this handler's signature is
+/// already shaped for that scoping to land as a body-only change.
+///
 /// Returns:
 /// - `200 OK` with [`ThreadStateResponse`] on success;
 /// - `400 Bad Request` for an invalid thread id;
@@ -474,6 +496,7 @@ fn map_parley_error(err: ParleyError) -> ApiError {
 )]
 pub async fn get_thread_state(
     State(state): State<ThreadApiState>,
+    Extension(_principal): Extension<Principal>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
     let waypoints = state
@@ -496,6 +519,11 @@ pub async fn get_thread_state(
 
 /// `POST /threads/{id}/resume` -- deliver parley responses.
 ///
+/// Requires an admin principal ([`require_admin`]) -- see the module-level
+/// "Authorization" docs: this narrows D-24's "any role" default for the one
+/// *mutating* thread route (CR-01, 24-REVIEW.md), pending PLAT-06's real
+/// per-thread ownership scoping.
+///
 /// Validates synchronously through [`ParleyPort::resume_with`] and returns
 /// `202 Accepted` immediately; the run itself continues on a background task
 /// (D-25) -- a client polls `GET .../state` to observe the outcome. Maps
@@ -510,6 +538,7 @@ pub async fn get_thread_state(
         (status = 202, description = "Resume accepted; poll GET /threads/{id}/state for the outcome", body = ResumeAcceptedResponse),
         (status = 400, description = "One of unknown_parley_id / parley_already_answered / response_shape_invalid / parley_expired; the offending parley_id is in `details`", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 403, description = "Admin role required", body = ApiErrorBody),
         (status = 404, description = "Unknown thread", body = ApiErrorBody),
         (status = 409, description = "Same HTTP status, two distinct envelope codes: `thread_not_awaiting_input` (the thread is not suspended) or `graph_not_registered` (the thread's graph fingerprint has no registered WarGraph in this process)", body = ApiErrorBody),
         (status = 501, description = "No waypoint backend configured", body = ApiErrorBody),
@@ -518,9 +547,11 @@ pub async fn get_thread_state(
 )]
 pub async fn resume_thread(
     State(state): State<ThreadApiState>,
+    Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
     Json(body): Json<ResumeRequest>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
+    require_admin(&principal)?;
     let parley = state
         .parley
         .as_ref()
@@ -564,6 +595,9 @@ pub async fn resume_thread(
 
 /// `GET /threads/{id}/history` -- paginated Chronicle history.
 ///
+/// Authenticated, any role (D-24) -- see [`get_thread_state`]'s docs on why
+/// reads are not admin-gated the way [`resume_thread`] is.
+///
 /// `limit` (at most [`MAX_HISTORY_LIMIT`]) and an opaque `cursor` whose
 /// content is the last returned item's `waypoint_id` (D-27). Returns
 /// `400 Bad Request` for `limit > 100` or an unparseable `cursor`.
@@ -586,6 +620,7 @@ pub async fn resume_thread(
 )]
 pub async fn get_thread_history(
     State(state): State<ThreadApiState>,
+    Extension(_principal): Extension<Principal>,
     Path(id): Path<String>,
     Query(params): Query<HistoryQuery>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
@@ -930,9 +965,10 @@ mod tests {
         store.seed_latest(wp);
         let state = state_with_waypoints(store);
 
-        let (status, Json(body)) = get_thread_state(State(state), Path(t.as_str().to_string()))
-            .await
-            .expect("ok");
+        let (status, Json(body)) =
+            get_thread_state(State(state), admin(), Path(t.as_str().to_string()))
+                .await
+                .expect("ok");
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["thread_id"], t.as_str());
         assert_eq!(body["status"], "awaiting_input");
@@ -953,9 +989,10 @@ mod tests {
         store.seed_latest(sample_waypoint(&t, 1, WaypointStatus::Running));
         let state = state_with_waypoints(store);
 
-        let (status, Json(body)) = get_thread_state(State(state), Path(t.as_str().to_string()))
-            .await
-            .expect("ok");
+        let (status, Json(body)) =
+            get_thread_state(State(state), admin(), Path(t.as_str().to_string()))
+                .await
+                .expect("ok");
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["status"], "running");
         assert_eq!(body["parleys"].as_array().unwrap().len(), 0);
@@ -965,7 +1002,7 @@ mod tests {
     #[tokio::test]
     async fn get_thread_state_unknown_thread_is_404() {
         let state = state_with_waypoints(Arc::new(MockWaypointStore::default()));
-        let err = get_thread_state(State(state), Path("no-such-thread".to_string()))
+        let err = get_thread_state(State(state), admin(), Path("no-such-thread".to_string()))
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
@@ -981,6 +1018,7 @@ mod tests {
 
         let (status, Json(body)) = resume_thread(
             State(state),
+            admin(),
             Path(t.as_str().to_string()),
             Json(resume_body(parley_id, serde_json::json!(true))),
         )
@@ -1005,6 +1043,7 @@ mod tests {
 
         let err = resume_thread(
             State(state),
+            admin(),
             Path(t.as_str().to_string()),
             Json(resume_body(parley_id, serde_json::json!(true))),
         )
@@ -1021,6 +1060,7 @@ mod tests {
 
         let err = resume_thread(
             State(state),
+            admin(),
             Path(t.as_str().to_string()),
             Json(resume_body(parley_id, serde_json::json!(true))),
         )
@@ -1038,6 +1078,7 @@ mod tests {
 
         let err = resume_thread(
             State(state),
+            admin(),
             Path(t.as_str().to_string()),
             Json(resume_body(parley_id, serde_json::json!(true))),
         )
@@ -1065,6 +1106,7 @@ mod tests {
             let state = state_with_parley(outcome, parley_id);
             let err = resume_thread(
                 State(state),
+                admin(),
                 Path(t.as_str().to_string()),
                 Json(resume_body(parley_id, serde_json::json!(true))),
             )
@@ -1108,6 +1150,7 @@ mod tests {
         // First page.
         let (status, Json(page1)) = get_thread_history(
             State(state.clone()),
+            admin(),
             Path(t.as_str().to_string()),
             Query(HistoryQuery {
                 limit: Some(2),
@@ -1130,6 +1173,7 @@ mod tests {
         // Second page: no overlap with the first.
         let (_, Json(page2)) = get_thread_history(
             State(state.clone()),
+            admin(),
             Path(t.as_str().to_string()),
             Query(HistoryQuery {
                 limit: Some(2),
@@ -1150,6 +1194,7 @@ mod tests {
         // Last page: fewer than `limit` items, next_cursor is null.
         let (_, Json(page3)) = get_thread_history(
             State(state),
+            admin(),
             Path(t.as_str().to_string()),
             Query(HistoryQuery {
                 limit: Some(2),
@@ -1169,6 +1214,7 @@ mod tests {
         let state = state_with_waypoints(Arc::new(MockWaypointStore::default()));
         let err = get_thread_history(
             State(state),
+            admin(),
             Path("any-thread".to_string()),
             Query(HistoryQuery {
                 limit: Some(101),
@@ -1186,13 +1232,14 @@ mod tests {
     async fn thread_routes_return_501_when_no_backend_is_wired() {
         let state = ThreadApiState::new();
 
-        let err = get_thread_state(State(state.clone()), Path("t".to_string()))
+        let err = get_thread_state(State(state.clone()), admin(), Path("t".to_string()))
             .await
             .unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_IMPLEMENTED);
 
         let err = resume_thread(
             State(state.clone()),
+            admin(),
             Path("t".to_string()),
             Json(ResumeRequest { responses: vec![] }),
         )
@@ -1202,6 +1249,7 @@ mod tests {
 
         let err = get_thread_history(
             State(state),
+            admin(),
             Path("t".to_string()),
             Query(HistoryQuery {
                 limit: None,
@@ -1233,6 +1281,116 @@ mod tests {
             .await
             .expect("router responds");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // --- CR-01 regression: resume is admin-gated, reads are not -----------
+
+    /// Build an authenticated router wired with both a waypoint backend and
+    /// a `parley` port that always accepts, plus two API keys -- one
+    /// `UserRole::User`, one `UserRole::Admin` -- for role-scoped HTTP tests.
+    fn authed_thread_app(parley_id: ParleyId) -> axum::Router {
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "user-key".to_string(),
+            Principal {
+                id: "u".to_string(),
+                role: UserRole::User,
+            },
+        );
+        api_keys.insert(
+            "admin-key".to_string(),
+            Principal {
+                id: "a".to_string(),
+                role: UserRole::Admin,
+            },
+        );
+        let auth = crate::agent_auth::AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+        };
+        let state = ThreadApiState::new()
+            .with_waypoints(Arc::new(MockWaypointStore::default()))
+            .with_parley(Arc::new(MockParleyPort {
+                outcome: MockOutcome::Accepted,
+                parley_id,
+            }))
+            .with_auth(auth);
+        thread_router(state)
+    }
+
+    #[tokio::test]
+    async fn post_resume_with_non_admin_role_is_403() {
+        let parley_id = ParleyId::new();
+        let app = authed_thread_app(parley_id);
+        let body = serde_json::to_vec(&serde_json::json!({
+            "responses": [
+                { "parley_id": parley_id.to_string(), "value": true, "responded_by": "alice" }
+            ]
+        }))
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/threads/scoped-thread/resume")
+                    .header("x-api-key", "user-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn post_resume_with_admin_role_is_202() {
+        let parley_id = ParleyId::new();
+        let app = authed_thread_app(parley_id);
+        let body = serde_json::to_vec(&serde_json::json!({
+            "responses": [
+                { "parley_id": parley_id.to_string(), "value": true, "responded_by": "alice" }
+            ]
+        }))
+        .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/threads/scoped-thread/resume")
+                    .header("x-api-key", "admin-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn get_thread_state_with_non_admin_role_is_200_not_403() {
+        // Reads stay authenticated-any-role (D-24); only `resume` is
+        // narrowed to admin by CR-01.
+        let parley_id = ParleyId::new();
+        let app = authed_thread_app(parley_id);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/threads/no-such-thread/state")
+                    .header("x-api-key", "user-key")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        // `404` (unknown thread), not `403` -- proves the User-role
+        // credential cleared authorization and reached the handler.
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

@@ -41,3 +41,15 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 mockito = "1.7.0"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+
+# X-10.6 deliberate-breaking suppression (D-06, MIGRATION.md §9.2, HITL-05, Phase 24).
+# `require_authentication` (agent_auth.rs) gained a generic type parameter `S:
+# HasAgentAuth` so `ThreadApiState`'s routes (24-11) could reuse the SAME
+# middleware `AgentApiState`'s routes already layer, instead of a duplicated
+# copy. This is a real, intentional generic-arity break for any external
+# caller using turbofish syntax against the old zero-generic signature.
+# Register/remove this suppression only in the same commit as the matching
+# MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml` entry (kept
+# set-equal by CI's `semver` job).
+[package.metadata.cargo-semver-checks.lints]
+function_requires_different_generic_type_params = "allow"

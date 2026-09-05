@@ -17,12 +17,15 @@ use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema, FieldName};
 use paladin_core::platform::container::directive::MusterTask;
+use paladin_core::platform::container::node_error::{AttemptRecord, NodeError, NodeErrorSource};
 use paladin_core::platform::container::parley::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
+use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::waypoint::{
-    FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeId, ThreadId,
-    Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
+    FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeExecutionRecord,
+    NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus,
+    canonical_edge_condition,
 };
 use paladin_ports::output::waypoint_port::WaypointPort;
 
@@ -925,6 +928,82 @@ pub async fn latest_prefers_most_recently_created_across_branches(port: &dyn Way
 }
 
 /// Runs every contract function above against `port`.
+// ── FT-FR-03 / D-16: attempt history on the execution record ─────────────
+
+/// A `NodeError` fixture for `node` at `attempt`, carrying a `Function`
+/// source so every backend exercises byte-identical inputs.
+fn sample_node_error(node: &NodeId, attempt: u32) -> NodeError {
+    NodeError {
+        node_id: node.clone(),
+        attempt,
+        transience: Transience::Transient,
+        source: NodeErrorSource::Function {
+            message: format!("attempt {attempt}: connection reset"),
+        },
+    }
+}
+
+/// A `NodeExecutionRecord` fixture whose node failed twice (attempts `1`
+/// and `2`, each with its own `AttemptRecord`) before succeeding on attempt
+/// `3`, with `cache_hit: false`.
+fn record_with_two_failed_attempts() -> NodeExecutionRecord {
+    let node = NodeId::new("flaky");
+    let started_at = Utc::now();
+    NodeExecutionRecord {
+        node_id: node.clone(),
+        paladin_id: None,
+        started_at,
+        duration_ms: 7,
+        token_count: 0,
+        outcome: NodeOutcomeKind::Succeeded,
+        attempt: 3,
+        attempts: vec![
+            AttemptRecord {
+                attempt: 1,
+                started_at,
+                duration_ms: 3,
+                error: sample_node_error(&node, 1),
+            },
+            AttemptRecord {
+                attempt: 2,
+                started_at,
+                duration_ms: 5,
+                error: sample_node_error(&node, 2),
+            },
+        ],
+        cache_hit: false,
+    }
+}
+
+/// A `Waypoint` whose `completed` carries a record with two failed
+/// `AttemptRecord`s (attempt history, FT-FR-03 / D-16) round-trips through
+/// `save` -> `latest` -> `get`, byte-identical after a serde round trip and
+/// equal field-for-field, with the attempts still ordered `1` then `2`.
+pub async fn waypoint_with_attempt_history_round_trips(port: &dyn WaypointPort) {
+    let thread = ThreadId::new("contract-attempt-history-round-trip").unwrap();
+    let mut wp = sample_waypoint(&thread, 1);
+    wp.completed = vec![record_with_two_failed_attempts()];
+    port.save(&wp).await.unwrap();
+
+    let expected_json = serde_json::to_string(&wp).unwrap();
+
+    let latest = port.latest(&thread).await.unwrap().unwrap();
+    assert_eq!(serde_json::to_string(&latest).unwrap(), expected_json);
+    assert_eq!(latest.completed, wp.completed);
+    let numbers: Vec<u32> = latest.completed[0]
+        .attempts
+        .iter()
+        .map(|a| a.attempt)
+        .collect();
+    assert_eq!(numbers, vec![1, 2]);
+    assert_eq!(latest.completed[0].attempt, 3);
+    assert!(!latest.completed[0].cache_hit);
+
+    let fetched = port.get(&thread, &wp.waypoint_id).await.unwrap().unwrap();
+    assert_eq!(serde_json::to_string(&fetched).unwrap(), expected_json);
+    assert_eq!(fetched, wp);
+}
+
 ///
 /// **Requires a freshly constructed, still-empty `port`** — call this once,
 /// before any other operation touches the store, as a single backend's
@@ -968,4 +1047,5 @@ pub async fn run_all(port: &dyn WaypointPort) {
     awaiting_input_payload_round_trips(port).await;
     fork_of_round_trips(port).await;
     latest_prefers_most_recently_created_across_branches(port).await;
+    waypoint_with_attempt_history_round_trips(port).await;
 }

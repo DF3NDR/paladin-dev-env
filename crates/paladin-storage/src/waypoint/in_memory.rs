@@ -440,4 +440,13 @@ mod tests {
         )
         .await;
     }
+
+    // ── FT-FR-03 / D-16: attempt history on the execution record
+    //    (Phase 25 Plan 07) ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn waypoint_with_attempt_history_round_trips() {
+        contract_tests::waypoint_with_attempt_history_round_trips(&InMemoryWaypointStore::new())
+            .await;
+    }
 }

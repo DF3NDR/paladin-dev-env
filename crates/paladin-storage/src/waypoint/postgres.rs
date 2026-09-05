@@ -830,6 +830,19 @@ mod tests {
         contract_tests::latest_prefers_most_recently_created_across_branches(&store).await;
     }
 
+    // ── FT-FR-03 / D-16: attempt history on the execution record (Phase 25
+    //    Plan 07). Tier 2 -- skipped locally without Docker (`store_or_skip`),
+    //    run only in CI's `postgres-integration` job; never recorded as
+    //    passed from a local run.
+
+    #[tokio::test]
+    async fn waypoint_with_attempt_history_round_trips() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::waypoint_with_attempt_history_round_trips(&store).await;
+    }
+
     #[tokio::test]
     async fn prune_thread_thread_id_and_waypoint_id_with_sql_metacharacters_round_trip_as_data() {
         let Some(store) = store_or_skip().await else {

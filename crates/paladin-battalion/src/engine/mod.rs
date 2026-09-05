@@ -1958,6 +1958,7 @@ mod tests {
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
     };
     use paladin_core::platform::container::directive::{Directive, NextStep};
+    use paladin_core::platform::container::node_error::NodeErrorSource;
     use paladin_core::platform::container::paladin_error::PaladinError;
     use paladin_core::platform::container::parley::{OnExpire, ParleyKind};
     use paladin_core::platform::container::waypoint::{NodeOutcomeKind, Waypoint};
@@ -7012,6 +7013,186 @@ mod tests {
             store.save_call_count(),
             saves_before,
             "a schema-rejected edit must persist nothing"
+        );
+    }
+
+    // --- Phase 25 Plan 07, Task 1: attempt history, per-attempt trace
+    //     events, cache_hit defaults (FT-FR-03, D-16) ---------------------
+
+    #[tokio::test]
+    async fn failed_attempts_are_recorded_in_order() {
+        let node_id = NodeId::new("flaky-history");
+        let node = FailThenSucceedNode::new(
+            3,
+            "transient failure",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("recovered"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("attempt-history-in-order").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(node.run_count(), 3);
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.node_id, node_id);
+        assert_eq!(record.attempt, 3, "the succeeding attempt is attempt 3");
+        assert_eq!(
+            record.attempts.len(),
+            2,
+            "exactly the two FAILED attempts, never the succeeding one"
+        );
+        let numbers: Vec<u32> = record.attempts.iter().map(|a| a.attempt).collect();
+        assert_eq!(numbers, vec![1, 2], "ascending by attempt number");
+        for attempt in &record.attempts {
+            assert_eq!(attempt.error.node_id, node_id);
+            assert_eq!(attempt.error.attempt, attempt.attempt);
+            assert!(matches!(
+                &attempt.error.source,
+                NodeErrorSource::Function { message } if message == "transient failure"
+            ));
+            assert!(attempt.started_at <= record.started_at);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_node_that_succeeds_first_time_records_an_empty_attempts_list() {
+        let node_id = NodeId::new("steady");
+        let node = FailThenSucceedNode::new(
+            1,
+            "never used",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("first-time"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("attempt-history-empty").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.attempt, 1);
+        assert!(record.attempts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn node_events_are_emitted_once_per_attempt_with_the_attempt_number() {
+        let node_id = NodeId::new("flaky-traced");
+        let node = FailThenSucceedNode::new(
+            2,
+            "transient failure",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("recovered"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone());
+        let thread = ThreadId::new("trace-per-attempt").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        // Give the background trace consumer a chance to drain.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let node_events: Vec<(&'static str, u32)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|event| match event {
+                TraceEvent::NodeStarted { attempt, .. } => Some(("NodeStarted", *attempt)),
+                TraceEvent::NodeFinished { attempt, .. } => Some(("NodeFinished", *attempt)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            node_events,
+            vec![
+                ("NodeStarted", 1),
+                ("NodeFinished", 1),
+                ("NodeStarted", 2),
+                ("NodeFinished", 2),
+            ],
+            "one NodeStarted/NodeFinished pair per attempt, each carrying its attempt number"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_hit_defaults_to_false_on_every_record_and_event() {
+        let node_id = NodeId::new("flaky-uncached");
+        let node = FailThenSucceedNode::new(
+            2,
+            "transient failure",
+            FieldName::new("result").unwrap(),
+            serde_json::json!("recovered"),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+
+        let sink = RecordingTraceSink::new();
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+            .with_trace_sink(sink.clone());
+        let thread = ThreadId::new("cache-hit-defaults-false").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert!(!waypoints.is_empty());
+        for record in waypoints.iter().flat_map(|w| w.completed.iter()) {
+            assert!(
+                !record.cache_hit,
+                "no cache is configured, so no record is a hit"
+            );
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let finished: Vec<bool> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|event| match event {
+                TraceEvent::NodeFinished { cache_hit, .. } => Some(*cache_hit),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            finished,
+            vec![false, false],
+            "one NodeFinished per attempt, none a hit"
         );
     }
 }

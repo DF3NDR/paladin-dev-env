@@ -1589,6 +1589,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             thread_id: ctx.thread_id.clone(),
                             superstep: ctx.superstep,
                             node_id: nid.clone(),
+                            attempt,
                         });
                         let started_at = Utc::now();
 
@@ -1664,6 +1665,10 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             thread_id: ctx.thread_id.clone(),
                             superstep: ctx.superstep,
                             node_id: nid.clone(),
+                            attempt,
+                            // Plan 25-13 is the only plan that sets this
+                            // `true` (a served-from-cache outcome).
+                            cache_hit: false,
                         });
 
                         // --- D-14, D-15: only a `NodeFailure::Node` (a
@@ -1879,6 +1884,8 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         reason: "shutdown".to_string(),
                     },
                     attempt: 1,
+                    attempts: Vec::new(),
+                    cache_hit: false,
                 });
                 continue;
             };
@@ -1967,6 +1974,8 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         token_count,
                         outcome: outcome_kind,
                         attempt,
+                        attempts: Vec::new(),
+                        cache_hit: false,
                     });
 
                     if is_muster_task {
@@ -2028,6 +2037,8 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         token_count,
                         outcome: NodeOutcomeKind::Skipped { reason },
                         attempt,
+                        attempts: Vec::new(),
+                        cache_hit: false,
                     });
                 }
                 NodeRunOutcome::Failed(e) => {
@@ -2039,6 +2050,8 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         token_count,
                         outcome: NodeOutcomeKind::Failed,
                         attempt,
+                        attempts: Vec::new(),
+                        cache_hit: false,
                     });
                     if node_failure.is_none() {
                         node_failure = Some((node_id, e));

@@ -5,12 +5,12 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 25
 current_phase_name: Node-Level Fault Tolerance
 status: planning
-stopped_at: Phase 24 complete (14/14 plans — 12 executed + 2 gap closure; re-verification passed 6/6; UAT 63/63 passed in 24-UAT.md; 24-SECURITY.md verified, threats_open 0; post-fix re-review 0 critical / 3 advisory warnings in 24-REVIEW.md) — next: plan Phase 25 Node-Level Fault Tolerance
-last_updated: "2026-09-05T14:00:09.000Z"
+stopped_at: Phase 25 context gathered
+last_updated: "2026-09-05T14:33:33.290Z"
 last_activity: 2026-09-05
 last_activity_desc: Phase 24 complete, transitioned to Phase 25
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 4
   total_plans: 50
   completed_plans: 50
@@ -827,14 +827,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 24 complete — UAT 63/63 passed (2026-09-05: cold-start smoke test, CR-02 human verdict confirmed, 60 coverage-auto-passed deliverables accepted), canonical verification `passed`, security `threats_open: 0`; ready to plan Phase 25 Node-Level Fault Tolerance
+**Stopped at:** Phase 25 context gathered
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-05T14:00:09.000Z
-Resume file: None
+Last session: 2026-09-05T14:33:33.253Z
+Resume file: .planning/phases/25-node-level-fault-tolerance/25-CONTEXT.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

@@ -891,6 +891,84 @@ jobs:
         if: always()
         run: docker compose -f docker/docker-compose.test.yml down -v
 
+  # Redis-cache live-server integration (Doc 04 FT-FR-18…20, D-27). The
+  # RedisNodeCache Tier 2 contract suite self-skips -- and therefore passes --
+  # when no server is reachable (mirroring the Postgres job above exactly).
+  # Docker is absent from every authoring environment for this phase, so
+  # before this job the suite would execute in no environment at all while
+  # every CI run reported green -- the same failure shape the Postgres and
+  # Ollama jobs above were each added to close.
+  #
+  # Reuses the `redis-test` service `docker-integration` already brings up
+  # (docker/docker-compose.test.yml) rather than defining a second Redis
+  # container, per this plan's own instruction to prefer an existing job's
+  # infrastructure over standing up a new one.
+  #
+  # The reachability assertion (`redis-cli ping`), the early-return detection
+  # step and the selected-count assertion below are what give this job its
+  # meaning -- do not remove them.
+  redis-cache-integration:
+    name: Redis Node Cache Contract Suite (live server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: redis-cache-integration
+
+      - name: Start redis-test and wait for healthy
+        run: |
+          docker compose -f docker/docker-compose.test.yml up -d redis-test
+          echo "Waiting for redis-test to report healthy..."
+          timeout 120 sh -c 'until docker inspect paladin-redis-test --format="{{.State.Health.Status}}" 2>/dev/null | grep -qx healthy; do sleep 3; done'
+
+      - name: Assert the live server accepts connections
+        run: docker exec paladin-redis-test redis-cli ping
+
+      - name: Run RedisNodeCache contract suite
+        run: |
+          set -o pipefail
+          # --nocapture: cache_or_skip() announces its early-return path on
+          # stdout, which cargo swallows without it -- the detection step
+          # below would have nothing to read.
+          NODE_CACHE_REDIS_TEST_URL=redis://127.0.0.1:6380/0 \
+            cargo test -p paladin-storage --features redis-cache --lib node_cache::redis \
+            -- --nocapture 2>&1 | tee /tmp/redis-node-cache-test.log
+
+      - name: Fail if the suite took the SKIP path
+        run: |
+          if grep -q 'SKIP:' /tmp/redis-node-cache-test.log; then
+            echo "::error::node_cache::redis took the SKIP path — the live server was NOT exercised."
+            grep 'SKIP:' /tmp/redis-node-cache-test.log
+            exit 1
+          fi
+          echo "All node_cache::redis tests exercised the live server."
+
+      - name: Fail if the suite selected fewer tests than it declares
+        run: |
+          set -o pipefail
+          EXPECTED=$(grep -cE '^\s*#\[test\]|^\s*#\[tokio::test\]' crates/paladin-storage/src/node_cache/redis.rs)
+          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/redis-node-cache-test.log | tail -1)
+          echo "Declared tests: $EXPECTED, passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then
+            echo "::error::node_cache::redis selected fewer tests (${ACTUAL:-0}) than the module declares ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
+            exit 1
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.test.yml logs redis-test
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker/docker-compose.test.yml down -v
+
   # Coverage measurement (PIPE-02) — MEASURE-ONLY as of this commit: no minimum-
   # threshold flag. D-04 requires the figure to be measured before the floor
   # derived from it can be set; plan 15-03 adds the threshold once this job has

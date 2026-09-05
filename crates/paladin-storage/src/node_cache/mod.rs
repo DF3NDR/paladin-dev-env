@@ -16,4 +16,12 @@ pub mod in_memory;
 /// unchanged by every backend's own `#[tokio::test]`s.
 pub mod contract_tests;
 
+/// Redis implementation of `NodeCachePort`, behind the `redis-cache`
+/// feature, over the same `redis::aio::ConnectionManager` pattern
+/// `crate::redis`'s `RedisQueueAdapter` already uses (D-27).
+#[cfg(feature = "redis-cache")]
+pub mod redis;
+
 pub use in_memory::InMemoryNodeCache;
+#[cfg(feature = "redis-cache")]
+pub use redis::{RedisNodeCache, RedisNodeCacheConfig};

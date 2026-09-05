@@ -60,9 +60,17 @@ impl GraphRegistry {
     /// must not need special-casing).
     pub fn register(&self, graph: WarGraph) -> GraphFingerprint {
         let fingerprint = graph.fingerprint();
+        // --- WR-01 (24-REVIEW.md): recover the guard on poison rather than
+        // `.unwrap()`ing it -- a panic elsewhere while some OTHER writer
+        // held this lock must not cascade into every subsequent
+        // register/resolve call across this `Arc`-shared registry, unlike a
+        // normal single-owner panic. Safe here: the map itself cannot be
+        // left torn by a panic mid-`insert`/`get` (no partial-write
+        // invariant to violate), so the recovered guard's contents are
+        // trusted exactly as an unpoisoned one's would be.
         self.graphs
             .write()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(fingerprint.clone(), Arc::new(graph));
         fingerprint
     }
@@ -71,7 +79,11 @@ impl GraphRegistry {
     /// nothing has been registered under it in this process (D-26) — never
     /// a default or "nearest" graph.
     pub fn resolve(&self, fingerprint: &GraphFingerprint) -> Option<Arc<WarGraph>> {
-        self.graphs.read().unwrap().get(fingerprint).cloned()
+        self.graphs
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(fingerprint)
+            .cloned()
     }
 }
 
@@ -123,5 +135,40 @@ mod tests {
         registry.register(graph_b);
 
         assert!(registry.resolve(&fingerprint).is_some());
+    }
+
+    /// WR-01 (24-REVIEW.md): a panic elsewhere while a writer holds the
+    /// lock must not cascade into every subsequent `register`/`resolve`
+    /// call -- both recover the poisoned guard instead of propagating the
+    /// poison as a fresh panic.
+    #[test]
+    fn register_and_resolve_survive_a_poisoned_lock() {
+        let registry = Arc::new(GraphRegistry::new());
+        let graph = empty_graph();
+        let fingerprint = registry.register(graph);
+
+        // Poison the lock: a writer panics while holding the write guard.
+        let poisoner = Arc::clone(&registry);
+        let panicked = std::thread::spawn(move || {
+            let _guard = poisoner.graphs.write().unwrap();
+            panic!("simulated writer panic while holding the lock");
+        })
+        .join();
+        assert!(panicked.is_err(), "the poisoning thread must have panicked");
+
+        // Both operations must recover the poisoned guard rather than
+        // panicking themselves, and see the state the poisoned writer left
+        // behind (a plain `HashMap` cannot be left torn by a panic
+        // mid-`insert`/`get`).
+        assert!(
+            registry.resolve(&fingerprint).is_some(),
+            "resolve must recover a poisoned lock instead of panicking"
+        );
+        let graph_b = empty_graph();
+        registry.register(graph_b);
+        assert!(
+            registry.resolve(&fingerprint).is_some(),
+            "register must recover a poisoned lock instead of panicking"
+        );
     }
 }

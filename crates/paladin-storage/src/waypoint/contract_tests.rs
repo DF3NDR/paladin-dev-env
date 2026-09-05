@@ -1005,6 +1005,72 @@ pub async fn waypoint_with_attempt_history_round_trips(port: &dyn WaypointPort) 
 }
 
 ///
+// ── D-08 / FT-FR-02: the structured NodeError on a Failed Waypoint ──────
+
+/// A `Failed` Waypoint carrying `node_error: Some(..)` (an Aegis-governed
+/// node's exhausted failure) round-trips through `save` -> `latest` ->
+/// `get`, byte-identical after a serde round trip; and a `Failed` payload
+/// written BEFORE `node_error` existed -- the key genuinely absent, not
+/// `null` -- still deserialises (as `None`) and round-trips through the
+/// backend unchanged, proving the field is additive with no reshape
+/// (D-08, the Phase 22.1 D-21…D-25 precedent).
+pub async fn failed_waypoint_with_node_error_round_trips(port: &dyn WaypointPort) {
+    // --- Some(..)
+    let thread = ThreadId::new("contract-failed-node-error-some").unwrap();
+    let failed_node = NodeId::new("flaky");
+    let mut wp = sample_waypoint(&thread, 3);
+    wp.status = WaypointStatus::Failed {
+        error: "node execution error: attempt 2: connection reset".to_string(),
+        failed_node: failed_node.clone(),
+        node_error: Some(sample_node_error(&failed_node, 2)),
+    };
+    port.save(&wp).await.unwrap();
+    let expected_json = serde_json::to_string(&wp).unwrap();
+    let latest = port.latest(&thread).await.unwrap().unwrap();
+    assert_eq!(serde_json::to_string(&latest).unwrap(), expected_json);
+    assert_eq!(latest.status, wp.status);
+    let fetched = port.get(&thread, &wp.waypoint_id).await.unwrap().unwrap();
+    assert_eq!(fetched, wp);
+
+    // --- key absent (pre-D-08 payload)
+    let thread = ThreadId::new("contract-failed-node-error-absent").unwrap();
+    let mut wp = sample_waypoint(&thread, 3);
+    wp.status = WaypointStatus::Failed {
+        error: "node execution error: boom".to_string(),
+        failed_node: failed_node.clone(),
+        node_error: None,
+    };
+    let mut value = serde_json::to_value(&wp).unwrap();
+    let status = value
+        .get_mut("status")
+        .and_then(|s| s.get_mut("Failed"))
+        .and_then(|f| f.as_object_mut())
+        .expect("Failed serializes to an externally-tagged object");
+    status.remove("node_error");
+    assert!(
+        !value.to_string().contains("node_error"),
+        "the node_error key must be genuinely absent from the fixture payload"
+    );
+    let restored: Waypoint = serde_json::from_value(value).unwrap();
+    assert_eq!(restored.status, wp.status);
+    assert!(matches!(
+        &restored.status,
+        WaypointStatus::Failed {
+            node_error: None,
+            ..
+        }
+    ));
+
+    port.save(&restored).await.unwrap();
+    let loaded = port.latest(&thread).await.unwrap().unwrap();
+    assert_eq!(loaded, restored);
+    assert!(matches!(
+        &loaded.status,
+        WaypointStatus::Failed { error, failed_node: fnode, node_error: None }
+            if error == "node execution error: boom" && fnode == &failed_node
+    ));
+}
+
 /// **Requires a freshly constructed, still-empty `port`** — call this once,
 /// before any other operation touches the store, as a single backend's
 /// smoke aggregate. `list_threads_empty_then_three_threads_newest_activity_first`
@@ -1048,4 +1114,5 @@ pub async fn run_all(port: &dyn WaypointPort) {
     fork_of_round_trips(port).await;
     latest_prefers_most_recently_created_across_branches(port).await;
     waypoint_with_attempt_history_round_trips(port).await;
+    failed_waypoint_with_node_error_round_trips(port).await;
 }

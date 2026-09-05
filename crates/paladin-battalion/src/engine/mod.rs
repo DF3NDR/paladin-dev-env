@@ -75,10 +75,12 @@ use tokio_util::sync::CancellationToken;
 use crate::edge_evaluator::EdgeConditionEvaluator;
 use crate::error_handler::ErrorHandler;
 use crate::retry_predicate::RetryPredicateEvaluator;
+use paladin_core::platform::container::battalion::BattalionError;
 #[cfg(test)]
 use paladin_core::platform::container::battlefield::CustomDispatchResolver;
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
 use paladin_core::platform::container::battlefield_error::BattlefieldError;
+use paladin_core::platform::container::node_error::{NodeError, NodeErrorSource};
 #[cfg(test)]
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{
@@ -99,6 +101,48 @@ pub use hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 pub use input_mapping::{InputMapping, InputMappingError};
 pub use node::{NodeContext, StateNode, StateNodeError};
 pub use registries::EngineRegistries;
+
+/// The display line for an [`EngineError::NodeFailed`]: the failing
+/// source's own message (a `Function` node's `StateNodeError` text, or a
+/// `PaladinError`'s `Display`), so the rendered line matches what
+/// `EngineError::Node(StateNodeError(that_text))` rendered for the same
+/// failure before the structured variant existed. Sources that carry no
+/// message (`Timeout`, `Cancelled`) render through their own `Display`.
+fn node_failed_message(err: &NodeError) -> String {
+    match &err.source {
+        NodeErrorSource::Paladin { message, .. }
+        | NodeErrorSource::Llm { message, .. }
+        | NodeErrorSource::Function { message } => message.clone(),
+        other => other.to_string(),
+    }
+}
+
+impl EngineError {
+    /// The structured [`NodeError`] this error carries, if it is an
+    /// [`EngineError::NodeFailed`] -- `None` for every other variant,
+    /// including an engine-limit failure and a no-Aegis node failure.
+    pub fn node_error(&self) -> Option<&NodeError> {
+        match self {
+            EngineError::NodeFailed(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<EngineError> for BattalionError {
+    /// [`EngineError::NodeFailed`] maps to [`BattalionError::Node`] carrying
+    /// the identical [`NodeError`] (D-08); every other variant, which had no
+    /// `BattalionError` mapping before this phase, renders through the
+    /// existing generic [`BattalionError::CampaignError`] line (the graph
+    /// engine is the Campaign pattern's execution surface) so no other
+    /// variant gains a new structured shape here.
+    fn from(err: EngineError) -> Self {
+        match err {
+            EngineError::NodeFailed(node_error) => BattalionError::Node(node_error),
+            other => BattalionError::CampaignError(other.to_string()),
+        }
+    }
+}
 
 /// Whether a `WaypointPort::save` failure fails the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -158,6 +202,19 @@ pub enum RunOutcome {
         /// was attempted.
         waypoint: Option<WaypointId>,
     },
+}
+
+impl RunOutcome {
+    /// The structured [`NodeError`] a [`RunOutcome::Failed`] carries when its
+    /// `error` is an [`EngineError::NodeFailed`] -- the same value the
+    /// failed `Waypoint`'s `WaypointStatus::Failed.node_error` records
+    /// (D-08). `None` for every other outcome and every other failure.
+    pub fn node_error(&self) -> Option<&NodeError> {
+        match self {
+            RunOutcome::Failed { error, .. } => error.node_error(),
+            _ => None,
+        }
+    }
 }
 
 /// Errors returned by [`WarEngine::start`] and [`WarEngine::resume`].
@@ -265,6 +322,24 @@ pub enum EngineError {
     /// A node's execution returned an error.
     #[error("node execution error: {0}")]
     Node(#[from] StateNodeError),
+
+    /// An Aegis-governed node's execution failed (Doc 04 D-08, FT-FR-02):
+    /// its retries were exhausted, or its error was not retry-eligible
+    /// under its policy. Carries the structured [`NodeError`] the failed
+    /// `Waypoint`'s `WaypointStatus::Failed.node_error` also records, so
+    /// `RunOutcome::Failed` and `BattalionError::Node` expose the same
+    /// value. Renders as `node execution error: {message}` -- byte-identical
+    /// to the `EngineError::Node` line the same failure produced before
+    /// this variant existed, so the display line a human reads is unchanged
+    /// (X-03).
+    ///
+    /// Supersedes `EngineError::Node` ONLY on the exhausted-failure path of
+    /// a node that has a resolved Aegis; a node with no Aegis still fails
+    /// through `EngineError::Node` exactly as before Phase 25 (D-09), and
+    /// `EngineError::Node` remains the engine's generic internal-error
+    /// variant everywhere else (join errors, missing worker resources, ...).
+    #[error("node execution error: {}", node_failed_message(.0))]
+    NodeFailed(NodeError),
 
     /// `DispatchRegistry::register` was asked to register a custom
     /// dispatch rule under a name that collides with a built-in
@@ -1353,7 +1428,10 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         // continue a run the engine itself already declared over. Such a
         // thread is advanced only by `replay`/`fork` from an earlier
         // Waypoint (a later plan), never by `resume`/`resume_with` again.
-        if let WaypointStatus::Failed { error, failed_node } = &latest.status {
+        if let WaypointStatus::Failed {
+            error, failed_node, ..
+        } = &latest.status
+        {
             return Err(EngineError::ThreadAlreadyFailed {
                 thread: thread.clone(),
                 error: error.clone(),
@@ -1553,6 +1631,9 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
                         WaypointStatus::Failed {
                             error: reason,
                             failed_node: request.node_id.clone(),
+                            // A parley expiry is not an Aegis-governed node
+                            // failure (D-08): no structured `NodeError`.
+                            node_error: None,
                         },
                         latest.visit_counts.clone(),
                         latest.frontier.clone(),
@@ -1958,17 +2039,18 @@ mod tests {
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
     };
     use paladin_core::platform::container::directive::{Directive, NextStep};
-    use paladin_core::platform::container::node_error::NodeErrorSource;
     use paladin_core::platform::container::paladin_error::PaladinError;
     use paladin_core::platform::container::parley::{OnExpire, ParleyKind};
+    use paladin_core::platform::container::transience::Transience;
     use paladin_core::platform::container::waypoint::{NodeOutcomeKind, Waypoint};
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream};
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
     use crate::engine::graph::{EdgeSpec, GateRequestTemplate};
     use crate::engine::test_support::{
-        CountingFunctionNode, FailThenSucceedNode, FixedDecisionInterceptor, RecordingInterceptor,
-        RecordingPaladinPort, RecordingWaypointStore,
+        CountingFunctionNode, FailThenSucceedNode, FailingFunctionNode, FailingPaladinPort,
+        FixedDecisionInterceptor, RecordingInterceptor, RecordingPaladinPort,
+        RecordingWaypointStore,
     };
 
     struct UnimplementedPaladinPort;
@@ -5532,7 +5614,9 @@ mod tests {
 
         let latest = store.latest(&thread).await.unwrap().unwrap();
         match latest.status {
-            WaypointStatus::Failed { error, failed_node } => {
+            WaypointStatus::Failed {
+                error, failed_node, ..
+            } => {
                 assert!(error.contains(parley_id.to_string().as_str()));
                 assert_eq!(failed_node, node_id);
             }
@@ -7193,6 +7277,313 @@ mod tests {
             finished,
             vec![false, false],
             "one NodeFinished per attempt, none a hit"
+        );
+    }
+
+    // --- Phase 25 Plan 07, Task 2: the structured failure path (D-08) ----
+
+    /// An always-failing Function node under `retrying_aegis(max_attempts)`,
+    /// run to its `Failed` Waypoint. Returns the run outcome and the store.
+    async fn run_exhausting_node(
+        thread: &str,
+        aegis: Option<Aegis>,
+    ) -> (NodeId, RunOutcome, Arc<RecordingWaypointStore>) {
+        let node_id = NodeId::new("always-down");
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::Function(FailingFunctionNode::new("always down")),
+        );
+        graph.add_entry(node_id.clone());
+        if let Some(aegis) = aegis {
+            graph.set_aegis(node_id.clone(), aegis);
+        }
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let outcome = engine
+            .start(&graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap();
+        (node_id, outcome, store)
+    }
+
+    fn failed_status(waypoint: &Waypoint) -> (&str, &NodeId, Option<&NodeError>) {
+        match &waypoint.status {
+            WaypointStatus::Failed {
+                error,
+                failed_node,
+                node_error,
+            } => (error.as_str(), failed_node, node_error.as_ref()),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn exhausted_retry_writes_a_failed_waypoint_carrying_the_structured_error() {
+        let (node_id, outcome, store) =
+            run_exhausting_node("exhausted-structured", Some(retrying_aegis(2))).await;
+        assert!(
+            matches!(outcome, RunOutcome::Failed { .. }),
+            "got {outcome:?}"
+        );
+        let thread = ThreadId::new("exhausted-structured").unwrap();
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(waypoints.len(), 1);
+        let (_, failed_node, node_error) = failed_status(&waypoints[0]);
+        assert_eq!(failed_node, &node_id);
+        let ne = node_error.expect("an Aegis-governed exhausted failure carries a NodeError");
+        assert_eq!(ne.node_id, node_id);
+        assert_eq!(ne.attempt, 2, "the last (exhausted) attempt number");
+        // A `StateNodeError` carries no typed transience: `Unknown`, the
+        // same classification the retry predicate saw.
+        assert_eq!(ne.transience, Transience::Unknown);
+        assert!(matches!(
+            &ne.source,
+            NodeErrorSource::Function { message } if message == "always down"
+        ));
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.attempt, 2);
+        assert_eq!(
+            record.attempts.len(),
+            1,
+            "attempt 1 failed before the exhausted attempt 2"
+        );
+        assert_eq!(record.attempts[0].attempt, 1);
+    }
+
+    #[tokio::test]
+    async fn the_display_line_on_a_failed_waypoint_is_unchanged() {
+        let legacy_line = EngineError::Node(StateNodeError("always down".to_string())).to_string();
+
+        let (_, outcome, store) =
+            run_exhausting_node("display-with-aegis", Some(retrying_aegis(2))).await;
+        let thread = ThreadId::new("display-with-aegis").unwrap();
+        let with_aegis = store.saved_waypoints(&thread).await;
+        let (line, _, node_error) = failed_status(&with_aegis[0]);
+        assert_eq!(
+            line, legacy_line,
+            "the human-readable line is byte-identical"
+        );
+        assert!(node_error.is_some());
+        match &outcome {
+            RunOutcome::Failed { error, .. } => assert_eq!(error.to_string(), legacy_line),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+
+        let (_, _, store) = run_exhausting_node("display-without-aegis", None).await;
+        let thread = ThreadId::new("display-without-aegis").unwrap();
+        let without_aegis = store.saved_waypoints(&thread).await;
+        let (line, _, _) = failed_status(&without_aegis[0]);
+        assert_eq!(line, legacy_line);
+    }
+
+    #[tokio::test]
+    async fn pre_aegis_and_limit_failures_carry_none() {
+        // (a) A node failure with no Aegis at all: the pre-Phase-25 path,
+        //     byte-identical (D-09) -- generic `EngineError::Node`, no
+        //     structured error.
+        let (node_id, outcome, store) = run_exhausting_node("pre-aegis-none", None).await;
+        assert!(matches!(
+            &outcome,
+            RunOutcome::Failed {
+                error: EngineError::Node(_),
+                ..
+            }
+        ));
+        assert!(outcome.node_error().is_none());
+        let thread = ThreadId::new("pre-aegis-none").unwrap();
+        let waypoints = store.saved_waypoints(&thread).await;
+        let (_, failed_node, node_error) = failed_status(&waypoints[0]);
+        assert_eq!(failed_node, &node_id);
+        assert!(node_error.is_none());
+
+        // (b) An engine-limit failure: a self-loop that never resolves trips
+        //     `NodeVisitLimitExceeded`; it is not a node's own failure, so no
+        //     structured error either -- even though the node HAS an Aegis.
+        let status = FieldName::new("result").unwrap();
+        let looping = CountingFunctionNode::new({
+            let status = status.clone();
+            move |_run, _state| {
+                let mut d = StateDelta::new();
+                d.set_raw(status.clone(), serde_json::json!("looping"));
+                d
+            }
+        });
+        let mut graph = WarGraph::new(
+            one_field_schema(),
+            EngineLimits {
+                max_node_visits: 3,
+                ..EngineLimits::default()
+            },
+        );
+        let a = NodeId::new("a");
+        graph.add_node(a.clone(), NodeSpec::Function(looping));
+        graph.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: a.clone(),
+            condition: Some(EdgeCondition::Contains("looping".to_string())),
+        });
+        graph.add_entry(a.clone());
+        graph.set_aegis(a.clone(), retrying_aegis(3));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("limit-none").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(
+            &outcome,
+            RunOutcome::Failed {
+                error: EngineError::NodeVisitLimitExceeded { .. },
+                ..
+            }
+        ));
+        assert!(outcome.node_error().is_none());
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .into_iter()
+            .next()
+            .unwrap();
+        let (_, failed_node, node_error) = failed_status(&latest);
+        assert_eq!(failed_node, &a);
+        assert!(node_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_outcome_failed_exposes_the_same_node_error() {
+        let (_, outcome, store) =
+            run_exhausting_node("outcome-same-node-error", Some(retrying_aegis(2))).await;
+        let thread = ThreadId::new("outcome-same-node-error").unwrap();
+        let waypoints = store.saved_waypoints(&thread).await;
+        let (_, _, recorded) = failed_status(&waypoints[0]);
+        let recorded = recorded.expect("the Waypoint records the NodeError");
+        let exposed = outcome
+            .node_error()
+            .expect("RunOutcome::Failed exposes the NodeError");
+        assert_eq!(exposed, recorded, "identical value on both surfaces");
+        match &outcome {
+            RunOutcome::Failed { error, .. } => {
+                assert!(matches!(error, EngineError::NodeFailed(ne) if ne == recorded));
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn engine_error_node_failed_maps_to_battalion_error_node() {
+        let ne = NodeError {
+            node_id: NodeId::new("n"),
+            attempt: 3,
+            transience: Transience::Permanent,
+            source: NodeErrorSource::Function {
+                message: "boom".to_string(),
+            },
+        };
+        let mapped = BattalionError::from(EngineError::NodeFailed(ne.clone()));
+        assert!(
+            matches!(&mapped, BattalionError::Node(inner) if inner == &ne),
+            "got {mapped:?}"
+        );
+
+        // Every other variant keeps a rendered, non-structured mapping.
+        let other = BattalionError::from(EngineError::Node(StateNodeError("x".to_string())));
+        assert!(matches!(other, BattalionError::CampaignError(msg) if msg.contains("x")));
+    }
+
+    async fn run_failing_paladin_node(
+        thread: &str,
+        port: Arc<FailingPaladinPort>,
+    ) -> (NodeId, RunOutcome, Arc<RecordingWaypointStore>) {
+        let field_name = FieldName::new("result").unwrap();
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("summarizer");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin("summarizer"),
+                InputMapping::new("summarize"),
+                field_name,
+            ),
+        );
+        graph.add_entry(node_id.clone());
+        // An Aegis with a single-attempt retry policy: policy-governed (so
+        // the structured error is recorded) without any actual retry.
+        graph.set_aegis(node_id.clone(), retrying_aegis(1));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(port, store.clone());
+        let outcome = engine
+            .start(&graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap();
+        (node_id, outcome, store)
+    }
+
+    #[tokio::test]
+    async fn a_paladin_node_failure_becomes_node_error_source_paladin() {
+        // A non-LLM Paladin failure: `Paladin { kind: <variant name>, .. }`.
+        let port = FailingPaladinPort::new(|| PaladinError::ExecutionError("paladin down".into()));
+        let (node_id, outcome, _) = run_failing_paladin_node("paladin-source", port.clone()).await;
+        assert_eq!(port.call_count(), 1);
+        let ne = outcome.node_error().expect("structured error").clone();
+        assert_eq!(ne.node_id, node_id);
+        assert_eq!(
+            ne.transience,
+            PaladinError::ExecutionError(String::new()).transience()
+        );
+        match &ne.source {
+            NodeErrorSource::Paladin {
+                kind,
+                status,
+                provider,
+                message,
+            } => {
+                assert_eq!(kind, "ExecutionError");
+                assert_eq!(*status, None);
+                assert_eq!(*provider, None);
+                assert!(message.contains("paladin down"));
+            }
+            other => panic!("expected Paladin, got {other:?}"),
+        }
+
+        // An LLM failure underneath: `Llm { .. }` carrying the typed status
+        // and provider -- never `Function`, and distinguishable from any
+        // other Paladin failure.
+        let port = FailingPaladinPort::new(|| PaladinError::LlmFailure {
+            transience: Transience::Transient,
+            status: Some(503),
+            provider: Some("openai".to_string()),
+            message: "upstream unavailable".to_string(),
+        });
+        let (_, outcome, store) = run_failing_paladin_node("llm-source", port.clone()).await;
+        assert_eq!(port.call_count(), 1, "max_attempts 1: no retry");
+        let ne = outcome.node_error().expect("structured error").clone();
+        assert_eq!(
+            ne.transience,
+            Transience::Transient,
+            "read from the typed field"
+        );
+        match &ne.source {
+            NodeErrorSource::Llm {
+                status, provider, ..
+            } => {
+                assert_eq!(*status, Some(503));
+                assert_eq!(provider.as_deref(), Some("openai"));
+            }
+            other => panic!("expected Llm, got {other:?}"),
+        }
+        let thread = ThreadId::new("llm-source").unwrap();
+        let waypoints = store.saved_waypoints(&thread).await;
+        let (line, _, recorded) = failed_status(&waypoints[0]);
+        assert_eq!(recorded, Some(&ne));
+        // The display line is the legacy `StateNodeError(e.to_string())` one.
+        assert_eq!(
+            line,
+            EngineError::Node(StateNodeError(
+                "LLM error: upstream unavailable".to_string()
+            ))
+            .to_string()
         );
     }
 }

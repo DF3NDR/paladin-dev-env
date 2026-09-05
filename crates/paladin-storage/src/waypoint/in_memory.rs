@@ -449,4 +449,10 @@ mod tests {
         contract_tests::waypoint_with_attempt_history_round_trips(&InMemoryWaypointStore::new())
             .await;
     }
+
+    #[tokio::test]
+    async fn failed_waypoint_with_node_error_round_trips() {
+        contract_tests::failed_waypoint_with_node_error_round_trips(&InMemoryWaypointStore::new())
+            .await;
+    }
 }

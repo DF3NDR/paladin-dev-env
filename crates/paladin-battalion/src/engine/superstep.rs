@@ -44,6 +44,7 @@ use paladin_core::platform::container::directive::{
 };
 use paladin_core::platform::container::node_error::{AttemptRecord, NodeError, NodeErrorSource};
 use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::{
     ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
@@ -253,6 +254,12 @@ enum NodeFailure {
     /// internal engine error -- everything that was `StateNodeError` before this
     /// phase, unchanged.
     Node(StateNodeError),
+    /// A `NodeSpec::Paladin` node's `PaladinPort::execute` call failed
+    /// (Doc 04 D-07): the live `PaladinError` is kept until the engine
+    /// boundary converts it, so its typed `transience()`, `status` and
+    /// `provider` reach the structured `NodeError` instead of being erased
+    /// to a string one line early. Retry-eligible exactly like `Node`.
+    Paladin(PaladinError),
     /// A `NodeSpec::Paladin` node's `DirectiveParser::StructuredDirective`
     /// call under `OnParseError::FailRun` (CF-02, D-11).
     DirectiveParse(DirectiveParseError),
@@ -494,11 +501,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             }
                         }
                     }
-                    Err(e) => (
-                        paladin_id,
-                        0,
-                        Err(NodeFailure::Node(StateNodeError(e.to_string()))),
-                    ),
+                    Err(e) => (paladin_id, 0, Err(NodeFailure::Paladin(e))),
                 }
             }
             NodeDispatch::Battalion {
@@ -1229,6 +1232,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Failed {
                     error: error.to_string(),
                     failed_node: starved[0].clone(),
+                    node_error: None,
                 },
                 visit_counts,
                 entry_frontier.snapshot(graph),
@@ -1353,6 +1357,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         .cloned()
                         .or_else(|| pending_muster.as_ref().map(|(node, _)| node.clone()))
                         .unwrap_or_else(|| NodeId::new(String::new())),
+                    node_error: None,
                 },
                 visit_counts,
                 frontier.snapshot(graph),
@@ -1395,6 +1400,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Failed {
                     error: error.to_string(),
                     failed_node: node,
+                    node_error: None,
                 },
                 visit_counts,
                 frontier.snapshot(graph),
@@ -2101,6 +2107,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             // node-execution failure uses.
             let error = match err {
                 NodeFailure::Node(e) => EngineError::Node(e),
+                NodeFailure::Paladin(e) => EngineError::Node(StateNodeError(e.to_string())),
                 NodeFailure::DirectiveParse(e) => EngineError::DirectiveParseFailed {
                     node: node_id.clone(),
                     reason: e.reason,
@@ -2122,6 +2129,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Failed {
                     error: error.to_string(),
                     failed_node: node_id,
+                    node_error: None,
                 },
                 visit_counts,
                 frontier.snapshot(graph),
@@ -2154,6 +2162,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Failed {
                     error: error.to_string(),
                     failed_node,
+                    node_error: None,
                 },
                 visit_counts,
                 frontier.snapshot(graph),
@@ -2234,6 +2243,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             .first()
                             .cloned()
                             .unwrap_or_else(|| dispatch_entries[0].0.clone()),
+                        node_error: None,
                     },
                     visit_counts,
                     frontier.snapshot(graph),
@@ -2483,6 +2493,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     WaypointStatus::Failed {
                         error: error.to_string(),
                         failed_node: starved[0].clone(),
+                        node_error: None,
                     },
                     visit_counts.clone(),
                     frontier.snapshot(graph),

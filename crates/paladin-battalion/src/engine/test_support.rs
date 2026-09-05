@@ -561,6 +561,57 @@ impl PaladinPort for RecordingPaladinPort {
     }
 }
 
+/// A [`PaladinPort`] test double whose `execute` always fails with the
+/// `PaladinError` a caller-supplied factory produces (a factory rather than
+/// a stored error, following `llm_failure`'s test-double precedent: the
+/// double stays `Send + Sync` without a `Mutex` and every call's error is
+/// fresh), counting its calls, for exercising the engine's Paladin-node
+/// failure path (Doc 04 D-07: `NodeFailure::Paladin` ->
+/// `NodeErrorSource::Paladin`/`Llm`).
+pub struct FailingPaladinPort {
+    factory: fn() -> PaladinError,
+    calls: AtomicUsize,
+}
+
+impl FailingPaladinPort {
+    /// Construct a port whose every `execute` fails with `factory()`.
+    pub fn new(factory: fn() -> PaladinError) -> Arc<Self> {
+        Arc::new(Self {
+            factory,
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    /// How many times `execute` has been called.
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl PaladinPort for FailingPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err((self.factory)())
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("FailingPaladinPort only supports execute()")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
 // --- Phase 22 Plan 09: TraceSink test doubles -----------------------------
 
 /// A [`TraceSink`] test double recording every event it receives, in the

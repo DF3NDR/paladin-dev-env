@@ -844,6 +844,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_waypoint_with_node_error_round_trips() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::failed_waypoint_with_node_error_round_trips(&store).await;
+    }
+
+    #[tokio::test]
     async fn prune_thread_thread_id_and_waypoint_id_with_sql_metacharacters_round_trip_as_data() {
         let Some(store) = store_or_skip().await else {
             return;

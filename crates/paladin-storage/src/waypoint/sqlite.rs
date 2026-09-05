@@ -736,6 +736,11 @@ mod tests {
         contract_tests::waypoint_with_attempt_history_round_trips(&fresh_store().await).await;
     }
 
+    #[tokio::test]
+    async fn failed_waypoint_with_node_error_round_trips() {
+        contract_tests::failed_waypoint_with_node_error_round_trips(&fresh_store().await).await;
+    }
+
     // ── Backend-specific tests (T-22-17, T-22-18) ───────────────────────
 
     #[tokio::test]

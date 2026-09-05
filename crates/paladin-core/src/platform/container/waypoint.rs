@@ -18,7 +18,7 @@ use crate::platform::container::battlefield::{
     BATTLEFIELD_SCHEMA_VERSION, Battlefield, StateDelta,
 };
 use crate::platform::container::directive::MusterTask;
-use crate::platform::container::node_error::AttemptRecord;
+use crate::platform::container::node_error::{AttemptRecord, NodeError};
 pub use crate::platform::container::parley::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
@@ -594,10 +594,24 @@ pub enum WaypointStatus {
     Completed,
     /// The run failed.
     Failed {
-        /// A human-readable description of the failure.
+        /// A human-readable description of the failure -- the display line
+        /// a human reads and existing consumers parse. Its content is
+        /// unchanged by the structured `node_error` beside it (D-08).
         error: String,
         /// The node whose execution caused the failure.
         failed_node: NodeId,
+        /// The structured failure (Doc 04 D-08, FT-FR-02), `Some` only when
+        /// an Aegis-governed node's execution failed (its retries exhausted,
+        /// or its error was not retry-eligible). `None` for a node with no
+        /// Aegis (byte-identical pre-Phase-25 behaviour, D-09), for every
+        /// engine-limit failure (`NodeVisitLimitExceeded`,
+        /// `RecursionLimitExceeded`, starvation, ...) and for every `Failed`
+        /// payload written before this field existed -- so a reader can
+        /// tell a policy-driven node failure from a limit breach without
+        /// inspecting `error`. Additive and `#[serde(default)]`, following
+        /// the `visit_counts`/`frontier`/`fork_of` precedent; no reshape.
+        #[serde(default)]
+        node_error: Option<NodeError>,
     },
     /// The run is paused awaiting external input (HITL-01, D-02): every
     /// `ParleyRequest` raised in the suspending superstep, plus every

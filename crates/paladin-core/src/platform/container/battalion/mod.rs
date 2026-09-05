@@ -506,6 +506,16 @@ pub use crate::platform::container::token_usage::TokenUsage;
 /// A new plain-data struct (mirroring [`TokenUsage`]'s shape) rather than a
 /// reuse of [`BattalionError`], since `BattalionError` does not derive
 /// `Serialize`/`Deserialize` and `BattalionResult` does.
+///
+/// **Not the same type as [`crate::platform::container::node_error::NodeError`]
+/// (D-06):** this is the pre-existing v0.9 plain-data summary carried on
+/// [`BattalionResult`] (name + error text only) for the legacy
+/// Formation/Phalanx/Campaign patterns. The structured, engine-execution
+/// `NodeError` landed by Phase 25 for the superstep engine's per-node retry
+/// loop is a different, unrelated type in a different module -- it is never
+/// aliased here and this summary is never reshaped to match it (X-03).
+/// [`BattalionError::Node`] wraps the STRUCTURED type, path-qualified, never
+/// this summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeError {
     /// Name of the Paladin node that failed
@@ -728,7 +738,16 @@ pub enum GroveError {
 }
 
 /// Error types for Battalion operations
+///
+/// # Non-exhaustive (X-10.2, D-04)
+///
+/// Marked `#[non_exhaustive]` so a future variant can be added without a
+/// semver-major bump. Registered as deliberate-breaking in `MIGRATION.md`
+/// §9.2 and `.cargo/semver-checks-allowlist.toml` (the `enum_marked_non_exhaustive`
+/// lint) in the same commit that added this attribute. Every downstream
+/// exhaustive match gained a wildcard arm at that commit.
 #[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
 pub enum BattalionError {
     /// Configuration error
     #[error("Configuration error: {0}")]
@@ -809,6 +828,15 @@ pub enum BattalionError {
     /// General execution error
     #[error("Execution error: {0}")]
     ExecutionError(String),
+
+    /// A structured node-execution failure from the superstep engine
+    /// (Doc 04 FT-FR-02, D-06). Path-qualified to the NEW structured
+    /// `paladin_core::platform::container::node_error::NodeError` -- never
+    /// this module's legacy `NodeError { node_name, error }` summary, which
+    /// is a different, pre-existing v0.9 type left untouched (see its own
+    /// rustdoc cross-link above).
+    #[error("Node error: {0}")]
+    Node(crate::platform::container::node_error::NodeError),
 }
 
 /// Convert RegistryError to BattalionError
@@ -1343,4 +1371,78 @@ fn test_battalion_config_metadata_dir_auto_creates() {
 
     // Cleanup
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn battalion_error_node_carries_the_structured_node_error() {
+    use crate::platform::container::node_error::{
+        NodeError as StructuredNodeError, NodeErrorSource,
+    };
+    use crate::platform::container::transience::Transience;
+    use crate::platform::container::waypoint::NodeId;
+
+    let node_error = StructuredNodeError {
+        node_id: NodeId::new("summarize"),
+        attempt: 2,
+        transience: Transience::Transient,
+        source: NodeErrorSource::Function {
+            message: "connection reset".to_string(),
+        },
+    };
+    let battalion_error = BattalionError::Node(node_error.clone());
+
+    // Constructible and Clone.
+    let cloned = battalion_error.clone();
+    assert!(matches!(cloned, BattalionError::Node(_)));
+
+    // Display names the node id and the source summary.
+    let rendered = battalion_error.to_string();
+    assert!(rendered.contains("summarize"));
+    assert!(rendered.contains("connection reset"));
+}
+
+#[test]
+fn battalion_error_node_uses_the_core_node_error_not_the_legacy_summary() {
+    use crate::platform::container::node_error::{
+        NodeError as StructuredNodeError, NodeErrorSource,
+    };
+    use crate::platform::container::transience::Transience;
+    use crate::platform::container::waypoint::NodeId;
+
+    let node_error = StructuredNodeError {
+        node_id: NodeId::new("summarize"),
+        attempt: 1,
+        transience: Transience::Unknown,
+        source: NodeErrorSource::Cancelled,
+    };
+    let battalion_error = BattalionError::Node(node_error);
+
+    // A typed binding proves the payload type is the structured
+    // `node_error::NodeError`, never this module's legacy summary struct
+    // (which has no `node_id`/`attempt`/`transience`/`source` fields).
+    if let BattalionError::Node(payload) = battalion_error {
+        let _typed: StructuredNodeError = payload;
+        assert_eq!(_typed.node_id, NodeId::new("summarize"));
+        assert_eq!(_typed.attempt, 1);
+    } else {
+        panic!("expected BattalionError::Node");
+    }
+}
+
+#[test]
+fn legacy_battalion_node_error_summary_is_unchanged() {
+    let legacy = NodeError {
+        node_name: "researcher".to_string(),
+        error: "timed out".to_string(),
+    };
+    assert_eq!(legacy.node_name, "researcher");
+    assert_eq!(legacy.error, "timed out");
+
+    let json = serde_json::to_string(&legacy).expect("serialize");
+    assert!(json.contains("\"node_name\":\"researcher\""));
+    assert!(json.contains("\"error\":\"timed out\""));
+
+    let round_tripped: NodeError = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(round_tripped.node_name, legacy.node_name);
+    assert_eq!(round_tripped.error, legacy.error);
 }

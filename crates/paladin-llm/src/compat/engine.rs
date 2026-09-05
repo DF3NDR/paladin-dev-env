@@ -231,11 +231,15 @@ enum FetchFailureClass {
 /// change is exactly what keeps D-05's shared-engine boundary intact: the
 /// engine still learns nothing about which vendor is on the other end.
 ///
-/// Exhaustive over every `LlmError` variant — **deliberately no wildcard
-/// arm**. A variant added to `paladin-ports::LlmError` later is a compile
-/// error here until a person decides which side of the split it falls on,
-/// rather than silently landing in a catch-all and being absorbed into the
-/// quiet path unnoticed.
+/// Exhaustive over every known `LlmError` variant, each with its own
+/// deliberate arm below. `LlmError` is `#[non_exhaustive]` (X-10.2, D-04) as
+/// of Phase 25, so a wildcard arm is now REQUIRED for this to compile as a
+/// downstream crate — it exists solely to satisfy that compiler requirement,
+/// classifying a genuinely unknown future variant the same as the generic
+/// non-success catch-all (`FetchFailureClass::Supported`) rather than
+/// panicking. A variant added to `paladin-ports::LlmError` should still get
+/// its own explicit arm above the wildcard so a person decides which side of
+/// the split it falls on, rather than leaning on the wildcard by default.
 fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
     match error {
         // The one case this plan closes: a rejected credential (mapped from
@@ -289,6 +293,10 @@ fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
         // final status-aware split.
         LlmError::ProviderError { .. } => FetchFailureClass::Supported,
         LlmError::AllProvidersFailed { .. } => FetchFailureClass::Supported,
+        // X-10.2 (D-04): `LlmError` is `#[non_exhaustive]`; required by the
+        // compiler, not reachable by any variant known today. See the
+        // rustdoc above for why this stays `Supported` rather than a panic.
+        _ => FetchFailureClass::Supported,
     }
 }
 

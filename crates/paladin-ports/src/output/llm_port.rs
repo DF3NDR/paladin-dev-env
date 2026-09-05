@@ -288,7 +288,16 @@ use paladin_core::platform::container::transience::Transience;
 ///     }
 /// }
 /// ```
+///
+/// # Non-exhaustive (X-10.2, D-04)
+///
+/// Marked `#[non_exhaustive]` so a future variant can be added without a
+/// semver-major bump. Registered as deliberate-breaking in `MIGRATION.md`
+/// §9.2 and `.cargo/semver-checks-allowlist.toml` (the `enum_marked_non_exhaustive`
+/// lint) in the same commit that added this attribute. Every downstream
+/// exhaustive match gained a wildcard arm at that commit.
 #[derive(Debug, Clone, Error)]
+#[non_exhaustive]
 pub enum LlmError {
     /// Network communication failure (DNS, connection, socket errors)
     ///

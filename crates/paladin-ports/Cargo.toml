@@ -24,3 +24,14 @@ serde_json = { workspace = true }
 futures = "0.3"
 md5 = "0.7"
 mime_guess = "2"
+
+# X-10.6 deliberate-breaking suppression (D-04, MIGRATION.md §9.2, FT-01/FT-05, Phase 25).
+# `LlmError` gained the `ProviderError` and `AllProvidersFailed` variants
+# (status-carrying, for the FT-05 fallback chain, D-03) and a new
+# `transience()` method; marked `#[non_exhaustive]` so the provider-error
+# taxonomy can grow without a semver-major bump. Register/remove this
+# suppression only in the same commit as the matching MIGRATION.md §9.2 row
+# and `.cargo/semver-checks-allowlist.toml` entry (kept set-equal by CI's
+# `semver` job).
+[package.metadata.cargo-semver-checks.lints]
+enum_marked_non_exhaustive = "allow"

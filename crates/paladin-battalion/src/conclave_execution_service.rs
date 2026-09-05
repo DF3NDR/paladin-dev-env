@@ -369,6 +369,14 @@ impl ConclaveExecutionService {
                 error.transience(),
                 paladin_core::platform::container::transience::Transience::Transient
             ),
+            // X-10.2 (D-04): `PaladinError` is `#[non_exhaustive]`; a future
+            // variant is classified by its own `transience()` rather than a
+            // silently-wrong `true`/`false` guess, mirroring the `LlmFailure`
+            // arm immediately above.
+            _ => matches!(
+                error.transience(),
+                paladin_core::platform::container::transience::Transience::Transient
+            ),
         }
     }
 

@@ -1186,3 +1186,159 @@ impl PaladinPort for ObservedCallRecordingPort {
         Ok(())
     }
 }
+
+// --- Phase 25 Plan 09 Task 2: paused-clock-friendly timeout doubles ---------
+
+/// A scriptable [`PaladinPort`] for plan 25-09's idle-vs-run tests
+/// (FT-FR-09, D-19): on every `execute_observed` call it sleeps
+/// `beat_every`, beats the handle, repeats that `beats` times, then sleeps
+/// `then_stall` WITHOUT beating, and finally returns `output`. Every sleep
+/// is a `tokio::time::sleep`, so under `#[tokio::test(start_paused = true)]`
+/// the whole schedule is driven by the virtual clock -- "beats every 100 ms
+/// for 2 s" and "beats then stalls 300 ms" are both exact, never racy.
+pub struct BeatingPaladinPort {
+    beat_every: std::time::Duration,
+    beats: usize,
+    then_stall: std::time::Duration,
+    output: String,
+    calls: AtomicUsize,
+}
+
+impl BeatingPaladinPort {
+    /// Construct a port that beats every `beat_every` for `beats` beats,
+    /// then stalls `then_stall` silently, then returns `output`.
+    pub fn new(
+        beat_every: std::time::Duration,
+        beats: usize,
+        then_stall: std::time::Duration,
+        output: impl Into<String>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            beat_every,
+            beats,
+            then_stall,
+            output: output.into(),
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    /// How many times `execute_observed` (or `execute`) has been called --
+    /// i.e. how many attempts the engine made.
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    async fn play(&self, heartbeat: Option<&HeartbeatHandle>) -> PaladinResult {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        for _ in 0..self.beats {
+            tokio::time::sleep(self.beat_every).await;
+            if let Some(heartbeat) = heartbeat {
+                heartbeat.beat();
+            }
+        }
+        tokio::time::sleep(self.then_stall).await;
+        PaladinResult {
+            output: self.output.clone(),
+            ..Default::default()
+        }
+    }
+}
+
+#[async_trait]
+impl PaladinPort for BeatingPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        Ok(self.play(None).await)
+    }
+
+    async fn execute_observed(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+        heartbeat: &HeartbeatHandle,
+    ) -> Result<PaladinResult, PaladinError> {
+        Ok(self.play(Some(heartbeat)).await)
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("BeatingPaladinPort only supports execute_observed()")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// A scriptable [`StateNode`] for plan 25-09's per-attempt timeout tests:
+/// attempt `n` holds for `attempts[n - 1].0` (the LAST entry repeats for
+/// any later attempt), optionally beating `ctx.heartbeat()` every
+/// `beat_every` while it holds, then writes `attempts[n - 1].1` to `field`.
+/// A timed-out attempt is cancelled mid-hold and never reaches its write,
+/// which is exactly what "partial work is discarded" tests observe. Every
+/// wait is a `tokio::time::sleep`, so the paused clock drives it.
+pub struct TimedFunctionNode {
+    field: FieldName,
+    attempts: Vec<(std::time::Duration, serde_json::Value)>,
+    beat_every: Option<std::time::Duration>,
+    observed_attempts: Mutex<Vec<u32>>,
+}
+
+impl TimedFunctionNode {
+    /// Construct a node scripted per attempt. `attempts` must be non-empty.
+    pub fn new(
+        field: FieldName,
+        attempts: Vec<(std::time::Duration, serde_json::Value)>,
+        beat_every: Option<std::time::Duration>,
+    ) -> Arc<Self> {
+        assert!(
+            !attempts.is_empty(),
+            "TimedFunctionNode needs at least one attempt script"
+        );
+        Arc::new(Self {
+            field,
+            attempts,
+            beat_every,
+            observed_attempts: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Every `ctx.attempt` this node observed, in run order.
+    pub fn observed_attempts(&self) -> Vec<u32> {
+        self.observed_attempts.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for TimedFunctionNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        self.observed_attempts.lock().unwrap().push(ctx.attempt);
+        let index = (ctx.attempt.max(1) as usize - 1).min(self.attempts.len() - 1);
+        let (hold, value) = &self.attempts[index];
+        match self.beat_every {
+            Some(beat_every) if !beat_every.is_zero() => {
+                let mut elapsed = std::time::Duration::ZERO;
+                while elapsed < *hold {
+                    let slice = beat_every.min(*hold - elapsed);
+                    tokio::time::sleep(slice).await;
+                    elapsed += slice;
+                    ctx.heartbeat();
+                }
+            }
+            _ => tokio::time::sleep(*hold).await,
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), value.clone());
+        Ok(delta.into())
+    }
+}

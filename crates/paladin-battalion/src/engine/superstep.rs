@@ -10090,4 +10090,334 @@ mod tests {
             "the engine must never call execute() directly for a Paladin node"
         );
     }
+
+    // --- Plan 25-09 Task 2: per-attempt run_timeout / idle_timeout, named
+    // by the typed TimeoutKind (FT-FR-08, FT-FR-09, D-20). Every test here
+    // uses the paused-clock idiom `engine/retry.rs` established
+    // (`#[tokio::test(start_paused = true)]`): no wall-clock sleeps. ------
+
+    use crate::engine::test_support::{BeatingPaladinPort, TimedFunctionNode};
+    use paladin_core::platform::container::aegis::TimeoutPolicy;
+    use paladin_core::platform::container::node_error::TimeoutKind;
+    use std::time::Duration;
+
+    fn ms(millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
+
+    fn timeout_aegis(run: Option<Duration>, idle: Option<Duration>) -> Aegis {
+        Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: run,
+                idle_timeout: idle,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A single-`Paladin`-node graph whose node writes to `out`.
+    fn one_paladin_graph(out: &FieldName) -> (WarGraph, NodeId) {
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("scout");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(make_paladin("scout"), InputMapping::new("go"), out.clone()),
+        );
+        graph.add_entry(node_id.clone());
+        (graph, node_id)
+    }
+
+    /// A single-`Function`-node graph over `node`, writing to `out`.
+    fn one_function_graph(out: &FieldName, node: Arc<dyn StateNode>) -> (WarGraph, NodeId) {
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("worker");
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+        (graph, node_id)
+    }
+
+    /// FT-FR-09: a stream emitting a chunk every 100 ms is HEALTHY -- under
+    /// `idle_timeout: 250 ms` and `run_timeout: 10 s`, a port that beats
+    /// every 100 ms for 2 s completes, and neither bound fires.
+    #[tokio::test(start_paused = true)]
+    async fn a_port_beating_every_100ms_survives_a_250ms_idle_timeout() {
+        let out = field("out");
+        let (mut graph, node_id) = one_paladin_graph(&out);
+        graph.set_aegis(node_id, timeout_aegis(Some(ms(10_000)), Some(ms(250))));
+
+        let port_impl = BeatingPaladinPort::new(ms(100), 20, ms(0), "scouted");
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("idle-survives").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("scouted"))
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            port_impl.call_count(),
+            1,
+            "exactly one attempt, no timeout fired"
+        );
+    }
+
+    /// FT-FR-09: the SAME policy, but a port that beats then goes silent
+    /// for 300 ms, fails with `Timeout(Idle)` classified `Transient`.
+    #[tokio::test(start_paused = true)]
+    async fn a_port_that_stalls_300ms_fails_with_timeout_idle() {
+        let out = field("out");
+        let (mut graph, node_id) = one_paladin_graph(&out);
+        graph.set_aegis(
+            node_id.clone(),
+            timeout_aegis(Some(ms(10_000)), Some(ms(250))),
+        );
+
+        let port_impl = BeatingPaladinPort::new(ms(100), 2, ms(300), "never");
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("idle-fires").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        let node_error = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        assert_eq!(node_error.node_id, node_id);
+        assert_eq!(node_error.attempt, 1);
+        assert_eq!(node_error.transience, Transience::Transient);
+        assert_eq!(
+            node_error.source,
+            NodeErrorSource::Timeout(TimeoutKind::Idle),
+            "the idle bound fired, named by its typed kind"
+        );
+        assert_eq!(port_impl.call_count(), 1, "no retry policy: one attempt");
+    }
+
+    /// FT-FR-08: a node that keeps beating is still cut by the wall-clock
+    /// `run_timeout`, and the failure names `Run` (not `Idle`) -- progress
+    /// cannot extend the hard cap (T-25-39).
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_but_progressing_node_fails_on_run_timeout_not_idle() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("too late"))],
+            Some(ms(100)),
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(node_id.clone(), timeout_aegis(Some(ms(500)), Some(ms(250))));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("run-beats-idle").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        let node_error = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        assert_eq!(node_error.node_id, node_id);
+        assert_eq!(node_error.transience, Transience::Transient);
+        assert_eq!(
+            node_error.source,
+            NodeErrorSource::Timeout(TimeoutKind::Run),
+            "the wall-clock bound fired even though the node kept beating"
+        );
+        assert_eq!(node.observed_attempts(), vec![1]);
+    }
+
+    /// FT-FR-08, D-20: a `Timeout(Run)` is `Transient`, so under the
+    /// default `TransientOnly` retry predicate the attempt is retried and a
+    /// faster later attempt completes the run; the attempt history records
+    /// the timed-out attempt with its typed kind.
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_attempt_is_retried_as_transient() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![
+                (ms(1_000), serde_json::json!("partial")),
+                (ms(10), serde_json::json!("final")),
+            ],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(
+            node_id.clone(),
+            Aegis {
+                retry: Some(paladin_core::platform::container::aegis::RetryPolicy {
+                    max_attempts: 3,
+                    jitter: false,
+                    initial_interval: ms(1),
+                    ..paladin_core::platform::container::aegis::RetryPolicy::default()
+                }),
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(ms(200)),
+                    idle_timeout: None,
+                }),
+                ..Default::default()
+            },
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("timeout-retried").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "expected Completed, got {outcome:?}"
+        );
+        assert_eq!(node.observed_attempts(), vec![1, 2]);
+        let waypoints = store.saved_waypoints(&thread).await;
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.node_id, node_id);
+        assert_eq!(record.attempt, 2, "the succeeding attempt is attempt 2");
+        assert_eq!(record.attempts.len(), 1);
+        assert_eq!(record.attempts[0].attempt, 1);
+        assert_eq!(
+            record.attempts[0].error.source,
+            NodeErrorSource::Timeout(TimeoutKind::Run)
+        );
+        assert_eq!(record.attempts[0].error.transience, Transience::Transient);
+    }
+
+    /// FT-FR-03/FT-FR-08 (T-25-41): a timed-out attempt's partial delta is
+    /// discarded exactly like any other failed attempt's -- only the
+    /// succeeding attempt's value reaches the merged Battlefield.
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_attempts_partial_work_is_discarded() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![
+                (ms(1_000), serde_json::json!("partial")),
+                (ms(10), serde_json::json!("final")),
+            ],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(
+            node_id,
+            Aegis {
+                retry: Some(paladin_core::platform::container::aegis::RetryPolicy {
+                    max_attempts: 2,
+                    jitter: false,
+                    initial_interval: ms(1),
+                    ..paladin_core::platform::container::aegis::RetryPolicy::default()
+                }),
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(ms(200)),
+                    idle_timeout: None,
+                }),
+                ..Default::default()
+            },
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("partial-discarded").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("final")),
+                    "only the succeeding attempt's delta merges"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(
+            waypoints.len(),
+            1,
+            "no Waypoint is written between attempts"
+        );
+        assert_ne!(
+            waypoints[0].battlefield.get_raw(&out),
+            Some(&serde_json::json!("partial"))
+        );
+    }
+
+    /// `TimeoutPolicy { run_timeout: None, idle_timeout: None }` arms
+    /// nothing: a node under it behaves exactly as one with no policy --
+    /// a 5 s hold completes with one attempt and no timer ever fires.
+    #[tokio::test(start_paused = true)]
+    async fn timeout_policy_with_both_fields_none_is_a_no_op() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(5_000), serde_json::json!("eventually"))],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(node_id.clone(), timeout_aegis(None, None));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("no-op-policy").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("eventually"))
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        let waypoints = store.saved_waypoints(&thread).await;
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.node_id, node_id);
+        assert_eq!(record.attempt, 1);
+        assert!(record.attempts.is_empty());
+    }
+
+    /// T-25-42: which bound fired is read from the typed `TimeoutKind`
+    /// field by value -- this test never renders the error to a string and
+    /// never inspects a message.
+    #[tokio::test(start_paused = true)]
+    async fn the_fired_bound_is_read_from_the_typed_kind() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("silent"))],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node);
+        graph.set_aegis(node_id, timeout_aegis(Some(ms(10_000)), Some(ms(250))));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("typed-kind").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        let node_error = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        // Typed, by value: a `match` on the variant, not a substring search.
+        let fired: TimeoutKind = match node_error.source {
+            NodeErrorSource::Timeout(kind) => kind,
+            other => panic!("expected a Timeout source, got {other:?}"),
+        };
+        assert_eq!(fired, TimeoutKind::Idle);
+        assert_ne!(fired, TimeoutKind::Run);
+    }
 }

@@ -1283,6 +1283,25 @@ impl WarGraph {
     /// limit to let a resumed run continue must not trip `GraphMismatch`
     /// any more under `v3` than it did under `v2`.
     ///
+    /// **`v4` (Phase 24, D-09)** adds one more section for the new
+    /// [`NodeSpec::Gate`] node (HITL-01): everything about a Gate that
+    /// changes scheduling or merge -- `kind`, `output_field`, `choices`
+    /// and the `on_expire` DISCRIMINANT kind (never its `ResumeWithDefault`
+    /// payload value, which does not change routing) -- sorted by node id,
+    /// walked in `node_order` and written through [`push_field`], the same
+    /// discipline as every prior section. Deliberately NOT covered:
+    /// `prompt_template`, `payload_template` and `expires_in` -- matching
+    /// how a Paladin's prompt and `InputMapping` templates are already
+    /// excluded above, hot-swapping a Gate's rendered text or expiry window
+    /// is a legitimate operator action and must not trip `GraphMismatch`.
+    ///
+    /// **A Gate's own `on_expire` payload deserves the same fixed-width
+    /// discipline `restart_on_resume`'s tag byte follows.** Only the
+    /// discriminant (`"FailRun"` / `"ResumeWithDefault"`, a fixed short
+    /// string through `push_field`) is hashed, never
+    /// `serde_json::to_string(&on_expire)` -- that would embed the
+    /// `ResumeWithDefault` payload value ENG-FR-14 excludes.
+    ///
     /// The edge condition and dispatch rule are hashed through their serde
     /// representation (`serde_json::to_string`), never through `Debug`: a
     /// `#[derive(Debug)]` change on either type would otherwise silently
@@ -1327,7 +1346,7 @@ impl WarGraph {
     ///
     /// A golden hex test pins the exact output of a fixture exercising
     /// every hashed property (`engine::graph::tests::
-    /// fingerprint_golden_hex_pins_canonical_bytes`); changing this
+    /// fingerprint_golden_hex_v4`); changing this
     /// function's byte layout invalidates every stored Waypoint's
     /// fingerprint and must not be done without a deliberate format-version
     /// bump (D-17).
@@ -1437,6 +1456,40 @@ impl WarGraph {
             let parser_json = serde_json::to_string(directive_parser).unwrap_or_default();
             push_field(&mut buf, parser_json.as_bytes());
         }
+        // --- v4 (Phase 24, D-09): one more scheduling/merge-relevant
+        // section for NodeSpec::Gate, see `fingerprint`'s rustdoc above for
+        // the exact fields hashed and excluded.
+        buf.extend_from_slice(b";gates:");
+        for id in &self.node_order {
+            let Some(NodeSpec::Gate {
+                request,
+                output_field,
+            }) = self.nodes.get(id)
+            else {
+                continue;
+            };
+            push_field(&mut buf, id.as_str().as_bytes());
+            let kind_json = serde_json::to_string(&request.kind).unwrap_or_default();
+            push_field(&mut buf, kind_json.as_bytes());
+            match output_field {
+                Some(field) => {
+                    buf.push(1); // "has output field" tag
+                    push_field(&mut buf, field.as_str().as_bytes());
+                }
+                None => buf.push(0), // "no output field" tag
+            }
+            match &request.choices {
+                Some(choices) => {
+                    buf.push(1); // "has choices" tag
+                    buf.extend_from_slice(&(choices.len() as u64).to_le_bytes());
+                    for choice in choices {
+                        push_field(&mut buf, choice.as_bytes());
+                    }
+                }
+                None => buf.push(0), // "no choices" tag
+            }
+            push_field(&mut buf, on_expire_kind_tag(&request.on_expire).as_bytes());
+        }
 
         GraphFingerprint::from_canonical_bytes(&buf)
     }
@@ -1452,6 +1505,23 @@ impl WarGraph {
 fn push_field(buf: &mut Vec<u8>, bytes: &[u8]) {
     buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
     buf.extend_from_slice(bytes);
+}
+
+/// The stable, hashed-into-the-fingerprint DISCRIMINANT tag for an
+/// [`OnExpire`] value (D-09, `v4`), used exclusively by
+/// [`WarGraph::fingerprint`]'s `;gates:` section: never the value's own
+/// serde representation, which would embed a `ResumeWithDefault` payload
+/// value ENG-FR-14 deliberately excludes (only the KIND of expiry policy
+/// changes routing; the substituted value does not).
+/// `#[non_exhaustive]`-safe: a future `OnExpire` variant reaching here gets
+/// a distinct fixed tag rather than silently colliding with an existing
+/// one.
+fn on_expire_kind_tag(on_expire: &OnExpire) -> &'static str {
+    match on_expire {
+        OnExpire::FailRun => "FailRun",
+        OnExpire::ResumeWithDefault(_) => "ResumeWithDefault",
+        _ => "Unknown",
+    }
 }
 
 /// Whether `spec`'s declared type is compatible with a Gate of `kind`

@@ -256,14 +256,26 @@ impl std::fmt::Display for NodeId {
 /// helper `v2` established, never a delimiter join. Every `v2`-tagged
 /// fingerprint is now recognised as stale on `resume` rather than silently
 /// reinterpreted under the new layout.
+///
+/// Bumped to `v4` (Phase 24, D-09): one new `;gates:` section was added to
+/// `WarGraph::fingerprint`'s hashed bytes for the new `NodeSpec::Gate` node
+/// (HITL-01) -- `kind`, `output_field`, `choices` and the `on_expire`
+/// DISCRIMINANT kind (never its `ResumeWithDefault` payload value), sorted
+/// by node id and written through the same length-prefixed `push_field`
+/// helper. `prompt_template`, `payload_template` and `expires_in` are
+/// excluded, matching how a Paladin's prompt and `InputMapping` templates
+/// are already excluded (ENG-FR-14). Every `v3`-tagged fingerprint is now
+/// recognised as stale on `resume` rather than silently reinterpreted under
+/// the new layout.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct GraphFingerprint(String);
 
 /// Fingerprint algorithm/encoding version tag (Task 1 decision, option-b;
 /// bumped to `v2` by Phase 22.1 CR-01 / D-17's collision-free re-encoding;
-/// bumped to `v3` by Phase 23 D-18's three new hashed sections).
-pub const GRAPH_FINGERPRINT_VERSION: &str = "v3";
+/// bumped to `v3` by Phase 23 D-18's three new hashed sections; bumped to
+/// `v4` by Phase 24 D-09's `;gates:` section).
+pub const GRAPH_FINGERPRINT_VERSION: &str = "v4";
 
 impl GraphFingerprint {
     /// Compute a `GraphFingerprint` over a caller-supplied canonical byte
@@ -274,7 +286,7 @@ impl GraphFingerprint {
         Self(format!("{GRAPH_FINGERPRINT_VERSION}:{}", hash.to_hex()))
     }
 
-    /// Borrow the encoded fingerprint string (`"v3:{hex}"`).
+    /// Borrow the encoded fingerprint string (`"v4:{hex}"`).
     pub fn as_str(&self) -> &str {
         &self.0
     }

@@ -1,18 +1,418 @@
-//! RED state (Phase 24 Plan 10, Task 2): `ParleyPortAdapter`, `GraphRegistry`
-//! usage, and `map_engine_error` do not exist yet. See the GREEN commit
-//! that follows for the full implementation and rustdoc.
+//! Facade `ParleyPort` Adapter Over a Real `WarEngine` (HITL-05, D-25)
+//!
+//! [`ParleyPortAdapter`] implements `paladin-ports`'
+//! [`ParleyPort`](paladin_ports::input::parley_port::ParleyPort) over a real
+//! `WarEngine`: it resolves the thread's own graph through a
+//! [`GraphRegistry`](super::registry::GraphRegistry) (D-26), validates a
+//! submission, and either returns a typed error synchronously (nothing
+//! persisted, beyond the one documented `ParleyExpired`/`FailRun`
+//! exception) or spawns the continuation as a background task registered
+//! with `paladin-battalion`'s `ShutdownCoordinator` (D-21) and returns
+//! immediately (D-25) -- the SAME validate-then-spawn-then-`202` shape
+//! `crates/paladin-web/src/agent_controller.rs`'s `enqueue_job` already
+//! ships.
+//!
+//! # Why this adapter re-implements `WarEngine::resume_with`'s validation
+//!
+//! `WarEngine::resume_with` (`paladin-battalion`) is one atomic async
+//! function: its total-validation pass and its potentially long-running
+//! continuation (`superstep::run_with_namespace`, invoked only once every
+//! outstanding parley has a response) are not separable from outside the
+//! crate, and its own per-response validators
+//! (`graph::validate_parley_value_for_kind`, `validate_response_shape`) are
+//! `pub(crate)` to `paladin-battalion` -- unreachable from this crate.
+//!
+//! To honour D-25's contract (an error surfaces synchronously, from THIS
+//! call, before any background task is spawned; a valid-and-complete
+//! submission spawns the continuation and returns immediately) without
+//! modifying `paladin-battalion`, [`shadow_validate`] re-implements the
+//! SAME validation algorithm (24-04's D-10/D-11/D-12 ordering: lazy expiry
+//! scan over every outstanding parley, then total per-response validation)
+//! using only public data and public helper logic. This is a defensive,
+//! predictive pre-check -- never the sole authority: every branch below
+//! that concludes "this call will not reach the continuation" (a rejected
+//! submission, an expired `FailRun` parley, or a valid-but-partial
+//! submission) delegates the ACTUAL persist to a real, synchronous
+//! (awaited inline, never spawned) call to `WarEngine::resume_with`, which
+//! re-validates identically and is what performs the genuine Waypoint
+//! write. Only the one branch this shadow validation predicts will reach
+//! the continuation (every parley answered) is spawned in the background.
+//!
+//! A prediction/reality mismatch (an inherent, accepted risk of a
+//! check-then-act split when the two cannot be made atomic without an
+//! engine change) is always resolved in the REAL engine's favour: the
+//! spawned task's own call is what actually runs, and any divergence
+//! surfaces only through the thread's own state on a later poll -- the
+//! same eventually-consistent contract any background-job system offers.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use chrono::Utc;
 
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_battalion::engine::{EngineError, WarEngine, WarGraph};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_core::platform::container::waypoint::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse, ThreadId, WaypointStatus,
 };
-use paladin_ports::input::parley_port::{ParleyError, ParleyPort};
+use paladin_ports::input::parley_port::{ParleyError, ParleyPort, ResumeAccepted};
 use paladin_ports::output::waypoint_port::WaypointPort;
+
+use super::registry::GraphRegistry;
+
+/// Facade [`ParleyPort`] implementation over a real `WarEngine` (D-25,
+/// D-26). Generic over the same `W: WaypointPort` a `WarEngine<W>` is
+/// constructed with.
+pub struct ParleyPortAdapter<W: WaypointPort + 'static> {
+    engine: Arc<WarEngine<W>>,
+    waypoint_port: Arc<W>,
+    registry: Arc<GraphRegistry>,
+    coordinator: ShutdownCoordinator,
+}
+
+impl<W: WaypointPort + 'static> ParleyPortAdapter<W> {
+    /// Construct an adapter over `engine` (constructed with the SAME
+    /// `waypoint_port` instance), resolving graphs through `registry` and
+    /// registering every spawned continuation with `coordinator`.
+    pub fn new(
+        engine: Arc<WarEngine<W>>,
+        waypoint_port: Arc<W>,
+        registry: Arc<GraphRegistry>,
+        coordinator: ShutdownCoordinator,
+    ) -> Self {
+        Self {
+            engine,
+            waypoint_port,
+            registry,
+            coordinator,
+        }
+    }
+}
+
+#[async_trait]
+impl<W: WaypointPort + 'static> ParleyPort for ParleyPortAdapter<W> {
+    async fn resume_with(
+        &self,
+        thread: &ThreadId,
+        responses: Vec<ParleyResponse>,
+    ) -> Result<ResumeAccepted, ParleyError> {
+        let latest = self
+            .waypoint_port
+            .latest(thread)
+            .await
+            .map_err(|source| ParleyError::Backend { source })?
+            .ok_or_else(|| ParleyError::ThreadNotFound(thread.clone()))?;
+
+        let graph = self
+            .registry
+            .resolve(&latest.graph_fingerprint)
+            .ok_or_else(|| ParleyError::GraphNotRegistered {
+                fingerprint: latest.graph_fingerprint.clone(),
+            })?;
+
+        let (parleys, existing_responses) = match &latest.status {
+            WaypointStatus::AwaitingInput { parleys, responses } => {
+                (parleys.clone(), responses.clone())
+            }
+            other => {
+                return Err(ParleyError::ThreadNotAwaitingInput {
+                    thread: thread.clone(),
+                    status: format!("{other:?}"),
+                });
+            }
+        };
+
+        match shadow_validate(&parleys, &existing_responses, &responses, graph.as_ref()) {
+            ShadowOutcome::Rejected(err) => Err(err),
+            ShadowOutcome::DelegateSynchronously => {
+                // Always fast by construction: an expired `FailRun` parley
+                // and a valid-but-partial submission both return from the
+                // real `resume_with` before `superstep::run_with_namespace`
+                // is ever invoked -- awaiting inline here never blocks on
+                // the continuation.
+                self.engine
+                    .resume_with(graph.as_ref(), thread.clone(), responses)
+                    .await
+                    .map(|_outcome| ResumeAccepted::new(thread.clone()))
+                    .map_err(map_engine_error)
+            }
+            ShadowOutcome::Complete => {
+                // Every parley now has a response: this call WOULD invoke
+                // the continuation. Register with the ShutdownCoordinator
+                // and spawn the real, authoritative call as a background
+                // task (D-21, D-25); return immediately.
+                let (_child_token, guard) = self.coordinator.register();
+                let engine = Arc::clone(&self.engine);
+                let graph_for_task = Arc::clone(&graph);
+                let thread_for_task = thread.clone();
+                tokio::spawn(async move {
+                    let _guard = guard;
+                    let _ = engine
+                        .resume_with(graph_for_task.as_ref(), thread_for_task, responses)
+                        .await;
+                    // No synchronous caller remains to report a failure
+                    // to (a race against a concurrent resume_with call, or
+                    // a shadow-validation divergence) -- the thread's own
+                    // state, read through a separate poll path, is the
+                    // source of truth, exactly like any other
+                    // fire-and-forget background job.
+                });
+                Ok(ResumeAccepted::new(thread.clone()))
+            }
+        }
+    }
+}
+
+/// The three ways [`shadow_validate`] can conclude, given only the
+/// information a `ParleyPort` caller and the thread's own Waypoint expose.
+enum ShadowOutcome {
+    /// The submission is invalid; return this typed error directly, with
+    /// nothing persisted and no engine call made at all.
+    Rejected(ParleyError),
+    /// Either an outstanding parley has expired under `on_expire: FailRun`
+    /// (or a future `OnExpire` this engine fails closed on), or the
+    /// submission is valid but leaves at least one parley unanswered.
+    /// Either way the real `WarEngine::resume_with` call this outcome
+    /// delegates to is guaranteed fast (never reaches the continuation).
+    DelegateSynchronously,
+    /// The submission is valid and, combined with the thread's existing
+    /// responses, answers every outstanding parley: the real call would
+    /// invoke the continuation, so it must be spawned in the background.
+    Complete,
+}
+
+/// Re-implements `WarEngine::resume_with`'s own validation ordering
+/// (24-04, D-10/D-11/D-12) using only public data: lazy expiry scan over
+/// every outstanding (not-yet-answered) parley first (a `FailRun`-expired
+/// parley short-circuits to [`ShadowOutcome::DelegateSynchronously`]
+/// immediately, matching the real engine's own short-circuit), then total
+/// per-response validation (`UnknownParleyId` → `ParleyAlreadyAnswered` →
+/// `ResponseShapeInvalid`) over the submitted responses plus any
+/// `ResumeWithDefault` substitutions, then a completeness check. See the
+/// module-level documentation for why this duplication exists and why it
+/// is never the sole authority.
+fn shadow_validate(
+    parleys: &[ParleyRequest],
+    existing_responses: &[ParleyResponse],
+    responses: &[ParleyResponse],
+    graph: &WarGraph,
+) -> ShadowOutcome {
+    let now = Utc::now();
+    let already_answered: BTreeSet<ParleyId> =
+        existing_responses.iter().map(|r| r.parley_id).collect();
+
+    let mut defaulted: Vec<ParleyResponse> = Vec::new();
+    for request in parleys {
+        if already_answered.contains(&request.parley_id) {
+            continue;
+        }
+        let Some(expires_at) = request.expires_at else {
+            continue;
+        };
+        if expires_at > now {
+            continue;
+        }
+        match &request.on_expire {
+            OnExpire::ResumeWithDefault(value) => {
+                defaulted.push(ParleyResponse {
+                    parley_id: request.parley_id,
+                    kind: request.kind.clone(),
+                    prompt: request.prompt.clone(),
+                    value: value.clone(),
+                    responded_by: None,
+                    responded_at: now,
+                    defaulted: true,
+                });
+            }
+            // `OnExpire::FailRun`, or a future variant this engine fails
+            // closed on (mirroring the real engine's own fail-closed
+            // catch-all): the real call always returns before the
+            // continuation for this case.
+            _ => return ShadowOutcome::DelegateSynchronously,
+        }
+    }
+
+    let mut effective_responses: Vec<ParleyResponse> = responses
+        .iter()
+        .filter(|r| !defaulted.iter().any(|d| d.parley_id == r.parley_id))
+        .cloned()
+        .collect();
+    effective_responses.extend(defaulted);
+
+    let mut newly_answered: BTreeSet<ParleyId> = BTreeSet::new();
+    for response in &effective_responses {
+        let Some(request) = parleys.iter().find(|p| p.parley_id == response.parley_id) else {
+            return ShadowOutcome::Rejected(ParleyError::UnknownParleyId {
+                parley_id: response.parley_id,
+            });
+        };
+        if already_answered.contains(&response.parley_id)
+            || !newly_answered.insert(response.parley_id)
+        {
+            return ShadowOutcome::Rejected(ParleyError::ParleyAlreadyAnswered {
+                parley_id: response.parley_id,
+            });
+        }
+        if let Err(reason) = shadow_validate_response_shape(graph, request, &response.value) {
+            return ShadowOutcome::Rejected(ParleyError::ResponseShapeInvalid {
+                parley_id: response.parley_id,
+                reason,
+            });
+        }
+    }
+
+    let mut all_responses: Vec<&ParleyResponse> = existing_responses.iter().collect();
+    all_responses.extend(effective_responses.iter());
+
+    let complete = parleys
+        .iter()
+        .all(|p| all_responses.iter().any(|r| r.parley_id == p.parley_id));
+
+    if complete {
+        ShadowOutcome::Complete
+    } else {
+        ShadowOutcome::DelegateSynchronously
+    }
+}
+
+/// A faithful re-implementation of `paladin-battalion`'s crate-private
+/// `validate_response_shape` (`crates/paladin-battalion/src/engine/mod.rs`),
+/// reachable from this crate only by copy since the original is
+/// `pub(crate)` to `paladin-battalion`. See the module-level documentation
+/// for why this duplication exists.
+fn shadow_validate_response_shape(
+    graph: &WarGraph,
+    request: &ParleyRequest,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    shadow_validate_parley_value_for_kind(&request.kind, request.choices.as_deref(), value)?;
+    if request.kind == ParleyKind::StateEdit {
+        let delta: StateDelta = serde_json::from_value(value.clone())
+            .map_err(|e| format!("StateEdit value must deserialize as a StateDelta: {e}"))?;
+        let schema = graph.schema();
+        let mut unknown: Vec<&str> = delta
+            .values
+            .keys()
+            .filter(|field| schema.field_spec(field).is_none())
+            .map(|field| field.as_str())
+            .collect();
+        if !unknown.is_empty() {
+            unknown.sort_unstable();
+            return Err(format!(
+                "StateEdit value names field(s) not declared in the graph schema: {}",
+                unknown.join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A faithful re-implementation of `paladin-battalion`'s crate-private
+/// `graph::validate_parley_value_for_kind`. See
+/// [`shadow_validate_response_shape`]'s own rustdoc for why this
+/// duplication exists.
+fn shadow_validate_parley_value_for_kind(
+    kind: &ParleyKind,
+    choices: Option<&[String]>,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    match kind {
+        ParleyKind::Approval => shadow_normalize_approval_value(value)
+            .map(|_| ())
+            .ok_or_else(|| {
+                format!(
+                    "Approval value must be a bool or one of true/false/yes/no/approve/deny \
+                     (case-insensitive); found {value}"
+                )
+            }),
+        ParleyKind::Choice => {
+            let Some(s) = value.as_str() else {
+                return Err(format!("Choice value must be a string; found {value}"));
+            };
+            if let Some(choices) = choices
+                && !choices.iter().any(|c| c == s)
+            {
+                return Err(format!(
+                    "Choice value '{s}' is not one of the declared choices: {choices:?}"
+                ));
+            }
+            Ok(())
+        }
+        ParleyKind::FreeText => {
+            if value.is_string() {
+                Ok(())
+            } else {
+                Err(format!("FreeText value must be a string; found {value}"))
+            }
+        }
+        ParleyKind::StateEdit => serde_json::from_value::<StateDelta>(value.clone())
+            .map(|_| ())
+            .map_err(|e| format!("StateEdit value must deserialize as a StateDelta: {e}")),
+        // `ParleyKind` is `#[non_exhaustive]`: fails CLOSED, mirroring the
+        // original's own catch-all.
+        other => Err(format!(
+            "no value validator is registered for ParleyKind {other:?} -- add one alongside \
+             the kind"
+        )),
+    }
+}
+
+/// A faithful re-implementation of `paladin-battalion`'s crate-private
+/// `graph::normalize_approval_value`.
+fn shadow_normalize_approval_value(value: &serde_json::Value) -> Option<bool> {
+    match value {
+        serde_json::Value::Bool(b) => Some(*b),
+        serde_json::Value::String(s) => match s.to_ascii_lowercase().as_str() {
+            "true" | "yes" | "approve" => Some(true),
+            "false" | "no" | "deny" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Maps every `EngineError` variant the real `WarEngine::resume_with`
+/// validation path can produce onto its `ParleyError` counterpart
+/// explicitly (D-25) -- a catch-all mapping that collapsed distinct
+/// validation failures into one variant would erase the 400-versus-409
+/// distinction a later plan's HTTP layer depends on.
+fn map_engine_error(err: EngineError) -> ParleyError {
+    match err {
+        EngineError::ThreadNotFound(thread) => ParleyError::ThreadNotFound(thread),
+        EngineError::ThreadNotAwaitingInput { thread, status } => {
+            ParleyError::ThreadNotAwaitingInput { thread, status }
+        }
+        EngineError::UnknownParleyId { parley_id } => ParleyError::UnknownParleyId { parley_id },
+        EngineError::ParleyAlreadyAnswered { parley_id } => {
+            ParleyError::ParleyAlreadyAnswered { parley_id }
+        }
+        EngineError::ResponseShapeInvalid { parley_id, reason } => {
+            ParleyError::ResponseShapeInvalid { parley_id, reason }
+        }
+        EngineError::ParleyExpired {
+            parley_id,
+            expires_at,
+        } => ParleyError::ParleyExpired {
+            parley_id,
+            expires_at,
+        },
+        // `EngineError` is `#[non_exhaustive]`: every other variant --
+        // including ones this adapter's own upstream checks make
+        // structurally unreachable in practice (`GraphMismatch`: this
+        // adapter always resolves the graph BY the thread's own
+        // fingerprint, so the fingerprints can never differ;
+        // `ThreadAlreadyFailed`: this adapter already rejects a
+        // non-`AwaitingInput` status before ever reaching the real engine
+        // call) and any future variant this mapping does not yet name --
+        // fails CLOSED into `Rejected` rather than being silently dropped
+        // or panicking (T-24-06's fail-closed discipline).
+        other => ParleyError::Rejected {
+            reason: other.to_string(),
+        },
+    }
+}
 
 #[cfg(test)]
 mod tests {

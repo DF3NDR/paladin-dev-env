@@ -42,7 +42,7 @@ use paladin_core::platform::container::battlefield::{
 use paladin_core::platform::container::directive::{
     Directive, MusterContext, MusterTask, NextStep,
 };
-use paladin_core::platform::container::node_error::{NodeError, NodeErrorSource};
+use paladin_core::platform::container::node_error::{AttemptRecord, NodeError, NodeErrorSource};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{
     ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
@@ -842,18 +842,23 @@ enum NodeRunOutcome {
 /// rather than relying on completion order, can still cross-check it),
 /// when its FINAL (succeeding or exhausted) attempt started, how long that
 /// attempt ran, its Paladin identity if any, its token count, its
-/// [`NodeRunOutcome`], and the 1-indexed attempt number that produced it
+/// [`NodeRunOutcome`], the 1-indexed attempt number that produced it
 /// (D-15: populates `NodeExecutionRecord.attempt`, `1` for a node with no
-/// `Aegis` retry policy, exactly as before this phase).
-type NodeTaskOutput = (
-    NodeId,
-    chrono::DateTime<chrono::Utc>,
-    u64,
-    Option<Uuid>,
-    u64,
-    NodeRunOutcome,
-    u32,
-);
+/// `Aegis` retry policy, exactly as before this phase), and the history of
+/// every failed attempt before it (populates `NodeExecutionRecord.attempts`).
+struct NodeTaskOutput {
+    node_id: NodeId,
+    started_at: chrono::DateTime<chrono::Utc>,
+    duration_ms: u64,
+    paladin_id: Option<Uuid>,
+    token_count: u64,
+    outcome: NodeRunOutcome,
+    attempt: u32,
+    /// Every FAILED attempt before the final one, ascending by attempt
+    /// number (FT-FR-03, D-16) -- built in order by the retry loop, so it
+    /// is asserted (never sorted) at the record construction site.
+    failed_attempts: Vec<AttemptRecord>,
+}
 
 /// The `tasks.len() > limits.max_muster_tasks` comparison (D-13's
 /// `precision` edge truth), factored out of [`validate_muster_tasks`] so it
@@ -1583,6 +1588,10 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     // exactly once, byte-identical to pre-Phase-25 behavior
                     // (D-09's "no policy, no change" truth).
                     let mut attempt: u32 = 0;
+                    // --- FT-FR-03, D-16: one `AttemptRecord` per FAILED
+                    // attempt, pushed in attempt order as each retry is
+                    // decided, so the vector is ascending by construction.
+                    let mut failed_attempts: Vec<AttemptRecord> = Vec::new();
                     loop {
                         attempt += 1;
                         node_trace.emit(TraceEvent::NodeStarted {
@@ -1702,6 +1711,12 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                 source: NodeErrorSource::from(state_err.clone()),
                             };
                             if retry::should_retry(retry_policy, &node_error, attempt) {
+                                failed_attempts.push(AttemptRecord {
+                                    attempt,
+                                    started_at,
+                                    duration_ms,
+                                    error: node_error,
+                                });
                                 let delay = retry::backoff_delay(retry_policy, attempt + 1);
                                 if retry::wait_backoff(delay, &node_cancellation).await {
                                     continue;
@@ -1712,26 +1727,28 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                 // reason: "shutdown" }` rather than a
                                 // failure, exactly like the grace-race abort
                                 // path below.
-                                break (
-                                    nid,
+                                break NodeTaskOutput {
+                                    node_id: nid,
                                     started_at,
                                     duration_ms,
                                     paladin_id,
                                     token_count,
-                                    NodeRunOutcome::Skipped("shutdown".to_string()),
+                                    outcome: NodeRunOutcome::Skipped("shutdown".to_string()),
                                     attempt,
-                                );
+                                    failed_attempts,
+                                };
                             }
                         }
-                        break (
-                            nid,
+                        break NodeTaskOutput {
+                            node_id: nid,
                             started_at,
                             duration_ms,
                             paladin_id,
                             token_count,
                             outcome,
                             attempt,
-                        );
+                            failed_attempts,
+                        };
                     }
                 }),
             });
@@ -1865,8 +1882,16 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         for (dispatch_index, entry) in dispatch_entries.iter().enumerate() {
             let (entry_node_id, entry_muster_ctx) = entry;
             let is_muster_task = entry_muster_ctx.is_some();
-            let Some((node_id, started_at, duration_ms, paladin_id, token_count, outcome, attempt)) =
-                results[dispatch_index].take()
+            let Some(NodeTaskOutput {
+                node_id,
+                started_at,
+                duration_ms,
+                paladin_id,
+                token_count,
+                outcome,
+                attempt,
+                failed_attempts,
+            }) = results[dispatch_index].take()
             else {
                 // --- D-19: aborted past the shared grace deadline. Recorded
                 // `Skipped { reason: "shutdown" }`, exactly like an
@@ -1889,6 +1914,14 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 });
                 continue;
             };
+            // --- FT-FR-03, D-16: built in attempt order by the retry loop
+            // (asserted, never sorted, so a regression there is loud).
+            debug_assert!(
+                failed_attempts
+                    .windows(2)
+                    .all(|w| w[0].attempt < w[1].attempt),
+                "attempt history must ascend by attempt number"
+            );
             match outcome {
                 NodeRunOutcome::Succeeded(directive) => {
                     let Directive { delta, next } = directive;
@@ -1974,7 +2007,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         token_count,
                         outcome: outcome_kind,
                         attempt,
-                        attempts: Vec::new(),
+                        attempts: failed_attempts,
                         cache_hit: false,
                     });
 
@@ -2037,7 +2070,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         token_count,
                         outcome: NodeOutcomeKind::Skipped { reason },
                         attempt,
-                        attempts: Vec::new(),
+                        attempts: failed_attempts,
                         cache_hit: false,
                     });
                 }
@@ -2050,7 +2083,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         token_count,
                         outcome: NodeOutcomeKind::Failed,
                         attempt,
-                        attempts: Vec::new(),
+                        attempts: failed_attempts,
                         cache_hit: false,
                     });
                     if node_failure.is_none() {

@@ -338,19 +338,6 @@ async fn build_thread_state(
     coordinator: ShutdownCoordinator,
     auth: AgentAuthConfig,
 ) -> Result<ThreadApiState, Box<dyn std::error::Error>> {
-    // RED-STATE MARKER (Phase 24 Plan 11, Task 3): not yet implemented --
-    // the config is intentionally unread.
-    let _ = (waypoint_store_config, engine_config, coordinator, auth);
-    Err("stub: build_thread_state not yet implemented".into())
-}
-
-#[allow(dead_code)]
-async fn build_thread_state_real(
-    waypoint_store_config: &WaypointStoreConfig,
-    engine_config: &EngineConfig,
-    coordinator: ShutdownCoordinator,
-    auth: AgentAuthConfig,
-) -> Result<ThreadApiState, Box<dyn std::error::Error>> {
     match &waypoint_store_config.backend {
         WaypointStoreBackend::Disabled => Ok(ThreadApiState::new().with_auth(auth)),
         WaypointStoreBackend::Sqlite { path } => {

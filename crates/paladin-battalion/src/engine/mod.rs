@@ -2038,7 +2038,7 @@ mod tests {
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
     };
-    use paladin_core::platform::container::directive::{Directive, NextStep};
+    use paladin_core::platform::container::directive::{Directive, MusterTask, NextStep};
     use paladin_core::platform::container::paladin_error::PaladinError;
     use paladin_core::platform::container::parley::{OnExpire, ParleyKind};
     use paladin_core::platform::container::transience::Transience;
@@ -2048,9 +2048,9 @@ mod tests {
 
     use crate::engine::graph::{EdgeSpec, GateRequestTemplate};
     use crate::engine::test_support::{
-        CountingFunctionNode, FailThenSucceedNode, FailingFunctionNode, FailingPaladinPort,
-        FixedDecisionInterceptor, RecordingInterceptor, RecordingPaladinPort,
-        RecordingWaypointStore,
+        AttemptObservingNode, CountingFunctionNode, FailThenSucceedNode, FailingFunctionNode,
+        FailingPaladinPort, FixedDecisionInterceptor, MusterFailThenSucceedWorker,
+        RecordingInterceptor, RecordingPaladinPort, RecordingWaypointStore,
     };
 
     struct UnimplementedPaladinPort;
@@ -7585,5 +7585,489 @@ mod tests {
             ))
             .to_string()
         );
+    }
+
+    // --- Phase 25 Plan 07, Task 3: per-task retry inside a Muster, and the
+    //     Waypoint and Parley interactions (D-17, FT-FR-06, FT-FR-07) -----
+
+    fn retrying_aegis_with_interval(max_attempts: u32, interval: std::time::Duration) -> Aegis {
+        Aegis {
+            retry: Some(RetryPolicy {
+                max_attempts,
+                retry_on: RetryPredicate::TransientAndUnknown,
+                jitter: false,
+                initial_interval: interval,
+                ..RetryPolicy::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// `planner -> Muster(a..e) -> worker` over an `Append` field, the
+    /// worker being `worker_node` with `worker_aegis` set on the template.
+    fn muster_graph(
+        results_field: &FieldName,
+        worker_node: Arc<MusterFailThenSucceedWorker>,
+        worker_aegis: Aegis,
+    ) -> (WarGraph, NodeId) {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            results_field.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(
+                    ["a", "b", "c", "d", "e"]
+                        .iter()
+                        .map(|k| MusterTask {
+                            worker: worker.clone(),
+                            payload: serde_json::json!(*k),
+                            task_key: k.to_string(),
+                        })
+                        .collect(),
+                ),
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node));
+        graph.set_aegis(worker.clone(), worker_aegis);
+        graph.add_entry(planner);
+        (graph, worker)
+    }
+
+    #[tokio::test]
+    async fn one_mustered_task_retries_without_re_running_siblings() {
+        let results = FieldName::new("results").unwrap();
+        let worker_node = MusterFailThenSucceedWorker::new(results.clone(), [("c", 2)], None);
+        let (graph, _worker) = muster_graph(&results, worker_node.clone(), retrying_aegis(3));
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("muster-one-task-retries").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+
+        for sibling in ["a", "b", "d", "e"] {
+            assert_eq!(
+                worker_node.run_count(sibling),
+                1,
+                "sibling {sibling} ran exactly once"
+            );
+        }
+        assert_eq!(
+            worker_node.run_count("c"),
+            3,
+            "the failing task ran three times"
+        );
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                let mut aggregated: Vec<String> = final_state.get(&results).unwrap().unwrap();
+                aggregated.sort();
+                assert_eq!(
+                    aggregated,
+                    vec!["a", "b", "c", "d", "e"],
+                    "five results aggregated"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sibling_tasks_do_not_wait_for_a_retrying_task_to_finish() {
+        let results = FieldName::new("results").unwrap();
+        let worker_node = MusterFailThenSucceedWorker::new(results.clone(), [("c", 2)], None);
+        let interval = std::time::Duration::from_millis(500);
+        let (graph, _worker) = muster_graph(
+            &results,
+            worker_node.clone(),
+            retrying_aegis_with_interval(3, interval),
+        );
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("muster-siblings-do-not-wait").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let calls = worker_node.calls();
+        let c_final = calls
+            .iter()
+            .filter(|c| c.task_key == "c")
+            .map(|c| c.at)
+            .max()
+            .expect("c ran");
+        let c_first = calls
+            .iter()
+            .filter(|c| c.task_key == "c")
+            .map(|c| c.at)
+            .min()
+            .expect("c ran");
+        assert!(
+            c_final - c_first >= interval + interval * 2,
+            "c's final attempt waited out the 500ms + 1000ms backoffs on the paused clock"
+        );
+        for call in calls.iter().filter(|c| c.task_key != "c") {
+            assert!(
+                call.at < c_final,
+                "sibling {} ran at {:?}, before c's final attempt at {:?}",
+                call.task_key,
+                call.at,
+                c_final
+            );
+            assert!(
+                call.at - c_first < interval,
+                "sibling {} did not wait for any of c's backoffs",
+                call.task_key
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn each_muster_task_has_its_own_attempt_counter() {
+        let results = FieldName::new("results").unwrap();
+        let worker_node =
+            MusterFailThenSucceedWorker::new(results.clone(), [("b", 1), ("d", 1)], None);
+        let (graph, worker) = muster_graph(&results, worker_node.clone(), retrying_aegis(3));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("muster-own-attempt-counters").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(worker_node.run_count("b"), 2);
+        assert_eq!(worker_node.run_count("d"), 2);
+        for other in ["a", "c", "e"] {
+            assert_eq!(worker_node.run_count(other), 1);
+        }
+
+        // The muster superstep's consolidated Waypoint (no progress payload)
+        // carries one record per task: exactly two at `attempt: 2`, each
+        // with exactly one failed attempt in its history, and three at
+        // `attempt: 1` -- neither retrying task observed the other's count.
+        let waypoints = store.saved_waypoints(&thread).await;
+        let consolidated = waypoints
+            .iter()
+            .find(|w| w.superstep == 2 && w.muster_progress.is_none())
+            .expect("the muster superstep's consolidated Waypoint");
+        let worker_records: Vec<_> = consolidated
+            .completed
+            .iter()
+            .filter(|r| r.node_id == worker)
+            .collect();
+        assert_eq!(worker_records.len(), 5);
+        let mut attempts: Vec<u32> = worker_records.iter().map(|r| r.attempt).collect();
+        attempts.sort_unstable();
+        assert_eq!(attempts, vec![1, 1, 1, 2, 2]);
+        for record in &worker_records {
+            assert_eq!(record.attempts.len(), (record.attempt - 1) as usize);
+        }
+    }
+
+    #[tokio::test]
+    async fn no_waypoint_is_written_between_attempts() {
+        let node_id = NodeId::new("flaky-observer");
+        let store = Arc::new(RecordingWaypointStore::new());
+        let node =
+            AttemptObservingNode::new(3, FieldName::new("result").unwrap(), store.clone(), None);
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(3));
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("no-waypoint-between-attempts").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(node.run_count(), 3);
+        let seen = node.saves_seen();
+        assert_eq!(seen.len(), 3);
+        assert_eq!(
+            seen[1] - seen[0],
+            0,
+            "zero saves between attempt 1's failure and attempt 2's start"
+        );
+        assert_eq!(seen[2] - seen[1], 0, "and between attempts 2 and 3");
+        assert_eq!(
+            store.save_call_count(),
+            1,
+            "the superstep's one Waypoint, after the loop"
+        );
+    }
+
+    #[tokio::test]
+    async fn muster_progress_waypoints_record_only_completed_tasks() {
+        let results = FieldName::new("results").unwrap();
+        let store = Arc::new(RecordingWaypointStore::new());
+        let worker_node =
+            MusterFailThenSucceedWorker::new(results.clone(), [("c", 2)], Some(store.clone()));
+        let (graph, _worker) = muster_graph(&results, worker_node.clone(), retrying_aegis(3));
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("muster-progress-only-completed").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        // (1) No progress Waypoint was written while `c` was mid-retry: every
+        //     one of c's attempts observed the same save count, so nothing
+        //     was persisted between its failures and its success.
+        let c_saves: Vec<usize> = worker_node
+            .calls()
+            .iter()
+            .filter(|call| call.task_key == "c")
+            .map(|call| call.saves_seen)
+            .collect();
+        assert_eq!(c_saves.len(), 3);
+        assert!(c_saves.iter().all(|&n| n == c_saves[0]), "{c_saves:?}");
+
+        // (2) Every progress Waypoint's `completed` map lists only tasks
+        //     that had already succeeded, growing in task_key order; `c`
+        //     first appears in the third one (after a and b), never before
+        //     its succeeding attempt, and the payload shape is Phase 23's.
+        let mut progress: Vec<&Waypoint> = Vec::new();
+        let waypoints = store.saved_waypoints(&thread).await;
+        for w in waypoints.iter().rev() {
+            if w.muster_progress.is_some() {
+                progress.push(w);
+            }
+        }
+        assert_eq!(
+            progress.len(),
+            5,
+            "one progress Waypoint per completed task"
+        );
+        for (index, w) in progress.iter().enumerate() {
+            let p = w.muster_progress.as_ref().unwrap();
+            assert_eq!(p.tasks.len(), 5);
+            let keys: Vec<&String> = p.completed.keys().collect();
+            let expected: Vec<String> = ["a", "b", "c", "d", "e"][..=index]
+                .iter()
+                .map(|k| k.to_string())
+                .collect();
+            assert_eq!(keys, expected.iter().collect::<Vec<_>>());
+            assert_eq!(p.completed.contains_key("c"), index >= 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn resume_re_executes_an_interrupted_node_from_attempt_one() {
+        let node_id = NodeId::new("interrupted");
+        let store = Arc::new(RecordingWaypointStore::new());
+        let token = CancellationToken::new();
+        // Fails on run 1 (cancelling the run from inside that failure, so
+        // the backoff wait observes the cancellation and the run halts
+        // mid-retry), succeeds on run 2 -- which must be attempt 1 of the
+        // resumed run.
+        let node = AttemptObservingNode::new(
+            2,
+            FieldName::new("result").unwrap(),
+            store.clone(),
+            Some(token.clone()),
+        );
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+            .with_cancellation_token(token);
+        let thread = ThreadId::new("resume-from-attempt-one").unwrap();
+        let halted = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            engine.start(&graph, thread.clone(), StateDelta::new()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(halted, RunOutcome::Halted { .. }),
+            "got {halted:?}"
+        );
+        assert_eq!(
+            node.run_count(),
+            1,
+            "attempt 1 ran; the interrupted backoff never retried"
+        );
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(latest.status, WaypointStatus::Halted);
+        assert!(
+            latest.vanguard.contains(&node_id),
+            "the interrupted node is re-listed on the Halted vanguard so resume re-runs it"
+        );
+
+        let resume_engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let resumed = resume_engine.resume(&graph, thread.clone()).await.unwrap();
+        assert!(
+            matches!(resumed, RunOutcome::Completed { .. }),
+            "got {resumed:?}"
+        );
+        assert_eq!(node.run_count(), 2);
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .into_iter()
+            .next()
+            .unwrap();
+        let record = latest
+            .completed
+            .iter()
+            .find(|r| r.node_id == node_id)
+            .expect("the resumed run recorded the node");
+        assert_eq!(
+            record.attempt, 1,
+            "a resume re-executes from attempt 1 (FT-FR-07)"
+        );
+        assert!(record.attempts.is_empty());
+        assert_eq!(record.outcome, NodeOutcomeKind::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn a_parley_directive_is_never_retried() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let node = {
+            let node_id = node_id.clone();
+            CountingFunctionNode::with_context_directive(move |_run, _state, _ctx| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Parley(sample_parley_request(node_id.clone(), parley_id)),
+            })
+        };
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("parley-never-retried").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(
+            matches!(outcome, RunOutcome::AwaitingInput { .. }),
+            "got {outcome:?}"
+        );
+        assert_eq!(
+            node.run_count(),
+            1,
+            "a Parley is a success: exactly one execution"
+        );
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .into_iter()
+            .next()
+            .unwrap();
+        let record = &latest.completed[0];
+        assert_eq!(record.outcome, NodeOutcomeKind::Parleyed);
+        assert_eq!(record.attempt, 1);
+        assert!(record.attempts.is_empty(), "no retry budget consumed");
+    }
+
+    #[tokio::test]
+    async fn post_resume_rerun_of_a_parleying_node_starts_at_attempt_one() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        let node_id = NodeId::new("asker");
+        let parley_id = ParleyId::new();
+        let node = {
+            let node_id = node_id.clone();
+            CountingFunctionNode::with_context_directive(move |run, _state, ctx| {
+                if run == 0 {
+                    Directive {
+                        delta: StateDelta::new(),
+                        next: NextStep::Parley(sample_parley_request(node_id.clone(), parley_id)),
+                    }
+                } else {
+                    let value = ctx
+                        .parley_response()
+                        .expect("parley_response is set on the post-resume re-run")
+                        .value
+                        .clone();
+                    let mut delta = StateDelta::new();
+                    delta.set_raw(FieldName::new("result").unwrap(), value);
+                    delta.into()
+                }
+            })
+        };
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id.clone(), retrying_aegis(3));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone());
+        let thread = ThreadId::new("parley-rerun-attempt-one").unwrap();
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(suspended, RunOutcome::AwaitingInput { .. }));
+
+        let response = ParleyResponse {
+            parley_id,
+            kind: ParleyKind::Approval,
+            prompt: String::new(),
+            value: serde_json::json!("approve"),
+            responded_by: Some("tester".to_string()),
+            responded_at: Utc::now(),
+            defaulted: false,
+        };
+        let resumed = engine
+            .resume_with(&graph, thread.clone(), vec![response])
+            .await
+            .unwrap();
+        assert!(
+            matches!(resumed, RunOutcome::Completed { .. }),
+            "got {resumed:?}"
+        );
+        assert_eq!(node.run_count(), 2);
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .into_iter()
+            .next()
+            .unwrap();
+        let record = latest
+            .completed
+            .iter()
+            .find(|r| r.node_id == node_id)
+            .expect("the re-run is recorded");
+        assert_eq!(
+            record.attempt, 1,
+            "the post-resume re-run is a fresh attempt 1"
+        );
+        assert!(record.attempts.is_empty());
+        assert_eq!(record.outcome, NodeOutcomeKind::Succeeded);
     }
 }

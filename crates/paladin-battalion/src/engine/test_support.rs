@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
+use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
 use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
@@ -22,6 +22,7 @@ use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+use tokio_util::sync::CancellationToken;
 
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor};
 use crate::engine::node::{NodeContext, StateNode, StateNodeError};
@@ -881,4 +882,180 @@ impl NodeInterceptor for FixedDecisionInterceptor {
     }
 
     async fn after(&self, _ctx: &NodeContext, _delta: &mut StateDelta) {}
+}
+
+// --- Phase 25 Plan 07: per-task Muster retry doubles (D-17) ---------------
+
+/// One observed call of a [`MusterFailThenSucceedWorker`]: the task's
+/// `task_key`, when (on the tokio clock) the call started, and how many
+/// `save`s the observed [`RecordingWaypointStore`] had received by then.
+#[derive(Debug, Clone)]
+pub struct WorkerCall {
+    /// The `ctx.task_key()` the call ran under.
+    pub task_key: String,
+    /// The tokio-clock instant the call started (paused-clock friendly).
+    pub at: tokio::time::Instant,
+    /// `RecordingWaypointStore::save_call_count()` at call start, or `0`
+    /// with no observed store.
+    pub saves_seen: usize,
+}
+
+/// A Muster worker-template [`StateNode`] test double keyed by
+/// `ctx.task_key()`: each task fails (with `StateNodeError("transient")`)
+/// on its first `failures[task_key]` runs and succeeds afterwards by
+/// appending its own key to `field`; every other key succeeds at once.
+/// Records a per-key run count and an ordered log of every call, so a test
+/// can assert that one task's retries never re-ran or delayed a sibling
+/// (FT-FR-06) and that no Waypoint was written between attempts (FT-FR-07).
+pub struct MusterFailThenSucceedWorker {
+    field: FieldName,
+    failures: HashMap<String, usize>,
+    counts: Mutex<HashMap<String, usize>>,
+    calls: Mutex<Vec<WorkerCall>>,
+    observed_store: Option<Arc<RecordingWaypointStore>>,
+}
+
+impl MusterFailThenSucceedWorker {
+    /// Construct a worker whose tasks named in `failures` fail that many
+    /// times before succeeding, optionally observing `store`'s save count
+    /// at every call.
+    pub fn new(
+        field: FieldName,
+        failures: impl IntoIterator<Item = (&'static str, usize)>,
+        observed_store: Option<Arc<RecordingWaypointStore>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            failures: failures
+                .into_iter()
+                .map(|(k, n)| (k.to_string(), n))
+                .collect(),
+            counts: Mutex::new(HashMap::new()),
+            calls: Mutex::new(Vec::new()),
+            observed_store,
+        })
+    }
+
+    /// How many times the task keyed `task_key` has run so far.
+    pub fn run_count(&self, task_key: &str) -> usize {
+        self.counts
+            .lock()
+            .unwrap()
+            .get(task_key)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Every call so far, in call order.
+    pub fn calls(&self) -> Vec<WorkerCall> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for MusterFailThenSucceedWorker {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        let key = ctx.task_key().unwrap_or_default().to_string();
+        let run_index = {
+            let mut counts = self.counts.lock().unwrap();
+            let count = counts.entry(key.clone()).or_insert(0);
+            *count += 1;
+            *count
+        };
+        self.calls.lock().unwrap().push(WorkerCall {
+            task_key: key.clone(),
+            at: tokio::time::Instant::now(),
+            saves_seen: self
+                .observed_store
+                .as_ref()
+                .map(|s| s.save_call_count())
+                .unwrap_or(0),
+        });
+        if run_index <= self.failures.get(&key).copied().unwrap_or(0) {
+            return Err(StateNodeError("transient".to_string()));
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), serde_json::json!(key));
+        Ok(delta.into())
+    }
+}
+
+/// A vanguard [`StateNode`] test double that fails on every run before its
+/// `fail_until_attempt`-th (1-indexed), records the observed
+/// [`RecordingWaypointStore`] save count at the start of EVERY run (so a
+/// test can assert no Waypoint was written between two attempts,
+/// FT-FR-07), and can cancel a run's `CancellationToken` from inside its
+/// first failing run (so a test can interrupt a run mid-backoff
+/// deterministically and prove a resume re-executes it from attempt 1).
+pub struct AttemptObservingNode {
+    fail_until_attempt: usize,
+    field: FieldName,
+    run_count: AtomicUsize,
+    saves_seen: Mutex<Vec<usize>>,
+    observed_store: Arc<RecordingWaypointStore>,
+    cancel_on_first_failure: Option<CancellationToken>,
+}
+
+impl AttemptObservingNode {
+    /// Construct a node that fails before its `fail_until_attempt`-th run,
+    /// observing `store`'s save count on every run, and cancelling
+    /// `cancel_on_first_failure` (if given) from inside its first failing
+    /// run.
+    pub fn new(
+        fail_until_attempt: usize,
+        field: FieldName,
+        observed_store: Arc<RecordingWaypointStore>,
+        cancel_on_first_failure: Option<CancellationToken>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            fail_until_attempt,
+            field,
+            run_count: AtomicUsize::new(0),
+            saves_seen: Mutex::new(Vec::new()),
+            observed_store,
+            cancel_on_first_failure,
+        })
+    }
+
+    /// How many times this node has run so far, across every attempt and
+    /// every run of the thread.
+    pub fn run_count(&self) -> usize {
+        self.run_count.load(Ordering::SeqCst)
+    }
+
+    /// The observed store's `save_call_count()` at the start of each run,
+    /// in run order.
+    pub fn saves_seen(&self) -> Vec<usize> {
+        self.saves_seen.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for AttemptObservingNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        let run_index = self.run_count.fetch_add(1, Ordering::SeqCst) + 1;
+        self.saves_seen
+            .lock()
+            .unwrap()
+            .push(self.observed_store.save_call_count());
+        if run_index < self.fail_until_attempt {
+            if run_index == 1
+                && let Some(token) = &self.cancel_on_first_failure
+            {
+                token.cancel();
+            }
+            return Err(StateNodeError("transient".to_string()));
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), serde_json::json!("recovered"));
+        Ok(delta.into())
+    }
 }

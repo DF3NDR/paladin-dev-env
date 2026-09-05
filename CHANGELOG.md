@@ -30,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`MIGRATION.md` §9.1, M-B-01](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes)
   for the worked before/after example.
 
+- **Graph fingerprint bumped `v3` → `v4` (HITL-01, D-09).** The new `Gate` node's
+  routing-relevant properties (`kind`, `output_field`, `choices`, `on_expire`'s discriminant) are
+  now part of the hashed graph shape. A thread suspended under a `v3` fingerprint fails closed
+  with `EngineError::GraphMismatch` on resume rather than being silently reinterpreted under the
+  new hash — resume it against the graph it suspended with, or restart the run under the
+  `v4`-fingerprinted graph.
+
 ### Added
 
 - **Node-driven `Directive` routing (CF-02).** A `StateNode::run` now returns a `Directive` — its
@@ -68,6 +75,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delete-then-resave loop. `WaypointRetentionConfig` (`config::waypoint_retention`) configures
   it, with env overrides and validation. Additive API only (no pre-existing item changed);
   API-surface baseline regenerated to match.
+
+- **Human-in-the-loop pause and resume: the `Gate` node and typed `resume_with` (HITL-01,
+  HITL-02).** `NextStep::Parley` now really suspends a run instead of failing it: the emitting
+  superstep's deltas merge, a Waypoint with `status: AwaitingInput { parleys, responses }` is
+  persisted, every resource for the run is released, and the run survives full process
+  termination — resumable from a different process instance over the same `WaypointPort`. A new
+  first-class `NodeSpec::Gate` node renders its prompt/payload from the Battlefield and is the
+  primary approval-gate building block: one `Gate` plus two conditional edges is a complete
+  approval gate. `WarEngine::resume_with(graph, thread, responses)` validates every submitted
+  response totally before persisting anything (unknown/already-answered/wrong-shape/expired, each
+  a distinct typed `EngineError`), persists a valid-but-partial submission as a same-superstep
+  `AwaitingInput` Waypoint chain, and evaluates each request's `on_expire` policy
+  (`FailRun` | `ResumeWithDefault`) lazily at resume time — no background timer. A Paladin node can
+  also raise a parley through the structured directive envelope's `next.parley` key and read the
+  answer back through a new `parley.` `InputMapping` namespace, reserved at graph-validation time
+  exactly like the existing `muster.` namespace. See the
+  [Parley & Chronicle guide](docs/src/user-guides/parley-and-chronicle.md).
+- **Chronicle: inspectable, forkable execution history (HITL-03).** `Waypoint`/`WaypointSummary`
+  gain an additive `fork_of: Option<WaypointId>` branch marker; `WarEngine::replay`/
+  `WarEngine::fork` re-enter the superstep loop from any past Waypoint, each producing a new
+  branch while the original chain stays byte-identical (a hard, tested invariant) — `fork` merges
+  a caller-supplied `StateDelta` edit before the first forked superstep, letting a "what-if" edit
+  flip a conditional edge's routing. `ChronicleService::{history, inspect, latest_on_branch}`
+  exposes this as a thin, port-only read facade with no engine dependency. A branch's
+  `NodeSpec::Battalion` children run under `ThreadId::child_on_branch`, so a fork's subgraph
+  children never share Waypoints with the mainline's.
+- **Graceful shutdown (HITL-04).** A mid-superstep cancellation now races the whole in-flight
+  batch of node tasks against one shared `shutdown_grace` deadline (default 30s, tunable via
+  `EngineConfig`) instead of a per-node timeout; a node still running past the deadline is aborted
+  and recorded `NodeOutcomeKind::Skipped { reason: "shutdown" }`, its id re-listed in the Halted
+  Waypoint's vanguard so `resume` re-executes it exactly once. `ShutdownCoordinator`
+  (`paladin-battalion::engine::shutdown`) tracks every in-flight run; both `paladin-server`'s
+  `shutdown_signal` and `ServiceRunner::wait_for_shutdown` cancel the same coordinator on
+  SIGTERM/SIGINT and wait up to `shutdown_grace` for the batch to drain. Two new env vars:
+  `APP_ENGINE_SHUTDOWN_GRACE_SECS` (default `30`) and `APP_ENGINE_GRACEFUL_SHUTDOWN` (default
+  `true`; set `false` to restore the old immediate-exit behavior). Both shipped Kubernetes
+  manifests now declare `terminationGracePeriodSeconds: 60` (2× the default grace). See
+  [`MIGRATION.md` §9.1, M-B-02](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes)
+  for the worked before/after example.
+- **Threads over HTTP (HITL-05).** `paladin-web` gains three routes behind the same
+  authentication middleware `/v1/agents/*` already uses: `GET /v1/threads/{id}/state`,
+  `POST /v1/threads/{id}/resume` (returns `202 Accepted { thread_id, state_url }` immediately —
+  the engine continuation runs as a background task, never holding the connection open; a client
+  polls `.../state` for the outcome), and `GET /v1/threads/{id}/history` (paginated, `limit` ≤
+  100, opaque cursor). Backed by a new `ParleyPort` (`paladin-ports`) with zero `paladin-battalion`
+  dependency; `paladin-server` wires a real backend via the new `WaypointStoreConfig`
+  (`APP_WAYPOINT_STORE_BACKEND=sqlite|postgres`, disabled by default — every thread route answers
+  `501 not_implemented` naming the config key until an operator sets it). `openapi.json`
+  regenerated with the three new paths; every pre-existing `/v1/agents/*` path is unchanged.
 
 ## [0.9.0] - 2026-09-01
 

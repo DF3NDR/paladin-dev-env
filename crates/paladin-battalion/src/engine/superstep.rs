@@ -2624,7 +2624,7 @@ async fn evaluate_edge_condition(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_waypoint(
+pub(crate) fn build_waypoint(
     thread: &ThreadId,
     parent_waypoint_id: Option<WaypointId>,
     superstep: u64,
@@ -2670,7 +2670,7 @@ fn build_waypoint(
 /// warning and the caller proceeds as if the save had succeeded. Emits
 /// `TraceEvent::WaypointSaved` (ENG-FR-21) exactly when the save actually
 /// succeeded -- a `BestEffort`-swallowed failure is not reported as saved.
-async fn persist_waypoint<W: WaypointPort>(
+pub(crate) async fn persist_waypoint<W: WaypointPort>(
     waypoint_port: &W,
     durability: WaypointDurability,
     waypoint: &Waypoint,

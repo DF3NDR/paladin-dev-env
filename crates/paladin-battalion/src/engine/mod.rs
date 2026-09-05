@@ -55,9 +55,10 @@ mod superstep;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use chrono::Utc;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
@@ -69,7 +70,7 @@ use paladin_core::platform::container::battlefield_error::BattlefieldError;
 #[cfg(test)]
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{
-    ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
+    OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, ThreadId, WaypointId, WaypointStatus,
@@ -462,6 +463,83 @@ pub enum EngineError {
         /// Every outstanding (unanswered) request from the loaded
         /// `AwaitingInput` Waypoint.
         parleys: Vec<ParleyRequest>,
+    },
+
+    /// `WarEngine::resume_with` was given a response naming a `parley_id`
+    /// that is already answered -- either already present in the loaded
+    /// `AwaitingInput` Waypoint's own `responses` list (a prior
+    /// `resume_with` call already accepted a response for it), or named a
+    /// SECOND time by a later response within the SAME call (HITL-02,
+    /// D-10, X-06). Two responses answering the same `parley_id` in one
+    /// submission are BOTH rejected: the first is accepted into the
+    /// working set before the second is checked, so the second is what
+    /// this error reports -- never last-wins, never first-wins silently
+    /// accepting the first and ignoring the second.
+    #[error("parley already answered: {parley_id}")]
+    ParleyAlreadyAnswered {
+        /// The `parley_id` a response was submitted for that already has
+        /// an accepted answer.
+        parley_id: ParleyId,
+    },
+
+    /// `WarEngine::resume_with` was given a response whose `value` does not
+    /// satisfy its own request's `ParleyKind` (HITL-02, D-10): `Approval`
+    /// must be a bool or one of true/false/yes/no/approve/deny
+    /// (case-insensitive); `Choice` must be a string among the request's
+    /// own `choices`; `FreeText` must be a string; `StateEdit` must
+    /// deserialise as a `StateDelta` naming only fields declared in the
+    /// graph's own schema -- an undeclared field rejects THIS response,
+    /// never the run and never a partial edit (T-24-13). Checked through
+    /// the SAME per-kind validator
+    /// [`graph::validate_parley_value_for_kind`] a Gate's own `on_expire`
+    /// default (`WarGraph::validate`, 24-02) and a Directive's raise-time
+    /// default (`DirectiveParser::parse`, 24-03) are checked against
+    /// (T-24-06) -- never a second, weaker check for the same structural
+    /// rules.
+    #[error("parley {parley_id} response shape invalid: {reason}")]
+    ResponseShapeInvalid {
+        /// The parley whose submitted value failed shape validation.
+        parley_id: ParleyId,
+        /// Why the value was rejected.
+        reason: String,
+    },
+
+    /// `WarEngine::resume_with` found an outstanding parley whose
+    /// `expires_at` has passed, evaluated lazily against `Utc::now()` at
+    /// resume time -- no timer, no clock abstraction (HITL-02, D-12,
+    /// D-13). Under `on_expire: FailRun`, this error is returned AFTER a
+    /// `Failed` Waypoint naming the expired parley is persisted; the
+    /// thread is thereafter advanced only by `replay`/`fork` from an
+    /// earlier Waypoint, never by `resume` or `resume_with` again. A
+    /// future `OnExpire` variant this engine does not yet recognise also
+    /// fails closed with this same error, rather than being silently
+    /// treated as still open.
+    #[error("parley {parley_id} expired at {expires_at}")]
+    ParleyExpired {
+        /// The expired parley.
+        parley_id: ParleyId,
+        /// When it expired.
+        expires_at: chrono::DateTime<Utc>,
+    },
+
+    /// A plain `WarEngine::resume`/`resume_with_options` call loaded a
+    /// thread whose latest Waypoint is `Failed` (HITL-02, D-12) -- e.g. a
+    /// `FailRun` parley expiry. Returned BEFORE the generic
+    /// vanguard-restore fallthrough `resume_with_options` otherwise uses,
+    /// mirroring `EngineError::ThreadAwaitingInput`'s guard: a `Failed`
+    /// Waypoint records a terminal outcome, never "more work pending," so
+    /// the thread is thereafter advanced only by `replay`/`fork` from an
+    /// earlier Waypoint (a later plan), never by `resume`/`resume_with`
+    /// again. No Waypoint is written.
+    #[error("thread {thread} already failed: {error}")]
+    ThreadAlreadyFailed {
+        /// The thread a plain `resume`/`resume_with_options` was called
+        /// against.
+        thread: ThreadId,
+        /// The recorded failure reason from the loaded `Failed` Waypoint.
+        error: String,
+        /// The node whose execution caused the failure.
+        failed_node: NodeId,
     },
 
     /// A `NodeSpec::Battalion` node's child run suspended awaiting a Parley
@@ -1062,6 +1140,23 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             });
         }
 
+        // --- HITL-02, D-12: a thread whose latest Waypoint is `Failed`
+        // (e.g. a `FailRun` parley expiry) is refused by a plain
+        // `resume`/`resume_with_options`, mirroring the `AwaitingInput`
+        // guard just above -- a `Failed` Waypoint records a terminal
+        // outcome, not "more work pending," so the generic vanguard-
+        // restore fallthrough below would otherwise silently attempt to
+        // continue a run the engine itself already declared over. Such a
+        // thread is advanced only by `replay`/`fork` from an earlier
+        // Waypoint (a later plan), never by `resume`/`resume_with` again.
+        if let WaypointStatus::Failed { error, failed_node } = &latest.status {
+            return Err(EngineError::ThreadAlreadyFailed {
+                thread: thread.clone(),
+                error: error.clone(),
+                failed_node: failed_node.clone(),
+            });
+        }
+
         for node in &latest.vanguard {
             if graph.node(node).is_none() {
                 return Err(EngineError::VanguardNodeMissing { node: node.clone() });
@@ -1137,22 +1232,45 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
     /// `GraphMismatch`, ENG-FR-14, mirroring `resume`), and requires the
     /// loaded status to be `AwaitingInput` (else
     /// `EngineError::ThreadNotAwaitingInput { thread, status }`) -- only
-    /// `resume_with` may advance a suspended thread (D-11). Every submitted
-    /// response's `parley_id` is checked against the loaded Waypoint's own
-    /// `parleys` list (`EngineError::UnknownParleyId` if absent, T-24-01:
-    /// never a global parley-id lookup across threads). This task
-    /// implements the happy-path guards only -- the richer per-`ParleyKind`
-    /// validation matrix (`ParleyAlreadyAnswered`, `ResponseShapeInvalid`,
-    /// `ParleyExpired`) lands in a later plan.
+    /// `resume_with` may advance a suspended thread (D-11).
     ///
-    /// Seeds superstep `latest.superstep + 1` with `vanguard` = every
+    /// Validation is TOTAL before any state change (D-10): every
+    /// OUTSTANDING (not-yet-answered) parley is first checked for expiry,
+    /// evaluated lazily against `Utc::now()` (D-12, D-13) -- a `FailRun`
+    /// parley past its `expires_at` fails the WHOLE call with a persisted
+    /// `Failed` Waypoint and `Err(ParleyExpired)` before any submitted
+    /// response is even inspected; a `ResumeWithDefault` parley
+    /// substitutes its pre-validated default (`responded_by: None`,
+    /// `defaulted: true`), overriding any late submission for the same
+    /// `parley_id` (the clock alone decides once a request has expired).
+    /// Every submitted (or defaulted) response is then checked against its
+    /// own request: `UnknownParleyId` if its `parley_id` is not among this
+    /// thread's own outstanding `parleys` (T-24-01, never a global
+    /// lookup), `ParleyAlreadyAnswered` if that `parley_id` already has an
+    /// accepted response (from the thread's prior history OR an earlier
+    /// response in this SAME call -- two responses answering the same
+    /// parley in one submission are both rejected), `ResponseShapeInvalid`
+    /// if the value fails its `ParleyKind`'s shape rule. Any error here
+    /// leaves the thread suspended with no Waypoint written (except the
+    /// `Failed` Waypoint a `FailRun` expiry itself persists).
+    ///
+    /// A valid but PARTIAL submission (D-11) persists a new `AwaitingInput`
+    /// Waypoint at the SAME superstep with `responses` extended, and
+    /// returns `RunOutcome::AwaitingInput` naming only the still-remaining
+    /// parleys -- the thread stays suspended, queryable from a cold store.
+    /// Once every outstanding parley has an accepted response, this call
+    /// seeds superstep `latest.superstep + 1` with `vanguard` = every
     /// parleying node named on the loaded `AwaitingInput` status (D-08):
-    /// exactly the persisted Waypoint's own `vanguard`, discarding nothing.
-    /// Each dispatched node's `NodeContext.parley_response` is populated
-    /// with its matching response (looked up by the node's own `NodeId`,
-    /// via the request that named it) -- from there this is an ordinary
-    /// superstep: deltas merge, edges resolve, one Waypoint per superstep
-    /// (ENG-FR-11 holds with no clarification).
+    /// exactly the persisted Waypoint's own `vanguard`, discarding
+    /// nothing. Each dispatched node's `NodeContext.parley_response` is
+    /// populated with its matching response (looked up by the node's own
+    /// `NodeId`, via the request that named it) -- from there this is an
+    /// ordinary superstep: deltas merge, edges resolve, one Waypoint per
+    /// superstep (ENG-FR-11 holds with no clarification). Responses are
+    /// durably consumed only when this first post-resume Waypoint
+    /// persists (D-08): if the process dies between validation and that
+    /// write, the `AwaitingInput` Waypoint just read is still `latest`,
+    /// and re-submitting the identical responses is safe.
     pub async fn resume_with(
         &self,
         graph: &WarGraph,
@@ -1174,8 +1292,10 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             });
         }
 
-        let parleys = match &latest.status {
-            WaypointStatus::AwaitingInput { parleys, .. } => parleys.clone(),
+        let (parleys, existing_responses) = match &latest.status {
+            WaypointStatus::AwaitingInput { parleys, responses } => {
+                (parleys.clone(), responses.clone())
+            }
             other => {
                 return Err(EngineError::ThreadNotAwaitingInput {
                     thread: thread.clone(),
@@ -1184,16 +1304,177 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             }
         };
 
-        // --- HITL-02, D-10 happy path: every submitted response must name
-        // a parley this thread actually has outstanding. Checked BEFORE
-        // any state change -- an unknown id leaves the thread suspended
-        // with no Waypoint written.
-        for response in &responses {
-            if !parleys.iter().any(|p| p.parley_id == response.parley_id) {
+        let registry = self.dispatch_registry.resolver();
+        graph.validate(registry, &self.edge_evaluators)?;
+
+        let now = Utc::now();
+        let already_answered: BTreeSet<ParleyId> =
+            existing_responses.iter().map(|r| r.parley_id).collect();
+
+        // --- HITL-02, D-12, D-13: lazy expiry, evaluated over every
+        // OUTSTANDING (not-yet-answered) request -- independent of
+        // whether THIS call's `responses` even names it. Once the clock
+        // alone says a request expired, no late submission for it
+        // matters: `FailRun` fails the whole call before any submitted
+        // response is even inspected (extending D-10's total-validation
+        // discipline to expiry); `ResumeWithDefault` substitutes its own
+        // pre-validated default (T-24-06), unconditionally overriding
+        // whatever this call may have submitted for the same `parley_id`.
+        let mut defaulted: Vec<ParleyResponse> = Vec::new();
+        for request in &parleys {
+            if already_answered.contains(&request.parley_id) {
+                continue;
+            }
+            let Some(expires_at) = request.expires_at else {
+                continue;
+            };
+            if expires_at > now {
+                continue;
+            }
+            match &request.on_expire {
+                OnExpire::FailRun => {
+                    let reason = format!(
+                        "parley {} (node {}) expired at {expires_at} under on_expire: FailRun",
+                        request.parley_id, request.node_id
+                    );
+                    let waypoint = superstep::build_waypoint(
+                        &thread,
+                        Some(latest.waypoint_id),
+                        latest.superstep,
+                        graph,
+                        &latest.battlefield,
+                        latest.vanguard.clone(),
+                        Vec::new(),
+                        WaypointStatus::Failed {
+                            error: reason,
+                            failed_node: request.node_id.clone(),
+                        },
+                        latest.visit_counts.clone(),
+                        latest.frontier.clone(),
+                        None,
+                        latest.checkpoint_ns.clone(),
+                    );
+                    superstep::persist_waypoint(
+                        self.waypoint_port.as_ref(),
+                        self.durability,
+                        &waypoint,
+                        &self.trace_dispatcher,
+                    )
+                    .await?;
+                    return Err(EngineError::ParleyExpired {
+                        parley_id: request.parley_id,
+                        expires_at,
+                    });
+                }
+                OnExpire::ResumeWithDefault(value) => {
+                    defaulted.push(ParleyResponse {
+                        parley_id: request.parley_id,
+                        kind: request.kind.clone(),
+                        prompt: request.prompt.clone(),
+                        value: value.clone(),
+                        responded_by: None,
+                        responded_at: now,
+                        defaulted: true,
+                    });
+                }
+                // `OnExpire` is `#[non_exhaustive]`: a future policy this
+                // engine does not yet recognise fails CLOSED here too,
+                // mirroring `graph::validate_parley_value_for_kind`'s own
+                // fail-closed catch-all -- never silently treated as
+                // still open.
+                _ => {
+                    return Err(EngineError::ParleyExpired {
+                        parley_id: request.parley_id,
+                        expires_at,
+                    });
+                }
+            }
+        }
+
+        // A default substitution always wins over a late submission for
+        // the same `parley_id` (see the loop above's rationale).
+        let mut effective_responses: Vec<ParleyResponse> = responses
+            .into_iter()
+            .filter(|r| !defaulted.iter().any(|d| d.parley_id == r.parley_id))
+            .collect();
+        effective_responses.extend(defaulted);
+
+        // --- HITL-02, D-10: total validation -- every submitted (or
+        // defaulted) response is checked against its own request BEFORE
+        // any state changes. Two responses answering the SAME `parley_id`
+        // within one call are BOTH rejected (the flagged "review
+        // manually" edge probe's planner-resolved reading): the first is
+        // accepted into `newly_answered`, so the second fails
+        // `ParleyAlreadyAnswered`.
+        let mut newly_answered: BTreeSet<ParleyId> = BTreeSet::new();
+        for response in &effective_responses {
+            let Some(request) = parleys.iter().find(|p| p.parley_id == response.parley_id) else {
                 return Err(EngineError::UnknownParleyId {
                     parley_id: response.parley_id,
                 });
+            };
+            if already_answered.contains(&response.parley_id)
+                || !newly_answered.insert(response.parley_id)
+            {
+                return Err(EngineError::ParleyAlreadyAnswered {
+                    parley_id: response.parley_id,
+                });
             }
+            if let Err(reason) = validate_response_shape(graph, request, &response.value) {
+                return Err(EngineError::ResponseShapeInvalid {
+                    parley_id: response.parley_id,
+                    reason,
+                });
+            }
+        }
+
+        // --- Every response is now valid; nothing past this point can
+        // fail on account of the CALLER's input, so it is safe to start
+        // building persisted state.
+        let mut all_responses = existing_responses;
+        all_responses.extend(effective_responses);
+
+        let remaining: Vec<ParleyRequest> = parleys
+            .iter()
+            .filter(|p| !all_responses.iter().any(|r| r.parley_id == p.parley_id))
+            .cloned()
+            .collect();
+
+        if !remaining.is_empty() {
+            // --- HITL-02, D-11: a valid but PARTIAL submission persists
+            // a NEW `AwaitingInput` Waypoint at the SAME superstep
+            // (mirrors D-14's mid-muster progress-Waypoint precedent):
+            // `parleys` unchanged, `responses` extended, `vanguard`
+            // unchanged -- the parleying nodes are still the parleying
+            // nodes, since nothing has run yet.
+            let waypoint = superstep::build_waypoint(
+                &thread,
+                Some(latest.waypoint_id),
+                latest.superstep,
+                graph,
+                &latest.battlefield,
+                latest.vanguard.clone(),
+                Vec::new(),
+                WaypointStatus::AwaitingInput {
+                    parleys: parleys.clone(),
+                    responses: all_responses,
+                },
+                latest.visit_counts.clone(),
+                latest.frontier.clone(),
+                None,
+                latest.checkpoint_ns.clone(),
+            );
+            superstep::persist_waypoint(
+                self.waypoint_port.as_ref(),
+                self.durability,
+                &waypoint,
+                &self.trace_dispatcher,
+            )
+            .await?;
+            return Ok(RunOutcome::AwaitingInput {
+                parleys: remaining,
+                waypoint: waypoint.waypoint_id,
+            });
         }
 
         // --- D-08: `NodeContext.parley_response` is looked up by the
@@ -1209,7 +1490,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         // ONE type, with no separate `NodeContext`-only side channel
         // duplicating data already recorded on the request.
         let mut responses_by_node: BTreeMap<NodeId, ParleyResponse> = BTreeMap::new();
-        for response in responses {
+        for response in all_responses {
             if let Some(request) = parleys.iter().find(|p| p.parley_id == response.parley_id) {
                 let mut response = response;
                 response.kind = request.kind.clone();
@@ -1217,9 +1498,6 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
                 responses_by_node.insert(request.node_id.clone(), response);
             }
         }
-
-        let registry = self.dispatch_registry.resolver();
-        graph.validate(registry, &self.edge_evaluators)?;
 
         self.trace_dispatcher.emit(TraceEvent::RunStarted {
             thread_id: thread.clone(),
@@ -1258,6 +1536,50 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             .emit(TraceEvent::RunFinished { thread_id: thread });
         outcome
     }
+}
+
+/// Validate a submitted [`ParleyResponse::value`] against its own
+/// `request`'s [`ParleyKind`] (HITL-02, D-10). Delegates the structural,
+/// schema-oblivious rules to [`graph::validate_parley_value_for_kind`] --
+/// the SAME per-kind validator [`graph::WarGraph::validate`]'s Gate
+/// `on_expire` check (24-02) and `DirectiveParser`'s raise-time `on_expire`
+/// check (24-03) both call (T-24-06) -- never a second, weaker check for
+/// those rules.
+///
+/// Additionally, for [`ParleyKind::StateEdit`]: `graph`'s schema is checked
+/// against the deserialised `StateDelta`'s field names, since ONLY this
+/// call site has both a real submitted `StateEdit` value AND a live
+/// `WarGraph` to validate it against (`validate_parley_value_for_kind`'s
+/// other two call sites check a Gate's/Directive's own AUTHORED default
+/// value at author time, when no submitted-response schema check applies).
+/// An undeclared field rejects THIS response, never the run and never a
+/// partial edit (T-24-13) -- `Battlefield::merge`'s own `UnknownField`
+/// error is never allowed to reach this deep; this check runs first.
+fn validate_response_shape(
+    graph: &WarGraph,
+    request: &ParleyRequest,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    graph::validate_parley_value_for_kind(&request.kind, request.choices.as_deref(), value)?;
+    if request.kind == ParleyKind::StateEdit {
+        let delta: StateDelta = serde_json::from_value(value.clone())
+            .map_err(|e| format!("StateEdit value must deserialize as a StateDelta: {e}"))?;
+        let schema = graph.schema();
+        let mut unknown: Vec<&str> = delta
+            .values
+            .keys()
+            .filter(|field| schema.field_spec(field).is_none())
+            .map(|field| field.as_str())
+            .collect();
+        if !unknown.is_empty() {
+            unknown.sort_unstable();
+            return Err(format!(
+                "StateEdit value names field(s) not declared in the graph schema: {}",
+                unknown.join(", ")
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3503,7 +3825,13 @@ mod tests {
             // never observed.
             kind: ParleyKind::Approval,
             prompt: String::new(),
-            value: serde_json::json!("approved"),
+            // Plan 24-04's `resume_with` validation matrix now enforces
+            // `ParleyKind::Approval`'s shape rule (bool or one of
+            // true/false/yes/no/approve/deny, case-insensitive) -- this
+            // test only exercises pass-through-to-continuation, so the
+            // value must be a rule-conforming string, not an arbitrary
+            // one.
+            value: serde_json::json!("approve"),
             responded_by: Some("tester".to_string()),
             responded_at: Utc::now(),
             defaulted: false,
@@ -3519,7 +3847,7 @@ mod tests {
                     final_state
                         .get::<String>(&FieldName::new("result").unwrap())
                         .unwrap(),
-                    Some("approved".to_string())
+                    Some("approve".to_string())
                 );
             }
             other => panic!("expected Completed, got {other:?}"),
@@ -3719,7 +4047,9 @@ mod tests {
     /// raised in the SAME superstep, so the suspending Waypoint carries
     /// all `n` requests together.
     fn multi_parley_graph(n: usize) -> (WarGraph, Vec<NodeId>, Vec<ParleyId>) {
-        let fields: Vec<FieldName> = (0..n).map(|i| FieldName::new(format!("f{i}")).unwrap()).collect();
+        let fields: Vec<FieldName> = (0..n)
+            .map(|i| FieldName::new(format!("f{i}")).unwrap())
+            .collect();
         let schema = BattlefieldSchema::new(
             fields
                 .iter()
@@ -3826,14 +4156,22 @@ mod tests {
             .unwrap();
 
         let outcome = engine
-            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[0], true)])
+            .resume_with(
+                &graph,
+                thread.clone(),
+                vec![approval_response(parley_ids[0], true)],
+            )
             .await
             .unwrap();
         assert!(matches!(outcome, RunOutcome::AwaitingInput { .. }));
 
         let save_count_before = store.save_call_count();
         let err = engine
-            .resume_with(&graph, thread, vec![approval_response(parley_ids[0], false)])
+            .resume_with(
+                &graph,
+                thread,
+                vec![approval_response(parley_ids[0], false)],
+            )
             .await
             .unwrap_err();
         match err {
@@ -4104,7 +4442,11 @@ mod tests {
         // Even an obviously-invalid response (unknown parley id) must not
         // be inspected before the fingerprint check runs.
         let err = engine
-            .resume_with(&altered_graph, thread, vec![approval_response(ParleyId::new(), true)])
+            .resume_with(
+                &altered_graph,
+                thread,
+                vec![approval_response(ParleyId::new(), true)],
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, EngineError::GraphMismatch { .. }));
@@ -4162,7 +4504,11 @@ mod tests {
             .unwrap();
 
         let err = engine
-            .resume_with(&graph_b, thread_b, vec![approval_response(parley_ids_a[0], true)])
+            .resume_with(
+                &graph_b,
+                thread_b,
+                vec![approval_response(parley_ids_a[0], true)],
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, EngineError::UnknownParleyId { .. }));
@@ -4185,13 +4531,22 @@ mod tests {
             .unwrap();
         let original_superstep = match &suspended {
             RunOutcome::AwaitingInput { waypoint, .. } => {
-                store.get(&thread, waypoint).await.unwrap().unwrap().superstep
+                store
+                    .get(&thread, waypoint)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .superstep
             }
             other => panic!("expected AwaitingInput, got {other:?}"),
         };
 
         let outcome = engine
-            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[0], true)])
+            .resume_with(
+                &graph,
+                thread.clone(),
+                vec![approval_response(parley_ids[0], true)],
+            )
             .await
             .unwrap();
         match outcome {
@@ -4255,13 +4610,21 @@ mod tests {
             .unwrap();
 
         let partial = engine
-            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[0], true)])
+            .resume_with(
+                &graph,
+                thread.clone(),
+                vec![approval_response(parley_ids[0], true)],
+            )
             .await
             .unwrap();
         assert!(matches!(partial, RunOutcome::AwaitingInput { .. }));
 
         let final_outcome = engine
-            .resume_with(&graph, thread, vec![approval_response(parley_ids[1], false)])
+            .resume_with(
+                &graph,
+                thread,
+                vec![approval_response(parley_ids[1], false)],
+            )
             .await
             .unwrap();
         match final_outcome {
@@ -4298,7 +4661,11 @@ mod tests {
             .unwrap();
 
         engine
-            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[0], true)])
+            .resume_with(
+                &graph,
+                thread.clone(),
+                vec![approval_response(parley_ids[0], true)],
+            )
             .await
             .unwrap();
 
@@ -4377,7 +4744,11 @@ mod tests {
         };
 
         let first = engine
-            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[0], true)])
+            .resume_with(
+                &graph,
+                thread.clone(),
+                vec![approval_response(parley_ids[0], true)],
+            )
             .await
             .unwrap();
         let first_waypoint = match first {
@@ -4388,7 +4759,11 @@ mod tests {
         assert_eq!(first_wp.parent_waypoint_id, Some(root_waypoint));
 
         let second = engine
-            .resume_with(&graph, thread.clone(), vec![approval_response(parley_ids[1], true)])
+            .resume_with(
+                &graph,
+                thread.clone(),
+                vec![approval_response(parley_ids[1], true)],
+            )
             .await
             .unwrap();
         let second_waypoint = match second {
@@ -4506,7 +4881,10 @@ mod tests {
             .unwrap_err();
 
         let resume_err = engine.resume(&graph, thread.clone()).await.unwrap_err();
-        assert!(matches!(resume_err, EngineError::ThreadAlreadyFailed { .. }));
+        assert!(matches!(
+            resume_err,
+            EngineError::ThreadAlreadyFailed { .. }
+        ));
 
         let resume_with_err = engine
             .resume_with(&graph, thread, Vec::new())
@@ -4643,8 +5021,18 @@ mod tests {
     #[tokio::test]
     async fn defaulted_marker_is_persisted_and_queryable() {
         let schema = BattlefieldSchema::new(vec![
-            FieldSpec::new(FieldName::new("a").unwrap(), DispatchRule::LastWrite, None, false),
-            FieldSpec::new(FieldName::new("b").unwrap(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(
+                FieldName::new("a").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+            FieldSpec::new(
+                FieldName::new("b").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
         ]);
         let mut graph = WarGraph::new(schema, EngineLimits::default());
 
@@ -4762,8 +5150,18 @@ mod tests {
     #[tokio::test]
     async fn expired_and_valid_responses_in_one_submission() {
         let schema = BattlefieldSchema::new(vec![
-            FieldSpec::new(FieldName::new("a").unwrap(), DispatchRule::LastWrite, None, false),
-            FieldSpec::new(FieldName::new("b").unwrap(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(
+                FieldName::new("a").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+            FieldSpec::new(
+                FieldName::new("b").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
         ]);
         let mut graph = WarGraph::new(schema, EngineLimits::default());
 
@@ -4839,7 +5237,11 @@ mod tests {
         let save_count_before = store.save_call_count();
 
         let err = engine
-            .resume_with(&graph, thread.clone(), vec![approval_response(parley_b, true)])
+            .resume_with(
+                &graph,
+                thread.clone(),
+                vec![approval_response(parley_b, true)],
+            )
             .await
             .unwrap_err();
         match err {

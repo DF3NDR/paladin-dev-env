@@ -15,10 +15,155 @@ use std::sync::Arc;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort, WaypointSummary};
 
-// RED-STATE MARKER (Plan 24-07, Task 3): `ChronicleService` is intentionally
-// absent from this commit -- the test module below fails to compile until
-// the GREEN commit lands `pub struct ChronicleService` and its three
-// methods (`history`, `inspect`, `latest_on_branch`).
+/// A thin, port-only read facade over one thread's Chronicle: its ordered
+/// Waypoint history, including branch lineage recorded via `fork_of`
+/// (HITL-03, D-16).
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use paladin::application::services::chronicle::ChronicleService;
+/// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+///
+/// let port = Arc::new(InMemoryWaypointStore::new());
+/// let _chronicle = ChronicleService::new(port);
+/// ```
+pub struct ChronicleService {
+    port: Arc<dyn WaypointPort>,
+}
+
+impl ChronicleService {
+    /// Construct a service reading through `port`.
+    pub fn new(port: Arc<dyn WaypointPort>) -> Self {
+        Self { port }
+    }
+
+    /// Newest-first summaries of `thread`'s Waypoint history, each carrying
+    /// its own lineage (`parent_waypoint_id`, `fork_of`).
+    ///
+    /// `limit` bounds the returned page, widened to the port's own `u32`
+    /// and saturating (never wrapping) on overflow; `before` is the
+    /// exclusive cursor [`WaypointPort::history`] documents, passed through
+    /// unchanged. A thread with no Waypoints yields an empty list, never an
+    /// error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin::application::services::chronicle::ChronicleService;
+    /// use paladin_core::platform::container::waypoint::ThreadId;
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let port = Arc::new(InMemoryWaypointStore::new());
+    /// let chronicle = ChronicleService::new(port);
+    /// let thread = ThreadId::new("chronicle-doctest").unwrap();
+    /// let history = chronicle.history(&thread, 10, None).await.unwrap();
+    /// assert!(history.is_empty());
+    /// # }
+    /// ```
+    pub async fn history(
+        &self,
+        thread: &ThreadId,
+        limit: usize,
+        before: Option<WaypointId>,
+    ) -> Result<Vec<WaypointSummary>, WaypointError> {
+        let limit = u32::try_from(limit).unwrap_or(u32::MAX);
+        self.port.history(thread, Some(limit), before).await
+    }
+
+    /// The full [`Waypoint`] identified by `waypoint` on `thread`.
+    ///
+    /// A `waypoint` absent from `thread`'s history is a typed
+    /// [`WaypointError::NotFound`], never a silent `None` -- unlike
+    /// [`WaypointPort::get`]'s own "missing is `None`" contract, `inspect`
+    /// is a caller-facing read where "the id you asked about does not
+    /// exist" is itself the answer the caller needs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin::application::services::chronicle::ChronicleService;
+    /// use paladin_core::platform::container::waypoint::{ThreadId, WaypointId};
+    /// use paladin_ports::output::waypoint_port::WaypointError;
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let port = Arc::new(InMemoryWaypointStore::new());
+    /// let chronicle = ChronicleService::new(port);
+    /// let thread = ThreadId::new("chronicle-inspect-doctest").unwrap();
+    /// let err = chronicle
+    ///     .inspect(&thread, WaypointId::generate())
+    ///     .await
+    ///     .unwrap_err();
+    /// assert!(matches!(err, WaypointError::NotFound(_)));
+    /// # }
+    /// ```
+    pub async fn inspect(
+        &self,
+        thread: &ThreadId,
+        waypoint: WaypointId,
+    ) -> Result<Waypoint, WaypointError> {
+        self.port.get(thread, &waypoint).await?.ok_or_else(|| {
+            WaypointError::NotFound(format!("waypoint {waypoint} on thread {thread}"))
+        })
+    }
+
+    /// The newest [`WaypointSummary`] on the branch rooted at `branch_root`,
+    /// or `None` when the branch has no Waypoints.
+    ///
+    /// Implemented as a filter over [`WaypointPort::history`] by `fork_of`
+    /// -- paginated, never a full-[`Waypoint`] load via
+    /// [`WaypointPort::get`] -- since D-14 made a branch tree
+    /// reconstructible from [`WaypointSummary`] alone precisely so this is
+    /// possible. `history` is already newest-first, so the first matching
+    /// summary found is the branch's newest.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin::application::services::chronicle::ChronicleService;
+    /// use paladin_core::platform::container::waypoint::{ThreadId, WaypointId};
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let port = Arc::new(InMemoryWaypointStore::new());
+    /// let chronicle = ChronicleService::new(port);
+    /// let thread = ThreadId::new("chronicle-latest-on-branch-doctest").unwrap();
+    /// let latest = chronicle
+    ///     .latest_on_branch(&thread, WaypointId::generate())
+    ///     .await
+    ///     .unwrap();
+    /// assert!(latest.is_none());
+    /// # }
+    /// ```
+    pub async fn latest_on_branch(
+        &self,
+        thread: &ThreadId,
+        branch_root: WaypointId,
+    ) -> Result<Option<WaypointSummary>, WaypointError> {
+        const PAGE_SIZE: u32 = 500;
+        let mut before: Option<WaypointId> = None;
+        loop {
+            let page = self.port.history(thread, Some(PAGE_SIZE), before).await?;
+            if let Some(found) = page.iter().find(|s| s.fork_of == Some(branch_root)) {
+                return Ok(Some(found.clone()));
+            }
+            let page_len = page.len();
+            before = page.last().map(|s| s.waypoint_id);
+            if page_len < PAGE_SIZE as usize {
+                return Ok(None);
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

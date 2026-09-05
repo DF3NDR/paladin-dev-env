@@ -24,6 +24,12 @@ use paladin_ports::output::llm_port::{
     StreamingResponse, TokenUsage,
 };
 
+use crate::http_status::map_http_status;
+
+/// The provider name this adapter reports through [`LlmPort::get_provider_name`]
+/// and stamps on every [`LlmError::ProviderError`] it emits.
+const ANTHROPIC_PROVIDER: &str = "anthropic";
+
 /// The exact phrase observed VERBATIM in Anthropic's HTTP 400
 /// `invalid_request_error` body when an account has reached its configured
 /// API usage limit (live run `4a3b749d`). Matched narrowly and deliberately:
@@ -293,39 +299,37 @@ impl AnthropicAdapter {
         })
     }
 
-    /// Map Anthropic API errors to LlmError.
+    /// Map a non-2xx Anthropic response to [`LlmError`].
+    ///
+    /// Two Anthropic-specific pre-checks run first; everything else is the
+    /// crate-wide [`map_http_status`] (Phase 25 D-03, FT-FR-01), which
+    /// redacts the raw `body` before bounding it and emits a typed
+    /// `ProviderError { status }` for every status without a dedicated
+    /// variant.
+    ///
+    /// - `403` stays [`LlmError::AuthenticationError`]: Anthropic reports a
+    ///   key without permission for the resource as `403`, and
+    ///   [`Self::execute_with_retry`]'s non-retryable set halts on
+    ///   `AuthenticationError`. Letting it fall through to the helper's
+    ///   generic `ProviderError { 403 }` would re-transmit a rejected
+    ///   credential up to `max_retries` times.
+    /// - `400` is disambiguated on the body: a `max_tokens` complaint and
+    ///   the usage-cap signature (Phase 41 D-04/D-05) are Anthropic-shaped,
+    ///   so they are recognised here; any other `400` reaches the helper's
+    ///   own `400` arm.
     fn map_error(&self, status: u16, body: &str) -> LlmError {
         match status {
-            401 => LlmError::AuthenticationError(
-                "Invalid API key. Check your ANTHROPIC_API_KEY environment variable.".to_string(),
-            ),
             403 => LlmError::AuthenticationError(
                 "API key does not have permission for this resource.".to_string(),
             ),
-            429 => LlmError::RateLimitExceeded,
-            400 => {
-                if body.contains("max_tokens") {
-                    LlmError::InvalidPrompt(
-                        "Invalid max_tokens value. Claude requires max_tokens to be set."
-                            .to_string(),
-                    )
-                } else if body.contains(ANTHROPIC_USAGE_CAP_SIGNATURE) {
-                    LlmError::UsageLimitExceeded {
-                        provider: "anthropic".to_string(),
-                        regain_hint: extract_regain_hint(body),
-                    }
-                } else {
-                    LlmError::InvalidPrompt(format!("Bad request: {}", body))
-                }
-            }
-            500..=599 => LlmError::ProcessingError(format!(
-                "Anthropic server error ({}). Please retry.",
-                status
-            )),
-            _ => LlmError::ProcessingError(format!(
-                "Request failed with status {}: {}",
-                status, body
-            )),
+            400 if body.contains("max_tokens") => LlmError::InvalidPrompt(
+                "Invalid max_tokens value. Claude requires max_tokens to be set.".to_string(),
+            ),
+            400 if body.contains(ANTHROPIC_USAGE_CAP_SIGNATURE) => LlmError::UsageLimitExceeded {
+                provider: ANTHROPIC_PROVIDER.to_string(),
+                regain_hint: extract_regain_hint(body),
+            },
+            _ => map_http_status(ANTHROPIC_PROVIDER, status, body, &self.config.api_key),
         }
     }
 
@@ -537,7 +541,7 @@ impl LlmPort for AnthropicAdapter {
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "anthropic"
+        ANTHROPIC_PROVIDER
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -1053,6 +1057,43 @@ stake, so an attacker donating to himself alone is a strict loss.";
             3,
             "a genuinely retryable error must still be retried up to max_retries"
         );
+    }
+
+    // ── Phase 25 (FT-FR-01, D-03): non-2xx routes through map_http_status ──
+
+    #[test]
+    fn anthropic_non_2xx_routes_through_the_shared_mapper() {
+        let adapter = test_adapter();
+        match adapter.map_error(503, r#"{"error":{"type":"overloaded_error"}}"#) {
+            LlmError::ProviderError {
+                provider, status, ..
+            } => {
+                assert_eq!(provider, "anthropic");
+                assert_eq!(status, 503);
+            }
+            other => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn anthropic_dedicated_status_mappings_are_unchanged() {
+        let adapter = test_adapter();
+        assert!(matches!(
+            adapter.map_error(401, "bad key"),
+            LlmError::AuthenticationError(_)
+        ));
+        assert!(matches!(
+            adapter.map_error(403, "no permission"),
+            LlmError::AuthenticationError(_)
+        ));
+        assert!(matches!(
+            adapter.map_error(429, "slow down"),
+            LlmError::RateLimitExceeded
+        ));
+        assert!(matches!(
+            adapter.map_error(400, "bad prompt"),
+            LlmError::InvalidPrompt(_)
+        ));
     }
 
     // ── Task 41-01/2: usage-cap body classification (D-04/D-05) ───────────

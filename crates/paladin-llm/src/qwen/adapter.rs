@@ -253,6 +253,10 @@ impl QwenConfig {
     }
 }
 
+/// The provider name this adapter reports through [`LlmPort::get_provider_name`]
+/// and that its engine stamps on every `LlmError::ProviderError` (Phase 25 D-03).
+const QWEN_PROVIDER: &str = "qwen";
+
 /// Qwen (Alibaba DashScope) LLM Adapter implementing [`LlmPort`].
 ///
 /// Every method delegates to an owned [`CompatEngine`] (D-05) — this struct
@@ -333,7 +337,9 @@ impl QwenAdapter {
         };
 
         Ok(Self {
-            engine: CompatEngine::new(engine_config)?,
+            // Phase 25 D-03: name the engine so every `ProviderError` it
+            // emits carries "qwen", not the engine's generic default.
+            engine: CompatEngine::new(engine_config)?.with_provider_name(QWEN_PROVIDER),
         })
     }
 }
@@ -360,7 +366,7 @@ impl LlmPort for QwenAdapter {
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "qwen"
+        QWEN_PROVIDER
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -371,6 +377,7 @@ impl LlmPort for QwenAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http_status::map_http_status;
     use mockito::Server;
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
     use paladin_ports::output::llm_port::FinishReason;
@@ -620,6 +627,51 @@ mod tests {
 
         let result = adapter.generate(build_request("qwen-plus")).await;
         assert!(matches!(result, Err(LlmError::InvalidPrompt(_))));
+    }
+
+    /// Phase 25 (FT-FR-01, D-03): the preset's non-2xx path is the shared
+    /// `map_http_status` — proven by comparing the adapter's error against
+    /// the helper's own output for the same status, body and key.
+    #[tokio::test]
+    async fn qwen_non_2xx_routes_through_the_shared_mapper() {
+        let body = r#"{"error":"overloaded"}"#;
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(503)
+            .with_body(body)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let config = QwenConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            "qwen-plus".to_string(),
+        );
+        let adapter = QwenAdapter::new(config).unwrap();
+
+        let result = adapter.generate(build_request("qwen-plus")).await;
+        let expected = map_http_status("qwen", 503, body, "test-key");
+        match (result, expected) {
+            (
+                Err(LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                }),
+                LlmError::ProviderError {
+                    provider: want_provider,
+                    status: want_status,
+                    message: want_message,
+                },
+            ) => {
+                assert_eq!(provider, want_provider);
+                assert_eq!(status, want_status);
+                assert_eq!(message, want_message);
+            }
+            (other, _) => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+        }
     }
 
     // ── Capabilities / identity ──

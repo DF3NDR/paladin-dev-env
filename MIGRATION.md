@@ -13,7 +13,7 @@
 | ID | Change | Who is affected | Required user action |
 |---|---|---|---|
 | M-B-01 | **BUG-01 fix.** `EdgeCondition::Custom(name)` no longer evaluates to `true` when no evaluator is registered. Campaign/graph validation now fails with `BattalionError::InvalidGraph` naming each unregistered condition, before any node executes. | Any v0.9 workflow using `EdgeCondition::Custom`. Such workflows were routing *incorrectly* (always following the custom edge); after upgrade they fail loudly at validation. | Register an evaluator for each name via the new registry API (CF-FR-01), or replace the condition with `Contains`/`Regex`/`Always`. |
-| M-B-02 | **Graceful shutdown.** On SIGTERM/SIGINT the process now waits up to `shutdown_grace` (default 30 s) for in-flight engine runs to halt at a superstep boundary before exiting. | Operators; container orchestration. | Set `terminationGracePeriodSeconds` ≥ 2 × `shutdown_grace` (`k8s/` manifests are updated by HITL-FR-15). A documented disable switch will be provided for legacy-only deployments. |
+| M-B-02 | **Graceful shutdown.** On SIGTERM/SIGINT the process now waits up to `shutdown_grace` (default 30 s, env `APP_ENGINE_SHUTDOWN_GRACE_SECS`) for in-flight engine runs to halt before exiting — `paladin-server`'s `shutdown_signal` and `ServiceRunner::wait_for_shutdown` both cancel a shared `ShutdownCoordinator` and wait for registered runs to drain (HITL-04, D-21/D-22). | Operators; container orchestration. | Set `terminationGracePeriodSeconds` ≥ 2 × `shutdown_grace` — `k8s/server/deployment.yaml` and `k8s/deployment.yaml` ship `60` (landed, HITL-FR-15). Set `APP_ENGINE_GRACEFUL_SHUTDOWN=false` to restore the old no-wait behavior for legacy-only deployments (landed, HITL-04). |
 | M-B-03 | **Tool errors fed to the model by default** (RT-FR-24, `tool_error_mode = FeedToModel`). | Users of the Arsenal tool loop who relied on a tool failure aborting the run. | Set `tool_error_mode = FailRun` globally or per tool to restore the previous behavior. |
 | M-B-04 | **Automatic per-superstep checkpointing.** Any graph executed through the new `WarEngine` (via `WarGraph`/`WarEngine::start`/`WarEngine::resume`) now writes one `Waypoint` — a **full `Battlefield` snapshot**, including whatever a workflow places in shared state (which may include raw LLM prompts and model outputs) — after every superstep, by default (`WaypointDurability::Strict`). The write goes to whichever `WaypointPort` backend the caller wires in: `InMemoryWaypointStore` (ungated, tests/dev) or, once landed, `SqliteWaypointStore`/`PostgresWaypointStore` (ENG-05) for durable deployments. Growth is bounded by `EngineLimits` (`max_supersteps` default 50, `max_node_visits` default 25) and, once configured, by `WaypointRetentionConfig` (`max_age_days`, `max_waypoints_per_thread` — see §9.5). | Any workflow author who adopts the new `WarEngine`/`WarGraph` APIs (ENG-01…ENG-08). | **Legacy `FormationExecutionService`, `PhalanxExecutionService`, `CampaignExecutionService`, and `Commander` execution paths are completely unaffected — they write no Waypoints and their behavior is byte-for-byte unchanged (ENG-FR-20).** A v0.9 workflow gains **no new persistence** unless it is explicitly rebuilt against the new engine. To adopt it: choose a `WaypointPort` backend, review `WaypointDurability` (default `Strict` fails the run on a write error; `BestEffort` downgrades to a logged warning), and configure `WaypointRetentionConfig` if snapshots — which may contain raw prompts/outputs — must not accumulate unbounded. |
 
@@ -67,7 +67,53 @@
   ```text
   Invalid graph: unregistered custom edge condition(s): is_urgent -- register with CampaignExecutionService::with_evaluator before calling execute
   ```
-- M-B-02: TBD — owner HITL-04, Phase 24. A concrete `terminationGracePeriodSeconds` before/after example lands when HITL-04 ships graceful shutdown.
+- M-B-02: **landed (HITL-04, Phase 24).** Before this phase, SIGTERM/SIGINT exited the process
+  immediately — any in-flight superstep run was dropped mid-flight with no chance to reach a
+  Halted boundary, and neither shipped manifest declared `terminationGracePeriodSeconds`:
+
+  ```yaml
+  # v0.9 — k8s/server/deployment.yaml's pod spec (no termination grace declared;
+  # the kubelet's own default of 30s applied, with no relationship to any
+  # engine-level grace concept because none existed)
+  spec:
+    template:
+      spec:
+        containers:
+          - name: paladin-server
+            # ...
+  ```
+
+  After this phase, the process waits up to a configured grace window for
+  in-flight runs to drain before exiting, and both shipped manifests declare a
+  termination grace derived from — and at least twice — that window:
+
+  ```yaml
+  # v0.10 — k8s/server/deployment.yaml's pod spec
+  spec:
+    template:
+      spec:
+        # 2x the default APP_ENGINE_SHUTDOWN_GRACE_SECS (30s) so the kubelet's
+        # SIGKILL deadline never lands mid-drain.
+        terminationGracePeriodSeconds: 60
+        containers:
+          - name: paladin-server
+            # ...
+  ```
+
+  Two new env vars (`EngineConfig`, `src/config/engine.rs`) control the process-level wait:
+
+  | Env var | Default | Effect |
+  |---|---|---|
+  | `APP_ENGINE_SHUTDOWN_GRACE_SECS` | `30` | Seconds `paladin-server`/`ServiceRunner` wait, after SIGTERM/SIGINT, for in-flight superstep runs to finish before giving up on the stragglers. |
+  | `APP_ENGINE_GRACEFUL_SHUTDOWN` | `true` | Set `false` to restore the v0.9 no-wait behavior for legacy-only deployments — the process cancels in-flight runs and exits immediately without waiting. |
+
+  An operator upgrading with no config changes gets `shutdown_grace_secs=30`,
+  `graceful_shutdown=true` and `terminationGracePeriodSeconds: 60` from the shipped
+  manifests — a strictly safer default than v0.9's immediate exit, not a behavior an operator
+  must opt into. A run still executing when SIGTERM arrives either finishes inside the grace
+  window (Waypoint records completion normally) or is aborted at the deadline (`NodeOutcomeKind::
+  Skipped { reason: "shutdown" }`, re-listed in the Halted Waypoint's vanguard for exactly-once
+  resume) — no in-flight work silently vanishes either way.
 - M-B-03: TBD — owner RT-07, Phase 26. A concrete `tool_error_mode` before/after example lands when RT-07 ships the tool-loop default and records its rationale here.
 - M-B-04: no worked example owed — this phase (ENG-08) both introduces the behavior and documents it in full above.
 
@@ -123,7 +169,10 @@ Config structs mirror the existing `CitadelConfig` shape at `src/config/citadel.
   - `run_timeout_secs: Option<u64>` — default `None` (plumbing-only this phase; Doc 04/`FT-03` owns timeout semantics). Env: `APP_ENGINE_RUN_TIMEOUT_SECS`.
   - `waypoint_durability: WaypointDurability` (`Strict` | `BestEffort`) — default `Strict`. Env: `APP_ENGINE_WAYPOINT_DURABILITY`.
   - `max_muster_tasks: u32` — default `100` (CF-FR-13, D-16). Env: `APP_ENGINE_MAX_MUSTER_TASKS`. `validate()` rejects `0`.
-  - Converts into `EngineLimits`/`WaypointDurability` via `impl From<EngineConfig> for EngineLimits` (`src/config/engine.rs`); `waypoint_durability` is read directly off the source `EngineConfig` value and passed to `WarEngine::with_durability` separately.
+  - `shutdown_grace_secs: u64` — default `30` (HITL-04, D-20). Env: `APP_ENGINE_SHUTDOWN_GRACE_SECS`. Seconds a mid-superstep cancellation races the in-flight batch of spawned node tasks against before aborting stragglers; also the upper bound `paladin-server`/`ServiceRunner` wait on SIGTERM/SIGINT before exiting. `validate()` rejects values above `3600` (1 hour). **Landed this plan (24-08).**
+  - `graceful_shutdown: bool` — default `true` (HITL-04, D-20). Env: `APP_ENGINE_GRACEFUL_SHUTDOWN`. Set `false` to skip the shutdown-grace wait entirely and exit immediately on SIGTERM/SIGINT — the M-B-02 disable switch for legacy-only deployments (§9.1). **Landed this plan (24-08).**
+  - Converts into `EngineLimits`/`WaypointDurability` via `impl From<EngineConfig> for EngineLimits` (`src/config/engine.rs`); `waypoint_durability` is read directly off the source `EngineConfig` value and passed to `WarEngine::with_durability` separately. `shutdown_grace_secs`/`graceful_shutdown` are deliberately excluded from this conversion — both are runtime-only settings, never hashed into `WarGraph::fingerprint()` (proven by `shutdown_grace_does_not_change_the_graph_fingerprint`).
+  - Both new fields default to today's absent behavior (an unconfigured v0.9 deployment gets `shutdown_grace_secs=30`, `graceful_shutdown=true` — the same values a v0.10 deployment that never mentions either env var gets), so upgrading changes nothing about a workflow's own behavior; it only changes what the *process* does on SIGTERM/SIGINT (see M-B-02, §9.1).
 - **`WaypointRetentionConfig`** (`src/config/waypoint_retention.rs`) — **landed this plan (22-06, Task 3)**:
   - `enabled: bool` — default `false` (no pruning runs until an operator opts in — the new subsystem is off by default). Env: `APP_WAYPOINT_RETENTION_ENABLED`.
   - `max_age_days: Option<u32>` — default `None`. Env: `APP_WAYPOINT_RETENTION_MAX_AGE_DAYS`. `validate()` rejects `Some(0)`.
@@ -144,4 +193,4 @@ TBD — no item is marked `#[deprecated]` by this phase. Entries are added here 
 
 ## 9.8 Upgrade checklist
 
-TBD — a full ordered, copy-pasteable operator checklist (back up state dirs/DBs → apply migrations → update config → adjust termination grace → register custom evaluators if used → deploy → verify with `paladin-cli` health/graph-validate commands) is written once the subsystems it references exist to check against (migrations land with ENG-05; termination grace lands with HITL-04, Phase 24; custom evaluator registration **landed with CF-01, Phase 23** — `CampaignExecutionService::with_evaluator` on the legacy path, `WarEngine::with_edge_evaluator` on the `WarEngine` path, see M-B-01). Finalized at closeout, owner SHIP-01, Phase 29.
+TBD — a full ordered, copy-pasteable operator checklist (back up state dirs/DBs → apply migrations → update config → adjust termination grace → register custom evaluators if used → deploy → verify with `paladin-cli` health/graph-validate commands) is written once the subsystems it references exist to check against (migrations land with ENG-05; termination grace **landed with HITL-04, Phase 24** — set `terminationGracePeriodSeconds` to at least `60` (2 × the 30s default `APP_ENGINE_SHUTDOWN_GRACE_SECS`), or at least twice whatever value you configure that env var to, in every Deployment manifest before rolling out this upgrade; custom evaluator registration **landed with CF-01, Phase 23** — `CampaignExecutionService::with_evaluator` on the legacy path, `WarEngine::with_edge_evaluator` on the `WarEngine` path, see M-B-01). Finalized at closeout, owner SHIP-01, Phase 29.

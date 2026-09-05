@@ -1,6 +1,8 @@
 use crate::application::services::notification_orchestrator::NotificationService;
 use crate::application::services::orchestration::scheduler::Scheduler;
 use crate::config::Settings;
+use crate::config::engine::EngineConfig;
+use crate::config::env_utils::EnvOverridable;
 use crate::config::user_config::UserServiceFactory;
 use crate::core::base::service::message_service::{MessageService, MessageServiceConfig};
 use crate::core::platform::manager::event_manager::EventService;
@@ -10,6 +12,7 @@ use crate::infrastructure::adapters::file_storage::minio::MinioAdapter;
 use crate::infrastructure::adapters::logs::system_log_adapter::SystemLogAdapter;
 #[cfg(feature = "redis-queue")]
 use crate::infrastructure::adapters::queue::redis::RedisQueueAdapter;
+use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 #[cfg(feature = "s3-storage")]
 use paladin_ports::output::file_storage_port::FileStoragePort;
 #[cfg(feature = "s3-storage")]
@@ -24,6 +27,7 @@ use std::env;
 #[cfg(feature = "s3-storage")]
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::signal;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -40,6 +44,12 @@ pub struct ServiceRunner {
     #[cfg(feature = "s3-storage")]
     file_storage_adapter: Option<Arc<MinioAdapter>>,
     log_adapter: Option<Arc<SystemLogAdapter>>,
+    /// Graceful-shutdown coordinator (HITL-04, D-21/D-22): constructed once
+    /// per `ServiceRunner` and cancelled by `wait_for_shutdown` on
+    /// SIGTERM/SIGINT. Exposed via `shutdown_coordinator()` so any
+    /// component this runner starts an in-flight engine run from can
+    /// register with the SAME instance.
+    shutdown_coordinator: ShutdownCoordinator,
 }
 
 impl ServiceRunner {
@@ -57,7 +67,16 @@ impl ServiceRunner {
             file_storage_adapter: None,
             log_adapter: None,
             notification_service: None,
+            shutdown_coordinator: ShutdownCoordinator::new(),
         }
+    }
+
+    /// The `ShutdownCoordinator` this runner cancels on SIGTERM/SIGINT
+    /// (HITL-04, D-21/D-22). Any component that starts an in-flight engine
+    /// run registers with this SAME instance so `wait_for_shutdown`
+    /// observes it.
+    pub fn shutdown_coordinator(&self) -> ShutdownCoordinator {
+        self.shutdown_coordinator.clone()
     }
 
     pub async fn run_services(
@@ -251,7 +270,8 @@ impl ServiceRunner {
         config
     }
 
-    async fn wait_for_shutdown(&self) {
+    /// Resolve when the process receives `Ctrl-C` or (on Unix) `SIGTERM`.
+    async fn wait_for_termination_signal() {
         let ctrl_c = signal::ctrl_c();
 
         #[cfg(unix)]
@@ -274,6 +294,53 @@ impl ServiceRunner {
             ctrl_c.await.expect("Failed to listen for ctrl-c");
             log::info!("Received Ctrl+C, shutting down...");
         }
+    }
+
+    /// Cancel this runner's `ShutdownCoordinator` and drain every registered
+    /// in-flight engine run within `grace`, or skip the wait entirely when
+    /// `graceful` is `false` (the `MIGRATION.md` M-B-02 disable switch for
+    /// legacy-only deployments, D-20). Split out from `wait_for_shutdown` so
+    /// the drain behaviour is exercised by a simulated trigger in tests
+    /// rather than requiring a real OS signal (HITL-04, D-22).
+    async fn drain_on_shutdown(&self, grace: Duration, graceful: bool) {
+        if graceful {
+            let outcome = self.shutdown_coordinator.cancel_and_wait(grace).await;
+            log::info!("graceful shutdown drain complete: {outcome:?}");
+        } else {
+            self.shutdown_coordinator.token().cancel();
+            log::info!(
+                "graceful_shutdown disabled (APP_ENGINE_GRACEFUL_SHUTDOWN=false); cancelling \
+                 in-flight runs without waiting"
+            );
+        }
+    }
+
+    /// Wait for a termination signal, then cancel this runner's
+    /// `ShutdownCoordinator` and drain every registered in-flight engine
+    /// run within the configured grace (skipped when `graceful_shutdown` is
+    /// `false`) before this method returns and `run_services` exits
+    /// (HITL-04, D-22). `EngineConfig` (not `Settings`, X-10 avoidance) is
+    /// the one config struct feeding both the engine and this
+    /// process-level wait; an invalid override falls back to the
+    /// documented defaults rather than failing shutdown itself.
+    async fn wait_for_shutdown(&self) {
+        Self::wait_for_termination_signal().await;
+
+        let mut engine_config = EngineConfig::default();
+        engine_config.apply_env_overrides();
+        if let Err(e) = engine_config.validate() {
+            log::warn!(
+                "invalid engine configuration at shutdown ({e}); falling back to the documented \
+                 defaults (shutdown_grace_secs=30, graceful_shutdown=true)"
+            );
+            engine_config = EngineConfig::default();
+        }
+
+        self.drain_on_shutdown(
+            Duration::from_secs(engine_config.shutdown_grace_secs),
+            engine_config.graceful_shutdown,
+        )
+        .await;
     }
 
     pub async fn shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -767,6 +834,26 @@ mod tests {
         assert_eq!(
             ServiceRunner::detect_content_type(&PathBuf::from("IMAGE.PNG")),
             "image/png"
+        );
+    }
+
+    // --- Phase 24 Plan 09: ShutdownCoordinator process wiring (HITL-04,
+    // D-22) -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn service_runner_wait_for_shutdown_cancels_the_coordinator() {
+        let runner = ServiceRunner::new();
+        let (child_token, guard) = runner.shutdown_coordinator().register();
+        // No real work outstanding for this registration -- drop
+        // immediately so the drain below returns fast rather than waiting.
+        drop(guard);
+
+        runner.drain_on_shutdown(Duration::from_secs(5), true).await;
+
+        assert!(
+            child_token.is_cancelled(),
+            "ServiceRunner's shutdown wiring must cancel its ShutdownCoordinator's root token, \
+             observed here via a registered run's child token"
         );
     }
 }

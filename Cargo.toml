@@ -196,6 +196,11 @@ rmcp = { version = "=2.1.0", default-features = false, features = [
     "transport-streamable-http-server",
 ] }
 axum = "0.8.4"
+# `paladin-server.rs`'s own `#[cfg(test)]` module (Phase 24 Plan 11, HITL-05)
+# drives the thread/agent routers directly via `tower::util::oneshot`,
+# mirroring `paladin-web`'s own test convention -- dev-only, unified with
+# `paladin-web`'s pinned `tower = "0.5"` by the workspace resolver.
+tower = { version = "0.5", features = ["util"] }
 
 # Integration test configuration
 [[test]]

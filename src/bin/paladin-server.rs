@@ -18,20 +18,29 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use log::{error, info, warn};
+use paladin::application::services::parley::{GraphRegistry, ParleyPortAdapter};
 use paladin::config::agents::AuthConfig;
 use paladin::config::engine::EngineConfig;
 use paladin::config::env_utils::EnvOverridable;
 use paladin::config::settings::Settings;
+use paladin::config::waypoint_store::{WaypointStoreBackend, WaypointStoreConfig};
 use paladin::infrastructure::adapters::auth::InMemoryTokenAuthAdapter;
 use paladin::infrastructure::web::agent_host::{bind_address, build_agent_registry};
 use paladin::infrastructure::web::facade_provisioner::FacadeProvisioner;
 use paladin::infrastructure::web::{
-    AgentApiState, AgentAuthConfig, HttpLayersConfig, Principal, RateLimitConfig, TimeoutPolicy,
-    agent_router, with_http_layers,
+    AgentApiState, AgentAuthConfig, HttpLayersConfig, Principal, RateLimitConfig, ThreadApiState,
+    TimeoutPolicy, agent_router, thread_router, with_http_layers,
 };
+use paladin_battalion::engine::WarEngine;
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
+use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_ports::input::parley_port::ParleyPort;
 use paladin_ports::output::auth_port::AuthPort;
+use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+use paladin_ports::output::waypoint_port::WaypointPort;
 use tokio::signal;
 
 #[tokio::main]
@@ -84,6 +93,25 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let shutdown_coordinator = ShutdownCoordinator::new();
     let shutdown_grace = Duration::from_secs(engine_config.shutdown_grace_secs);
     let graceful_shutdown = engine_config.graceful_shutdown;
+
+    // Thread surface (HITL-05, D-24/D-25/D-26): a durable Waypoint backend is
+    // OFF by default (`WaypointStoreConfig::default()` is `Disabled`), in
+    // which case every `/v1/threads/*` route answers `501 not_implemented`
+    // (D-24). `ThreadApiState` is its own struct with its own `auth` --
+    // `AgentApiState` above is not modified (X-10.3).
+    let mut waypoint_store_config = WaypointStoreConfig::default();
+    waypoint_store_config.apply_env_overrides();
+    waypoint_store_config
+        .validate()
+        .map_err(|e| format!("invalid waypoint store configuration: {e}"))?;
+    let thread_state = build_thread_state(
+        &waypoint_store_config,
+        &engine_config,
+        shutdown_coordinator.clone(),
+        auth.clone(),
+    )
+    .await?;
+
     let state = AgentApiState::new(Arc::new(registry))
         .with_provisioner(Arc::new(provisioner))
         .with_timeouts(TimeoutPolicy {
@@ -103,7 +131,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     // Optionally serve the OpenAPI spec + Swagger UI (unversioned, unauthenticated).
     let docs_enabled = http.docs.enabled;
-    let routes = agent_router(state.clone());
+    // `thread_router`'s output is merged ALONGSIDE `agent_router`'s, never
+    // inside it, so `AgentApiState` stays untouched (D-24).
+    let routes = agent_router(state.clone()).merge(thread_router(thread_state));
     let routes = if docs_enabled {
         let spec = paladin::infrastructure::web::openapi::build_openapi(state);
         routes.merge(paladin::infrastructure::web::openapi::docs_router(spec))
@@ -120,7 +150,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         agent_ids
     );
     info!(
-        "routes: GET /health, GET /ready, GET/POST /v1/agents, GET/DELETE /v1/agents/{{id}}, POST /v1/agents/{{id}}/execute[/stream], POST /v1/agents/{{id}}/jobs, GET /v1/agents/{{id}}/jobs/{{job_id}}"
+        "routes: GET /health, GET /ready, GET/POST /v1/agents, GET/DELETE /v1/agents/{{id}}, POST /v1/agents/{{id}}/execute[/stream], POST /v1/agents/{{id}}/jobs, GET /v1/agents/{{id}}/jobs/{{job_id}}, GET /v1/threads/{{id}}/state, POST /v1/threads/{{id}}/resume, GET /v1/threads/{{id}}/history"
+    );
+    info!(
+        "waypoint store backend: {:?} ({})",
+        waypoint_store_config.backend,
+        if matches!(
+            waypoint_store_config.backend,
+            WaypointStoreBackend::Disabled
+        ) {
+            "thread routes answer 501 until a backend is configured"
+        } else {
+            "thread routes are live"
+        }
     );
     if docs_enabled {
         info!("docs: GET /openapi.json, Swagger UI at /docs");
@@ -243,6 +285,154 @@ fn build_auth_config(cfg: &AuthConfig) -> Result<AgentAuthConfig, Box<dyn std::e
     Ok(auth)
 }
 
+/// A [`PaladinPort`] this binary's own thread-surface `WarEngine` is
+/// constructed with but never actually calls (HITL-05, D-26, ADR-0039):
+/// `build_thread_state` registers no `WarGraph`s in its [`GraphRegistry`],
+/// because HTTP-served agents in this topology are LLM-plus-prompt only, not
+/// graph-backed. Every `resume_with` call therefore fails closed with
+/// `GraphNotRegistered` until an embedder registers a graph -- the intended
+/// topology, not an oversight (see this type's `unreachable!` bodies and
+/// `paladin-web`'s own `tower::util::oneshot` tests, which prove end-to-end
+/// HTTP resume against a REAL graph using an in-test registry instead).
+struct NoRegisteredGraphsPaladinPort;
+
+#[async_trait]
+impl PaladinPort for NoRegisteredGraphsPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        unreachable!(
+            "this process's thread-surface WarEngine has no registered WarGraph, so it can \
+             never dispatch a NodeSpec::Paladin node (ADR-0039)"
+        )
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unreachable!(
+            "this process's thread-surface WarEngine has no registered WarGraph, so it can \
+             never dispatch a NodeSpec::Paladin node (ADR-0039)"
+        )
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// Build the thread surface's [`ThreadApiState`] from [`WaypointStoreConfig`]
+/// (HITL-05, D-24/D-25/D-26): `Disabled` (the default) yields `None`-valued
+/// state fields, so every `/v1/threads/*` route answers `501` naming the
+/// config key to set; `Sqlite`/`Postgres` construct a real store, a facade
+/// [`ParleyPortAdapter`] over it (registered with `coordinator`, D-21), and
+/// an empty [`GraphRegistry`] -- this process registers no `WarGraph`s
+/// itself (ADR-0039; see [`NoRegisteredGraphsPaladinPort`]'s own rustdoc).
+async fn build_thread_state(
+    waypoint_store_config: &WaypointStoreConfig,
+    engine_config: &EngineConfig,
+    coordinator: ShutdownCoordinator,
+    auth: AgentAuthConfig,
+) -> Result<ThreadApiState, Box<dyn std::error::Error>> {
+    match &waypoint_store_config.backend {
+        WaypointStoreBackend::Disabled => Ok(ThreadApiState::new().with_auth(auth)),
+        WaypointStoreBackend::Sqlite { path } => {
+            let store = Arc::new(
+                paladin_storage::waypoint::sqlite::SqliteWaypointStore::new(path)
+                    .await
+                    .map_err(|e| {
+                        format!("failed to open sqlite waypoint store at '{path}': {e}")
+                    })?,
+            );
+            Ok(thread_state_over_store(
+                store,
+                engine_config,
+                coordinator,
+                auth,
+            ))
+        }
+        WaypointStoreBackend::Postgres { url_env } => {
+            build_postgres_thread_state(url_env, engine_config, coordinator, auth).await
+        }
+    }
+}
+
+/// Compose a [`ThreadApiState`] over an already-constructed waypoint store:
+/// shared by the `Sqlite` and (when compiled in) `Postgres` branches of
+/// [`build_thread_state`].
+fn thread_state_over_store<W: WaypointPort + 'static>(
+    store: Arc<W>,
+    engine_config: &EngineConfig,
+    coordinator: ShutdownCoordinator,
+    auth: AgentAuthConfig,
+) -> ThreadApiState {
+    let engine = Arc::new(
+        WarEngine::new(Arc::new(NoRegisteredGraphsPaladinPort), Arc::clone(&store))
+            .with_durability(engine_config.waypoint_durability)
+            .with_shutdown_grace(Duration::from_secs(engine_config.shutdown_grace_secs)),
+    );
+    // Deliberately empty: this process registers no `WarGraph`s (ADR-0039).
+    let registry = Arc::new(GraphRegistry::new());
+    let adapter = ParleyPortAdapter::new(engine, Arc::clone(&store), registry, coordinator);
+    let waypoints: Arc<dyn WaypointPort> = store;
+    let parley: Arc<dyn ParleyPort> = Arc::new(adapter);
+    ThreadApiState::new()
+        .with_waypoints(waypoints)
+        .with_parley(parley)
+        .with_auth(auth)
+}
+
+/// The `Postgres` branch of [`build_thread_state`], split out so the
+/// `#[cfg(feature = "storage-postgres")]` gate (X-11.4: the default
+/// `paladin-ai` build gains no Postgres driver) applies to one small
+/// function rather than an inline `#[cfg]` block inside a `match` arm.
+#[cfg(feature = "storage-postgres")]
+async fn build_postgres_thread_state(
+    url_env: &str,
+    engine_config: &EngineConfig,
+    coordinator: ShutdownCoordinator,
+    auth: AgentAuthConfig,
+) -> Result<ThreadApiState, Box<dyn std::error::Error>> {
+    let url = std::env::var(url_env).map_err(|_| {
+        format!("waypoint store postgres backend names env var '{url_env}', which is not set")
+    })?;
+    let store = Arc::new(
+        paladin_storage::waypoint::postgres::PostgresWaypointStore::new(&url)
+            .await
+            .map_err(|e| format!("failed to open postgres waypoint store: {e}"))?,
+    );
+    Ok(thread_state_over_store(
+        store,
+        engine_config,
+        coordinator,
+        auth,
+    ))
+}
+
+/// When this binary is built without `storage-postgres`, a configured
+/// `Postgres` backend is a startup error naming the missing feature, never a
+/// silent `Disabled` fallback (fail-closed, matching `build_auth_config`'s
+/// own precedent elsewhere in this file).
+#[cfg(not(feature = "storage-postgres"))]
+async fn build_postgres_thread_state(
+    url_env: &str,
+    _engine_config: &EngineConfig,
+    _coordinator: ShutdownCoordinator,
+    _auth: AgentAuthConfig,
+) -> Result<ThreadApiState, Box<dyn std::error::Error>> {
+    Err(format!(
+        "waypoint store backend is configured as 'postgres' (env var '{url_env}') but this \
+         binary was built without the 'storage-postgres' feature; rebuild with \
+         --features storage-postgres,web-server, or set APP_WAYPOINT_STORE_BACKEND=disabled or \
+         =sqlite"
+    )
+    .into())
+}
+
 /// Resolve the config file path: `PALADIN_CONFIG`, else the first CLI argument, else
 /// `config.yml`.
 fn config_path() -> String {
@@ -311,6 +501,7 @@ mod tests {
     use paladin::config::agents::{ApiKeyConfig, BearerTokenAuthConfig};
     use paladin_core::platform::container::user::UserRole;
     use std::sync::{Mutex, Once};
+    use tower::ServiceExt; // for `Router::oneshot`
 
     /// A `log::Log` implementation that records formatted `(level, message)` pairs instead of
     /// printing them, so tests can assert on what `build_auth_config` actually emits rather
@@ -596,5 +787,127 @@ mod tests {
             "resume must continue a Halted thread after a coordinator-driven process shutdown \
              and complete, got {resumed:?}"
         );
+    }
+
+    // --- Phase 24 Plan 11: thread surface composition (HITL-05, D-24) -----
+
+    #[tokio::test]
+    async fn server_wires_no_waypoint_backend_by_default() {
+        let config = WaypointStoreConfig::default();
+        assert_eq!(config.backend, WaypointStoreBackend::Disabled);
+
+        let engine_config = EngineConfig::default();
+        let coordinator = ShutdownCoordinator::new();
+        let thread_state = build_thread_state(
+            &config,
+            &engine_config,
+            coordinator,
+            AgentAuthConfig::default(),
+        )
+        .await
+        .expect("disabled backend never fails to build");
+
+        assert!(thread_state.waypoints.is_none());
+        assert!(thread_state.parley.is_none());
+
+        // The route itself answers 501, not merely the state fields being
+        // `None` in isolation.
+        let app = thread_router(thread_state);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/threads/any-thread/state")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn server_wires_sqlite_backend_when_configured() {
+        let config = WaypointStoreConfig {
+            backend: WaypointStoreBackend::Sqlite {
+                path: "sqlite::memory:".to_string(),
+            },
+        };
+        let engine_config = EngineConfig::default();
+        let coordinator = ShutdownCoordinator::new();
+        let thread_state = build_thread_state(
+            &config,
+            &engine_config,
+            coordinator,
+            AgentAuthConfig::default(),
+        )
+        .await
+        .expect("sqlite backend builds");
+
+        assert!(thread_state.waypoints.is_some());
+        assert!(thread_state.parley.is_some());
+
+        // An unknown thread reads through the real store: 404, not 501.
+        let waypoints = thread_state.waypoints.clone().unwrap();
+        let thread = paladin_core::platform::container::waypoint::ThreadId::new(
+            "server-wiring-sqlite-thread",
+        )
+        .unwrap();
+        assert!(waypoints.latest(&thread).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn thread_router_is_merged_alongside_agent_router() {
+        let registry = paladin::infrastructure::web::AgentRegistry::new();
+        let agent_state = AgentApiState::new(Arc::new(registry));
+        let thread_state = ThreadApiState::new();
+
+        let app = agent_router(agent_state).merge(thread_router(thread_state));
+
+        let agents = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/agents")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(agents.status(), axum::http::StatusCode::OK);
+
+        let threads = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/threads/any-thread/state")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // No backend wired in this test's ThreadApiState -- 501, not 404,
+        // proves the route is genuinely reachable and reached its handler.
+        assert_eq!(threads.status(), axum::http::StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn thread_routes_share_the_agent_auth_middleware() {
+        let auth = AgentAuthConfig {
+            enabled: true,
+            api_keys: HashMap::new(),
+            token_verifier: None,
+        };
+        let thread_state = ThreadApiState::new().with_auth(auth);
+        let app = thread_router(thread_state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/threads/any-thread/state")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
     }
 }

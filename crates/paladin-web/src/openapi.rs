@@ -20,6 +20,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::agent_controller::{AgentApiState, versioned_agent_parts};
 use crate::agent_registry::AgentRegistry;
+use crate::thread_controller::{ThreadApiState, versioned_thread_parts};
 
 /// Security-scheme name for the `X-API-Key` header credential (matches the handler annotations).
 pub const SEC_API_KEY: &str = "api_key";
@@ -52,12 +53,19 @@ fn decorate(api: &mut OpenApi) {
     );
 }
 
-/// Build the decorated OpenAPI document for the agent API (paths under `/v1`).
+/// Build the decorated OpenAPI document for the agent + thread APIs (paths under `/v1`).
 ///
-/// The `state` only shapes the (discarded) router; the document depends solely on the
-/// handler annotations, so any state — including an empty one — yields the same spec.
+/// The `state` only shapes the (discarded) agent router; the document depends solely on
+/// the handler annotations, so any state — including an empty one — yields the same spec.
+/// The thread paths (`crate::thread_controller`, HITL-05, D-24) are always merged in from a
+/// throwaway, unwired [`ThreadApiState`] — D-24 requires the spec to list them regardless of
+/// whether a waypoint backend is actually configured in the process building this document,
+/// since the paths and their `#[utoipa::path]` annotations (including the `501` response) are
+/// static, independent of any runtime state.
 pub fn build_openapi(state: AgentApiState) -> OpenApi {
     let (_router, mut api) = versioned_agent_parts(state);
+    let (_thread_router, thread_api) = versioned_thread_parts(ThreadApiState::new());
+    api.merge(thread_api);
     decorate(&mut api);
     api
 }
@@ -108,6 +116,125 @@ mod tests {
         );
         assert!(paths.contains_key("/v1/agents/{id}/execute"));
         assert!(!paths.contains_key("/agents"));
+    }
+
+    /// Test 1 (Phase 24 Plan 11, D-24/D-27): the built spec lists all three
+    /// thread paths under `/v1`, regardless of whether a waypoint backend
+    /// is wired in the process building the document.
+    #[test]
+    fn openapi_lists_the_three_thread_paths() {
+        let api = openapi_spec();
+        let paths = &api.paths.paths;
+        for expected in [
+            "/v1/threads/{id}/state",
+            "/v1/threads/{id}/resume",
+            "/v1/threads/{id}/history",
+        ] {
+            assert!(
+                paths.contains_key(expected),
+                "paths: {:?}",
+                paths.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// Test 2: each thread path documents its full status set, including
+    /// `501` for the unwired case (every path) and both `409` codes on the
+    /// resume path (as a single response entry naming both, since OpenAPI's
+    /// per-status-code response map cannot hold two distinct entries under
+    /// the identical `409` key).
+    #[test]
+    fn openapi_thread_paths_document_every_status() {
+        let api = openapi_spec();
+
+        let state_path = api
+            .paths
+            .paths
+            .get("/v1/threads/{id}/state")
+            .expect("state path present");
+        let get_op = state_path.get.as_ref().expect("GET operation");
+        for status in ["200", "400", "401", "404", "501"] {
+            assert!(
+                get_op.responses.responses.contains_key(status),
+                "GET /threads/{{id}}/state missing {status}"
+            );
+        }
+
+        let resume_path = api
+            .paths
+            .paths
+            .get("/v1/threads/{id}/resume")
+            .expect("resume path present");
+        let post_op = resume_path.post.as_ref().expect("POST operation");
+        for status in ["202", "400", "401", "404", "409", "501"] {
+            assert!(
+                post_op.responses.responses.contains_key(status),
+                "POST /threads/{{id}}/resume missing {status}"
+            );
+        }
+        let conflict = post_op
+            .responses
+            .responses
+            .get("409")
+            .expect("409 documented");
+        let utoipa::openapi::RefOr::T(conflict) = conflict else {
+            panic!("expected an inline 409 response, not a $ref");
+        };
+        assert!(
+            conflict.description.contains("thread_not_awaiting_input")
+                && conflict.description.contains("graph_not_registered"),
+            "the 409 response must document BOTH distinct codes: {}",
+            conflict.description
+        );
+
+        let history_path = api
+            .paths
+            .paths
+            .get("/v1/threads/{id}/history")
+            .expect("history path present");
+        let get_op = history_path.get.as_ref().expect("GET operation");
+        for status in ["200", "400", "401", "501"] {
+            assert!(
+                get_op.responses.responses.contains_key(status),
+                "GET /threads/{{id}}/history missing {status}"
+            );
+        }
+    }
+
+    /// Test 4: adding the thread paths must not change a single pre-existing
+    /// agent path's operation -- computed by comparing the combined spec
+    /// against an agent-only spec built the same way `build_openapi` did
+    /// before the thread paths existed.
+    #[test]
+    fn openapi_pre_existing_agent_paths_are_unchanged() {
+        let agent_only = {
+            let (_router, mut api) =
+                versioned_agent_parts(AgentApiState::new(Arc::new(AgentRegistry::new())));
+            decorate(&mut api);
+            api
+        };
+        let combined = openapi_spec();
+
+        for key in [
+            "/v1/agents",
+            "/v1/agents/{id}",
+            "/v1/agents/{id}/execute",
+            "/v1/agents/{id}/execute/stream",
+            "/v1/agents/{id}/jobs",
+            "/v1/agents/{id}/jobs/{job_id}",
+        ] {
+            // `PathItem` does not implement `Debug` outside the `debug`
+            // feature -- compare via JSON (the same representation the
+            // committed `openapi.json` drift guard already trusts).
+            let before = serde_json::to_value(agent_only.paths.paths.get(key))
+                .expect("serialize pre-existing path");
+            let after = serde_json::to_value(combined.paths.paths.get(key))
+                .expect("serialize combined path");
+            assert_eq!(
+                before, after,
+                "path {key} drifted after adding the thread routes"
+            );
+        }
     }
 
     use crate::agent_controller::agent_router;

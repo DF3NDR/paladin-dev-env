@@ -3252,6 +3252,7 @@ dependencies = [
  "tokio-test",
  "tokio-util",
  "toml 0.8.23",
+ "tower 0.5.3",
  "tracing-subscriber",
  "url",
  "urlencoding",

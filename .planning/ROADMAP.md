@@ -414,7 +414,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 24-08-PLAN.md — Shutdown grace race, `ShutdownCoordinator`, `EngineConfig` fields
+- [x] 24-08-PLAN.md — Shutdown grace race, `ShutdownCoordinator`, `EngineConfig` fields
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

@@ -111,7 +111,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   — proven by program scenario E2E-2 (approval gate, both branches, across process
   drop/recreate) (HITL-FR-04…06; overview §6 E2E-2)
 
-- [ ] **HITL-03**: The Chronicle is inspectable and forkable: history/inspect over `WaypointPort`,
+- [x] **HITL-03**: The Chronicle is inspectable and forkable: history/inspect over `WaypointPort`,
   `replay` and `fork`-with-edit create new chains with `fork_of` lineage while the original
   chain stays byte-identical (immutability hard invariant), branch-aware latest resolution, and
   defined subgraph-fork semantics (HITL-FR-07…12)
@@ -363,7 +363,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CF-05 | Phase 23 | Complete |
 | HITL-01 | Phase 24 | Complete |
 | HITL-02 | Phase 24 | Complete |
-| HITL-03 | Phase 24 | Pending |
+| HITL-03 | Phase 24 | Complete |
 | HITL-04 | Phase 24 | Pending |
 | HITL-05 | Phase 24 | Pending |
 | FT-01 | Phase 25 | Pending |

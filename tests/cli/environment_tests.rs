@@ -1163,6 +1163,7 @@ fn test_user_journey_output_formatting() {
         stop_reason: StopReason::Completed,
         plan: None,
         handoff_history: vec![],
+        served_by: None,
     };
 
     // Format for display
@@ -1205,6 +1206,7 @@ fn test_user_journey_verbose_output_shows_details() {
         stop_reason: StopReason::MaxLoops,
         plan: None,
         handoff_history: vec![],
+        served_by: None,
     };
 
     // Verbose mode should include loop count and stop reason details

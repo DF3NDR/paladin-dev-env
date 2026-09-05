@@ -47,5 +47,14 @@ rand = { workspace = true }
 # bump. Register/remove this suppression only in the same commit as the
 # matching MIGRATION.md §9.2 rows and `.cargo/semver-checks-allowlist.toml`
 # entries (kept set-equal by CI's `semver` job).
+#
+# FT-05 / FT-FR-17 (D-26, Phase 25 plan 25-08): `PaladinResult` gained the
+# additive `served_by: Option<String>` field and deliberately stays a
+# constructible, NOT-`#[non_exhaustive]` struct -- cross-crate
+# functional-update syntax is disallowed on `#[non_exhaustive]` structs, so
+# marking it would break every `..Default::default()` construction site
+# downstream. Only full struct literals break; the in-tree ones were migrated
+# in the same commit that added the field.
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
+constructible_struct_adds_field = "allow"

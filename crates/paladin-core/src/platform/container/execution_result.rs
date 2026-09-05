@@ -27,13 +27,23 @@ use crate::platform::container::planning::TaskPlan;
 ///     execution_time_ms: 1250,
 ///     loop_count: 1,
 ///     stop_reason: StopReason::Completed,
-///     plan: None,
-///     handoff_history: Vec::new(),
+///     ..Default::default()
 /// };
 ///
 /// assert_eq!(result.loop_count, 1);
 /// assert!(result.stop_reason.is_successful());
+/// assert!(result.served_by.is_none());
 /// ```
+///
+/// # Constructing across crates
+///
+/// The struct is deliberately **constructible** and **not** `#[non_exhaustive]`
+/// (Doc 04 D-26, X-10.3 option (b)): functional-update syntax
+/// (`..Default::default()`) is disallowed cross-crate on a `#[non_exhaustive]`
+/// struct, so marking it would break every downstream construction site and
+/// contradict FT-FR-17's own "`Default` still works" intent. The cost is that
+/// a full struct literal breaks when a field is added — prefer
+/// `..Default::default()` for any field you do not set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaladinResult {
     /// The generated output text
@@ -66,6 +76,22 @@ pub struct PaladinResult {
     /// which agent handled what task and at what depth in the delegation chain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handoff_history: Vec<HandoffRecord>,
+
+    /// `get_provider_name()` of the provider that actually served this
+    /// result when the Paladin's `LlmPort` was a fallback chain
+    /// (Doc 04 FT-FR-17, D-26).
+    ///
+    /// `None` for every result produced by a plain single-provider adapter,
+    /// and absent from the serialised JSON in that case — so a payload
+    /// written before this field existed is byte-identical to one written
+    /// today. Set only by copying the `paladin.served_by` metadata key the
+    /// `FallbackLlmAdapter` stamps on its `LlmResponse`.
+    ///
+    /// This is an **observability** field stamped in-process by the adapter,
+    /// not an authenticated attestation of provenance (T-25-38): no
+    /// security decision should read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub served_by: Option<String>,
 }
 
 /// Reason why Paladin execution stopped
@@ -112,6 +138,7 @@ impl Default for PaladinResult {
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
+            served_by: None,
         }
     }
 }
@@ -147,6 +174,7 @@ impl PaladinResult {
             stop_reason,
             plan: None,
             handoff_history: Vec::new(),
+            served_by: None,
         }
     }
 
@@ -163,6 +191,12 @@ impl PaladinResult {
     /// Returns the number of handoffs in the history
     pub fn handoff_count(&self) -> usize {
         self.handoff_history.len()
+    }
+
+    /// Checks whether this result records the provider that served it
+    /// (only a fallback-chain-served result does — see [`Self::served_by`]).
+    pub fn was_served_by_fallback(&self) -> bool {
+        self.served_by.is_some()
     }
 }
 

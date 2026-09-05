@@ -59,3 +59,10 @@ lint = "enum_marked_non_exhaustive"
 migration_row = "paladin-ports | LlmError"
 requirement_id = "FT-01, FT-05"
 justification = "LlmError gained ProviderError and AllProvidersFailed (status-carrying variants for the FT-05 fallback chain, D-03) and the transience() method; marked #[non_exhaustive] so the provider-error taxonomy can grow without a semver-major bump."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ports | PaladinResult"
+requirement_id = "FT-FR-17"
+justification = "PaladinResult gained the additive served_by: Option<String> field (serving provider from the FT-05 fallback chain, D-26) with #[serde(default, skip_serializing_if)] so legacy JSON is byte-identical; the struct stays constructible and is deliberately NOT #[non_exhaustive] because cross-crate functional-update syntax is disallowed on non_exhaustive structs -- FT-FR-17's premise that Default still works under that marking does not hold -- so only full struct literals break, and every in-tree one was migrated in the same commit."

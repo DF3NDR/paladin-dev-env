@@ -32,4 +32,9 @@
 #   requirement_id  = "<owning requirement, e.g. FT-01>"
 #   justification   = "<one line: why this is deliberate-breaking, not a mitigation>"
 #
-# entries = []
+[[entry]]
+crate = "paladin-web"
+lint = "function_requires_different_generic_type_params"
+migration_row = "paladin-web | require_authentication (fn)"
+requirement_id = "HITL-FR-16"
+justification = "require_authentication gained a generic type parameter (S: HasAgentAuth) so ThreadApiState's routes (24-11) can reuse the SAME middleware AgentApiState's routes already layer, instead of a duplicated copy -- accepted as the minimal, intentional cost of that reuse."

@@ -8,19 +8,19 @@
 | G-02 | Typed shared state + reducers | ENG §3.1, ENG-FR-05, 07–10 | Battlefield + DispatchRule |
 | G-03 | Per-step checkpointing / durable execution | ENG-FR-11, 12, 15–17; PLAT-FR-03 | Waypoint per superstep; resume; worker redelivery |
 | G-04 | Thread/checkpoint addressing | ENG §3.3, ENG-FR-13, 14 | ThreadId + WaypointId + fingerprint |
-| G-05 | Human-in-the-loop pause/resume | HITL-FR-01…06; PLAT-FR-06 | Parley, Gate node, resume API |
-| G-06 | History / replay / fork ("time travel") | HITL-FR-07…12; PLAT threads/fork endpoints | Immutable chronicle, fork_of lineage |
+| G-05 | Human-in-the-loop pause/resume | HITL-FR-01…06; PLAT-FR-06 | Parley, Gate node, resume API — test anchors: `crates/paladin-battalion/src/engine/superstep.rs#parley_suspends_run_and_persists_awaiting_input`, `crates/paladin-battalion/src/engine/mod.rs#parley_suspends_and_resumes_end_to_end`, `crates/paladin-battalion/src/engine/mod.rs#gate_raises_parley_on_first_visit`, `crates/paladin-battalion/src/engine/mod.rs#resume_with_rejects_wrong_shape_per_kind`, `tests/integration/e2e_approval_gate_test.rs#e2e2_approval_branch_survives_process_drop` (Phase 24, plans 24-01/24-02/24-04/24-05) |
+| G-06 | History / replay / fork ("time travel") | HITL-FR-07…12; PLAT threads/fork endpoints | Immutable chronicle, fork_of lineage — test anchors: `crates/paladin-battalion/src/engine/mod.rs#replay_leaves_the_mainline_byte_identical`, `crates/paladin-battalion/src/engine/mod.rs#fork_with_edit_flips_a_conditional_edge`, `src/application/services/chronicle.rs#chronicle_history_returns_newest_first_summaries_with_lineage`, `crates/paladin-core/src/platform/container/waypoint.rs#child_on_branch_is_injective` (Phase 24, plans 24-06/24-07) |
 | G-07 | Dynamic routing from node output | CF-FR-05…08 | Directive / NextStep::Goto/End |
 | G-08 | Dynamic parallel fan-out (map-reduce) | CF-FR-09…13; FT-FR-06 (retry per task) | Muster + task_key ordering |
 | — (deferred/join precision) | Join & defer semantics | ENG-FR-06; CF-FR-12 | Not-firing edges don't deadlock joins |
 | — (mid-muster crash recovery) | Progress Waypoints inside a Muster superstep | ENG-FR-11 (clarification note); CF-FR-12 | Zero-or-more `status: Running` progress Waypoints per muster superstep, carrying the superstep-start Battlefield and unmerged per-task deltas keyed by `task_key`; resume re-enters the same superstep and dispatches only unfinished tasks (Plan 23-06, D-14) |
-| G-09 | Subgraph composition | CF-FR-14…17; HITL-FR-12 (fork interaction) | Battalion-as-node, namespaced waypoints |
+| G-09 | Subgraph composition | CF-FR-14…17; HITL-FR-12 (fork interaction) | Battalion-as-node, namespaced waypoints — HITL-FR-12 fork-interaction test anchors: `tests/integration/subgraph_formation_in_campaign_test.rs#fork_does_not_touch_mainline_child_waypoints`, `tests/integration/subgraph_formation_in_campaign_test.rs#latest_on_a_fork_child_thread_does_not_resolve_the_mainline_child` (Phase 24, plan 24-07) |
 | G-10 | Per-node retry policy | FT-FR-03…07 + FT §2.1 | Backoff, jitter, predicate, attempt isolation |
 | G-11 | Per-node timeout (wall + idle) | FT-FR-08…10 | heartbeat-based progress |
 | G-12 | Typed error handlers / compensation | FT-FR-01, 02, 11…15 | Transience taxonomy + Route/Absorb/Custom |
 | G-13 | Model fallback | FT-FR-16, 17; RT-FR-09 | Adapter + middleware exposure |
 | G-14 | Node result caching | FT-FR-18…20 | CachePolicy + NodeCachePort |
-| G-15 | Graceful shutdown | ENG-FR-23; HITL-FR-13…15; PLAT-FR-04 | Cooperative halt, SIGTERM wiring, remote cancel |
+| G-15 | Graceful shutdown | ENG-FR-23; HITL-FR-13…15; PLAT-FR-04 | Cooperative halt, SIGTERM wiring, remote cancel — test anchors: `crates/paladin-battalion/src/engine/shutdown.rs#cancel_and_wait_returns_at_the_deadline_when_not_idle`, `crates/paladin-battalion/src/engine/superstep.rs#over_grace_node_is_aborted_and_recorded_skipped`, `crates/paladin-battalion/src/engine/superstep.rs#resume_reruns_the_skipped_node_exactly_once`, `src/bin/paladin-server.rs#resume_continues_a_halted_thread_after_process_shutdown` (Phase 24, plans 24-08/24-09) |
 | G-16 | Middleware pipeline | RT-FR-01…09; ENG-FR-22 | Two layers documented (node vs. in-loop) |
 | G-17 | Context-window management | RT-FR-10…12 | TokenCounterPort, trim, summarize |
 | G-18 | Cross-session long-term memory | RT-FR-13…16 | VaultPort + confinement + recall |
@@ -31,7 +31,7 @@
 | G-23 | Background runs + task queue | PLAT-FR-01…07 + PLAT §2.1–2.2 | Queue port, worker pool, streaming |
 | G-24 | Cron + webhooks as API | PLAT-FR-13…15 | incl. SSRF guard |
 | G-25 | Versioned assistants | PLAT-FR-08…12 | Immutable versions, freeze-at-submit, WarGraphDoc |
-| G-26 | Threads API | HITL-FR-16; PLAT §2.1 thread endpoints | |
+| G-26 | Threads API | HITL-FR-16; PLAT §2.1 thread endpoints | Test anchors: `crates/paladin-web/src/thread_controller.rs#post_resume_returns_202_with_thread_and_state_url`, `crates/paladin-web/src/thread_controller.rs#get_thread_history_paginates_with_limit_and_cursor`, `crates/paladin-web/src/openapi.rs#openapi_pre_existing_agent_paths_are_unchanged` (Phase 24, plan 24-11) |
 | G-27 | Visual debugging | OBS-FR-08…10 | Mermaid/DOT export + execution overlay + inspector page |
 | G-28 | Trace/observability + eval | OBS-FR-01…07 (trace/OTel), OBS-FR-11…15 (eval) | |
 | G-29 | Multi-language client access | PLAT-FR-17 | Generated-client CI gate (hand-written SDKs out of scope) |

@@ -21,6 +21,7 @@
 - [Herald Output](user-guides/herald-output.md)
 - [Maneuver Flow DSL](user-guides/maneuver-flow-dsl.md)
 - [Control Flow: Dynamic Routing & Subgraphs](user-guides/control-flow.md)
+- [Parley & Chronicle: Pause, Resume, History and Graceful Shutdown](user-guides/parley-and-chronicle.md)
 - [Paladin Configuration](user-guides/paladin-configuration.md)
 - [Memory Management](user-guides/memory-management.md)
 - [Tool Integration](user-guides/tool-integration.md)

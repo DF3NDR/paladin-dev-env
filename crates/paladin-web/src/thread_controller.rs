@@ -473,11 +473,25 @@ fn map_parley_error(err: ParleyError) -> ApiError {
     security(("api_key" = []), ("bearer_token" = [])),
 )]
 pub async fn get_thread_state(
-    State(_state): State<ThreadApiState>,
-    Path(_id): Path<String>,
+    State(state): State<ThreadApiState>,
+    Path(id): Path<String>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
-    // RED-STATE MARKER (Phase 24 Plan 11, Task 1): not yet implemented.
-    Err(ApiError::internal("stub: get_thread_state not yet implemented"))
+    let waypoints = state
+        .waypoints
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(WAYPOINT_BACKEND_HINT))?;
+    let thread = parse_thread_id(&id)?;
+
+    let waypoint = waypoints
+        .latest(&thread)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(format!("unknown thread '{id}'")))?;
+
+    Ok((
+        StatusCode::OK,
+        ok_body(&ThreadStateResponse::from(&waypoint)),
+    ))
 }
 
 /// `POST /threads/{id}/resume` -- deliver parley responses.
@@ -503,12 +517,49 @@ pub async fn get_thread_state(
     security(("api_key" = []), ("bearer_token" = [])),
 )]
 pub async fn resume_thread(
-    State(_state): State<ThreadApiState>,
-    Path(_id): Path<String>,
-    Json(_body): Json<ResumeRequest>,
+    State(state): State<ThreadApiState>,
+    Path(id): Path<String>,
+    Json(body): Json<ResumeRequest>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
-    // RED-STATE MARKER (Phase 24 Plan 11, Task 1): not yet implemented.
-    Err(ApiError::internal("stub: resume_thread not yet implemented"))
+    let parley = state
+        .parley
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(PARLEY_PORT_HINT))?;
+    let thread = parse_thread_id(&id)?;
+
+    let mut responses = Vec::with_capacity(body.responses.len());
+    for input in body.responses {
+        let parley_id = parse_parley_id(&input.parley_id)?;
+        responses.push(ParleyResponse {
+            parley_id,
+            // Placeholders: `WarEngine::resume_with` stamps both from the
+            // matching request regardless of what is supplied here (D-07).
+            kind: ParleyKind::FreeText,
+            prompt: String::new(),
+            value: input.value,
+            responded_by: input.responded_by,
+            responded_at: Utc::now(),
+            defaulted: false,
+        });
+    }
+
+    let accepted = parley
+        .resume_with(&thread, responses)
+        .await
+        .map_err(map_parley_error)?;
+
+    let thread_id = accepted.thread_id().as_str().to_string();
+    let state_url = format!(
+        "{}/threads/{thread_id}/state",
+        crate::agent_controller::API_V1_PREFIX
+    );
+    Ok((
+        StatusCode::ACCEPTED,
+        ok_body(&ResumeAcceptedResponse {
+            thread_id,
+            state_url,
+        }),
+    ))
 }
 
 /// `GET /threads/{id}/history` -- paginated Chronicle history.
@@ -534,13 +585,50 @@ pub async fn resume_thread(
     security(("api_key" = []), ("bearer_token" = [])),
 )]
 pub async fn get_thread_history(
-    State(_state): State<ThreadApiState>,
-    Path(_id): Path<String>,
-    Query(_params): Query<HistoryQuery>,
+    State(state): State<ThreadApiState>,
+    Path(id): Path<String>,
+    Query(params): Query<HistoryQuery>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
-    // RED-STATE MARKER (Phase 24 Plan 11, Task 1): not yet implemented.
-    Err(ApiError::internal(
-        "stub: get_thread_history not yet implemented",
+    let waypoints = state
+        .waypoints
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(WAYPOINT_BACKEND_HINT))?;
+    let thread = parse_thread_id(&id)?;
+
+    if let Some(limit) = params.limit
+        && limit > MAX_HISTORY_LIMIT
+    {
+        return Err(ApiError::bad_request(format!(
+            "limit must be at most {MAX_HISTORY_LIMIT}, got {limit}"
+        )));
+    }
+    let before = params
+        .cursor
+        .as_deref()
+        .map(parse_waypoint_id)
+        .transpose()?;
+
+    let page = waypoints
+        .history(&thread, params.limit, before)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    // A full page (== the requested limit) may have more behind it; a
+    // shorter page (or no limit at all, i.e. "everything") is the last one.
+    let is_full_page = params
+        .limit
+        .map(|limit| page.len() as u32 >= limit && limit > 0)
+        .unwrap_or(false);
+    let next_cursor = if is_full_page {
+        page.last().map(|s| s.waypoint_id.to_string())
+    } else {
+        None
+    };
+
+    let items: Vec<WaypointSummaryDto> = page.iter().map(WaypointSummaryDto::from).collect();
+    Ok((
+        StatusCode::OK,
+        ok_body(&HistoryResponse { items, next_cursor }),
     ))
 }
 

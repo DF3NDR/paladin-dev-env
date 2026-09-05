@@ -465,9 +465,9 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 25-05-PLAN.md — One shared map_http_status helper (redact-then-bound) applied to all nine LLM provider adapters
-- [ ] 25-06-PLAN.md — LlmError → PaladinError::LlmFailure conversion helper and the eight erasure sites
-- [ ] 25-07-PLAN.md — Retry expansion: AttemptRecord history, per-attempt trace fields, structured failure path, per-task Muster retry
+- [x] 25-05-PLAN.md — One shared map_http_status helper (redact-then-bound) applied to all nine LLM provider adapters
+- [x] 25-06-PLAN.md — LlmError → PaladinError::LlmFailure conversion helper and the eight erasure sites
+- [x] 25-07-PLAN.md — Retry expansion: AttemptRecord history, per-attempt trace fields, structured failure path, per-task Muster retry
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

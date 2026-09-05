@@ -380,6 +380,12 @@ storage-mysql = ["paladin-storage/mysql"]
 storage-postgres = ["paladin-storage/postgres"]
 storage = ["storage-mysql", "storage-postgres"]
 
+# Redis-backed `NodeCachePort` adapter (Doc 04 FT-FR-18…20, D-27). Deliberately
+# NOT part of `default`, `storage`, or `full`'s implicit set -- see X-11.4: the
+# default `paladin-ai` build must gain no Redis driver beyond what `redis-queue`
+# already opts in separately.
+redis-cache = ["paladin-storage/redis-cache"]
+
 # CLI (binary and test tooling only — not compiled into the library)
 cli = ["dep:clap", "dep:dialoguer", "dep:indicatif", "dep:console", "dep:serde_yaml", "dep:colored", "dep:comfy-table", "paladin-herald/table", "paladin-herald/color"]
 

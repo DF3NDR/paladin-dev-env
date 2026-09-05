@@ -27,6 +27,10 @@ postgres = ["dep:sqlx", "sqlx/postgres"]
 s3 = ["dep:rust-s3"]
 ## Enable the Redis queue adapter.
 redis-queue = ["dep:redis"]
+## Enable the Redis-backed `NodeCachePort` adapter (Doc 04 FT-FR-18…20, D-27).
+## Shares the already-declared optional `redis` dependency with
+## `redis-queue` -- no new dependency name, no version bump.
+redis-cache = ["dep:redis"]
 ## Enable the tokio-cron-scheduler-backed SchedulerPort adapter.
 scheduler = ["dep:tokio-cron-scheduler"]
 
@@ -48,8 +52,11 @@ sqlx = { workspace = true, optional = true }
 # rust-s3 is optional: activated by the s3 feature (MinIO/S3 file storage).
 rust-s3 = { version = "0.35.1", optional = true }
 
-# redis is optional: activated by the redis-queue feature.
-redis = { version = "0.32.2", features = ["aio", "tokio-comp", "connection-manager", "script"], optional = true }
+# redis is optional: activated by the redis-queue or redis-cache feature.
+# `safe_iterators` is required by the redis-cache adapter's `scan_match`-based
+# `invalidate` (T-25-17): without it, `redis::AsyncIter` silently stops at the
+# first value that fails conversion rather than surfacing the error.
+redis = { version = "0.32.2", features = ["aio", "tokio-comp", "connection-manager", "script", "safe_iterators"], optional = true }
 
 # tokio-cron-scheduler is optional: activated by the scheduler feature. Pinned
 # to the same "0.13" the workspace root already resolves.

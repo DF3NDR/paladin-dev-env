@@ -19,6 +19,7 @@ pub mod herald;
 pub mod herald_error;
 pub mod job;
 pub mod log;
+pub mod node_cache;
 pub mod node_error;
 pub mod notification;
 pub mod orchestration_context;

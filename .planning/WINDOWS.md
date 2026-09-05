@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 18
+open_count: 19
 waived_count: 4
 fixed_count: 5
-total_count: 27
-last_updated: 2026-09-05T08:06:30.095Z
+total_count: 28
+last_updated: 2026-09-05T21:18:05.117Z
 ---
 
 # Broken Windows Ledger
@@ -42,6 +42,7 @@ last_updated: 2026-09-05T08:06:30.095Z
 | 25 | 22 | deviation | crates/paladin-battalion/src/engine/superstep.rs | 1220 | self_loop_graph test helper makes its looping node a graph entry to sidestep the Frontier::is_ready self-loop join-deadlock property (same root cause as e2e_crash_resume_test.rs); flagged for plan 22-16's fixture audit (acceptance 2a) | open |  | 2026-09-02T18:04:11.984Z |  |
 | 26 | 24 | unrun-verify | crates/paladin-storage/src/waypoint/contract_tests.rs |  | Phase 24's new Postgres Tier-2 contract-suite cases (awaiting_input_payload_round_trips, fork_of_round_trips, latest_prefers_most_recently_created_across_branches, D-02/D-14/D-15) self-skip locally (no Docker in this devcontainer) and are provable only via CI's postgres-integration job; never recorded as passed locally (D-28). | open |  | 2026-09-05T08:06:14.731Z |  |
 | 27 | 24 | unrun-verify | Makefile |  | Phase 24's gate-evidence coverage measurement used cargo llvm-cov --workspace --features web-server (87.11% line coverage, above the 82% ADR-0006 floor) rather than the canonical make coverage/scripts/coverage.sh invocation (--features integration-tests,llm-all), because Redis and MinIO are unreachable -- no Docker daemon in this devcontainer, matching the Phase 17 precedent (row 13). Not recorded as CI's official figure. | open |  | 2026-09-05T08:06:30.095Z |  |
+| 28 | 25 | unrun-verify | crates/paladin-storage/src/node_cache/redis.rs |  | RedisNodeCache Tier-2 live-server contract suite (redis_node_cache_runs_the_full_contract_suite, redis_keys_are_namespaced_by_the_configured_prefix, redis_ttl_is_set_on_the_server_not_only_in_the_payload) never executed against a real Redis server in any authoring environment -- Docker/Redis absent from devcontainer; evidence is CI-only via the new redis-cache-integration job | open |  | 2026-09-05T21:18:05.117Z |  |
 
 ````json
 [
@@ -367,6 +368,18 @@ last_updated: 2026-09-05T08:06:30.095Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-05T08:06:30.095Z",
+    "resolved_at": null
+  },
+  {
+    "id": 28,
+    "kind": "unrun-verify",
+    "phase": "25",
+    "file": "crates/paladin-storage/src/node_cache/redis.rs",
+    "line": null,
+    "description": "RedisNodeCache Tier-2 live-server contract suite (redis_node_cache_runs_the_full_contract_suite, redis_keys_are_namespaced_by_the_configured_prefix, redis_ttl_is_set_on_the_server_not_only_in_the_payload) never executed against a real Redis server in any authoring environment -- Docker/Redis absent from devcontainer; evidence is CI-only via the new redis-cache-integration job",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-05T21:18:05.117Z",
     "resolved_at": null
   }
 ]

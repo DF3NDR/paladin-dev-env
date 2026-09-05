@@ -450,7 +450,23 @@ Plans:
   4. Program scenario E2E-3 passes together with CF-03: a `Route`/`Absorb`/registered-`Custom` typed error handler compensates a transiently-failing Muster worker without failing the run, unregistered `Custom` names fail closed, and handler loops are bounded by `max_node_visits` (FT-04)
   5. `FallbackLlmAdapter` fails over across a provider chain on Transient/Unknown errors only (short-circuiting on Permanent) without silently switching providers mid-stream, and a `CachePolicy`-keyed node hits its `NodeCachePort` cache with `cache_hit: true` and no re-execution while failures are never cached (FT-05, FT-06)
 
-**Plans**: TBD
+**Plans**: 14 plans
+
+Plans:
+- [ ] 25-01-PLAN.md — Tracer: core Transience/NodeError/Aegis value types, WarGraph aegis sidecar, superstep retry loop, backoff and predicate tests
+- [ ] 25-02-PLAN.md — X-10 error taxonomy gate: transience() on both enums, LlmFailure/ProviderError/AllProvidersFailed/BattalionError::Node, three enums non-exhaustive, §9.2 rows
+- [ ] 25-03-PLAN.md — Aegis validation: EngineRegistries, fail-closed predicate/handler registries, node-kind matrix, fingerprint v4 → v5
+- [ ] 25-04-PLAN.md — Node cache port, CachedDelta, InMemory + Redis adapters under one contract suite, redis-cache feature, NodeCacheConfig
+- [ ] 25-05-PLAN.md — One shared map_http_status helper (redact-then-bound) applied to all nine LLM provider adapters
+- [ ] 25-06-PLAN.md — LlmError → PaladinError::LlmFailure conversion helper and the eight erasure sites
+- [ ] 25-07-PLAN.md — Retry expansion: AttemptRecord history, per-attempt trace fields, structured failure path, per-task Muster retry
+- [ ] 25-08-PLAN.md — FallbackLlmAdapter chain with streaming first-chunk rule, FallbackHop trace, PaladinResult.served_by
+- [ ] 25-09-PLAN.md — Timeouts: HeartbeatHandle, defaulted PaladinPort::execute_observed, run/idle/EngineRun nesting, RunTimeoutExceeded
+- [ ] 25-10-PLAN.md — Typed error handlers: Route/Absorb/Custom validation and dispatch, max_node_visits loop bound
+- [ ] 25-11-PLAN.md — Handler composition: Muster delta-only rule, Parley from a handler, compensation-chain and loop-bound E2E
+- [ ] 25-12-PLAN.md — E2E-3 seam replaced by real per-task retry, X-05 stress, kill-during-backoff, run-timeout E2E
+- [ ] 25-13-PLAN.md — Cache engine integration: key composition, hit/miss path, FieldSpec cache marker, correctness guardrails
+- [ ] 25-14-PLAN.md — Fault-tolerance guide, MIGRATION §9.1-§9.7 close-out, traceability anchors, semver/MSRV/security/coverage gate evidence
 
 ### Phase 26: Agent Runtime Enhancements
 

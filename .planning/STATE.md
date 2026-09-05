@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 24
-current_phase_name: Pause/Resume, History & Graceful Shutdown
+current_phase_name: pause-resume-history-graceful-shutdown
 status: executing
 stopped_at: Phase 24 executed (12/12 plans, code review fixed 5/5); verification gaps_found — 3-file docs drift after CR-01 admin-gate + CR-02 human diff read pending
-last_updated: "2026-09-05T10:26:13.273Z"
-last_activity: 2026-09-04
+last_updated: "2026-09-05T11:17:16.340Z"
+last_activity: 2026-09-05
 last_activity_desc: Phase 24 execution started
 progress:
   total_phases: 4
-  completed_phases: 4
+  completed_phases: 3
   total_plans: 50
   completed_plans: 48
 ---
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-04 after Phase 23)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 24 — Pause/Resume, History & Graceful Shutdown
+**Current focus:** Phase 24 — pause-resume-history-graceful-shutdown
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
 **Progress:** [███░░░░░░░] v0.10.0 — 3 of 9 phases complete (22, 22.1, 23); 36/36 planned plans executed (Phase 24 not yet planned)
@@ -51,10 +51,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 24 (Pause/Resume, History & Graceful Shutdown) — EXECUTING
-Plan: 1 of 12
-Status: Ready to execute
-Last activity: 2026-09-04 — Phase 24 execution started
+Phase: 24 (pause-resume-history-graceful-shutdown) — EXECUTING
+Plan: 1 of 14
+Status: Executing Phase 24
+Last activity: 2026-09-05 — Phase 24 execution started
 
 ## Performance Metrics
 

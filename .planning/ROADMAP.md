@@ -431,7 +431,7 @@ Plans:
 
 **Wave 11** *(gap closure — 24-VERIFICATION.md, blocked on Wave 10 completion)*
 
-- [ ] 24-13-PLAN.md — Doc drift after CR-01: MIGRATION §9.6 `403`, CHANGELOG, mdBook posture callout
+- [x] 24-13-PLAN.md — Doc drift after CR-01: MIGRATION §9.6 `403`, CHANGELOG, mdBook posture callout
 
 **Wave 12** *(gap closure — blocked on Wave 11 completion)*
 

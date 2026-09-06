@@ -7,17 +7,19 @@
 //! (`.project/v0.10.0/02-control-flow-routing-fanout-subgraphs.md` §3
 //! acceptance criterion 2).
 //!
-//! ## Scope: this file covers ONLY the muster/defer/order half of E2E-3
+//! ## Scope: the muster/defer/order half AND the recovering worker
 //!
 //! E2E-3's full program text also describes a recovering worker: one
-//! mustered task that fails on its first attempts and succeeds later,
-//! standing in for a per-task Aegis retry policy. §3 acceptance criterion 2
-//! is explicit that the muster/defer/order half passes NOW, and that the
-//! recovering-worker half is exercised here with a manually-succeeding
-//! mock rather than a real retry mechanism -- typed per-task retry,
-//! timeouts and error handlers are **FT-FR-06, owned by Phase 25**. See
-//! `one_worker_recovers_by_manual_attempt_scripting` below for the exact,
-//! clearly marked seam a real Aegis retry policy will replace.
+//! mustered task that fails on its first attempts and succeeds later under
+//! a per-task Aegis retry policy. Phase 23 exercised that half with a
+//! manually-scripted mock because no retry mechanism existed yet; Phase 25
+//! (FT-FR-06, D-31) replaced that stand-in with the real thing --
+//! `one_worker_recovers_by_real_per_task_retry` below drives a GENUINELY
+//! failing mustered Paladin through the engine's own per-task retry loop,
+//! under the DEFAULT `TransientOnly` predicate, with no test-side
+//! pre-scripting of any kind. The exact port-call count (5 workers + 2
+//! retries = 7) and the recovering task's two `AttemptRecord`s are what
+//! prove the retry was real.
 //!
 //! ## Why a `Function` planner rather than a Paladin planner
 //!
@@ -34,21 +36,45 @@
 //! `FaultyPaladinPort`, which is what this scenario is actually about: fan
 //! out through the genuine Paladin-execution path, in one superstep, with
 //! deterministic `task_key`-ordered aggregation.
+//!
+//! ## Why the recovering-worker graph has one worker template per task
+//!
+//! The engine dispatches every mustered task with its worker TEMPLATE's own
+//! `Paladin` (`superstep.rs`'s `execute_observed(&paladin, ..)` call), so a
+//! single shared template presents the same Paladin name on every task and
+//! neither `FaultyPaladinPort::fail_paladin_until_attempt` (keyed by that
+//! name) nor `NodeExecutionRecord.node_id` (the template id) could single
+//! out "the third task". The recovering-worker fixture therefore registers
+//! five worker templates `w1`..`w5` -- each a real Paladin node carrying the
+//! per-task `RetryPolicy` -- and musters one task against each, keyed
+//! `"a"`..`"e"` exactly as the shared-template fixture does. Same-superstep
+//! fan-out, `task_key`-ordered aggregation and the one-aggregator-run
+//! contract are unchanged by that choice; what it buys is a `w3` that is
+//! addressable by value in the port, in the records and in the assertions.
+//!
+//! These tests live under `tests/integration/`, so the repository's default
+//! `make test` (`--lib --bins`) does not run them; run
+//! `cargo test --test e2e_muster_defer_order`.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use paladin_battalion::engine::{
     EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeSpec, RunOutcome, StateNode,
     StateNodeError, WarEngine, WarGraph,
 };
 use paladin_core::base::entity::node::Node;
+use paladin_core::platform::container::aegis::{Aegis, RetryPolicy, RetryPredicate};
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
 };
 use paladin_core::platform::container::directive::{Directive, MusterTask, NextStep};
+use paladin_core::platform::container::node_error::NodeErrorSource;
 use paladin_core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
-use paladin_core::platform::container::waypoint::{NodeId, ThreadId, Waypoint};
-use paladin_ports::output::paladin_port::PaladinPort;
+use paladin_core::platform::container::transience::Transience;
+use paladin_core::platform::container::waypoint::{
+    NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointStatus,
+};
 use paladin_ports::output::waypoint_port::WaypointPort;
 use paladin_storage::waypoint::sqlite::SqliteWaypointStore;
 
@@ -68,6 +94,14 @@ use helpers::FaultyPaladinPort;
 /// job is to prove the SAME guarantee holds through the full engine +
 /// real-Paladin-dispatch path, not to re-derive it.
 const TASK_KEYS: [&str; 5] = ["a", "b", "c", "d", "e"];
+
+/// The five worker templates of the recovering-worker fixture, one per
+/// task key (`w1` runs `"a"`, .., `w5` runs `"e"`); `w3` is the one that
+/// fails its first two attempts (D-31).
+const WORKER_NAMES: [&str; 5] = ["w1", "w2", "w3", "w4", "w5"];
+
+/// The recovering worker of the E2E-3 scenario.
+const RECOVERING_WORKER: &str = "w3";
 
 fn field(name: &str) -> FieldName {
     FieldName::new(name).expect("valid field name")
@@ -89,11 +123,46 @@ fn make_paladin(name: &str) -> Paladin {
     Node::new(data, Some(name.to_string()))
 }
 
-/// Deterministic planner: on its one (and only) execution, musters five
-/// worker tasks against the `worker` template, keyed `"a"`..`"e"`, each
+/// Deterministic planner: on its one (and only) execution, musters the
+/// configured worker tasks -- each `(worker template, task_key)` pair
 /// carrying its own key as a JSON string payload (`{muster.payload}`
 /// resolves to the bare key string -- see `InputMapping::resolve_muster`).
-struct PlannerNode;
+struct PlannerNode {
+    tasks: Vec<MusterTask>,
+}
+
+impl PlannerNode {
+    fn muster(assignments: impl IntoIterator<Item = (NodeId, &'static str)>) -> Self {
+        Self {
+            tasks: assignments
+                .into_iter()
+                .map(|(worker, key)| MusterTask {
+                    worker,
+                    payload: serde_json::json!(key),
+                    task_key: key.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Five tasks, keyed `"a"`..`"e"`, all against the single `worker`
+    /// template -- the original E2E-3 muster/defer/order fixture.
+    fn single_template() -> Self {
+        let worker = NodeId::new("worker");
+        Self::muster(TASK_KEYS.iter().map(|key| (worker.clone(), *key)))
+    }
+
+    /// Five tasks, keyed `"a"`..`"e"`, each against its own `w1`..`w5`
+    /// template -- the recovering-worker fixture (see the module rustdoc).
+    fn one_template_per_task() -> Self {
+        Self::muster(
+            WORKER_NAMES
+                .iter()
+                .zip(TASK_KEYS.iter())
+                .map(|(worker, key)| (NodeId::new(*worker), *key)),
+        )
+    }
+}
 
 #[async_trait::async_trait]
 impl StateNode for PlannerNode {
@@ -102,18 +171,9 @@ impl StateNode for PlannerNode {
         _state: &Battlefield,
         _ctx: &NodeContext,
     ) -> Result<Directive, StateNodeError> {
-        let worker = NodeId::new("worker");
-        let tasks = TASK_KEYS
-            .iter()
-            .map(|key| MusterTask {
-                worker: worker.clone(),
-                payload: serde_json::json!(*key),
-                task_key: key.to_string(),
-            })
-            .collect();
         Ok(Directive {
             delta: StateDelta::new(),
-            next: NextStep::Muster(tasks),
+            next: NextStep::Muster(self.tasks.clone()),
         })
     }
 }
@@ -144,6 +204,13 @@ impl StateNode for AggregatorNode {
     }
 }
 
+fn schema() -> BattlefieldSchema {
+    BattlefieldSchema::new(vec![
+        FieldSpec::new(field("worker_out"), DispatchRule::Append, None, false),
+        FieldSpec::new(field("aggregated"), DispatchRule::LastWrite, None, false),
+    ])
+}
+
 /// Build the E2E-3 muster/defer/order fixture: `planner` (Function, entry,
 /// one-shot `Muster` of 5 tasks) `-> worker` (Paladin worker template, no
 /// static incoming edge -- dispatched only when mustered, D-12) `->
@@ -151,17 +218,16 @@ impl StateNode for AggregatorNode {
 fn build_graph() -> WarGraph {
     let worker_out = field("worker_out");
     let aggregated = field("aggregated");
-    let schema = BattlefieldSchema::new(vec![
-        FieldSpec::new(worker_out.clone(), DispatchRule::Append, None, false),
-        FieldSpec::new(aggregated.clone(), DispatchRule::LastWrite, None, false),
-    ]);
-    let mut graph = WarGraph::new(schema, EngineLimits::default());
+    let mut graph = WarGraph::new(schema(), EngineLimits::default());
 
     let planner = NodeId::new("planner");
     let worker = NodeId::new("worker");
     let aggregator = NodeId::new("aggregator");
 
-    graph.add_node(planner.clone(), NodeSpec::Function(Arc::new(PlannerNode)));
+    graph.add_node(
+        planner.clone(),
+        NodeSpec::Function(Arc::new(PlannerNode::single_template())),
+    );
     graph.add_worker_template(
         worker.clone(),
         NodeSpec::paladin(
@@ -182,6 +248,79 @@ fn build_graph() -> WarGraph {
         to: aggregator.clone(),
         condition: None,
     });
+    graph.add_entry(planner);
+
+    graph
+}
+
+/// The per-task retry policy of the recovering-worker fixture (D-31):
+/// `max_attempts: 3` so `w3` may fail twice and succeed on its third
+/// attempt, and `retry_on` LEFT AT ITS DEFAULT (`TransientOnly`) -- the
+/// scenario passes because the mock's failure is Transient by value, never
+/// because the predicate was widened. Only the backoff interval is
+/// shortened: this fixture runs against a real on-disk SQLite backend, so
+/// it measures wall-clock time rather than a paused Tokio clock, and the
+/// default 500 ms/1 s waits would add seconds to a test whose assertions
+/// are counts, not durations.
+fn per_task_retry_policy() -> RetryPolicy {
+    RetryPolicy {
+        max_attempts: 3,
+        initial_interval: Duration::from_millis(20),
+        ..RetryPolicy::default()
+    }
+}
+
+/// Build the E2E-3 recovering-worker fixture: `planner` (Function, entry,
+/// one-shot `Muster` of 5 tasks, one per template) `-> w1..w5` (five
+/// Paladin worker templates, each carrying `retry` as its Aegis retry
+/// policy when `Some`, no static incoming edges) `-> aggregator` (Function,
+/// `defer: true`, runs once after all 5 resolve). See the module rustdoc
+/// for why one template per task. `None` attaches no Aegis at all -- the
+/// negative control that proves the green scenario depends on the retry.
+fn build_graph_with_a_template_per_task(retry: Option<RetryPolicy>) -> WarGraph {
+    let worker_out = field("worker_out");
+    let aggregated = field("aggregated");
+    let mut graph = WarGraph::new(schema(), EngineLimits::default());
+
+    let planner = NodeId::new("planner");
+    let aggregator = NodeId::new("aggregator");
+
+    graph.add_node(
+        planner.clone(),
+        NodeSpec::Function(Arc::new(PlannerNode::one_template_per_task())),
+    );
+    graph.add_deferred_node(
+        aggregator.clone(),
+        NodeSpec::Function(Arc::new(AggregatorNode {
+            worker_out: worker_out.clone(),
+            aggregated: aggregated.clone(),
+        })),
+    );
+    for name in WORKER_NAMES {
+        let worker = NodeId::new(name);
+        graph.add_worker_template(
+            worker.clone(),
+            NodeSpec::paladin(
+                make_paladin(name),
+                InputMapping::new("{muster.payload}"),
+                worker_out.clone(),
+            ),
+        );
+        if let Some(policy) = &retry {
+            graph.set_aegis(
+                worker.clone(),
+                Aegis {
+                    retry: Some(policy.clone()),
+                    ..Aegis::default()
+                },
+            );
+        }
+        graph.add_edge(EdgeSpec {
+            from: worker,
+            to: aggregator.clone(),
+            condition: None,
+        });
+    }
     graph.add_entry(planner);
 
     graph
@@ -221,6 +360,18 @@ fn expected_worker_outputs() -> Vec<String> {
     TASK_KEYS
         .iter()
         .map(|key| format!("FaultyPaladinPort: worker processed {key}"))
+        .collect()
+}
+
+/// The recovering-worker fixture's counterpart of
+/// [`expected_worker_outputs`]: `w1` ran `"a"`, .., `w5` ran `"e"`, so the
+/// aggregated list reads `"FaultyPaladinPort: w<i> processed <key>"` in
+/// `task_key` order.
+fn expected_per_template_worker_outputs() -> Vec<String> {
+    WORKER_NAMES
+        .iter()
+        .zip(TASK_KEYS.iter())
+        .map(|(worker, key)| format!("FaultyPaladinPort: {worker} processed {key}"))
         .collect()
 }
 
@@ -352,66 +503,33 @@ async fn aggregated_results_are_exactly_five_in_task_key_order() {
     }
 }
 
+/// E2E-3's recovering-worker half, through a REAL per-task Aegis retry
+/// (FT-FR-06, D-31): `w3` fails its own first two calls with a
+/// Transient-classified `LlmFailure { status: Some(503) }` and succeeds on
+/// its third, retried in place by the engine under the DEFAULT
+/// `TransientOnly` predicate -- no test-side pre-scripting, no widened
+/// predicate, no relaxed counts. The port sees exactly 7 calls (5 workers +
+/// 2 retries of `w3`), `w3`'s record reads `attempt: 3` with two
+/// `AttemptRecord`s, every other worker ran once, the aggregator ran once,
+/// the aggregated field holds all 5 results in `task_key` order, and the
+/// muster superstep wrote ONE superstep-complete Waypoint plus Phase 23's
+/// five progress Waypoints -- none between `w3`'s attempts (FT-FR-07).
 #[tokio::test]
-async fn one_worker_recovers_by_manual_attempt_scripting() {
-    // ============================================================
-    // PHASE 25 SEAM (FT-FR-06) -- REPLACE THE BLOCK BELOW, NOT AROUND IT
-    // ============================================================
-    // `FaultyPaladinPort::fail_until_attempt`'s counter is GLOBAL, shared
-    // across every `execute` call made through ONE port instance -- never
-    // scoped per Paladin (`tests/helpers/mock_paladin_port.rs`'s own doc
-    // comment). There is no real per-task retry mechanism in this phase: a
-    // mustered worker's `PaladinPort::execute` failure fails the whole run
-    // (CF-03's Muster validation/dispatch has no retry-in-place). D-17
-    // scripts the "this worker recovered by attempt N" scenario manually
-    // instead: configure the port to fail while its counter is <= 2, then
-    // manually drive two "warm-up" `execute` calls through the SAME port
-    // instance BEFORE the real muster run below. Every REAL Paladin call
-    // the engine itself makes during the muster then lands past the
-    // threshold and succeeds -- standing in for a worker that failed twice
-    // and succeeded on its third (real) attempt.
-    //
-    // When FT-FR-06 lands: replace this scripted-warm-up block with a real
-    // `WarEngine`-level (or `PaladinPort`-level) per-task retry policy that
-    // lets a GENUINELY failing mustered task retry in place, inside the
-    // same run, without any test-side pre-scripting. The assertions at the
-    // end of this test -- exactly 5 results, all present, in task_key order
-    // -- are the contract the real retry policy must continue to satisfy.
-    let port = Arc::new(FaultyPaladinPort::new().fail_until_attempt(2));
-    let warmup_paladin = make_paladin("warmup");
-    for attempt in 1..=2 {
-        let result = port.execute(&warmup_paladin, "warmup").await;
-        assert!(
-            result.is_err(),
-            "manual attempt scripting: warm-up attempt {attempt} must fail, standing in for \
-             the pre-recovery attempts a real Aegis retry policy would absorb"
-        );
-    }
-    assert_eq!(
-        port.call_count(),
-        2,
-        "exactly 2 scripted warm-up attempts before the real muster run"
-    );
-    // ============================================================
-    // END PHASE 25 SEAM
-    // ============================================================
-
-    let graph = build_graph();
+async fn one_worker_recovers_by_real_per_task_retry() {
+    let port = Arc::new(FaultyPaladinPort::new().fail_paladin_until_attempt(RECOVERING_WORKER, 2));
+    let graph = build_graph_with_a_template_per_task(Some(per_task_retry_policy()));
     let store = Arc::new(
         SqliteWaypointStore::new(&temp_db_url("recover"))
             .await
             .expect("store should connect"),
     );
     let thread = ThreadId::new("e2e-3-recover").expect("valid thread id");
-    let engine = WarEngine::new(port.clone(), store);
+    let engine = WarEngine::new(port.clone(), store.clone());
 
     let outcome = engine
-        .start(&graph, thread, StateDelta::new())
+        .start(&graph, thread.clone(), StateDelta::new())
         .await
-        .expect(
-            "the run must still succeed: the shared counter is already past the \
-             fail_until_attempt threshold by the time the engine dispatches any real worker call",
-        );
+        .expect("the run must succeed: w3's two transient failures are retried in place");
     match outcome {
         RunOutcome::Completed { final_state, .. } => {
             let aggregated = final_state
@@ -419,19 +537,202 @@ async fn one_worker_recovers_by_manual_attempt_scripting() {
                 .expect("aggregated field should deserialize as Vec<String>");
             assert_eq!(
                 aggregated,
-                Some(expected_worker_outputs()),
-                "the run still produces all 5 results despite the recovering worker's scripted \
-                 pre-recovery failures"
+                Some(expected_per_template_worker_outputs()),
+                "the run still produces all 5 results, in task_key order, despite the \
+                 recovering worker's two real failures"
             );
         }
         other => panic!("expected Completed, got {other:?}"),
     }
-    // 2 scripted warm-up calls + 5 real muster dispatches.
+
+    // --- Exactly 7 port calls: 5 workers + 2 retries of w3, nothing else.
     assert_eq!(
         port.call_count(),
         7,
-        "2 scripted warm-up attempts plus exactly 5 real worker executions"
+        "exactly 5 worker executions plus exactly 2 retries of w3 -- no scripted calls"
     );
+    let log = port.execution_log();
+    for name in WORKER_NAMES {
+        let calls = log
+            .iter()
+            .filter(|entry| entry.starts_with(&format!("{name}:")))
+            .count();
+        let expected = if name == RECOVERING_WORKER { 3 } else { 1 };
+        assert_eq!(
+            calls, expected,
+            "{name} must be called exactly {expected} time(s)"
+        );
+    }
+
+    // --- Records: w3 at attempt 3 with two AttemptRecords numbered 1 and
+    // 2, each carrying the Transient 503 by value; every other worker at
+    // attempt 1 with an empty history; all five Succeeded.
+    let history = full_history(&store, &thread).await;
+    let superstep_complete: Vec<&Waypoint> = history
+        .iter()
+        .filter(|w| w.muster_progress.is_none())
+        .collect();
+    let w3 = NodeId::new(RECOVERING_WORKER);
+    let muster_waypoint = superstep_complete
+        .iter()
+        .find(|w| w.completed.iter().any(|r| r.node_id == w3))
+        .expect("the muster superstep's completion Waypoint records w3");
+    for name in WORKER_NAMES {
+        let id = NodeId::new(name);
+        let records: Vec<_> = muster_waypoint
+            .completed
+            .iter()
+            .filter(|r| r.node_id == id)
+            .collect();
+        assert_eq!(records.len(), 1, "{name} has exactly one record");
+        let record = records[0];
+        assert_eq!(
+            record.outcome,
+            NodeOutcomeKind::Succeeded,
+            "{name} succeeded"
+        );
+        if name == RECOVERING_WORKER {
+            assert_eq!(record.attempt, 3, "w3 succeeded on its third attempt");
+            assert_eq!(
+                record.attempts.len(),
+                2,
+                "w3 carries exactly two failed AttemptRecords"
+            );
+            let numbers: Vec<u32> = record.attempts.iter().map(|a| a.attempt).collect();
+            assert_eq!(
+                numbers,
+                vec![1, 2],
+                "the failed attempts are numbered 1 and 2"
+            );
+            for attempt in &record.attempts {
+                assert_eq!(attempt.error.node_id, w3);
+                assert_eq!(attempt.error.attempt, attempt.attempt);
+                assert_eq!(attempt.error.transience, Transience::Transient);
+                assert!(
+                    matches!(
+                        &attempt.error.source,
+                        NodeErrorSource::Llm {
+                            status: Some(503),
+                            ..
+                        }
+                    ),
+                    "the attempt's error carries the 503 by value: {:?}",
+                    attempt.error.source
+                );
+            }
+        } else {
+            assert_eq!(record.attempt, 1, "{name} succeeded on its first attempt");
+            assert!(record.attempts.is_empty(), "{name} has no failed attempts");
+        }
+    }
+
+    // --- The aggregator ran exactly once.
+    let aggregator_id = NodeId::new("aggregator");
+    let aggregator_runs = superstep_complete
+        .iter()
+        .flat_map(|w| w.completed.iter())
+        .filter(|r| r.node_id == aggregator_id)
+        .count();
+    assert_eq!(
+        aggregator_runs, 1,
+        "the deferred aggregator must run exactly once"
+    );
+
+    // --- Waypoints: ONE superstep-complete Waypoint for the muster
+    // superstep, plus Phase 23's five progress Waypoints (one per completed
+    // task), and none between w3's attempts -- the whole thread is exactly
+    // planner (1) + muster (1 + 5 progress) + aggregator (1) = 8, with no
+    // Failed status anywhere.
+    let muster_superstep = muster_waypoint.superstep;
+    let muster_complete_count = superstep_complete
+        .iter()
+        .filter(|w| w.superstep == muster_superstep)
+        .count();
+    assert_eq!(
+        muster_complete_count, 1,
+        "exactly one superstep-complete Waypoint for the muster superstep"
+    );
+    let progress_count = history
+        .iter()
+        .filter(|w| w.muster_progress.is_some())
+        .count();
+    assert_eq!(
+        progress_count, 5,
+        "one progress Waypoint per COMPLETED task -- a failed attempt writes none"
+    );
+    assert_eq!(
+        history.len(),
+        8,
+        "planner + (muster + 5 progress) + aggregator: no Waypoint between w3's attempts"
+    );
+    assert!(
+        history
+            .iter()
+            .all(|w| !matches!(w.status, WaypointStatus::Failed { .. })),
+        "a retried-and-recovered attempt never persists a Failed Waypoint"
+    );
+}
+
+/// The negative control for T-25-59 ("a green E2E-3 that proves nothing"):
+/// the SAME fixture and the SAME failing port with NO retry policy attached
+/// does not complete -- w3's transient failure fails the run on its first
+/// and only attempt, and the port sees exactly 5 calls. Whatever makes the
+/// scenario above green is therefore the per-task retry, not the fixture.
+#[tokio::test]
+async fn without_a_retry_policy_the_same_transient_failure_fails_the_run() {
+    let port = Arc::new(FaultyPaladinPort::new().fail_paladin_until_attempt(RECOVERING_WORKER, 2));
+    let graph = build_graph_with_a_template_per_task(None);
+    let store = Arc::new(
+        SqliteWaypointStore::new(&temp_db_url("no-retry"))
+            .await
+            .expect("store should connect"),
+    );
+    let thread = ThreadId::new("e2e-3-no-retry").expect("valid thread id");
+    let engine = WarEngine::new(port.clone(), store);
+
+    let outcome = engine
+        .start(&graph, thread, StateDelta::new())
+        .await
+        .expect("the engine itself returns Ok(RunOutcome::Failed), never Err");
+    assert!(
+        matches!(outcome, RunOutcome::Failed { .. }),
+        "with no retry policy the transient failure fails the run: {outcome:?}"
+    );
+    assert_eq!(
+        port.call_count(),
+        5,
+        "one call per worker and no retry of w3 -- exactly 5"
+    );
+    let w3_calls = port
+        .execution_log()
+        .iter()
+        .filter(|entry| entry.starts_with(&format!("{RECOVERING_WORKER}:")))
+        .count();
+    assert_eq!(w3_calls, 1, "w3 ran exactly once without a retry policy");
+}
+
+/// D-31: the recovering-worker fixture leaves `retry_on` at its default, so
+/// the scenario above is proven under `TransientOnly` -- the same predicate
+/// `RetryPolicy::default()` carries -- and never by widening it.
+#[test]
+fn the_default_predicate_is_used() {
+    let policy = per_task_retry_policy();
+    assert_eq!(policy.max_attempts, 3);
+    assert_eq!(policy.retry_on, RetryPredicate::TransientOnly);
+    assert_eq!(policy.retry_on, RetryPolicy::default().retry_on);
+
+    let graph = build_graph_with_a_template_per_task(Some(per_task_retry_policy()));
+    for name in WORKER_NAMES {
+        let aegis = graph
+            .aegis_for(&NodeId::new(name))
+            .expect("every worker template carries the per-task Aegis");
+        let retry = aegis
+            .retry
+            .as_ref()
+            .expect("the Aegis carries a retry policy");
+        assert_eq!(retry.max_attempts, 3);
+        assert_eq!(retry.retry_on, RetryPredicate::TransientOnly);
+    }
 }
 
 #[tokio::test]

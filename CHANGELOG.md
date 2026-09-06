@@ -37,8 +37,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new hash — resume it against the graph it suspended with, or restart the run under the
   `v4`-fingerprinted graph.
 
+- **Graph fingerprint bumped `v4` → `v5` (FT-04/FT-06, D-11).** Each node's `Aegis.on_error` and
+  `Aegis.cache` (and the graph-wide `default_aegis`) are now part of the hashed graph shape,
+  because they change what a run does; `retry` and `timeout` are deliberately excluded, so tuning
+  either never makes `resume` fail with `GraphMismatch`. A thread suspended under a `v4`
+  fingerprint fails closed on resume exactly as the `v3` → `v4` bump did.
+
 ### Added
 
+- **Typed error taxonomy (FT-01).** `Transience { Transient, Permanent, Unknown }` in `paladin-core`,
+  with table-driven `PaladinError::transience()` and `LlmError::transience()` reading typed fields
+  only — never a message. Provider adapters now emit `LlmError::ProviderError { provider, status,
+  message }` for every non-2xx status without a dedicated variant (408/429/5xx classify Transient,
+  every other 4xx Permanent, by value), through one shared `map_http_status` helper that redacts
+  credentials *before* bounding the excerpt. A node's failure travels as one structured
+  `NodeError { node_id, attempt, transience, source }` — on the failed Waypoint
+  (`WaypointStatus::Failed.node_error`), `RunOutcome::node_error()`, `EngineError::NodeFailed` and
+  `BattalionError::Node` — while the persisted display line is unchanged. `PaladinError`, `LlmError`
+  and `BattalionError` are now `#[non_exhaustive]` (registered deliberate-breaking in
+  [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)).
+- **Aegis: per-node retry (FT-02).** `Aegis { retry, timeout, on_error, cache }` attaches to a node
+  through `WarGraph::set_aegis` / `with_default_aegis` (a node's own entry wins wholesale — no
+  field-level merge). `RetryPolicy` retries a failed attempt inside the same superstep with exact
+  exponential backoff (`min(initial_interval × backoff_factor^(n−2), max_interval)` plus optional
+  uniform jitter), gated by a `RetryPredicate` (`TransientOnly` default, `TransientAndUnknown`, or
+  a registered `Custom` evaluator via `WarEngine::with_retry_predicate`). Attempts are isolated —
+  a failed attempt's delta never reaches the Battlefield, every attempt reads the same snapshot,
+  interceptors run once per attempt, no Waypoint is written between attempts — and are recorded
+  as `NodeExecutionRecord.attempts: Vec<AttemptRecord>` with per-attempt `NodeStarted`/`NodeFinished`
+  trace events. Retry is per task inside a Muster; a Parley is a success, never retried; a run
+  cancelled mid-backoff aborts at once and resumes at attempt 1. See the
+  [Aegis guide](docs/src/user-guides/fault-tolerance.md).
+- **Per-attempt timeouts and the run-level budget (FT-03).** `TimeoutPolicy { run_timeout,
+  idle_timeout }` bounds each attempt with a wall clock and a progress-aware idle window, named by
+  a typed `TimeoutKind::{Run, Idle, EngineRun}`; progress flows through a new `HeartbeatHandle`
+  (`ctx.heartbeat()` in Function nodes; `PaladinExecutionService` beats on every LLM completion,
+  streamed chunk and Armament call through the new defaulted `PaladinPort::execute_observed`).
+  `EngineLimits.run_timeout` (`EngineConfig.run_timeout_secs` / `APP_ENGINE_RUN_TIMEOUT_SECS`,
+  declared in 0.10's Phase 23) is now enforced as `EngineError::RunTimeoutExceeded`, nesting outside
+  every per-attempt bound; an attempt cut by the engine budget records `Timeout(EngineRun)` and is
+  never retried.
+- **Typed error handlers and compensation (FT-04).** `Aegis.on_error` runs on a node's *final*
+  failure: `ErrorHandlerSpec::Route { to, error_field }` writes the structured `NodeError` JSON into
+  a declared non-`Sum` field and places `to` in the next Vanguard in place of the failed node's
+  static successors; `Absorb { fallback_delta }` merges a schema-validated delta and continues;
+  `Custom(name)` awaits an `ErrorHandler` registered via `WarEngine::with_error_handler` over the
+  pre-superstep Battlefield and honours whatever `Directive` it returns — including
+  `NextStep::Parley`. Routed visits count against `max_node_visits`, so a compensation cycle
+  terminates. On a worker template only `Absorb` and a delta-only `Custom` are allowed. Every
+  wiring fault is a typed validation error listing all offenders before a node runs.
+- **Model fallback: `FallbackLlmAdapter` (FT-05).** An ordered chain of `LlmPort`s exposed as one
+  plain `LlmPort` (`paladin_llm::fallback`, ungated): hops on Transient/Unknown errors only,
+  short-circuits on Permanent, reports exhaustion as `LlmError::AllProvidersFailed { attempts,
+  last }` in chain order, never switches provider after a streamed chunk has been delivered, emits
+  `TraceEvent::FallbackHop` plus a `warn!` per hop, and stamps the serving provider into the new
+  additive `PaladinResult.served_by` (registered deliberate-breaking, D-26).
+- **Node result caching (FT-06).** `Aegis.cache: CachePolicy { ttl, key }` serves a node's stored
+  delta instead of executing it, recorded as `cache_hit: true` on the record and trace event. Keys
+  are a versioned blake3 digest over the graph fingerprint, node id, rendered input (or Battlefield
+  snapshot / `CacheKeySpec::Fields` subset), muster task and the Paladin's configuration, so a
+  prompt or graph change is a miss by construction; `ttl` has a closed boundary; only a successful
+  `Edges`-routed delta is stored; backend errors are best-effort (a `get` error is a miss, a `put`
+  error is logged). New `NodeCachePort` (`paladin-ports`), `InMemoryNodeCache` and, behind the new
+  `redis-cache` feature on `paladin-storage` (facade passthrough `redis-cache`, in no default set),
+  `RedisNodeCache`; `WarEngine::with_node_cache` wires one, and a `cache` policy with no backend
+  fails validation. The schema-level `FieldSpec.cache: CacheMarker::Deny` marker opts a field out
+  (the documented `Append`-replay hazard on forks). `NodeCacheConfig` (`src/config/node_cache.rs`,
+  `APP_NODE_CACHE_*`) selects the backend and is **off by default**.
 - **Node-driven `Directive` routing (CF-02).** A `StateNode::run` now returns a `Directive` — its
   `StateDelta` plus a `NextStep` (`Edges`, `Goto`, `Muster`, `End`, or the not-yet-implemented
   `Parley`) — letting a node author its own routing instead of relying solely on static graph

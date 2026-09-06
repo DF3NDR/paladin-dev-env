@@ -46,7 +46,13 @@ use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey, NodeC
 /// namespace (`paladin:node_cache`), NOT the queue's `paladin:queue`, so the
 /// two subsystems never collide in the same keyspace even when pointed at
 /// the same Redis server (T-25-15).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `redis_password` never appears in a `Debug` rendering (T-25-70,
+/// security.instructions.md's "no config type carrying a credential is
+/// `Debug`-formatted outward"): `Debug` is implemented by hand below and
+/// renders the password as a fixed placeholder, exactly as the facade's
+/// `NodeCacheConfig` does, rather than derived.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RedisNodeCacheConfig {
     /// The Redis server hostname.
     pub redis_host: String,
@@ -76,6 +82,27 @@ impl Default for RedisNodeCacheConfig {
             key_prefix: "paladin:node_cache".to_string(),
             max_retries: 3,
         }
+    }
+}
+
+// Manual `Debug`: the password is rendered as a fixed placeholder when set
+// (see the type-level note). Every other field renders normally so an
+// operator can still read the host, port, database and namespace out of a
+// log line.
+impl std::fmt::Debug for RedisNodeCacheConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedisNodeCacheConfig")
+            .field("redis_host", &self.redis_host)
+            .field("redis_port", &self.redis_port)
+            .field(
+                "redis_password",
+                &self.redis_password.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("redis_db", &self.redis_db)
+            .field("connection_timeout", &self.connection_timeout)
+            .field("key_prefix", &self.key_prefix)
+            .field("max_retries", &self.max_retries)
+            .finish()
     }
 }
 
@@ -272,6 +299,31 @@ mod tests {
         assert_eq!(config.connection_timeout, 30);
         assert_eq!(config.key_prefix, "paladin:node_cache");
         assert_eq!(config.max_retries, 3);
+    }
+
+    /// T-25-70: a `Debug` rendering of the config must never carry the
+    /// password, while every other field stays readable.
+    #[test]
+    fn debug_rendering_never_prints_the_password() {
+        let config = RedisNodeCacheConfig {
+            redis_host: "cache.example.internal".to_string(),
+            redis_password: Some("s3cr3t-cache-password".to_string()),
+            ..test_config()
+        };
+        let rendered = format!("{config:?}");
+        assert!(
+            !rendered.contains("s3cr3t-cache-password"),
+            "password leaked into Debug output: {rendered}"
+        );
+        assert!(
+            rendered.contains("[REDACTED]"),
+            "placeholder missing: {rendered}"
+        );
+        assert!(rendered.contains("cache.example.internal"));
+        assert!(rendered.contains("test-node-cache"));
+
+        let unset = format!("{:?}", test_config());
+        assert!(unset.contains("redis_password: None"), "{unset}");
     }
 
     #[test]

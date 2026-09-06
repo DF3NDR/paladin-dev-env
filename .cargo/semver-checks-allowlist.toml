@@ -42,14 +42,14 @@ justification = "require_authentication gained a generic type parameter (S: HasA
 [[entry]]
 crate = "paladin-ai-core"
 lint = "enum_marked_non_exhaustive"
-migration_row = "paladin-core | BattalionError"
+migration_row = "paladin-ai-core | BattalionError"
 requirement_id = "FT-01"
 justification = "BattalionError gained the Node(NodeError) variant (FT-FR-02, D-06) and is marked #[non_exhaustive] so the superstep engine's structured node-execution errors can be extended later without a semver-major bump."
 
 [[entry]]
 crate = "paladin-ai-core"
 lint = "enum_marked_non_exhaustive"
-migration_row = "paladin-core | PaladinError"
+migration_row = "paladin-ai-core | PaladinError"
 requirement_id = "FT-01"
 justification = "PaladinError gained the structured LlmFailure variant and the transience() method (D-02); marked #[non_exhaustive] so a typed-classification error taxonomy can grow without a semver-major bump. LlmFailure's Display is byte-identical to the legacy LlmError(String) arm and is_retryable() answers true exactly as that legacy arm did, so circuit_breaker.rs is unaffected (X-03, X-06)."
 
@@ -63,6 +63,6 @@ justification = "LlmError gained ProviderError and AllProvidersFailed (status-ca
 [[entry]]
 crate = "paladin-ai-core"
 lint = "constructible_struct_adds_field"
-migration_row = "paladin-ports | PaladinResult"
+migration_row = "paladin-ai-core | PaladinResult"
 requirement_id = "FT-FR-17"
 justification = "PaladinResult gained the additive served_by: Option<String> field (serving provider from the FT-05 fallback chain, D-26) with #[serde(default, skip_serializing_if)] so legacy JSON is byte-identical; the struct stays constructible and is deliberately NOT #[non_exhaustive] because cross-crate functional-update syntax is disallowed on non_exhaustive structs -- FT-FR-17's premise that Default still works under that marking does not hold -- so only full struct literals break, and every in-tree one was migrated in the same commit."

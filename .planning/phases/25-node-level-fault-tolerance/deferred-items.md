@@ -22,3 +22,24 @@ after wave merges so sibling worktree agents never race on this file.
   and returns a non-`Edges` step is pre-existing behaviour outside D-22's handler scope and was
   left untouched. Candidate for a later Muster-hardening pass. Source: `25-11-SUMMARY.md`
   § "For the orchestrator's attention".
+
+## From 25-12 (E2E-3 seam replacement, X-05 stress, kill-during-backoff and run-timeout E2E)
+
+- **`NodeExecutionRecord` for mustered tasks carries no `task_key`.** Records produced by a
+  shared worker template are distinguishable only by position and attempt, which is why the
+  recovering-worker fixture had to use one worker template per task (`w1`..`w5`). An additive
+  `task_key: Option<String>` on the record would let future E2E tests (and operators reading
+  Chronicle output) address one mustered task directly without per-task templates.
+  Source: `25-12-SUMMARY.md` § "Surfaced for deferred-items.md".
+
+## From 25-13 (node-cache engine integration)
+
+- **Cache eviction surface is unwired.** `cache_key::graph_prefix` / `cache_key::node_prefix`
+  and the port's `invalidate(prefix)` exist, but no engine or operator path calls them yet.
+  An operator-facing "evict this graph / node" surface is a candidate for a later phase.
+- **`CacheKeySpec::Custom` stays deferred** per D-28 (only the declared field-set key
+  composition ships in v0.10.0).
+- **`Cargo.lock` gained one line**: `blake3 = "1.8.2"` became a direct dependency edge of
+  `paladin-battalion` (no new package in the graph). Noted so the semver/security gates in
+  25-14 do not read it as an unexplained lockfile drift.
+  Source: `25-13-SUMMARY.md` § "For the orchestrator / deferred-items.md".

@@ -487,8 +487,8 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 25-12-PLAN.md — E2E-3 seam replaced by real per-task retry, X-05 stress, kill-during-backoff, run-timeout E2E
-- [ ] 25-13-PLAN.md — Cache engine integration: key composition, hit/miss path, FieldSpec cache marker, correctness guardrails
+- [x] 25-12-PLAN.md — E2E-3 seam replaced by real per-task retry, X-05 stress, kill-during-backoff, run-timeout E2E
+- [x] 25-13-PLAN.md — Cache engine integration: key composition, hit/miss path, FieldSpec cache marker, correctness guardrails
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

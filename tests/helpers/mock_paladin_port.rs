@@ -344,6 +344,155 @@ mod tests {
         );
     }
 
+    // --- Phase 25 D-31: the additive per-Paladin counter ----------------
+
+    /// D-31: `fail_paladin_until_attempt("w3", 2)` fails `w3`'s OWN first
+    /// two calls and succeeds on its third, while a sibling Paladin never
+    /// fails no matter how many `w3` calls preceded it -- the counter is
+    /// scoped per Paladin name, unlike the global `fail_until_attempt`.
+    #[tokio::test]
+    async fn fail_paladin_until_attempt_is_scoped_to_one_paladin() {
+        let port = FaultyPaladinPort::new().fail_paladin_until_attempt("w3", 2);
+        let w1 = make_paladin("w1");
+        let w3 = make_paladin("w3");
+
+        assert!(port.execute(&w3, "x").await.is_err(), "w3 call 1 fails");
+        assert!(
+            port.execute(&w1, "x").await.is_ok(),
+            "w1 is not configured to fail, whatever w3's counter reads"
+        );
+        assert!(port.execute(&w3, "x").await.is_err(), "w3 call 2 fails");
+        assert!(
+            port.execute(&w1, "x").await.is_ok(),
+            "w1 still succeeds after two w3 failures"
+        );
+        assert!(
+            port.execute(&w3, "x").await.is_ok(),
+            "w3 call 3 succeeds: its own counter is past the threshold"
+        );
+        assert_eq!(port.call_count(), 5, "exact total across both Paladins");
+    }
+
+    /// D-31: the per-Paladin failure is `PaladinError::LlmFailure { status:
+    /// Some(503), .. }` whose typed `transience()` is `Transient`, so the
+    /// DEFAULT `TransientOnly` retry predicate retries it by value -- never
+    /// by parsing a message.
+    #[tokio::test]
+    async fn fail_paladin_until_attempt_returns_a_transient_llm_failure() {
+        use paladin_core::platform::container::transience::Transience;
+
+        let port = FaultyPaladinPort::new().fail_paladin_until_attempt("w3", 1);
+        let w3 = make_paladin("w3");
+
+        let err = port
+            .execute(&w3, "x")
+            .await
+            .expect_err("the first w3 call fails");
+        match &err {
+            PaladinError::LlmFailure {
+                transience,
+                status,
+                provider,
+                ..
+            } => {
+                assert_eq!(*transience, Transience::Transient);
+                assert_eq!(*status, Some(503));
+                assert!(provider.is_some(), "a provider name is carried");
+            }
+            other => panic!("expected LlmFailure {{ status: Some(503), .. }}, got {other:?}"),
+        }
+        assert_eq!(err.transience(), Transience::Transient);
+    }
+
+    /// D-31: the global `fail_until_attempt` counter keeps exactly the
+    /// semantics its rustdoc states -- shared across EVERY Paladin, never
+    /// scoped per name -- and its failure is still the legacy
+    /// `ExecutionError`, so the pre-existing global-counter test above is
+    /// unedited and this one pins the cross-Paladin sharing explicitly.
+    #[tokio::test]
+    async fn the_global_fail_until_attempt_semantics_are_unchanged() {
+        let port = FaultyPaladinPort::new().fail_until_attempt(2);
+        let p1 = make_paladin("Paladin-1");
+        let p2 = make_paladin("Paladin-2");
+
+        let first = port.execute(&p1, "x").await;
+        assert!(
+            matches!(first, Err(PaladinError::ExecutionError(_))),
+            "the global counter's failure is the legacy ExecutionError: {first:?}"
+        );
+        assert!(
+            port.execute(&p2, "x").await.is_err(),
+            "call 2 (a DIFFERENT Paladin) still fails: the counter is global"
+        );
+        assert!(
+            port.execute(&p1, "x").await.is_ok(),
+            "call 3 succeeds regardless of which Paladin makes it"
+        );
+        assert!(port.execute(&p2, "x").await.is_ok());
+        assert_eq!(port.call_count(), 4);
+    }
+
+    /// D-31: a port configured with BOTH a global counter and a per-Paladin
+    /// counter follows the documented precedence -- the global counter is
+    /// consulted first, then the per-Paladin counter -- and every call for
+    /// a named Paladin advances that Paladin's own counter whether or not
+    /// the global counter already decided the call.
+    #[tokio::test]
+    async fn the_two_mechanisms_compose() {
+        let port = FaultyPaladinPort::new()
+            .fail_until_attempt(1)
+            .fail_paladin_until_attempt("w3", 2);
+        let w1 = make_paladin("w1");
+        let w3 = make_paladin("w3");
+
+        // Call 1 (w3): the GLOBAL counter fires first -> ExecutionError.
+        let first = port.execute(&w3, "x").await;
+        assert!(
+            matches!(first, Err(PaladinError::ExecutionError(_))),
+            "global counter takes precedence on call 1: {first:?}"
+        );
+        // Call 2 (w3): the global counter is past its threshold; w3's own
+        // counter (advanced by call 1 too) reads 2 <= 2 -> LlmFailure.
+        let second = port.execute(&w3, "x").await;
+        assert!(
+            matches!(second, Err(PaladinError::LlmFailure { .. })),
+            "per-Paladin counter fires on w3's second call: {second:?}"
+        );
+        // Call 3 (w1): neither mechanism applies.
+        assert!(port.execute(&w1, "x").await.is_ok());
+        // Call 4 (w3): w3's counter reads 3 > 2 -> success.
+        assert!(port.execute(&w3, "x").await.is_ok());
+        assert_eq!(port.call_count(), 4);
+    }
+
+    /// D-31: two named Paladins each configured with their own threshold
+    /// count independently -- neither's calls advance the other's counter.
+    #[tokio::test]
+    async fn per_paladin_counters_are_independent() {
+        let port = FaultyPaladinPort::new()
+            .fail_paladin_until_attempt("w2", 1)
+            .fail_paladin_until_attempt("w4", 3);
+        let w2 = make_paladin("w2");
+        let w4 = make_paladin("w4");
+
+        assert!(port.execute(&w4, "x").await.is_err(), "w4 call 1 fails");
+        assert!(port.execute(&w4, "x").await.is_err(), "w4 call 2 fails");
+        assert!(
+            port.execute(&w2, "x").await.is_err(),
+            "w2 call 1 fails: w4's two calls did not consume w2's threshold"
+        );
+        assert!(
+            port.execute(&w2, "x").await.is_ok(),
+            "w2 call 2 succeeds: w2's own counter is past 1"
+        );
+        assert!(
+            port.execute(&w4, "x").await.is_err(),
+            "w4 call 3 still fails: w2's calls did not advance w4's counter"
+        );
+        assert!(port.execute(&w4, "x").await.is_ok(), "w4 call 4 succeeds");
+        assert_eq!(port.call_count(), 6);
+    }
+
     #[tokio::test]
     async fn faulty_paladin_port_execution_log_records_invocation_order() {
         let port = FaultyPaladinPort::new();

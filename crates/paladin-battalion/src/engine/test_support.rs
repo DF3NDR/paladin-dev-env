@@ -13,11 +13,13 @@ use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
 use paladin_core::platform::container::directive::{Directive, NextStep};
+use paladin_core::platform::container::node_cache::CachedDelta;
 use paladin_core::platform::container::node_error::NodeError;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::ParleyRequest;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
+use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink, TraceSinkError};
 use paladin_ports::output::waypoint_port::{
@@ -1590,5 +1592,141 @@ impl StateNode for ParleyObservingNode {
             }
             _ => Err(StateNodeError(self.message.clone())),
         }
+    }
+}
+
+// --- Phase 25 Plan 13: the node-cache test double -------------------------
+
+/// One [`RecordingNodeCache`] entry: the [`CachedDelta`] a `get` returns,
+/// plus the paused-clock-driven expiry the double itself enforces.
+struct RecordedEntry {
+    cached: CachedDelta,
+    /// Expiry on tokio's clock (`tokio::time::Instant`), so a
+    /// `#[tokio::test(start_paused = true)]` test can elapse a TTL with
+    /// `tokio::time::advance` instead of a wall-clock sleep -- the same
+    /// paused-clock idiom `engine::retry`'s tests established.
+    expires: tokio::time::Instant,
+}
+
+/// An in-crate [`NodeCachePort`] test double (plan 25-13, RESEARCH.md's
+/// discretion note: a `HashMap`-backed recording mock rather than a
+/// `paladin-storage` dev-dependency): records every `get`/`put`, can be
+/// pre-populated, can fail every `get` or every `put` on demand, and can
+/// move an entry's `expires_at` so the engine's own closed-boundary check
+/// is exercised independently of the backend's.
+#[derive(Default)]
+pub struct RecordingNodeCache {
+    entries: Mutex<HashMap<NodeCacheKey, RecordedEntry>>,
+    puts: Mutex<Vec<(NodeCacheKey, StateDelta, std::time::Duration)>>,
+    gets: AtomicUsize,
+    fail_gets: AtomicBool,
+    fail_puts: AtomicBool,
+}
+
+impl RecordingNodeCache {
+    /// Construct an empty cache.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Make every subsequent `get` return `NodeCacheError::Backend`.
+    pub fn fail_gets(&self) {
+        self.fail_gets.store(true, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent `put` return `NodeCacheError::Backend`.
+    pub fn fail_puts(&self) {
+        self.fail_puts.store(true, Ordering::SeqCst);
+    }
+
+    /// How many `get` calls have been made (hits, misses and failures).
+    pub fn get_count(&self) -> usize {
+        self.gets.load(Ordering::SeqCst)
+    }
+
+    /// How many `put` calls have been made (including failed ones).
+    pub fn put_count(&self) -> usize {
+        self.puts.lock().unwrap().len()
+    }
+
+    /// Every `put` call so far, in order: `(key, delta, ttl)`.
+    pub fn puts(&self) -> Vec<(NodeCacheKey, StateDelta, std::time::Duration)> {
+        self.puts.lock().unwrap().clone()
+    }
+
+    /// Every key currently stored, sorted.
+    pub fn keys(&self) -> Vec<NodeCacheKey> {
+        let mut keys: Vec<NodeCacheKey> = self.entries.lock().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    /// Rewrite EVERY stored entry's `expires_at` to `expires_at`, leaving
+    /// the double's own paused-clock expiry untouched -- so the backend
+    /// still serves the entry and ONLY the engine's `is_expired_at` check
+    /// decides (the engine-side counterpart of plan 25-04's closed-boundary
+    /// contract case).
+    pub fn set_expires_at_for_all(&self, expires_at: DateTime<Utc>) {
+        for entry in self.entries.lock().unwrap().values_mut() {
+            entry.cached.expires_at = expires_at;
+        }
+    }
+}
+
+#[async_trait]
+impl NodeCachePort for RecordingNodeCache {
+    async fn get(&self, key: &NodeCacheKey) -> Result<Option<CachedDelta>, NodeCacheError> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+        if self.fail_gets.load(Ordering::SeqCst) {
+            return Err(NodeCacheError::Backend {
+                source: Box::<dyn std::error::Error + Send + Sync>::from(
+                    "simulated get failure (RecordingNodeCache::fail_gets)",
+                ),
+            });
+        }
+        let entries = self.entries.lock().unwrap();
+        Ok(entries
+            .get(key)
+            // Closed boundary on the double's own clock, mirroring the
+            // real backends: at or past `expires` is a miss.
+            .filter(|entry| tokio::time::Instant::now() < entry.expires)
+            .map(|entry| entry.cached.clone()))
+    }
+
+    async fn put(
+        &self,
+        key: &NodeCacheKey,
+        delta: &StateDelta,
+        ttl: std::time::Duration,
+    ) -> Result<(), NodeCacheError> {
+        self.puts
+            .lock()
+            .unwrap()
+            .push((key.clone(), delta.clone(), ttl));
+        if self.fail_puts.load(Ordering::SeqCst) {
+            return Err(NodeCacheError::Backend {
+                source: Box::<dyn std::error::Error + Send + Sync>::from(
+                    "simulated put failure (RecordingNodeCache::fail_puts)",
+                ),
+            });
+        }
+        let stored_at = Utc::now();
+        let expires_at = stored_at
+            + chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::days(36_500));
+        self.entries.lock().unwrap().insert(
+            key.clone(),
+            RecordedEntry {
+                cached: CachedDelta::new(delta.clone(), stored_at, expires_at),
+                expires: tokio::time::Instant::now() + ttl,
+            },
+        );
+        Ok(())
+    }
+
+    async fn invalidate(&self, prefix: &str) -> Result<u64, NodeCacheError> {
+        let mut entries = self.entries.lock().unwrap();
+        let before = entries.len();
+        entries.retain(|key, _| !key.starts_with(prefix));
+        Ok((before - entries.len()) as u64)
     }
 }

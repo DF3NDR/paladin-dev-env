@@ -12,10 +12,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec, RetryPredicate};
+use paladin_core::platform::container::aegis::{
+    Aegis, CacheKeySpec, ErrorHandlerSpec, RetryPredicate,
+};
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
-    BattlefieldSchema, CustomDispatchResolver, DispatchRule, FieldName, FieldSpec,
+    BattlefieldSchema, CacheMarker, CustomDispatchResolver, DispatchRule, FieldName, FieldSpec,
 };
 use paladin_core::platform::container::battlefield_error::BattlefieldError;
 use paladin_core::platform::container::paladin::Paladin;
@@ -833,6 +835,12 @@ impl WarGraph {
         // undeclared-node and node-kind clauses above it, so it precedes
         // the per-policy value checks and the registry lookups below.
         self.validate_aegis_handler_wiring()?;
+        // --- plan 25-13, D-29: the `cache` policy's schema wiring (a
+        // Paladin `output_field` the schema marks `CacheMarker::Deny`, a
+        // `CacheKeySpec::Fields` name the schema does not declare) --
+        // structural like the handler wiring above it, so it sits in the
+        // same position ahead of the per-policy value checks.
+        self.validate_aegis_cache_fields()?;
         self.validate_aegis_policy_values()?;
         self.validate_aegis_custom_registrations(registries)?;
 
@@ -995,6 +1003,159 @@ impl WarGraph {
             ),
             offenders,
         })
+    }
+
+    /// D-29's cache/schema wiring clause (plan 25-13, FT-FR-20): for every
+    /// node whose RESOLVED `Aegis` (own entry or `default_aegis`) carries a
+    /// `cache` policy --
+    ///
+    /// - a [`NodeSpec::Paladin`] node whose `output_field` the schema marks
+    ///   [`CacheMarker::Deny`] is rejected
+    ///   (`EngineError::CachePolicyOnDeniedField`): a Paladin node's write
+    ///   set is exactly its `output_field`, so the denial is knowable here.
+    ///   A `Function` node's write set is NOT statically knowable (a
+    ///   `StateNode` is opaque), so its denial is enforced at store time by
+    ///   the engine instead -- a delta touching a `Deny` field is never
+    ///   written to the cache. Any marker other than `Allow` is treated as a
+    ///   denial (fail-closed under `#[non_exhaustive]`).
+    /// - a `CacheKeySpec::Fields` naming a field the schema does not declare
+    ///   is rejected (`EngineError::CacheKeyFieldUndeclared`): an undeclared
+    ///   name would silently contribute an "absent" marker to every key, so
+    ///   a typo would narrow the key below what the author intended and
+    ///   serve stale hits.
+    ///
+    /// An `Append`-dispatch field left at the default `Allow` validates:
+    /// `Deny` is the author's opt-in, and the fork replay hazard is
+    /// documentation (FT-FR-20). Collects EVERY offender PER CATEGORY,
+    /// mirroring [`WarGraph::validate_edge_evaluators`]'s discipline; the
+    /// denied-field category (the shallower schema check) is reported first.
+    fn validate_aegis_cache_fields(&self) -> Result<(), EngineError> {
+        let mut denied: Vec<String> = Vec::new();
+        let mut undeclared: Vec<String> = Vec::new();
+        for id in &self.node_order {
+            let Some(cache) = self.aegis_for(id).and_then(|a| a.cache.as_ref()) else {
+                continue;
+            };
+            if let Some(NodeSpec::Paladin { output_field, .. }) = self.nodes.get(id)
+                && self
+                    .schema
+                    .field_spec(output_field)
+                    .is_some_and(|spec| !matches!(spec.cache, CacheMarker::Allow))
+            {
+                denied.push(format!(
+                    "{id}: output_field '{}' is marked cache: Deny",
+                    output_field.as_str()
+                ));
+            }
+            match &cache.key {
+                CacheKeySpec::Fields(fields) => {
+                    for field in fields {
+                        if self.schema.field_spec(field).is_none() {
+                            undeclared.push(format!(
+                                "{id}: CacheKeySpec::Fields names '{}'",
+                                field.as_str()
+                            ));
+                        }
+                    }
+                }
+                CacheKeySpec::Default => {}
+                _ => {}
+            }
+        }
+        if !denied.is_empty() {
+            denied.sort();
+            return Err(EngineError::CachePolicyOnDeniedField {
+                reason: format!(
+                    "a CachePolicy may not cache a field the schema marks CacheMarker::Deny: {} \
+                     -- remove the policy, or mark the field cache: Allow",
+                    denied.join("; ")
+                ),
+                offenders: denied,
+            });
+        }
+        if !undeclared.is_empty() {
+            undeclared.sort();
+            return Err(EngineError::CacheKeyFieldUndeclared {
+                reason: format!(
+                    "every CacheKeySpec::Fields name must be a declared schema field: {} -- \
+                     fix the name or declare the field",
+                    undeclared.join("; ")
+                ),
+                offenders: undeclared,
+            });
+        }
+        Ok(())
+    }
+
+    /// D-29's fail-closed backend clause (plan 25-13, FT-FR-18): when the
+    /// `WarEngine` running this graph has NO node cache wired
+    /// (`cache_configured == false`), every node -- in this graph and,
+    /// recursively, in every embedded [`NodeSpec::Battalion`] child graph,
+    /// which inherits the engine's cache wholesale -- whose RESOLVED `Aegis`
+    /// carries a `cache` policy is an offender
+    /// (`EngineError::CachePolicyWithoutCacheBackend`). A graph author who
+    /// asked for caching and silently got none would have no signal, so
+    /// this is a typed error before any node runs, never a degradation to
+    /// "no caching". With a backend wired there is nothing to check.
+    ///
+    /// Called by the engine (`WarEngine::start`/`resume*`/`fork`/`replay`)
+    /// immediately after [`WarGraph::validate`], since only the engine knows
+    /// whether a backend is configured; a child node is named
+    /// `{battalion node}/{child node}`. Collects EVERY offender, sorted,
+    /// mirroring [`WarGraph::validate_aegis_undeclared_nodes`]'s discipline.
+    /// Recursion is bounded by the `Arc` identity of each child graph, so a
+    /// self-embedding graph (which [`WarGraph::validate`] rejects anyway) can
+    /// never loop here.
+    pub fn validate_node_cache_backend(&self, cache_configured: bool) -> Result<(), EngineError> {
+        if cache_configured {
+            return Ok(());
+        }
+        let mut offenders: Vec<NodeId> = Vec::new();
+        self.collect_cache_policy_nodes("", &mut offenders, &mut Vec::new());
+        if offenders.is_empty() {
+            return Ok(());
+        }
+        offenders.sort();
+        let names = offenders
+            .iter()
+            .map(NodeId::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(EngineError::CachePolicyWithoutCacheBackend {
+            nodes: offenders,
+            reason: format!(
+                "CachePolicy set on node(s) {names} but the WarEngine has no node cache -- wire \
+                 one via WarEngine::with_node_cache, or remove the policy"
+            ),
+        })
+    }
+
+    /// [`WarGraph::validate_node_cache_backend`]'s walk: every node with a
+    /// resolved `cache` policy in this graph (prefixed by `path`), then each
+    /// [`NodeSpec::Battalion`] child not already on the `ancestry` stack.
+    fn collect_cache_policy_nodes(
+        &self,
+        path: &str,
+        out: &mut Vec<NodeId>,
+        ancestry: &mut Vec<*const WarGraph>,
+    ) {
+        for id in &self.node_order {
+            if self
+                .aegis_for(id)
+                .is_some_and(|aegis| aegis.cache.is_some())
+            {
+                out.push(NodeId::new(format!("{path}{}", id.as_str())));
+            }
+            if let Some(NodeSpec::Battalion { graph: child, .. }) = self.nodes.get(id) {
+                let child_ptr: *const WarGraph = Arc::as_ptr(child);
+                if ancestry.contains(&child_ptr) || std::ptr::eq(child_ptr, self) {
+                    continue;
+                }
+                ancestry.push(child_ptr);
+                child.collect_cache_policy_nodes(&format!("{path}{}/", id.as_str()), out, ancestry);
+                ancestry.pop();
+            }
+        }
     }
 
     /// D-09's Aegis self-validation clause (plan 25-03): `RetryPolicy.
@@ -2115,12 +2276,14 @@ fn push_aegis_hashed_fields(buf: &mut Vec<u8>, aegis: &Aegis) {
 
 /// Write `bytes` to `buf` preceded by its length as a fixed-width 8-byte
 /// little-endian integer (Phase 22.1 CR-01, D-17). Used exclusively by
-/// [`WarGraph::fingerprint`] to build a canonical byte stream in which no
+/// [`WarGraph::fingerprint`] -- and, since plan 25-13, by
+/// `engine::cache_key`'s node-cache key composition, which follows the same
+/// discipline -- to build a canonical byte stream in which no
 /// field's bytes can be reinterpreted as a different split across a
 /// node/edge boundary -- the defect a delimiter-only encoding (`v1`) was
 /// vulnerable to whenever a `NodeId`/`FieldName` legally contained one of
 /// the delimiter bytes.
-fn push_field(buf: &mut Vec<u8>, bytes: &[u8]) {
+pub(crate) fn push_field(buf: &mut Vec<u8>, bytes: &[u8]) {
     buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
     buf.extend_from_slice(bytes);
 }
@@ -4038,6 +4201,7 @@ mod tests {
             &None,
             None,
             std::time::Duration::from_secs(30),
+            None,
         )
         .await
         .unwrap()

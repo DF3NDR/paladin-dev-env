@@ -5,12 +5,12 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 26
 current_phase_name: Agent Runtime Enhancements
 status: planning
-stopped_at: Phase 25 complete — 14/14 plans, verification passed (5/5; re-verified 2026-09-06T23:12Z against HEAD after the five post-plan code-review fixes, no regressions), UAT 76/76 passed in 25-UAT.md (2026-09-06; the one issue, a red api-surface CI job from a stale public-API baseline, fixed by 0e5c106c and green on run 34051074633); 25-SECURITY.md produced 2026-09-06 (74 register entries, threats_open: 0, 93 pinning tests re-run green); Phase 26 ready to plan
-last_updated: "2026-09-06T19:44:34.000Z"
+stopped_at: Phase 26 context gathered
+last_updated: "2026-09-06T23:48:34.969Z"
 last_activity: 2026-09-06
 last_activity_desc: Phase 25 complete, transitioned to Phase 26
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 5
   total_plans: 64
   completed_plans: 64
@@ -842,14 +842,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 25 complete — UAT 76/76 passed (2026-09-06), canonical verification `passed` (re-verified 2026-09-06T23:12Z, 5/5, after the post-plan code-review fixes), `25-SECURITY.md` verified (`threats_open: 0`), `25-VALIDATION.md` validated. Next: `/gsd-discuss-phase 26`, then `/gsd-plan-phase 26`.
+**Stopped at:** Phase 26 context gathered
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-06T19:44:34.000Z
-Resume file: None
+Last session: 2026-09-06T23:48:34.927Z
+Resume file: .planning/phases/26-agent-runtime-enhancements/26-CONTEXT.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

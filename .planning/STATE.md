@@ -5,7 +5,7 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 26
 current_phase_name: Agent Runtime Enhancements
 status: planning
-stopped_at: Phase 25 complete — 14/14 plans, verification passed (5/5), UAT 76/76 passed in 25-UAT.md (2026-09-06; the one issue, a red api-surface CI job from a stale public-API baseline, fixed by 0e5c106c and green on run 34051074633); 25-SECURITY.md produced 2026-09-06 (74 register entries, threats_open: 0, 93 pinning tests re-run green); Phase 26 ready to plan
+stopped_at: Phase 25 complete — 14/14 plans, verification passed (5/5; re-verified 2026-09-06T23:12Z against HEAD after the five post-plan code-review fixes, no regressions), UAT 76/76 passed in 25-UAT.md (2026-09-06; the one issue, a red api-surface CI job from a stale public-API baseline, fixed by 0e5c106c and green on run 34051074633); 25-SECURITY.md produced 2026-09-06 (74 register entries, threats_open: 0, 93 pinning tests re-run green); Phase 26 ready to plan
 last_updated: "2026-09-06T19:44:34.000Z"
 last_activity: 2026-09-06
 last_activity_desc: Phase 25 complete, transitioned to Phase 26
@@ -366,10 +366,11 @@ Postgres Waypoint tiers were read green on runs `34042790005` and `34051074633`)
 regenerated at plan 23-12 and Phases 24 + 25 added 123 public items (purely additive) without
 regenerating it. Fixed by `0e5c106c` (gap G-25-1); no close-out plan runs
 `scripts/check-api-surface.sh`, so add it to the X-10/X-11 gate list from Phase 26 on. (2)
-`25-05-SUMMARY.md`'s coverage block labels one verification `kind: doc`, which `uat
-classify-coverage` rejects — change it to `kind: other` so D1 auto-passes on any re-run. (3)
-`25-SECURITY.md` is not yet produced (Phase 24 ran `/gsd-secure-phase` before advancing) and
-`25-VALIDATION.md` is still `status: draft`. (4) Phase 23's carried concern (3) is closed: plan
+Resolved: `25-05-SUMMARY.md`'s coverage block labelled one verification `kind: doc`, which `uat
+classify-coverage` rejects — `83133f00` changed it to `kind: other` so D1 auto-passes on re-run.
+(3) Resolved: `25-SECURITY.md` (`1860bb00`, status `verified`, `threats_open: 0`) and
+`25-VALIDATION.md` (`aee5134e`, status `validated`, `nyquist_compliant: true`) were produced on
+2026-09-06 after the transition to Phase 26. (4) Phase 23's carried concern (3) is closed: plan
 25-12 replaced the E2E-3 mock attempt-counter seam with a real per-task Aegis retry.
 
 **Phase 24 close (2026-09-05): no blockers.** Carried concern from UAT: the untracked, gitignored
@@ -841,7 +842,7 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 25 complete — UAT 76/76 passed (2026-09-06), canonical verification `passed`, security review not yet run. Next: `/gsd-secure-phase 25`, then `/gsd-discuss-phase 26` and `/gsd-plan-phase 26`.
+**Stopped at:** Phase 25 complete — UAT 76/76 passed (2026-09-06), canonical verification `passed` (re-verified 2026-09-06T23:12Z, 5/5, after the post-plan code-review fixes), `25-SECURITY.md` verified (`threats_open: 0`), `25-VALIDATION.md` validated. Next: `/gsd-discuss-phase 26`, then `/gsd-plan-phase 26`.
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
@@ -909,5 +910,4 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
-- `/gsd-secure-phase 25` — security review for Phase 25 (Phase 24 precedent: `24-SECURITY.md` verified, `threats_open: 0`, before advancing)
 - `/gsd-discuss-phase 26` — gather context for Phase 26 (no CONTEXT.md exists yet), then `/gsd-plan-phase 26`

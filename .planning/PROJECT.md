@@ -109,6 +109,32 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 25 complete (2026-09-06)** — node-level-fault-tolerance, the v0.10.0 milestone's
+fourth planned phase: the Aegis policy bundle (a `Transience` taxonomy with table-driven
+`transience()` on `PaladinError`/`LlmError`, structured `NodeError`, `BattalionError::Node`,
+three enums `#[non_exhaustive]`), per-node retry with provable backoff (paused-clock sequence and
+jitter bounds, `TransientOnly` predicate, fail-closed `EngineRegistries` for predicates and
+handlers, per-task Muster retry with ordered `AttemptRecord` history and per-attempt trace
+events), nested timeouts (`HeartbeatHandle`, per-attempt `run_timeout`/`idle_timeout` named by
+`TimeoutKind`, an enforced `EngineLimits.run_timeout`), typed error handlers (`Route`/`Absorb`/
+`Custom` dispatch after retries exhaust, worker-template restrictions, handler-raised Parley
+through the HITL-01 path, `max_node_visits` bounding compensation cycles), the shared
+`map_http_status` redact-then-bound helper across all nine provider adapters,
+`FallbackLlmAdapter` (Transient/Unknown-only hops, the first-chunk streaming rule,
+`PaladinResult.served_by` under option (b)/D-26 registered deliberate-breaking), and node result
+caching (`NodeCachePort` with in-memory and `redis-cache` adapters under one contract suite,
+`CachedDelta`, blake3 key composition, fail-closed cache validation) — persisted
+Waypoint/Battlefield shapes unchanged, graph fingerprint bumped to `v5`, the mdBook
+`fault-tolerance` guide, MIGRATION §9.1–§9.7 rows resolved. 14/14 plans over 9 waves;
+verification passed 5/5 first time. Gate evidence on the final code commit (`462a1442`):
+coverage 89.34 % (floor 82 %), `cargo semver-checks` 11/11 vs 0.9.0 with exactly the five
+allowlisted lints, `make security` clean, MSRV 1.88 clean. Code review `25-REVIEW.md`: 2
+critical (CR-01 the Anthropic usage-cap hint is read from the unredacted body; CR-02
+openai/anthropic/deepseek clients still follow redirects with a credential header — pre-existing,
+tracked in `deferred-items.md`), 3 warnings, 1 info — fixes outstanding
+(`/gsd-code-review 25 --fix`). FT-01 … FT-06 complete. `25-SECURITY.md` not yet produced
+(`/gsd-secure-phase 25` outstanding).
+
 **Phase 24 complete (2026-09-05)** — pause-resume-history-graceful-shutdown, the v0.10.0
 milestone's third planned phase: the Parley value types and the suspend-persist-resume spine (a
 node, or a first-class `Gate` node with Battlefield templating, raising `ParleyRequest`s suspends
@@ -598,7 +624,7 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
   sanctioned behavioral break), Directive routing, Muster fan-out, subgraphs, LLM routing (Doc 02)
 - [x] **HITL-01 … HITL-05** (✓ Phase 24, 2026-09-05) — Parley pause, validated resume, Chronicle history/replay/fork,
   graceful shutdown, minimal thread HTTP endpoints (Doc 03)
-- [ ] **FT-01 … FT-06** — Transience taxonomy + structured NodeError, Aegis retry/timeout/error
+- [x] **FT-01 … FT-06** (✓ Phase 25, 2026-09-06) — Transience taxonomy + structured NodeError, Aegis retry/timeout/error
   handlers, model fallback, node caching (Doc 04)
 - [ ] **RT-01 … RT-06** — Middleware chain + built-ins, context management, Vault, structured
   output, provider-conformance close-out (Doc 05)
@@ -1573,5 +1599,5 @@ requirements, 86 forward requirements across 16 phases, 60 variant entries acros
 69 warnings, 0 locked decisions, 0 blockers, 11 ADR candidates**)*
 
 ---
-*Last updated: 2026-09-05 after Phase 24 completion (v0.10.0 milestone; next: Phase 25
-node-level fault tolerance).*
+*Last updated: 2026-09-06 after Phase 25 completion (v0.10.0 milestone; next: Phase 26
+agent runtime enhancements).*

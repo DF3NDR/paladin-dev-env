@@ -42,7 +42,9 @@ use paladin_core::platform::container::battlefield::{
 use paladin_core::platform::container::directive::{
     Directive, MusterContext, MusterTask, NextStep,
 };
-use paladin_core::platform::container::node_error::{AttemptRecord, NodeError, NodeErrorSource};
+use paladin_core::platform::container::node_error::{
+    AttemptRecord, NodeError, NodeErrorSource, TimeoutKind,
+};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::{
@@ -167,6 +169,114 @@ async fn cancelled_or_pending(token: &Option<CancellationToken>) {
     }
 }
 
+/// One attempt's resolved timeout bounds (Doc 04 FT-FR-08/09/10, D-20;
+/// plan 25-09): the tightest wall-clock deadline and which bound it belongs
+/// to, plus the idle window. Resolved fresh per attempt by
+/// [`AttemptBounds::resolve`] and raced against the attempt by
+/// [`race_attempt`].
+#[derive(Debug, Clone, Copy)]
+struct AttemptBounds {
+    /// The absolute wall-clock deadline for this attempt and the typed kind
+    /// naming which bound it is: `Run` when the node's own
+    /// `TimeoutPolicy::run_timeout` is the tightest, `EngineRun` when the
+    /// remaining `EngineLimits::run_timeout` budget is. `None` when neither
+    /// bound is declared.
+    deadline: Option<(tokio::time::Instant, TimeoutKind)>,
+    /// The node's `TimeoutPolicy::idle_timeout`, if declared: the attempt
+    /// fails `Timeout(Idle)` if no heartbeat arrives within this window.
+    idle: Option<std::time::Duration>,
+}
+
+impl AttemptBounds {
+    /// Resolve the bounds for an attempt starting NOW from the node's
+    /// resolved `TimeoutPolicy` (if any) and the run's absolute engine
+    /// deadline (if any). The per-attempt deadline is
+    /// `min(now + run_timeout, engine_deadline)`, named by whichever was
+    /// tightest; on an exact tie the node's own `Run` bound is named (the
+    /// policy the node author declared wins the label). Zero durations
+    /// never reach here: `WarGraph::validate` rejects them (plan 25-03).
+    fn resolve(
+        policy: Option<&paladin_core::platform::container::aegis::TimeoutPolicy>,
+        engine_deadline: Option<tokio::time::Instant>,
+    ) -> Self {
+        let now = tokio::time::Instant::now();
+        let run = policy
+            .and_then(|p| p.run_timeout)
+            .map(|d| (now + d, TimeoutKind::Run));
+        let engine = engine_deadline.map(|d| (d, TimeoutKind::EngineRun));
+        let deadline = match (run, engine) {
+            (Some(run), Some(engine)) if engine.0 < run.0 => Some(engine),
+            (Some(run), _) => Some(run),
+            (None, engine) => engine,
+        };
+        Self {
+            deadline,
+            idle: policy.and_then(|p| p.idle_timeout),
+        }
+    }
+}
+
+/// Resolves when `deadline` passes, or never when there is none -- an
+/// always-present `tokio::select!` branch with no `unwrap()` on the
+/// `Option` (house rule), mirroring [`cancelled_or_pending`].
+async fn deadline_or_pending(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// Resolves when no beat has been observed on `heartbeat` for `idle`, or
+/// never when there is no idle window (a node without an `idle_timeout`
+/// never subscribes -- D-18's "heartbeat is a no-op" truth). Each observed
+/// beat restarts the window: the timer AWAITS the handle's `changed()`
+/// rather than polling a timestamp, so under `tokio::time::pause` it is
+/// driven purely by the virtual clock (RESEARCH.md's `watch` recommendation).
+async fn idle_or_pending(heartbeat: &HeartbeatHandle, idle: Option<std::time::Duration>) {
+    let Some(idle) = idle else {
+        return std::future::pending::<()>().await;
+    };
+    let mut beats = heartbeat.subscribe();
+    loop {
+        match tokio::time::timeout(idle, beats.changed()).await {
+            // A beat arrived inside the window: progress -- restart it.
+            Ok(Ok(())) => continue,
+            // The handle was dropped: the attempt itself is gone (finished
+            // or cancelled), so there is nothing left to bound.
+            Ok(Err(_)) => return std::future::pending::<()>().await,
+            // No beat for a whole window: the node has stalled.
+            Err(_elapsed) => return,
+        }
+    }
+}
+
+/// Race one attempt's execution against its [`AttemptBounds`] (D-20).
+/// `biased` toward the attempt so a result landing on the same virtual
+/// tick as a deadline is still a result. On expiry the attempt future is
+/// dropped here -- its partial work is discarded exactly as any other
+/// failed attempt's is (FT-FR-03, T-25-41) -- and the failure names the
+/// bound that fired by typed `TimeoutKind`, never by message text (T-25-42).
+async fn race_attempt(
+    attempt: impl std::future::Future<Output = NodeDispatchResult>,
+    bounds: &AttemptBounds,
+    heartbeat: &HeartbeatHandle,
+) -> NodeDispatchResult {
+    let (deadline, deadline_kind) = match bounds.deadline {
+        Some((at, kind)) => (Some(at), kind),
+        None => (None, TimeoutKind::Run),
+    };
+    tokio::select! {
+        biased;
+        result = attempt => result,
+        _ = deadline_or_pending(deadline) => {
+            (None, 0, Err(NodeFailure::Timeout(deadline_kind)))
+        }
+        _ = idle_or_pending(heartbeat, bounds.idle) => {
+            (None, 0, Err(NodeFailure::Timeout(TimeoutKind::Idle)))
+        }
+    }
+}
+
 /// What one vanguard node resolves to for this superstep's execution: either
 /// a `Function` node's trait object, or the pieces of a `NodeSpec::Paladin`
 /// node needed to render its input and call the port, cloned out of the
@@ -271,6 +381,16 @@ enum NodeFailure {
     /// interpolated string), built where the child's own thread id is in
     /// scope and passed through here unchanged.
     Battalion(EngineError),
+    /// The attempt was cut by a timeout (Doc 04 FT-FR-08/09/10, D-20; plan
+    /// 25-09): the per-attempt wall-clock `TimeoutPolicy::run_timeout`
+    /// (`Run`), the progress-aware `TimeoutPolicy::idle_timeout` (`Idle`),
+    /// or the run-level `EngineLimits::run_timeout` (`EngineRun`). The
+    /// attempt's future was DROPPED at expiry, so its partial work never
+    /// existed as a `Directive` to merge (T-25-41). Always `Transient`, so
+    /// `Run`/`Idle` feed the retry predicate like any other transient
+    /// failure; `EngineRun` is never retried (the budget is gone) and ends
+    /// the whole run with `EngineError::RunTimeoutExceeded`.
+    Timeout(TimeoutKind),
 }
 
 impl NodeFailure {
@@ -288,6 +408,9 @@ impl NodeFailure {
     ///   `PaladinError::transience()` (D-05) -- via
     ///   `llm_failure::to_node_error_source`, the one conversion beside
     ///   `to_paladin_error` so both read the same typed fields.
+    /// - `Timeout(kind)` -> `NodeErrorSource::Timeout(kind)` classified
+    ///   `Transience::Transient` (D-20, FT-FR-08): the bound that fired is
+    ///   carried by the typed `TimeoutKind`, never inferred from a message.
     /// - `DirectiveParse`/`Battalion` -> `None`: neither is a node-execution
     ///   failure the Aegis governs (each has its own typed `EngineError`
     ///   and is never retried, D-14).
@@ -295,6 +418,7 @@ impl NodeFailure {
         let (transience, source) = match self {
             NodeFailure::Node(err) => (Transience::Unknown, NodeErrorSource::from(err.clone())),
             NodeFailure::Paladin(err) => (err.transience(), llm_failure::to_node_error_source(err)),
+            NodeFailure::Timeout(kind) => (Transience::Transient, NodeErrorSource::Timeout(*kind)),
             NodeFailure::DirectiveParse(_) | NodeFailure::Battalion(_) => return None,
         };
         Some(NodeError {
@@ -1589,6 +1713,10 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         let limit = parallelism.unwrap_or(dispatch_entries.len()).max(1);
         let semaphore = Arc::new(Semaphore::new(limit));
 
+        // --- D-20: the run-level budget's absolute deadline, `None` until
+        // `EngineLimits::run_timeout` is enforced (plan 25-09 Task 3).
+        let engine_deadline: Option<tokio::time::Instant> = None;
+
         let mut handles = Vec::with_capacity(dispatch_entries.len());
         for (dispatch_index, (node_id, muster_ctx)) in dispatch_entries.iter().enumerate() {
             let spec = graph.node(node_id).ok_or_else(|| {
@@ -1703,6 +1831,16 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             heartbeat: HeartbeatHandle::new(),
                             ..base_ctx.clone()
                         };
+                        // --- FT-FR-08/09/10, D-20: THIS attempt's bounds,
+                        // armed fresh per attempt from the node's resolved
+                        // `TimeoutPolicy` and the remaining engine budget.
+                        // A policy with both fields `None` (or no policy at
+                        // all) and no engine bound arms nothing, so the
+                        // attempt runs exactly as before this plan.
+                        let attempt_bounds = AttemptBounds::resolve(
+                            node_aegis.as_ref().and_then(|a| a.timeout.as_ref()),
+                            engine_deadline,
+                        );
                         node_trace.emit(TraceEvent::NodeStarted {
                             thread_id: ctx.thread_id.clone(),
                             superstep: ctx.superstep,
@@ -1733,9 +1871,18 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                 .await
                             {
                                 Ok(_permit) => {
-                                    let (paladin_id, token_count, result) =
-                                        execute_vanguard_node(dispatch.clone(), &snap, &ctx, &port)
-                                            .await;
+                                    // --- FT-FR-08/09/10, D-20: race the
+                                    // attempt against its resolved bounds.
+                                    // On expiry the attempt future is
+                                    // DROPPED (its partial work never becomes
+                                    // a Directive, T-25-41) and the failure
+                                    // names the bound by typed `TimeoutKind`.
+                                    let (paladin_id, token_count, result) = race_attempt(
+                                        execute_vanguard_node(dispatch.clone(), &snap, &ctx, &port),
+                                        &attempt_bounds,
+                                        &ctx.heartbeat,
+                                    )
+                                    .await;
                                     match result {
                                         Ok(mut directive) => {
                                             // --- ENG-FR-22: run every `after` in
@@ -1807,7 +1954,15 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         // this loop -- a retry is never a durable checkpoint
                         // boundary, so a run interrupted between attempts
                         // resumes by re-executing this node from attempt 1.
+                        //
+                        // D-20: an attempt cut by the ENGINE's run budget
+                        // (`Timeout(EngineRun)`) is never retried -- the
+                        // budget is exhausted, so a fresh attempt would be
+                        // cut at once; the run ends `RunTimeoutExceeded`
+                        // instead (bookkeeping loop below). `Run`/`Idle`
+                        // cuts ARE retried like any other transient failure.
                         if let NodeRunOutcome::Failed(ref failure) = outcome
+                            && !matches!(failure, NodeFailure::Timeout(TimeoutKind::EngineRun))
                             && let Some(retry_policy) =
                                 node_aegis.as_ref().and_then(|a| a.retry.as_ref())
                             && attempt < retry_policy.max_attempts
@@ -1847,8 +2002,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         // FINAL failed attempt only when this node has a
                         // resolved Aegis; a no-Aegis node's failure stays on
                         // the byte-identical pre-Phase-25 path (D-09).
+                        // --- D-20: a timeout is the one exception -- it is
+                        // always structured, whether or not the node has an
+                        // Aegis, because the ENGINE's own run budget
+                        // (`Timeout(EngineRun)`) can cut a node that declared
+                        // no policy at all, and the bound that fired must
+                        // still be a typed `TimeoutKind` on the record.
                         let node_error = match (&outcome, node_aegis.as_ref()) {
                             (NodeRunOutcome::Failed(failure), Some(_)) => {
+                                failure.node_error(&nid, attempt)
+                            }
+                            (NodeRunOutcome::Failed(failure @ NodeFailure::Timeout(_)), None) => {
                                 failure.node_error(&nid, attempt)
                             }
                             _ => None,
@@ -2252,11 +2416,19 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             // routing through the generic `EngineError::Node` every other
             // node-execution failure uses.
             let error = match (err, node_error) {
-                (NodeFailure::Node(_) | NodeFailure::Paladin(_), Some(node_error)) => {
-                    EngineError::NodeFailed(node_error)
-                }
+                (
+                    NodeFailure::Node(_) | NodeFailure::Paladin(_) | NodeFailure::Timeout(_),
+                    Some(node_error),
+                ) => EngineError::NodeFailed(node_error),
                 (NodeFailure::Node(e), None) => EngineError::Node(e),
                 (NodeFailure::Paladin(e), None) => EngineError::Node(StateNodeError(e.to_string())),
+                // --- D-20: unreachable in practice -- a timeout's
+                // `node_error` is always `Some` (see the retry loop) -- but
+                // library code must not `unreachable!()` an invariant it
+                // cannot enforce; render through the generic path instead.
+                (NodeFailure::Timeout(kind), None) => {
+                    EngineError::Node(StateNodeError(format!("{kind} timeout")))
+                }
                 (NodeFailure::DirectiveParse(e), _) => EngineError::DirectiveParseFailed {
                     node: node_id.clone(),
                     reason: e.reason,

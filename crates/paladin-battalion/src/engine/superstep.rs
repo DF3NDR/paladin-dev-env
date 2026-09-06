@@ -34,7 +34,7 @@ use tokio_util::sync::CancellationToken;
 
 use uuid::Uuid;
 
-use paladin_core::platform::container::aegis::Aegis;
+use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec};
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
     Battlefield, CustomDispatchResolver, FieldName, StateDelta,
@@ -485,6 +485,59 @@ impl NodeFailure {
             transience,
             source,
         })
+    }
+}
+
+/// Resolve a node's FINAL failure through its `Aegis.on_error` handler
+/// (Doc 04 FT-FR-11/12/13, D-21, D-13; plan 25-10), returning the
+/// compensating [`Directive`] the dispatch loop honours as if the node had
+/// returned it -- or the error the run fails with instead:
+///
+/// - `Route { to, error_field }`: the structured `NodeError` is serialized
+///   to a `serde_json::Value` and written into `error_field` as an ORDINARY
+///   delta write (so the schema's declared dispatch applies -- validation
+///   already guaranteed the field is declared and not `Sum`), routed via
+///   `NextStep::Goto([to])` so the existing Goto machinery places `to` in
+///   the next Vanguard and resolves the failed node's static successors
+///   `NotFiring` (the routed target REPLACES them, FT-FR-11).
+/// - `Absorb { fallback_delta }`: the fallback delta (possibly empty --
+///   merges nothing) routed via `NextStep::Edges`, so the node's static
+///   edges fire exactly as they would on success (FT-FR-12).
+/// - `Custom(name)`: **plan 25-10 Task 3** -- until that arm lands, an
+///   explicit re-fail with the original error, never a silent fallthrough
+///   to `Absorb`/`Edges`: the run fails `NodeFailed(err)` exactly as with
+///   no handler.
+///
+/// Every arm reads `state` as the same immutable pre-superstep snapshot
+/// the node's attempts read (T-25-50). `serde_json::to_value` on a
+/// `NodeError` cannot fail for a well-formed value (every field is a plain
+/// serde value, D-07); should it ever, the run fails with the ORIGINAL
+/// error rather than a fabricated one, so nothing is silently dropped.
+async fn dispatch_error_handler(
+    spec: &ErrorHandlerSpec,
+    err: &NodeError,
+    state: &Battlefield,
+    registries: &EngineRegistries,
+) -> Result<Directive, NodeError> {
+    let _ = (state, registries);
+    match spec {
+        ErrorHandlerSpec::Route { to, error_field } => {
+            let serialized = serde_json::to_value(err).map_err(|_| err.clone())?;
+            let mut delta = StateDelta::new();
+            delta.set_raw(error_field.clone(), serialized);
+            Ok(Directive {
+                delta,
+                next: NextStep::Goto(vec![to.clone()]),
+            })
+        }
+        ErrorHandlerSpec::Absorb { fallback_delta } => Ok(Directive {
+            delta: fallback_delta.clone(),
+            next: NextStep::Edges,
+        }),
+        // Task 3 replaces this arm with the registry dispatch. The spec
+        // enum is `#[non_exhaustive]`, so the wildcard is required; it is
+        // deliberately a re-fail, never an `Absorb`-shaped fallthrough.
+        _ => Err(err.clone()),
     }
 }
 
@@ -2305,6 +2358,55 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     .all(|w| w[0].attempt < w[1].attempt),
                 "attempt history must ascend by attempt number"
             );
+            // --- Plan 25-10, D-21, FT-FR-11/12/13: a FINAL failure --
+            // retries exhausted, or the predicate refused a non-retryable
+            // error; the retry loop above never yields `Failed` while
+            // attempts remain (FT-FR-05, T-25-48) -- with a resolved
+            // `on_error` handler is handed to that handler HERE, in dispatch
+            // order, over the SAME pre-superstep `battlefield` every attempt
+            // read (T-25-50: the merge below has not happened yet, so a
+            // handler never observes partially merged state). The handler's
+            // `Directive` is then honoured through the `Succeeded` arm below
+            // exactly as a node's own would be -- `Edges` merges the delta
+            // and fires static edges, `Goto` places its target through the
+            // existing Goto machinery (`goto_targets` -> `next_vanguard`, so
+            // a routed visit is counted by the SAME `visit_counts` bound as
+            // any other, T-25-47), `End` completes, `Parley` suspends,
+            // `Muster` fans out -- with ONE difference: the record still
+            // reads `NodeOutcomeKind::Failed`, because the node DID fail;
+            // the handler compensated. A handler returning `Err` fails the
+            // run carrying the HANDLER's error (D-13). An attempt cut by
+            // the ENGINE budget (`Timeout(EngineRun)`) is never handed to a
+            // handler: the budget is gone, and the run ends
+            // `RunTimeoutExceeded` below (D-20). A failure with no
+            // structured error (a `DirectiveParse`/`Battalion` failure, or a
+            // no-Aegis node) has no handler by construction (D-09, D-14).
+            let mut node_error = node_error;
+            let mut handled_failure = false;
+            let outcome = match outcome {
+                NodeRunOutcome::Failed(failure)
+                    if !matches!(failure, NodeFailure::Timeout(TimeoutKind::EngineRun)) =>
+                {
+                    let handler = graph.aegis_for(&node_id).and_then(|a| a.on_error.as_ref());
+                    match (handler, node_error.as_ref()) {
+                        (Some(spec), Some(err)) => {
+                            match dispatch_error_handler(spec, err, &battlefield, registries).await
+                            {
+                                Ok(directive) => {
+                                    handled_failure = true;
+                                    NodeRunOutcome::Succeeded(directive)
+                                }
+                                Err(handler_error) => {
+                                    node_error = Some(handler_error);
+                                    NodeRunOutcome::Failed(failure)
+                                }
+                            }
+                        }
+                        _ => NodeRunOutcome::Failed(failure),
+                    }
+                }
+                other => other,
+            };
             match outcome {
                 NodeRunOutcome::Succeeded(directive) => {
                     let Directive { delta, next } = directive;
@@ -2388,7 +2490,13 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         started_at,
                         duration_ms,
                         token_count,
-                        outcome: outcome_kind,
+                        // Plan 25-10: a handler-compensated failure is
+                        // still recorded as the failure it was (D-21).
+                        outcome: if handled_failure {
+                            NodeOutcomeKind::Failed
+                        } else {
+                            outcome_kind
+                        },
                         attempt,
                         attempts: failed_attempts,
                         cache_hit: false,

@@ -295,7 +295,7 @@ async fn run_stress_round(label: &str, workers: &[String], plan: &[usize], max_a
     let port = Arc::new(port);
     let store = Arc::new(InMemoryWaypointStore::new());
     let graph = wide_muster_graph(workers, fast_retry(max_attempts));
-    let thread = ThreadId::new(&format!("x05-{label}")).expect("valid thread id");
+    let thread = ThreadId::new(format!("x05-{label}")).expect("valid thread id");
     let engine = WarEngine::new(port.clone(), store.clone());
 
     let outcome = engine
@@ -497,7 +497,7 @@ async fn kill_during_backoff(
 ) {
     let port = Arc::new(FaultyPaladinPort::new().fail_paladin_until_attempt(FLAKY, 1));
     let store = Arc::new(InMemoryWaypointStore::new());
-    let thread = ThreadId::new(&format!("kill-during-backoff-{label}")).expect("valid thread id");
+    let thread = ThreadId::new(format!("kill-during-backoff-{label}")).expect("valid thread id");
     let token = CancellationToken::new();
     let engine = WarEngine::new(port.clone(), store.clone()).with_cancellation_token(token.clone());
 

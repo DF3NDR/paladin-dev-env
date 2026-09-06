@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 25
-current_phase_name: Node-Level Fault Tolerance
-status: executing
-stopped_at: Phase 25 execution complete — 14/14 plans merged and gated; code review, regression gate and verification next
-last_updated: "2026-09-06T03:31:57.000Z"
-last_activity: 2026-09-05
-last_activity_desc: Phase 25 all 9 waves executed (14/14 plans merged); verification pending
+current_phase: 26
+current_phase_name: Agent Runtime Enhancements
+status: planning
+stopped_at: Phase 25 complete — 14/14 plans, verification passed (5/5); Phase 26 ready to plan
+last_updated: "2026-09-06T03:39:52.494Z"
+last_activity: 2026-09-06
+last_activity_desc: Phase 25 complete, transitioned to Phase 26
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 64
-  completed_plans: 50
+  completed_plans: 64
 ---
 
 # Project State
@@ -51,16 +51,16 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 25 (Node-Level Fault Tolerance) — EXECUTING
-Plan: 14 of 14
-Status: Executing Phase 25
-Last activity: 2026-09-06 — Phase 25 wave 9 complete (14/14 plans merged); verification pending
+Phase: 26 — Agent Runtime Enhancements
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-06 — Phase 25 complete, transitioned to Phase 26
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 237
+- Total plans completed: 251
 - Average duration: —
 - Total execution time: —
 
@@ -91,6 +91,7 @@ Last activity: 2026-09-06 — Phase 25 wave 9 complete (14/14 plans merged); ver
 | 22.1 | 7 | - | - |
 | 23 | 12 | - | - |
 | 24 | 14 | - | - |
+| 25 | 14 | - | - |
 
 *Updated after each plan completion*
 

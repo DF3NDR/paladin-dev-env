@@ -136,30 +136,30 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   X-10 (`#[non_exhaustive]` or justified deliberate-breaking) and registered in `MIGRATION.md`
   §9.2 (FT-FR-01, FT-FR-02, FT-FR-02a)
 
-- [ ] **FT-02**: Per-node Aegis retry works and is provable: exact backoff sequence under paused
+- [x] **FT-02**: Per-node Aegis retry works and is provable: exact backoff sequence under paused
   clock (jitter bounds asserted), transience-predicate gating (Permanent → 1 attempt),
   attempt isolation (failed-attempt deltas discarded, `AttemptRecord` history kept), per-task
   retries inside a Muster, and retries-within-a-superstep Waypoint semantics
   (FT-FR-03…07; PRD 04 §2.1)
 
-- [ ] **FT-03**: Per-attempt timeouts distinguish stalled from slow: wall-clock `run_timeout` and
+- [x] **FT-03**: Per-attempt timeouts distinguish stalled from slow: wall-clock `run_timeout` and
   progress-aware `idle_timeout` (stream chunks, trace events, `ctx.heartbeat()`), nested with
   engine/Battalion bounds so the tightest fires and the error names which (FT-FR-08…10)
 
-- [ ] **FT-04**: Typed error handlers enable compensation: `Route` (structured NodeError into a
+- [x] **FT-04**: Typed error handlers enable compensation: `Route` (structured NodeError into a
   declared state field, recovery node into the vanguard, run not failed), `Absorb` (fallback
   delta, continue), registered `Custom` handlers (fail-closed on unregistered names, may Parley),
   no-handler exhaustion failing with a structured — never stringified — error, and handler loops
   bounded by `max_node_visits`; program scenario E2E-3 passes together with CF-03
   (FT-FR-11…15; overview §6 E2E-3)
 
-- [ ] **FT-05**: `FallbackLlmAdapter` fails over across a provider chain on Transient/Unknown
+- [x] **FT-05**: `FallbackLlmAdapter` fails over across a provider chain on Transient/Unknown
   errors only (Permanent short-circuits), propagates mid-stream errors without silent provider
   switch, returns `LlmError::AllProvidersFailed` with per-hop attempts, and records the serving
   provider on `PaladinResult` under X-10.3 (`Default` preserved, `#[non_exhaustive]`, §9.2
   register entry) (FT-FR-16, FT-FR-17)
 
-- [ ] **FT-06**: Expensive deterministic nodes can cache: `CachePolicy` keyed by default on node
+- [x] **FT-06**: Expensive deterministic nodes can cache: `CachePolicy` keyed by default on node
   id + resolved input + Paladin config fingerprint (prompt/model change invalidates naturally),
   `NodeCachePort` with InMemory and Redis adapters sharing a contract suite, hits merging the
   stored delta with `cache_hit: true` and no execution, failures never cached, Append-dispatch
@@ -367,11 +367,11 @@ Which phases cover which requirements. Populated during roadmap creation.
 | HITL-04 | Phase 24 | Complete |
 | HITL-05 | Phase 24 | Complete |
 | FT-01 | Phase 25 | Complete |
-| FT-02 | Phase 25 | Pending |
-| FT-03 | Phase 25 | Pending |
-| FT-04 | Phase 25 | Pending |
-| FT-05 | Phase 25 | Pending |
-| FT-06 | Phase 25 | Pending |
+| FT-02 | Phase 25 | Complete |
+| FT-03 | Phase 25 | Complete |
+| FT-04 | Phase 25 | Complete |
+| FT-05 | Phase 25 | Complete |
+| FT-06 | Phase 25 | Complete |
 | RT-01 | Phase 26 | Pending |
 | RT-02 | Phase 26 | Pending |
 | RT-03 | Phase 26 | Pending |

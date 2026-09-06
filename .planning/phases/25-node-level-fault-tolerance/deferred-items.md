@@ -57,6 +57,10 @@ after wave merges so sibling worktree agents never race on this file.
   scope; recorded as an open finding rather than a fix. Candidate for Phase 26's RT-06 retry-path
   re-verification or a small `fix(llm)` of its own — align the three on `Policy::none()` and the
   typed refused-redirect `ProviderError { status: 3xx }` the compat engine already emits.
+  **Resolved 2026-09-06** by `fix(25): CR-02` (`2ea6328b`, `/gsd-code-review 25 --fix`): all three
+  adapters now set `redirect::Policy::none()` and map `300..=399` to the typed refused-redirect
+  `ProviderError`, with mockito tests proving the redirect target is never contacted. See
+  `25-REVIEW-FIX.md`. RT-06 no longer needs to carry this item.
 - **`RedisQueueConfig` still derives `Debug` (and `Serialize`) over a raw `redis_password`.**
   Phase 25's `RedisNodeCacheConfig` mirrored that pre-existing derive verbatim (D-27) and was
   hardened in 25-14 with a redacting manual `Debug` (T-25-70); the v0.8 queue config it copied
@@ -76,3 +80,15 @@ after wave merges so sibling worktree agents never race on this file.
   average at ~7 on 8 cores from sibling work) and passed on the standalone re-run (34/34 in
   3.7 s) and on the full workspace re-run. Nothing in Phase 25 touches it. Candidate for a
   Phase 24 follow-up: widen the guard or move the scenario onto a paused clock.
+
+## From the Phase 25 code-review fix pass (2026-09-06, `25-REVIEW-FIX.md`)
+
+- **`deserialize_null_as_empty_string` is duplicated** between `deepseek/adapter.rs` and
+  `crate::redaction` (identical bodies). WR-01 deduplicated only the credential-redaction items
+  and the follow-on commit `6b566916` removed the Anthropic adapter's private `bounded_excerpt`
+  copy; this helper has the same drift risk and is the last known duplicate. Candidate for a small
+  `refactor(llm)`.
+- **IN-01 (`RedisNodeCache::scan_pattern` interpolates `prefix` into a `SCAN MATCH` glob without
+  escaping `*?[]`) is still open.** Info severity, outside the `critical_warning` fix scope.
+  Unreachable with today's `NodeId` grammar; escape or document if that grammar is ever widened.
+  See `25-REVIEW.md`.

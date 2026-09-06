@@ -325,10 +325,21 @@ impl AnthropicAdapter {
             400 if body.contains("max_tokens") => LlmError::InvalidPrompt(
                 "Invalid max_tokens value. Claude requires max_tokens to be set.".to_string(),
             ),
-            400 if body.contains(ANTHROPIC_USAGE_CAP_SIGNATURE) => LlmError::UsageLimitExceeded {
-                provider: ANTHROPIC_PROVIDER.to_string(),
-                regain_hint: extract_regain_hint(body),
-            },
+            400 if body.contains(ANTHROPIC_USAGE_CAP_SIGNATURE) => {
+                // Redact before extracting/bounding (load-bearing ordering,
+                // see `crate::redaction`'s module doc): `body` is
+                // attacker- or third-party-influenceable (a gateway in
+                // front of `AnthropicConfig::base_url` that echoes request
+                // context), and `regain_hint` is displayed VERBATIM to the
+                // operator, so it must go through the same redact-then-bound
+                // discipline as every other body-derived string in this
+                // crate before `extract_regain_hint` slices and bounds it.
+                let redacted = crate::redaction::redact_credentials(body, &self.config.api_key);
+                LlmError::UsageLimitExceeded {
+                    provider: ANTHROPIC_PROVIDER.to_string(),
+                    regain_hint: extract_regain_hint(&redacted),
+                }
+            }
             _ => map_http_status(ANTHROPIC_PROVIDER, status, body, &self.config.api_key),
         }
     }
@@ -1155,6 +1166,36 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 assert!(
                     regain_hint.is_none(),
                     "a missing hint must never be an error: {regain_hint:?}"
+                );
+            }
+            other => panic!("expected UsageLimitExceeded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_error_400_usage_cap_redacts_the_configured_api_key_before_extracting_the_regain_hint() {
+        // CR-01 regression: a gateway/proxy in front of `base_url` that
+        // echoes request context near "regain access" must never have that
+        // context (including a live credential) forwarded into the
+        // operator-facing `regain_hint` unredacted.
+        let adapter = test_adapter();
+        let secret = "sk-ant-test123"; // matches `test_adapter()`'s configured api_key
+        let body = format!(
+            r#"{{"type":"error","error":{{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access after re-authenticating with key {secret} on 2026-08-01."}}}}"#
+        );
+
+        let error = adapter.map_error(400, &body);
+
+        match error {
+            LlmError::UsageLimitExceeded { regain_hint, .. } => {
+                let hint = regain_hint.expect("regain hint must still be extracted");
+                assert!(
+                    !hint.contains(secret),
+                    "regain hint leaked the configured API key: {hint}"
+                );
+                assert!(
+                    hint.contains("2026-08-01"),
+                    "redaction must not destroy surrounding diagnostic prose: {hint}"
                 );
             }
             other => panic!("expected UsageLimitExceeded, got {other:?}"),

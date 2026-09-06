@@ -39,7 +39,28 @@ after wave merges so sibling worktree agents never race on this file.
   An operator-facing "evict this graph / node" surface is a candidate for a later phase.
 - **`CacheKeySpec::Custom` stays deferred** per D-28 (only the declared field-set key
   composition ships in v0.10.0).
-- **`Cargo.lock` gained one line**: `blake3 = "1.8.2"` became a direct dependency edge of
+- **`Cargo.lock` gained one line (25-13)**: `blake3 = "1.8.2"` became a direct dependency edge of
   `paladin-battalion` (no new package in the graph). Noted so the semver/security gates in
   25-14 do not read it as an unexplained lockfile drift.
   Source: `25-13-SUMMARY.md` § "For the orchestrator / deferred-items.md".
+
+## From 25-14 (close-out: manual credential-handling review, security.instructions.md)
+
+- **The three pre-Phase-17 adapters follow redirects with a credential header attached.**
+  `openai/adapter.rs`, `anthropic/adapter.rs` and `deepseek/adapter.rs` build their `reqwest`
+  client with `Client::builder().timeout(..)` only, so reqwest's default policy (follow up to 10
+  redirects) applies; the six Phase 17 adapters and `CompatEngine` set
+  `redirect::Policy::none()` (PROV-02 / T-17-54). reqwest strips `Authorization` on a cross-host
+  redirect but not Anthropic's `x-api-key`, so the manual-review rule "HTTP clients sending a
+  credential header do not follow redirects" is not met by these three. Pre-existing since v0.8,
+  untouched by Phase 25 (25-05 changed only their non-2xx mapping), outside this close-out plan's
+  scope; recorded as an open finding rather than a fix. Candidate for Phase 26's RT-06 retry-path
+  re-verification or a small `fix(llm)` of its own — align the three on `Policy::none()` and the
+  typed refused-redirect `ProviderError { status: 3xx }` the compat engine already emits.
+- **`RedisQueueConfig` still derives `Debug` (and `Serialize`) over a raw `redis_password`.**
+  Phase 25's `RedisNodeCacheConfig` mirrored that pre-existing derive verbatim (D-27) and was
+  hardened in 25-14 with a redacting manual `Debug` (T-25-70); the v0.8 queue config it copied
+  was not touched. Neither type is `Debug`-formatted anywhere in-tree today, and both still derive
+  `Serialize` (removing it is a semver-major trait removal, not a close-out change). Candidate for
+  a storage-crate hardening pass: a redacting `Debug` on `RedisQueueConfig`, and a decision on
+  whether either config should be `Serialize` at all.

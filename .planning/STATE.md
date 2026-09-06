@@ -5,7 +5,7 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 26
 current_phase_name: Agent Runtime Enhancements
 status: planning
-stopped_at: Phase 25 complete — 14/14 plans, verification passed (5/5), UAT 76/76 passed in 25-UAT.md (2026-09-06; the one issue, a red api-surface CI job from a stale public-API baseline, fixed by 0e5c106c and green on run 34051074633); 25-SECURITY.md not yet produced; Phase 26 ready to plan
+stopped_at: Phase 25 complete — 14/14 plans, verification passed (5/5), UAT 76/76 passed in 25-UAT.md (2026-09-06; the one issue, a red api-surface CI job from a stale public-API baseline, fixed by 0e5c106c and green on run 34051074633); 25-SECURITY.md produced 2026-09-06 (74 register entries, threats_open: 0, 93 pinning tests re-run green); Phase 26 ready to plan
 last_updated: "2026-09-06T19:44:34.000Z"
 last_activity: 2026-09-06
 last_activity_desc: Phase 25 complete, transitioned to Phase 26

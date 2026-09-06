@@ -22,6 +22,7 @@
 - [Maneuver Flow DSL](user-guides/maneuver-flow-dsl.md)
 - [Control Flow: Dynamic Routing & Subgraphs](user-guides/control-flow.md)
 - [Parley & Chronicle: Pause, Resume, History and Graceful Shutdown](user-guides/parley-and-chronicle.md)
+- [Aegis: Retry, Timeout, Error Handlers, Model Fallback and Node Caching](user-guides/fault-tolerance.md)
 - [Paladin Configuration](user-guides/paladin-configuration.md)
 - [Memory Management](user-guides/memory-management.md)
 - [Tool Integration](user-guides/tool-integration.md)

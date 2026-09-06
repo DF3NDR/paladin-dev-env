@@ -3,7 +3,7 @@ status: complete
 phase: 25-node-level-fault-tolerance
 source: 25-01-SUMMARY.md, 25-02-SUMMARY.md, 25-03-SUMMARY.md, 25-04-SUMMARY.md, 25-05-SUMMARY.md, 25-06-SUMMARY.md, 25-07-SUMMARY.md, 25-08-SUMMARY.md, 25-09-SUMMARY.md, 25-10-SUMMARY.md, 25-11-SUMMARY.md, 25-12-SUMMARY.md, 25-13-SUMMARY.md, 25-14-SUMMARY.md
 started: 2026-09-06T14:30:23Z
-updated: 2026-09-06T19:41:12Z
+updated: 2026-09-06T19:42:34Z
 ---
 
 ## Current Test
@@ -14,7 +14,8 @@ updated: 2026-09-06T19:41:12Z
 
 ### 1. Redis node cache runs the contract suite against a live Redis server
 expected: The redis-cache-integration CI job (added by plan 25-04) is green on a phase-25 commit: the three live-server tests (redis_node_cache_runs_the_full_contract_suite, redis_keys_are_namespaced_by_the_configured_prefix, redis_ttl_is_set_on_the_server_not_only_in_the_payload) execute against a real Redis rather than self-skipping, and the job's SKIP-detection assertion passes. Branch is 120 commits ahead of origin so this job has not yet run on phase-25 code.
-result: issue
+result: pass
+resolution: originally recorded as an issue (API Surface Tracking CI failure, gap G-25-1, severity blocker); fixed by 0e5c106c and verified on run 34051074633 where Redis Node Cache Contract Suite (live server) and every other job were green; the expected behaviour (three live-server tests executing against a real Redis, SKIP-detection passing) is proven on two runs (34042790005 job 101512438673, 34051074633)
 reported: "THe last time a `ci.yml` action ran on github it failed: https://github.com/DF3NDR/paladin-dev-env/actions/runs/33965717959 however this was on API Surface Tracking and was part of phase 24 not phase 25.  We have now pushed the latest commit up and it too is showing the same problem while it is still running: https://github.com/DF3NDR/paladin-dev-env/actions/runs/34042790005/job/101512438612  This needs to be fixed before we can proceed."
 severity: blocker
 note: run 34042790005 on 332614d4 -- Redis Node Cache Contract Suite (live server) job 101512438673 completed/success; redis_node_cache_runs_the_full_contract_suite, redis_keys_are_namespaced_by_the_configured_prefix, redis_ttl_is_set_on_the_server_not_only_in_the_payload all ok, 9 passed, SKIP-detection step passed
@@ -623,8 +624,8 @@ verification: scratchpad verify_matrix_anchors.py parses the written rows: G-08 
 ## Summary
 
 total: 76
-passed: 75
-issues: 1
+passed: 76
+issues: 0
 pending: 0
 skipped: 0
 blocked: 0

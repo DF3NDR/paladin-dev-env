@@ -483,7 +483,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 25-11-PLAN.md — Handler composition: Muster delta-only rule, Parley from a handler, compensation-chain and loop-bound E2E
+- [x] 25-11-PLAN.md — Handler composition: Muster delta-only rule, Parley from a handler, compensation-chain and loop-bound E2E
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

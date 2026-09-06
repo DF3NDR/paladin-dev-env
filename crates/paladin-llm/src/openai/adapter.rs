@@ -192,9 +192,44 @@ impl OpenAIAdapter {
         config.validate()?;
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout_seconds))
+            // CR-02 (`25-REVIEW.md`): `OPENAI_BASE_URL` is
+            // operator-configurable and every request carries the
+            // `Authorization: Bearer` credential header. Refusing redirects
+            // means a `3xx` from whatever host it resolves to can never
+            // replay that header to a different, attacker-influenced host —
+            // matches every `CompatEngine`-based preset and the bespoke
+            // Gemini adapter (T-17-18/T-17-52). A refused redirect surfaces
+            // via `Self::map_error`'s `300..=399` arm.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
         Ok(Self { config, client })
+    }
+
+    /// Map a non-2xx OpenAI response to [`LlmError`].
+    ///
+    /// `300..=399` is named explicitly (mirroring
+    /// `CompatEngine::map_error`/`GeminiAdapter::map_error`) because this
+    /// client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
+    /// response is never followed — it arrives here as an ordinary
+    /// non-success status instead. Everything else is the crate-wide
+    /// [`map_http_status`] (Phase 25 D-03, FT-FR-01).
+    fn map_error(&self, status: u16, body: &str) -> LlmError {
+        match status {
+            300..=399 => LlmError::ProviderError {
+                provider: OPENAI_PROVIDER.to_string(),
+                status,
+                message: format!(
+                    "the configured base URL responded with a redirect (HTTP {status}), which \
+                     this client refuses to follow because doing so would forward the \
+                     credential header to a different, potentially attacker-influenced host. \
+                     Correct the configured base-URL setting to point directly at the intended \
+                     endpoint. Response excerpt: {}",
+                    crate::redaction::diagnostic_excerpt(body, &self.config.api_key)
+                ),
+            },
+            _ => map_http_status(OPENAI_PROVIDER, status, body, &self.config.api_key),
+        }
     }
 
     /// Create an adapter by loading configuration from environment variables.
@@ -378,14 +413,10 @@ impl OpenAIAdapter {
             .map_err(|e| LlmError::ProcessingError(format!("Failed to read response: {}", e)))?;
 
         if !status.is_success() {
-            // One shared status-to-variant mapping for every adapter (D-03,
-            // FT-FR-01); it redacts the body before bounding it.
-            return Err(map_http_status(
-                OPENAI_PROVIDER,
-                status.as_u16(),
-                &response_text,
-                &self.config.api_key,
-            ));
+            // Shared status-to-variant mapping for every adapter (D-03,
+            // FT-FR-01), with a `300..=399` pre-check (CR-02) since this
+            // client refuses to follow redirects.
+            return Err(self.map_error(status.as_u16(), &response_text));
         }
 
         serde_json::from_str::<OpenAIResponse>(&response_text)
@@ -420,12 +451,7 @@ impl OpenAIAdapter {
             let error_text = response.text().await.unwrap_or_default();
             // Same shared mapping as the generate path, so a status yields
             // the same typed variant whether or not the call streams.
-            return Err(map_http_status(
-                OPENAI_PROVIDER,
-                status.as_u16(),
-                &error_text,
-                &self.config.api_key,
-            ));
+            return Err(self.map_error(status.as_u16(), &error_text));
         }
 
         let stream = response.bytes_stream().map(|chunk_result| {
@@ -608,12 +634,7 @@ impl LlmPort for OpenAIAdapter {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(map_http_status(
-                OPENAI_PROVIDER,
-                status.as_u16(),
-                &error_text,
-                &self.config.api_key,
-            ));
+            return Err(self.map_error(status.as_u16(), &error_text));
         }
 
         let response_text = response
@@ -738,6 +759,32 @@ mod tests {
         assert!(config.validate().is_err());
     }
 
+    // ── CR-02 (`25-REVIEW.md`): refused-redirect mapping ───────────────────
+
+    #[test]
+    fn map_error_maps_a_redirect_status_to_an_actionable_provider_error() {
+        let config = OpenAIConfig::new("test-key".to_string());
+        let adapter = OpenAIAdapter::new(config).unwrap();
+
+        for expected in [301u16, 302, 307] {
+            match adapter.map_error(expected, "moved") {
+                LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                } => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(status, expected, "typed status field must carry the code");
+                    assert!(
+                        message.contains("redirect"),
+                        "status {expected}: message must name the refused redirect, got: {message}"
+                    );
+                }
+                other => panic!("status {expected}: expected ProviderError, got {other:?}"),
+            }
+        }
+    }
+
     // ── Phase 25 (FT-FR-01, D-03): non-2xx routes through map_http_status ──
 
     mod status_mapping {
@@ -830,6 +877,47 @@ mod tests {
                 );
                 assert!(ok, "status {status}: expected {expect}, got {err:?}");
             }
+        }
+
+        #[tokio::test]
+        async fn openai_client_refuses_to_follow_a_redirect() {
+            // CR-02 (`25-REVIEW.md`) end-to-end regression: a `302` from the
+            // configured base URL must surface as a refused-redirect
+            // `ProviderError`, and the redirect target must never receive a
+            // request — proving the `Authorization` header was never
+            // replayed rather than merely asserting on the returned error
+            // shape.
+            let mut server = Server::new_async().await;
+            let redirect_target = server
+                .mock("POST", "/redirected")
+                .expect(0)
+                .create_async()
+                .await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(302)
+                .with_header("Location", "/redirected")
+                .with_body("moved")
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await;
+
+            match result {
+                Err(LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                }) => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(status, 302);
+                    assert!(message.contains("redirect"), "got: {message}");
+                }
+                other => panic!("expected ProviderError {{ status: 302 }}, got {other:?}"),
+            }
+            redirect_target.assert_async().await;
         }
 
         #[tokio::test]

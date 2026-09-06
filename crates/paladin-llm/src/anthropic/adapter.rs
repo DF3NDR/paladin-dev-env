@@ -149,6 +149,18 @@ impl AnthropicAdapter {
 
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout_seconds))
+            // CR-02 (`25-REVIEW.md`): `AnthropicConfig::base_url` is
+            // operator-configurable and every request carries the
+            // `x-api-key` credential header, which reqwest's built-in
+            // cross-host redirect header-stripping does NOT cover (it only
+            // strips `Authorization`/`Cookie`/`Cookie2`/`Proxy-Authorization`/
+            // `WWW-Authenticate`). Refusing redirects means a `3xx` from
+            // whatever host `base_url` resolves to can never replay the key
+            // to a different, attacker-influenced host — matches every
+            // `CompatEngine`-based preset and the bespoke Gemini adapter
+            // (T-17-18/T-17-52). A refused redirect surfaces via
+            // [`Self::map_error`]'s `300..=399` arm.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
@@ -317,6 +329,11 @@ impl AnthropicAdapter {
     ///   the usage-cap signature (Phase 41 D-04/D-05) are Anthropic-shaped,
     ///   so they are recognised here; any other `400` reaches the helper's
     ///   own `400` arm.
+    /// - `300..=399` is named explicitly (CR-02, mirroring
+    ///   `CompatEngine::map_error`/`GeminiAdapter::map_error`) because this
+    ///   client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
+    ///   response is never followed — it arrives here as an ordinary
+    ///   non-success status instead.
     fn map_error(&self, status: u16, body: &str) -> LlmError {
         match status {
             403 => LlmError::AuthenticationError(
@@ -325,6 +342,18 @@ impl AnthropicAdapter {
             400 if body.contains("max_tokens") => LlmError::InvalidPrompt(
                 "Invalid max_tokens value. Claude requires max_tokens to be set.".to_string(),
             ),
+            300..=399 => LlmError::ProviderError {
+                provider: ANTHROPIC_PROVIDER.to_string(),
+                status,
+                message: format!(
+                    "the configured base URL responded with a redirect (HTTP {status}), which \
+                     this client refuses to follow because doing so would forward the \
+                     credential header to a different, potentially attacker-influenced host. \
+                     Correct the configured base-URL setting to point directly at the intended \
+                     endpoint. Response excerpt: {}",
+                    crate::redaction::diagnostic_excerpt(body, &self.config.api_key)
+                ),
+            },
             400 if body.contains(ANTHROPIC_USAGE_CAP_SIGNATURE) => {
                 // Redact before extracting/bounding (load-bearing ordering,
                 // see `crate::redaction`'s module doc): `body` is
@@ -1129,6 +1158,33 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 );
             }
             other => panic!("expected UsageLimitExceeded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_error_maps_a_redirect_status_to_an_actionable_provider_error() {
+        // CR-02 (`25-REVIEW.md`): named explicitly because this client's
+        // redirect policy is `none` (see `AnthropicAdapter::new`), so a
+        // `3xx` response is never followed by the underlying HTTP client —
+        // it arrives here as an ordinary non-success status instead.
+        let adapter = test_adapter();
+
+        for expected in [301u16, 302, 307] {
+            match adapter.map_error(expected, "moved") {
+                LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                } => {
+                    assert_eq!(provider, "anthropic");
+                    assert_eq!(status, expected, "typed status field must carry the code");
+                    assert!(
+                        message.contains("redirect"),
+                        "status {expected}: message must name the refused redirect, got: {message}"
+                    );
+                }
+                other => panic!("status {expected}: expected ProviderError, got {other:?}"),
+            }
         }
     }
 

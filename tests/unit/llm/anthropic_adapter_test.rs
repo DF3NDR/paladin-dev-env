@@ -339,6 +339,48 @@ async fn test_anthropic_server_error_500() {
 }
 
 #[tokio::test]
+async fn test_anthropic_client_refuses_to_follow_a_redirect() {
+    // CR-02 (`25-REVIEW.md`): the adapter sends its credential as a
+    // custom `x-api-key` header, which reqwest's built-in cross-host
+    // redirect header-stripping does NOT cover. This must surface as a
+    // refused-redirect `ProviderError`, and the redirect target must never
+    // receive a request — proving the header was never replayed rather
+    // than merely asserting on the returned error shape.
+    let (mut server, adapter) = setup_mock_server().await;
+
+    let redirect_target = server
+        .mock("POST", "/redirected")
+        .expect(0)
+        .create_async()
+        .await;
+    let _mock = server
+        .mock("POST", "/messages")
+        .with_status(302)
+        .with_header("Location", "/redirected")
+        .with_body("moved")
+        .create_async()
+        .await;
+
+    let request = create_user_request("Hello");
+    let response = adapter.generate(request).await;
+
+    assert!(response.is_err());
+    match response.unwrap_err() {
+        paladin_ports::output::llm_port::LlmError::ProviderError {
+            provider,
+            status,
+            message,
+        } => {
+            assert_eq!(provider, "anthropic");
+            assert_eq!(status, 302);
+            assert!(message.contains("redirect"), "got: {message}");
+        }
+        other => panic!("expected ProviderError {{ status: 302 }}, got {other:?}"),
+    }
+    redirect_target.assert_async().await;
+}
+
+#[tokio::test]
 async fn test_anthropic_malformed_response() {
     let (mut server, adapter) = setup_mock_server().await;
 

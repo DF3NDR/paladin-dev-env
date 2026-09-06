@@ -280,6 +280,50 @@ async fn test_deepseek_server_error_500() {
 }
 
 #[tokio::test]
+async fn test_deepseek_client_refuses_to_follow_a_redirect() {
+    // CR-02 (`25-REVIEW.md`): a `302` from the configured base URL must
+    // surface as a refused-redirect `ProviderError`, and the redirect
+    // target must never receive a request — proving the `Authorization`
+    // header was never replayed rather than merely asserting on the
+    // returned error shape. `generate` retries a `ProviderError` up to its
+    // hardcoded `max_retries` (3), so the redirect mock is hit more than
+    // once, but the redirect TARGET must still be hit zero times across
+    // every attempt.
+    let (mut server, adapter) = setup_mock_server().await;
+
+    let redirect_target = server
+        .mock("POST", "/redirected")
+        .expect(0)
+        .create_async()
+        .await;
+    let _mock = server
+        .mock("POST", "/chat/completions")
+        .with_status(302)
+        .with_header("Location", "/redirected")
+        .with_body("moved")
+        .create_async()
+        .await;
+
+    let request = create_test_request("Hello");
+    let response = adapter.generate(request).await;
+
+    assert!(response.is_err());
+    match response.unwrap_err() {
+        paladin_ports::output::llm_port::LlmError::ProviderError {
+            provider,
+            status,
+            message,
+        } => {
+            assert_eq!(provider, "deepseek");
+            assert_eq!(status, 302);
+            assert!(message.contains("redirect"), "got: {message}");
+        }
+        other => panic!("expected ProviderError {{ status: 302 }}, got {other:?}"),
+    }
+    redirect_target.assert_async().await;
+}
+
+#[tokio::test]
 async fn test_deepseek_malformed_response() {
     let (mut server, adapter) = setup_mock_server().await;
 

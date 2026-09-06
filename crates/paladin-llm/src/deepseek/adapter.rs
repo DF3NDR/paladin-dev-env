@@ -393,6 +393,15 @@ impl DeepSeekAdapter {
         let client = Client::builder()
             .timeout(timeout)
             .default_headers(headers)
+            // CR-02 (`25-REVIEW.md`): `DeepSeekConfig::base_url` is
+            // operator-configurable and every request carries the
+            // `Authorization: Bearer` default header set above. Refusing
+            // redirects means a `3xx` from whatever host it resolves to can
+            // never replay that header to a different, attacker-influenced
+            // host — matches every `CompatEngine`-based preset and the
+            // bespoke Gemini adapter (T-17-18/T-17-52). A refused redirect
+            // surfaces via [`Self::map_error`]'s `300..=399` arm.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
@@ -505,15 +514,34 @@ impl DeepSeekAdapter {
 
     /// Map a non-2xx DeepSeek response to [`LlmError`].
     ///
-    /// Delegates wholesale to the crate-wide [`map_http_status`] (Phase 25
-    /// D-03, FT-FR-01): `body` is the RAW response text, redacted and
-    /// bounded once inside the helper — never pre-excerpted here, which
-    /// would bound twice. DeepSeek's documented insufficient-balance status
-    /// is 402; the helper's 402 arm carries `regain_hint: None` because
-    /// DeepSeek's 402 body shape is not first-party-confirmed (Phase 41
-    /// RESEARCH Assumption A1), so there is no prose to parse yet.
+    /// `300..=399` is named explicitly (CR-02, mirroring
+    /// `CompatEngine::map_error`/`GeminiAdapter::map_error`) because this
+    /// client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
+    /// response is never followed — it arrives here as an ordinary
+    /// non-success status instead. Everything else delegates wholesale to
+    /// the crate-wide [`map_http_status`] (Phase 25 D-03, FT-FR-01): `body`
+    /// is the RAW response text, redacted and bounded once inside the
+    /// helper — never pre-excerpted here, which would bound twice.
+    /// DeepSeek's documented insufficient-balance status is 402; the
+    /// helper's 402 arm carries `regain_hint: None` because DeepSeek's 402
+    /// body shape is not first-party-confirmed (Phase 41 RESEARCH
+    /// Assumption A1), so there is no prose to parse yet.
     fn map_error(&self, status: u16, body: &str) -> LlmError {
-        map_http_status(DEEPSEEK_PROVIDER, status, body, &self.config.api_key)
+        match status {
+            300..=399 => LlmError::ProviderError {
+                provider: DEEPSEEK_PROVIDER.to_string(),
+                status,
+                message: format!(
+                    "the configured base URL responded with a redirect (HTTP {status}), which \
+                     this client refuses to follow because doing so would forward the \
+                     credential header to a different, potentially attacker-influenced host. \
+                     Correct the configured base-URL setting to point directly at the intended \
+                     endpoint. Response excerpt: {}",
+                    self.diagnostic_excerpt(body)
+                ),
+            },
+            _ => map_http_status(DEEPSEEK_PROVIDER, status, body, &self.config.api_key),
+        }
     }
 
     /// Perform API call with retry logic.
@@ -1205,6 +1233,33 @@ mod tests {
             adapter.map_error(400, "bad prompt"),
             LlmError::InvalidPrompt(_)
         ));
+    }
+
+    #[test]
+    fn map_error_maps_a_redirect_status_to_an_actionable_provider_error() {
+        // CR-02 (`25-REVIEW.md`): named explicitly because this client's
+        // redirect policy is `none` (see `DeepSeekAdapter::new`), so a
+        // `3xx` response is never followed by the underlying HTTP client —
+        // it arrives here as an ordinary non-success status instead.
+        let adapter = test_adapter();
+
+        for expected in [301u16, 302, 307] {
+            match adapter.map_error(expected, "moved") {
+                LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                } => {
+                    assert_eq!(provider, "deepseek");
+                    assert_eq!(status, expected, "typed status field must carry the code");
+                    assert!(
+                        message.contains("redirect"),
+                        "status {expected}: message must name the refused redirect, got: {message}"
+                    );
+                }
+                other => panic!("status {expected}: expected ProviderError, got {other:?}"),
+            }
+        }
     }
 
     #[test]

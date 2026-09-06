@@ -15,7 +15,13 @@
 pub const RESPONSE_EXCERPT_CHAR_BUDGET: usize = 512;
 
 /// What a redacted credential is replaced with in a diagnostic excerpt.
-const CREDENTIAL_PLACEHOLDER: &str = "[REDACTED]";
+///
+/// `pub(crate)` (not private) so callers elsewhere in this crate that
+/// migrated off a local duplicate of this module (WR-01, `25-REVIEW.md`) —
+/// e.g. `deepseek::adapter`'s own tests — can assert against the same
+/// constant this module redacts with, rather than a copy-pasted literal
+/// that could silently drift.
+pub(crate) const CREDENTIAL_PLACEHOLDER: &str = "[REDACTED]";
 
 /// Deserialize a possibly-`null` (or absent) string field as an empty string.
 ///

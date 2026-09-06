@@ -23,6 +23,16 @@ use paladin_ports::output::llm_port::{
 };
 
 use crate::http_status::map_http_status;
+// WR-01 (`25-REVIEW.md`): this adapter previously carried its own
+// byte-for-byte copy of the crate's shared credential-redaction routine
+// (`RESPONSE_EXCERPT_CHAR_BUDGET`, `CREDENTIAL_PLACEHOLDER`,
+// `bounded_excerpt`, `redact_token_after`, `redact_credentials`) rather than
+// importing it, so a future fix to the shared module would silently not
+// apply here. Mirrors `compat/engine.rs` and `gemini/adapter.rs`, which
+// already import from `crate::redaction`.
+#[cfg(test)]
+use crate::redaction::CREDENTIAL_PLACEHOLDER;
+use crate::redaction::{RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, redact_credentials};
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits.
@@ -253,16 +263,6 @@ fn annotate_with_usage(err: LlmError, usage: &DeepSeekUsage) -> LlmError {
     }
 }
 
-/// Character budget for a diagnostic excerpt of a response body.
-///
-/// Mirrors `anthropic::adapter::RESPONSE_EXCERPT_CHAR_BUDGET`, deliberately —
-/// the two adapters' diagnostics are meant to stay in lockstep for the same
-/// reason their retryable sets are (see [`DeepSeekAdapter::call_api_with_retry`]).
-const RESPONSE_EXCERPT_CHAR_BUDGET: usize = 512;
-
-/// What a redacted credential is replaced with in a diagnostic excerpt.
-const CREDENTIAL_PLACEHOLDER: &str = "[REDACTED]";
-
 /// Deserialize a possibly-`null` (or absent) string field as an empty string.
 ///
 /// DeepSeek's reasoning models split their `max_tokens` budget between hidden
@@ -283,82 +283,6 @@ where
     D: serde::Deserializer<'de>,
 {
     Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
-}
-
-/// Build a diagnostic excerpt of a response body, bounded by CHARACTER count
-/// rather than byte count.
-///
-/// Slicing a UTF-8 `&str` by byte offset panics when the offset lands
-/// mid-character, and panics are forbidden in this library — a captured
-/// production response body is full of multi-byte characters. When `body`
-/// exceeds `budget` characters, an ASCII elision marker reports the total byte
-/// length of the untruncated body so the reader knows how much was withheld.
-fn bounded_excerpt(body: &str, budget: usize) -> String {
-    if body.chars().count() <= budget {
-        return body.to_string();
-    }
-
-    let truncated: String = body.chars().take(budget).collect();
-    format!("{truncated}... [truncated, {} total bytes]", body.len())
-}
-
-/// Replace the token that follows every occurrence of `marker` with
-/// [`CREDENTIAL_PLACEHOLDER`].
-///
-/// The token is taken to run until the first whitespace or JSON delimiter.
-/// `marker` must be ASCII so the byte offsets returned by `find` are always
-/// character boundaries; every slice is nonetheless taken through the checked
-/// `get` API so this function has no panicking path.
-fn redact_token_after(body: &str, marker: &str) -> String {
-    let mut out = String::with_capacity(body.len());
-    let mut rest = body;
-
-    while let Some(idx) = rest.find(marker) {
-        let cut = idx + marker.len();
-        let (head, tail) = match (rest.get(..cut), rest.get(cut..)) {
-            (Some(head), Some(tail)) => (head, tail),
-            // Unreachable for an ASCII `marker` located by `find`, but this
-            // library must never panic: stop scanning and emit the remainder
-            // verbatim via the trailing `push_str` below.
-            _ => break,
-        };
-
-        out.push_str(head);
-
-        let end = tail
-            .find(|c: char| c.is_whitespace() || matches!(c, '"' | ',' | '}' | ']' | '\\'))
-            .unwrap_or(tail.len());
-
-        if end > 0 {
-            out.push_str(CREDENTIAL_PLACEHOLDER);
-        }
-
-        rest = tail.get(end..).unwrap_or("");
-    }
-
-    out.push_str(rest);
-    out
-}
-
-/// Strip anything credential-shaped out of text destined for a log line.
-///
-/// Three passes, in order of precision:
-/// 1. the adapter's OWN configured `api_key`, matched exactly — this cannot
-///    miss, and covers a gateway that echoes the request back verbatim;
-/// 2. `Bearer <token>` / `bearer <token>`, the header form;
-/// 3. any surviving `sk-`-prefixed token.
-///
-/// Redaction MUST run before truncation, otherwise a bounded excerpt could
-/// slice a secret in half and leak the surviving prefix.
-fn redact_credentials(body: &str, api_key: &str) -> String {
-    let exact = if api_key.is_empty() {
-        body.to_string()
-    } else {
-        body.replace(api_key, CREDENTIAL_PLACEHOLDER)
-    };
-
-    let no_bearer = redact_token_after(&redact_token_after(&exact, "Bearer "), "bearer ");
-    redact_token_after(&no_bearer, "sk-")
 }
 
 /// DeepSeek LLM Adapter implementing [`LlmPort`].

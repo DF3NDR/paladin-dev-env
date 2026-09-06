@@ -53,6 +53,7 @@ pub mod bridges;
 pub mod directive_parser;
 pub mod dispatch_registry;
 pub mod graph;
+pub mod heartbeat;
 pub mod hooks;
 pub mod input_mapping;
 pub mod node;
@@ -97,6 +98,7 @@ pub use bridges::{CAMPAIGN_FAN_IN_SEPARATOR, campaign_node_ids, dedicated_output
 pub use directive_parser::{DirectiveParseError, DirectiveParser, OnParseError};
 pub use dispatch_registry::DispatchRegistry;
 pub use graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
+pub use heartbeat::HeartbeatHandle;
 pub use hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 pub use input_mapping::{InputMapping, InputMappingError};
 pub use node::{NodeContext, StateNode, StateNodeError};
@@ -237,6 +239,26 @@ pub enum EngineError {
         node: NodeId,
         /// The configured limit that was hit.
         limit: u32,
+    },
+
+    /// The run's total wall clock exceeded `EngineLimits::run_timeout`
+    /// (Doc 04 FT-FR-10, D-20, ENG-FR-03; plan 25-09). Takes the SAME
+    /// `Failed`-Waypoint and `RunOutcome::Failed` path
+    /// [`EngineError::RecursionLimitExceeded`] and
+    /// [`EngineError::NodeVisitLimitExceeded`] take -- consistent by
+    /// construction (`engine::superstep`'s one limit-failure helper), not a
+    /// second implementation. Raised either at a superstep boundary (budget
+    /// already exhausted) or mid-superstep when the budget cuts an in-flight
+    /// attempt, in which case that attempt's structured
+    /// `NodeError { source: Timeout(EngineRun), .. }` rides on the
+    /// Waypoint's `WaypointStatus::Failed.node_error`.
+    #[error("run timeout exceeded: {elapsed:?} elapsed against a limit of {limit:?}")]
+    RunTimeoutExceeded {
+        /// How long the run had been executing when the budget was found
+        /// exhausted.
+        elapsed: std::time::Duration,
+        /// The configured `EngineLimits::run_timeout` that was hit.
+        limit: std::time::Duration,
     },
 
     /// `WarGraph::validate` rejected the graph's limits.
@@ -1829,6 +1851,9 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             latest.fork_of,
             Some(responses_by_node),
             self.shutdown_grace,
+            // --- FT-FR-09, D-19: a top-level resume has no parent node to
+            // beat -- only a Battalion child dispatch passes `Some`.
+            None,
         )
         .await;
         self.trace_dispatcher
@@ -1975,6 +2000,9 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             Some(from),
             None,
             self.shutdown_grace,
+            // --- FT-FR-09, D-19: a top-level fork has no parent node to
+            // beat -- only a Battalion child dispatch passes `Some`.
+            None,
         )
         .await;
         self.trace_dispatcher.emit(TraceEvent::RunFinished {

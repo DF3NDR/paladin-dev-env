@@ -381,6 +381,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use paladin_core::platform::container::heartbeat::HeartbeatHandle;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 
@@ -680,6 +681,78 @@ pub trait PaladinPort: Send + Sync {
     /// ```
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError>;
 
+    /// Execute a Paladin while reporting progress on `heartbeat` (Doc 04
+    /// FT-FR-09, D-19; plan 25-09).
+    ///
+    /// The superstep engine calls THIS method -- never `execute` directly --
+    /// for every `NodeSpec::Paladin` dispatch, passing the attempt's
+    /// [`HeartbeatHandle`]. An implementation that can observe its own
+    /// progress beats the handle at each progress event: every completed
+    /// LLM call, every streamed chunk, every Armament invocation.
+    /// `PaladinExecutionService` does exactly that. Each beat resets the
+    /// node's `TimeoutPolicy::idle_timeout` timer, which is how the engine
+    /// distinguishes a node that is merely slow (still beating) from one
+    /// that has stalled (silent past the idle window).
+    ///
+    /// # The default is correct, not a placeholder (X-10.4)
+    ///
+    /// This is a DEFAULTED method on a pre-existing public trait, and its
+    /// default body delegates to [`PaladinPort::execute`] and beats nothing.
+    /// That default is a *correct* claim, not a stub: a port that does not
+    /// report progress genuinely claims none, so an `idle_timeout` over such
+    /// a port degrades to a per-attempt wall clock -- it fires `idle_timeout`
+    /// after the attempt starts whether or not work is happening -- rather
+    /// than to no bound at all. A port author who wants an `idle_timeout` to
+    /// mean "no progress" rather than "no time" overrides this method.
+    /// Existing implementors compile unchanged (no new required method is
+    /// added to any published trait this phase).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_trait::async_trait;
+    /// use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+    /// use paladin_core::platform::container::paladin::Paladin;
+    /// use paladin_core::platform::container::paladin_error::PaladinError;
+    /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    ///
+    /// struct ObservingPort;
+    ///
+    /// #[async_trait]
+    /// impl PaladinPort for ObservingPort {
+    ///     async fn execute(&self, _p: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
+    ///         Ok(PaladinResult { output: input.to_string(), ..Default::default() })
+    ///     }
+    ///
+    ///     // Override to report progress; the default would report none.
+    ///     async fn execute_observed(
+    ///         &self,
+    ///         paladin: &Paladin,
+    ///         input: &str,
+    ///         heartbeat: &HeartbeatHandle,
+    ///     ) -> Result<PaladinResult, PaladinError> {
+    ///         heartbeat.beat(); // e.g. after each LLM call completes
+    ///         self.execute(paladin, input).await
+    ///     }
+    ///
+    ///     async fn execute_stream(&self, _p: &Paladin, _i: &str) -> Result<PaladinStream, PaladinError> {
+    ///         unimplemented!()
+    ///     }
+    ///
+    ///     fn validate(&self, _p: &Paladin) -> Result<(), PaladinError> {
+    ///         Ok(())
+    ///     }
+    /// }
+    /// ```
+    async fn execute_observed(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        _heartbeat: &HeartbeatHandle,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.execute(paladin, input).await
+    }
+
     /// Execute a Paladin with streaming output
     ///
     /// Similar to `execute()` but returns a stream of chunks as they are generated.
@@ -811,6 +884,68 @@ pub trait PaladinPort: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plan 25-09, D-19 / X-10.4: `execute_observed` is a DEFAULTED method
+    /// whose default body delegates to `execute` and beats nothing. A port
+    /// that never overrides it produces exactly what `execute` produces,
+    /// and the handle records zero beats -- the default correctly claims
+    /// no progress, so an `idle_timeout` over such a port degrades to a
+    /// per-attempt wall clock rather than to no bound at all.
+    #[tokio::test]
+    async fn execute_observed_defaults_to_execute() {
+        use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+        use paladin_core::platform::container::paladin::PaladinData;
+
+        struct ExecuteOnlyPort;
+
+        #[async_trait]
+        impl PaladinPort for ExecuteOnlyPort {
+            async fn execute(
+                &self,
+                _paladin: &Paladin,
+                input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                Ok(PaladinResult {
+                    output: format!("echo:{input}"),
+                    token_count: 7,
+                    loop_count: 1,
+                    stop_reason: StopReason::Completed,
+                    ..Default::default()
+                })
+            }
+
+            async fn execute_stream(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                unimplemented!("not exercised")
+            }
+
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+        }
+
+        let port = ExecuteOnlyPort;
+        let paladin: Paladin = paladin_core::base::entity::node::Node::new(
+            PaladinData::default(),
+            Some("p".to_string()),
+        );
+        let heartbeat = HeartbeatHandle::new();
+
+        let direct = port.execute(&paladin, "hi").await.unwrap();
+        let observed = port
+            .execute_observed(&paladin, "hi", &heartbeat)
+            .await
+            .unwrap();
+
+        assert_eq!(observed.output, direct.output);
+        assert_eq!(observed.token_count, direct.token_count);
+        assert_eq!(observed.loop_count, direct.loop_count);
+        assert_eq!(observed.stop_reason, direct.stop_reason);
+        assert_eq!(heartbeat.beats(), 0, "the default body emits no beat");
+    }
 
     #[test]
     fn test_paladin_result_creation() {

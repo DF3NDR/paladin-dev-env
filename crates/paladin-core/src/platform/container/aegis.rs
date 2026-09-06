@@ -152,13 +152,61 @@ pub enum RetryPredicate {
     Custom(String),
 }
 
-/// Nested run/idle timeout policy (Doc 04 FT-FR-03, plan 25-09).
+/// Per-ATTEMPT run/idle timeout policy (Doc 04 FT-FR-08, FT-FR-09; D-18,
+/// D-19, D-20; plan 25-09), nested inside the run-level
+/// `EngineLimits::run_timeout`.
+///
+/// Both bounds are armed fresh for every attempt of the node and fire as a
+/// `NodeError { source: Timeout(kind), transience: Transient }` -- so under
+/// a `RetryPolicy` a timed-out attempt is retried like any other transient
+/// failure, and the timed-out attempt's partial work is discarded exactly
+/// as any other failed attempt's is. Which bound fired is carried by the
+/// typed `TimeoutKind`, never inferred from a message.
+///
+/// `TimeoutPolicy { run_timeout: None, idle_timeout: None }` arms nothing
+/// and is indistinguishable from having no policy; `Some(Duration::ZERO)`
+/// on either field is rejected by `WarGraph::validate` before execution.
+///
+/// # `idle_timeout` on a node that never reports progress
+///
+/// The idle bound resets on each observed progress event -- a stream chunk,
+/// an Armament invocation or a completed LLM call reported through
+/// `PaladinPort::execute_observed`, or an explicit `ctx.heartbeat()` from a
+/// Function node. A node whose port never beats (the trait's DEFAULT
+/// `execute_observed` delegates to `execute` and correctly claims no
+/// progress) therefore has its `idle_timeout` degrade to a per-attempt wall
+/// clock: it fires `idle_timeout` after the attempt starts whether or not
+/// work is happening -- a bound, never no bound at all.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
+/// use std::time::Duration;
+///
+/// // A stream emitting a chunk every 100 ms is healthy under this policy;
+/// // one that stalls 300 ms is not, and a 10 s wall clock caps each attempt.
+/// let aegis = Aegis {
+///     timeout: Some(TimeoutPolicy {
+///         run_timeout: Some(Duration::from_secs(10)),
+///         idle_timeout: Some(Duration::from_millis(250)),
+///     }),
+///     ..Default::default()
+/// };
+/// assert!(aegis.validate().is_ok());
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TimeoutPolicy {
-    /// The whole node execution (across every attempt) must complete within
-    /// this duration, if set.
+    /// A hard wall-clock cap on EACH attempt, if set: firing cancels the
+    /// attempt (discarding its partial work) with `Timeout(Run)`, and
+    /// progress cannot extend it. The effective per-attempt deadline is
+    /// `min(run_timeout, remaining EngineLimits::run_timeout budget)`, and
+    /// an attempt the ENGINE budget cuts records `Timeout(EngineRun)`
+    /// instead.
     pub run_timeout: Option<Duration>,
-    /// The node must produce a heartbeat within this duration, if set.
+    /// The longest an attempt may go WITHOUT an observed progress event
+    /// before failing `Timeout(Idle)`, if set; each progress event restarts
+    /// the window. See the type-level note on ports that never beat.
     pub idle_timeout: Option<Duration>,
 }
 

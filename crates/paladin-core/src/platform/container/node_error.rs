@@ -38,12 +38,19 @@ use crate::platform::container::waypoint::NodeId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum TimeoutKind {
-    /// The node's whole execution (across every attempt) exceeded
-    /// `TimeoutPolicy::run_timeout`.
+    /// This ATTEMPT exceeded the node's per-attempt wall-clock
+    /// `TimeoutPolicy::run_timeout` (D-20): a hard cap progress cannot
+    /// extend. Transient -- retried under a `RetryPolicy`.
     Run,
-    /// The node produced no heartbeat within `TimeoutPolicy::idle_timeout`.
+    /// This attempt observed no progress event (stream chunk, Armament
+    /// call, LLM completion, or `ctx.heartbeat()`) within
+    /// `TimeoutPolicy::idle_timeout`. Transient -- retried under a
+    /// `RetryPolicy`.
     Idle,
-    /// The whole engine run's own bound was exceeded.
+    /// The remaining run-level `EngineLimits::run_timeout` budget was the
+    /// tightest bound and cut this attempt (D-20, FT-FR-10). Never retried
+    /// -- the budget is gone -- and the run ends
+    /// `EngineError::RunTimeoutExceeded`.
     EngineRun,
 }
 

@@ -42,7 +42,9 @@ use paladin_core::platform::container::battlefield::{
 use paladin_core::platform::container::directive::{
     Directive, MusterContext, MusterTask, NextStep,
 };
-use paladin_core::platform::container::node_error::{AttemptRecord, NodeError, NodeErrorSource};
+use paladin_core::platform::container::node_error::{
+    AttemptRecord, NodeError, NodeErrorSource, TimeoutKind,
+};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::{
@@ -60,6 +62,7 @@ use paladin_ports::output::waypoint_port::WaypointPort;
 use crate::edge_evaluator::EdgeEvaluatorRegistry;
 use crate::engine::directive_parser::{DirectiveParseError, DirectiveParser};
 use crate::engine::graph::{EngineLimits, GateRequestTemplate, NodeSpec, StateMap, WarGraph};
+use crate::engine::heartbeat::HeartbeatHandle;
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::{NodeContext, StateNode, StateNodeError};
@@ -166,6 +169,171 @@ async fn cancelled_or_pending(token: &Option<CancellationToken>) {
     }
 }
 
+/// One attempt's resolved timeout bounds (Doc 04 FT-FR-08/09/10, D-20;
+/// plan 25-09): the tightest wall-clock deadline and which bound it belongs
+/// to, plus the idle window. Resolved fresh per attempt by
+/// [`AttemptBounds::resolve`] and raced against the attempt by
+/// [`race_attempt`].
+#[derive(Debug, Clone, Copy)]
+struct AttemptBounds {
+    /// The absolute wall-clock deadline for this attempt and the typed kind
+    /// naming which bound it is: `Run` when the node's own
+    /// `TimeoutPolicy::run_timeout` is the tightest, `EngineRun` when the
+    /// remaining `EngineLimits::run_timeout` budget is. `None` when neither
+    /// bound is declared.
+    deadline: Option<(tokio::time::Instant, TimeoutKind)>,
+    /// The node's `TimeoutPolicy::idle_timeout`, if declared: the attempt
+    /// fails `Timeout(Idle)` if no heartbeat arrives within this window.
+    idle: Option<std::time::Duration>,
+}
+
+impl AttemptBounds {
+    /// Resolve the bounds for an attempt starting NOW from the node's
+    /// resolved `TimeoutPolicy` (if any) and the run's absolute engine
+    /// deadline (if any). The per-attempt deadline is
+    /// `min(now + run_timeout, engine_deadline)`, named by whichever was
+    /// tightest; on an exact tie the node's own `Run` bound is named (the
+    /// policy the node author declared wins the label). Zero durations
+    /// never reach here: `WarGraph::validate` rejects them (plan 25-03).
+    fn resolve(
+        policy: Option<&paladin_core::platform::container::aegis::TimeoutPolicy>,
+        engine_deadline: Option<tokio::time::Instant>,
+    ) -> Self {
+        let now = tokio::time::Instant::now();
+        let run = policy
+            .and_then(|p| p.run_timeout)
+            .map(|d| (now + d, TimeoutKind::Run));
+        let engine = engine_deadline.map(|d| (d, TimeoutKind::EngineRun));
+        let deadline = match (run, engine) {
+            (Some(run), Some(engine)) if engine.0 < run.0 => Some(engine),
+            (Some(run), _) => Some(run),
+            (None, engine) => engine,
+        };
+        Self {
+            deadline,
+            idle: policy.and_then(|p| p.idle_timeout),
+        }
+    }
+}
+
+/// Resolves when `deadline` passes, or never when there is none -- an
+/// always-present `tokio::select!` branch with no `unwrap()` on the
+/// `Option` (house rule), mirroring [`cancelled_or_pending`].
+async fn deadline_or_pending(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// Resolves when no beat has been observed on `heartbeat` for `idle`, or
+/// never when there is no idle window (a node without an `idle_timeout`
+/// never subscribes -- D-18's "heartbeat is a no-op" truth). Each observed
+/// beat restarts the window: the timer AWAITS the handle's `changed()`
+/// rather than polling a timestamp, so under `tokio::time::pause` it is
+/// driven purely by the virtual clock (RESEARCH.md's `watch` recommendation).
+async fn idle_or_pending(heartbeat: &HeartbeatHandle, idle: Option<std::time::Duration>) {
+    let Some(idle) = idle else {
+        return std::future::pending::<()>().await;
+    };
+    let mut beats = heartbeat.subscribe();
+    loop {
+        match tokio::time::timeout(idle, beats.changed()).await {
+            // A beat arrived inside the window: progress -- restart it.
+            Ok(Ok(())) => continue,
+            // The handle was dropped: the attempt itself is gone (finished
+            // or cancelled), so there is nothing left to bound.
+            Ok(Err(_)) => return std::future::pending::<()>().await,
+            // No beat for a whole window: the node has stalled.
+            Err(_elapsed) => return,
+        }
+    }
+}
+
+/// Race one attempt's execution against its [`AttemptBounds`] (D-20).
+/// `biased` toward the attempt so a result landing on the same virtual
+/// tick as a deadline is still a result. On expiry the attempt future is
+/// dropped here -- its partial work is discarded exactly as any other
+/// failed attempt's is (FT-FR-03, T-25-41) -- and the failure names the
+/// bound that fired by typed `TimeoutKind`, never by message text (T-25-42).
+async fn race_attempt(
+    attempt: impl std::future::Future<Output = NodeDispatchResult>,
+    bounds: &AttemptBounds,
+    heartbeat: &HeartbeatHandle,
+) -> NodeDispatchResult {
+    let (deadline, deadline_kind) = match bounds.deadline {
+        Some((at, kind)) => (Some(at), kind),
+        None => (None, TimeoutKind::Run),
+    };
+    tokio::select! {
+        biased;
+        result = attempt => result,
+        _ = deadline_or_pending(deadline) => {
+            (None, 0, Err(NodeFailure::Timeout(deadline_kind)))
+        }
+        _ = idle_or_pending(heartbeat, bounds.idle) => {
+            (None, 0, Err(NodeFailure::Timeout(TimeoutKind::Idle)))
+        }
+    }
+}
+
+/// The ONE path every engine-limit failure takes (ENG-FR-03, D-20):
+/// `RecursionLimitExceeded`, `NodeVisitLimitExceeded` and, from plan 25-09,
+/// `RunTimeoutExceeded` all persist a `WaypointStatus::Failed` Waypoint
+/// through here and return `RunOutcome::Failed` -- consistency is
+/// structural (one function), not three implementations kept in step by
+/// hand. `completed` is empty for a boundary-time limit (nothing ran this
+/// superstep) and carries the superstep's records for a mid-superstep cut;
+/// `node_error` is `None` for a boundary-time limit (exactly what the two
+/// pre-existing limits always wrote) and `Some` when the engine budget cut
+/// an in-flight attempt, so the typed `Timeout(EngineRun)` survives on the
+/// Waypoint.
+#[allow(clippy::too_many_arguments)]
+async fn persist_limit_failure<W: WaypointPort + 'static>(
+    waypoint_port: &W,
+    durability: WaypointDurability,
+    trace: &Arc<TraceDispatcher>,
+    thread: &ThreadId,
+    parent_waypoint_id: Option<WaypointId>,
+    superstep_number: u64,
+    graph: &WarGraph,
+    battlefield: &Battlefield,
+    vanguard: Vec<NodeId>,
+    completed: Vec<NodeExecutionRecord>,
+    error: EngineError,
+    failed_node: NodeId,
+    node_error: Option<NodeError>,
+    visit_counts: BTreeMap<NodeId, u32>,
+    frontier: FrontierSnapshot,
+    checkpoint_ns: Option<String>,
+    fork_of: Option<WaypointId>,
+) -> Result<RunOutcome, EngineError> {
+    let waypoint = build_waypoint(
+        thread,
+        parent_waypoint_id,
+        superstep_number,
+        graph,
+        battlefield,
+        vanguard,
+        completed,
+        WaypointStatus::Failed {
+            error: error.to_string(),
+            failed_node,
+            node_error,
+        },
+        visit_counts,
+        frontier,
+        None,
+        checkpoint_ns,
+        fork_of,
+    );
+    persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+    Ok(RunOutcome::Failed {
+        error,
+        waypoint: Some(waypoint.waypoint_id),
+    })
+}
+
 /// What one vanguard node resolves to for this superstep's execution: either
 /// a `Function` node's trait object, or the pieces of a `NodeSpec::Paladin`
 /// node needed to render its input and call the port, cloned out of the
@@ -270,6 +438,16 @@ enum NodeFailure {
     /// interpolated string), built where the child's own thread id is in
     /// scope and passed through here unchanged.
     Battalion(EngineError),
+    /// The attempt was cut by a timeout (Doc 04 FT-FR-08/09/10, D-20; plan
+    /// 25-09): the per-attempt wall-clock `TimeoutPolicy::run_timeout`
+    /// (`Run`), the progress-aware `TimeoutPolicy::idle_timeout` (`Idle`),
+    /// or the run-level `EngineLimits::run_timeout` (`EngineRun`). The
+    /// attempt's future was DROPPED at expiry, so its partial work never
+    /// existed as a `Directive` to merge (T-25-41). Always `Transient`, so
+    /// `Run`/`Idle` feed the retry predicate like any other transient
+    /// failure; `EngineRun` is never retried (the budget is gone) and ends
+    /// the whole run with `EngineError::RunTimeoutExceeded`.
+    Timeout(TimeoutKind),
 }
 
 impl NodeFailure {
@@ -287,6 +465,9 @@ impl NodeFailure {
     ///   `PaladinError::transience()` (D-05) -- via
     ///   `llm_failure::to_node_error_source`, the one conversion beside
     ///   `to_paladin_error` so both read the same typed fields.
+    /// - `Timeout(kind)` -> `NodeErrorSource::Timeout(kind)` classified
+    ///   `Transience::Transient` (D-20, FT-FR-08): the bound that fired is
+    ///   carried by the typed `TimeoutKind`, never inferred from a message.
     /// - `DirectiveParse`/`Battalion` -> `None`: neither is a node-execution
     ///   failure the Aegis governs (each has its own typed `EngineError`
     ///   and is never retried, D-14).
@@ -294,6 +475,7 @@ impl NodeFailure {
         let (transience, source) = match self {
             NodeFailure::Node(err) => (Transience::Unknown, NodeErrorSource::from(err.clone())),
             NodeFailure::Paladin(err) => (err.transience(), llm_failure::to_node_error_source(err)),
+            NodeFailure::Timeout(kind) => (Transience::Transient, NodeErrorSource::Timeout(*kind)),
             NodeFailure::DirectiveParse(_) | NodeFailure::Battalion(_) => return None,
         };
         Some(NodeError {
@@ -520,7 +702,18 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         );
                     }
                 };
-                match paladin_port.execute(&paladin, &rendered).await {
+                // --- FT-FR-09, D-19: ALWAYS `execute_observed`, never
+                // `execute` directly, passing this attempt's own handle --
+                // a port that overrides the defaulted method beats it on
+                // every LLM completion / stream chunk / Armament call, and
+                // each beat resets this node's `idle_timeout` timer. The
+                // trait's default delegates to `execute` and beats nothing,
+                // so a non-observing port's `idle_timeout` degrades to a
+                // per-attempt wall clock rather than to no bound at all.
+                match paladin_port
+                    .execute_observed(&paladin, &rendered, &ctx.heartbeat)
+                    .await
+                {
                     Ok(result) => {
                         let token_count = u64::from(result.token_count);
                         // --- CF-02, D-11: the `DirectiveParser` call replacing
@@ -789,6 +982,11 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     // own rustdoc) -- a runtime setting shared by the whole
                     // run tree, exactly like `fork_of` above.
                     resources.shutdown_grace,
+                    // --- FT-FR-09, D-19: a child Battalion beats the
+                    // PARENT node's own attempt handle once per child
+                    // superstep, so a parent `idle_timeout` over a
+                    // Battalion node measures child-superstep progress.
+                    Some(ctx.heartbeat.clone()),
                 ));
                 let outcome = child_fut.await;
 
@@ -1116,6 +1314,10 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         // stays unchanged by this plan, exactly like `checkpoint_ns` above.
         None,
         shutdown_grace,
+        // --- FT-FR-09, D-19: a top-level run has no parent node whose
+        // idle timer it could feed -- only a `NodeSpec::Battalion` child
+        // dispatch ever passes `Some` here.
+        None,
     )
     .await
 }
@@ -1196,7 +1398,27 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // `NodeSpec::Battalion` child run inherits the SAME value via
     // `ChildEngineResources::shutdown_grace`.
     shutdown_grace: std::time::Duration,
+    // --- FT-FR-09, D-19: `Some(handle)` ONLY when this call is a
+    // `NodeSpec::Battalion` child run -- the PARENT node's own attempt
+    // handle, beaten once at the top of every child superstep below so a
+    // parent `idle_timeout` over a Battalion node observes child progress.
+    // `None` for every top-level `start`/`resume`/`fork` call.
+    parent_heartbeat: Option<HeartbeatHandle>,
 ) -> Result<RunOutcome, EngineError> {
+    // --- FT-FR-10, D-20, ENG-FR-03: the run-level budget. Measured from
+    // the moment THIS call starts (a resumed run's budget restarts with the
+    // resume; a Battalion child run measures its OWN budget against its
+    // OWN `EngineLimits`, per `child_uses_its_own_engine_limits`). The
+    // absolute deadline is threaded into every attempt so the per-attempt
+    // bound can be `min(attempt run_timeout, remaining budget)` and the
+    // top-of-loop check below can end a run whose budget is already gone.
+    // `tokio::time::Instant` (not `std`), so the paused clock drives it.
+    let run_started_at = tokio::time::Instant::now();
+    let engine_deadline: Option<tokio::time::Instant> = graph
+        .limits()
+        .run_timeout
+        .map(|limit| run_started_at + limit);
+
     // --- CF-FR-16, D-21: gathered ONCE per `run()` call, never per
     // dispatch -- see `ChildEngineResources`'s own rustdoc for why a
     // single construction site matters. `None` when this call has no
@@ -1335,6 +1557,13 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // is never mistakenly reapplied to a later, unrelated Muster).
 
     loop {
+        // --- FT-FR-09, D-19: a child Battalion run reports progress to its
+        // parent node once per child superstep -- here, at the boundary,
+        // before any of this superstep's work begins.
+        if let Some(handle) = &parent_heartbeat {
+            handle.beat();
+        }
+
         // --- ENG-FR-23: cancellation is observed only at a superstep
         // BOUNDARY -- here, at the top of the loop -- never mid-superstep.
         // `vanguard` at this point is exactly the set of nodes that would
@@ -1370,12 +1599,39 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
 
         // --- ENG-FR-03: bounded iteration, checked at the top of the loop
         // so a run stops at exactly `max_supersteps` rather than one over.
+        // --- CR-01 (23-REVIEW.md): `vanguard` alone may be empty on a
+        // muster-only round -- this phase's Muster feature can re-enter
+        // this loop with `vanguard` empty and `pending_muster` carrying the
+        // next dispatch (`has_pending_muster` a few hundred lines below
+        // stands in for "there is more work" in exactly this situation).
+        // Mirrors the `Battlefield::merge` failure fallback's
+        // `dispatch_entries.first()` pattern a few hundred lines below,
+        // using `pending_muster` instead since `dispatch_entries` is not
+        // built yet at this point in the loop. The loop's own
+        // Completed-return checks guarantee at least one of `vanguard`/
+        // `pending_muster` is non-empty whenever a boundary-time limit
+        // fires, so the final placeholder is unreachable by construction --
+        // but must not panic if that invariant is ever violated (mirrors
+        // `MusterProgress::default`'s own placeholder
+        // `NodeId::new(String::new())`). Shared by every boundary-time
+        // limit below (recursion, run timeout).
+        let boundary_failed_node = || {
+            vanguard
+                .first()
+                .cloned()
+                .or_else(|| pending_muster.as_ref().map(|(node, _)| node.clone()))
+                .unwrap_or_else(|| NodeId::new(String::new()))
+        };
         if superstep_number >= graph.limits().max_supersteps {
             let error = EngineError::RecursionLimitExceeded {
                 limit: graph.limits().max_supersteps,
                 thread_id: thread.clone(),
             };
-            let waypoint = build_waypoint(
+            let failed_node = boundary_failed_node();
+            return persist_limit_failure(
+                waypoint_port,
+                durability,
+                trace,
                 &thread,
                 parent_waypoint_id,
                 superstep_number,
@@ -1383,43 +1639,50 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 &battlefield,
                 vanguard.clone(),
                 Vec::new(),
-                WaypointStatus::Failed {
-                    error: error.to_string(),
-                    // --- CR-01 (23-REVIEW.md): `vanguard` alone may be
-                    // empty on a muster-only round -- this phase's Muster
-                    // feature can re-enter this loop with `vanguard` empty
-                    // and `pending_muster` carrying the next dispatch
-                    // (`has_pending_muster` a few hundred lines below
-                    // stands in for "there is more work" in exactly this
-                    // situation). Mirrors the `Battlefield::merge` failure
-                    // fallback's `dispatch_entries.first()` pattern a few
-                    // hundred lines below, using `pending_muster` instead
-                    // since `dispatch_entries` is not built yet at this
-                    // point in the loop. The loop's own Completed-return
-                    // checks guarantee at least one of `vanguard`/
-                    // `pending_muster` is non-empty whenever this branch is
-                    // reached, so the final placeholder is unreachable by
-                    // construction -- but must not panic if that invariant
-                    // is ever violated (mirrors `MusterProgress::default`'s
-                    // own placeholder `NodeId::new(String::new())`).
-                    failed_node: vanguard
-                        .first()
-                        .cloned()
-                        .or_else(|| pending_muster.as_ref().map(|(node, _)| node.clone()))
-                        .unwrap_or_else(|| NodeId::new(String::new())),
-                    node_error: None,
-                },
+                error,
+                failed_node,
+                None,
                 visit_counts,
                 frontier.snapshot(graph),
-                None,
                 checkpoint_ns.clone(),
                 fork_of,
-            );
-            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
-            return Ok(RunOutcome::Failed {
-                error,
-                waypoint: Some(waypoint.waypoint_id),
-            });
+            )
+            .await;
+        }
+
+        // --- FT-FR-10, D-20, ENG-FR-03: the run-level wall-clock budget,
+        // checked at the SAME boundary as the recursion limit so a run
+        // whose budget expired during (or exactly at the end of) the
+        // previous superstep stops here rather than starting another one.
+        // A budget that expires MID-superstep is caught by the per-attempt
+        // race instead (`AttemptBounds::resolve` names it `EngineRun`) and
+        // surfaced through the same helper after the bookkeeping loop.
+        if let Some(limit) = graph.limits().run_timeout {
+            let elapsed = run_started_at.elapsed();
+            if elapsed >= limit {
+                let error = EngineError::RunTimeoutExceeded { elapsed, limit };
+                let failed_node = boundary_failed_node();
+                return persist_limit_failure(
+                    waypoint_port,
+                    durability,
+                    trace,
+                    &thread,
+                    parent_waypoint_id,
+                    superstep_number,
+                    graph,
+                    &battlefield,
+                    vanguard.clone(),
+                    Vec::new(),
+                    error,
+                    failed_node,
+                    None,
+                    visit_counts,
+                    frontier.snapshot(graph),
+                    checkpoint_ns.clone(),
+                    fork_of,
+                )
+                .await;
+            }
         }
 
         // --- ENG-FR-03: per-node visit bound, checked before a node is
@@ -1439,7 +1702,10 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 node: node.clone(),
                 limit: graph.limits().max_node_visits,
             };
-            let waypoint = build_waypoint(
+            return persist_limit_failure(
+                waypoint_port,
+                durability,
+                trace,
                 &thread,
                 parent_waypoint_id,
                 superstep_number,
@@ -1447,22 +1713,15 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 &battlefield,
                 vanguard.clone(),
                 Vec::new(),
-                WaypointStatus::Failed {
-                    error: error.to_string(),
-                    failed_node: node,
-                    node_error: None,
-                },
+                error,
+                node,
+                None,
                 visit_counts,
                 frontier.snapshot(graph),
-                None,
                 checkpoint_ns.clone(),
                 fork_of,
-            );
-            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
-            return Ok(RunOutcome::Failed {
-                error,
-                waypoint: Some(waypoint.waypoint_id),
-            });
+            )
+            .await;
         }
         visit_counts = candidate_counts;
 
@@ -1615,12 +1874,20 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             let port = Arc::clone(paladin_port);
             let node_trace = Arc::clone(trace);
             let node_interceptors = interceptors.to_vec();
-            let ctx = crate::engine::node::NodeContext {
+            // --- D-18: the attempt-INVARIANT part of this dispatch's
+            // context. `attempt` and `heartbeat` are per attempt (the retry
+            // loop below rebuilds `ctx` from this base on every iteration
+            // with the current attempt number and a FRESH handle), so the
+            // values placed here are placeholders overwritten before any
+            // node, interceptor or trace ever sees the context.
+            let base_ctx = crate::engine::node::NodeContext {
                 node_id: node_id.clone(),
                 thread_id: thread.clone(),
                 superstep: superstep_number,
                 muster: muster_ctx.clone(),
                 parley_response: parley_responses_this_round.get(node_id).cloned(),
+                attempt: 0,
+                heartbeat: HeartbeatHandle::new(),
             };
             let nid = node_id.clone();
             // --- D-09, D-10, D-14: this node's resolved Aegis (its own
@@ -1650,6 +1917,27 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     let mut failed_attempts: Vec<AttemptRecord> = Vec::new();
                     loop {
                         attempt += 1;
+                        // --- D-18: rebuilt per attempt with the CURRENT
+                        // attempt number and a FRESH `HeartbeatHandle`, so a
+                        // straggling task from a cancelled (timed-out)
+                        // previous attempt can never reset THIS attempt's
+                        // idle timer, and a `StateNode` never observes a
+                        // stale `ctx.attempt`.
+                        let ctx = crate::engine::node::NodeContext {
+                            attempt,
+                            heartbeat: HeartbeatHandle::new(),
+                            ..base_ctx.clone()
+                        };
+                        // --- FT-FR-08/09/10, D-20: THIS attempt's bounds,
+                        // armed fresh per attempt from the node's resolved
+                        // `TimeoutPolicy` and the remaining engine budget.
+                        // A policy with both fields `None` (or no policy at
+                        // all) and no engine bound arms nothing, so the
+                        // attempt runs exactly as before this plan.
+                        let attempt_bounds = AttemptBounds::resolve(
+                            node_aegis.as_ref().and_then(|a| a.timeout.as_ref()),
+                            engine_deadline,
+                        );
                         node_trace.emit(TraceEvent::NodeStarted {
                             thread_id: ctx.thread_id.clone(),
                             superstep: ctx.superstep,
@@ -1680,9 +1968,18 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                 .await
                             {
                                 Ok(_permit) => {
-                                    let (paladin_id, token_count, result) =
-                                        execute_vanguard_node(dispatch.clone(), &snap, &ctx, &port)
-                                            .await;
+                                    // --- FT-FR-08/09/10, D-20: race the
+                                    // attempt against its resolved bounds.
+                                    // On expiry the attempt future is
+                                    // DROPPED (its partial work never becomes
+                                    // a Directive, T-25-41) and the failure
+                                    // names the bound by typed `TimeoutKind`.
+                                    let (paladin_id, token_count, result) = race_attempt(
+                                        execute_vanguard_node(dispatch.clone(), &snap, &ctx, &port),
+                                        &attempt_bounds,
+                                        &ctx.heartbeat,
+                                    )
+                                    .await;
                                     match result {
                                         Ok(mut directive) => {
                                             // --- ENG-FR-22: run every `after` in
@@ -1754,7 +2051,15 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         // this loop -- a retry is never a durable checkpoint
                         // boundary, so a run interrupted between attempts
                         // resumes by re-executing this node from attempt 1.
+                        //
+                        // D-20: an attempt cut by the ENGINE's run budget
+                        // (`Timeout(EngineRun)`) is never retried -- the
+                        // budget is exhausted, so a fresh attempt would be
+                        // cut at once; the run ends `RunTimeoutExceeded`
+                        // instead (bookkeeping loop below). `Run`/`Idle`
+                        // cuts ARE retried like any other transient failure.
                         if let NodeRunOutcome::Failed(ref failure) = outcome
+                            && !matches!(failure, NodeFailure::Timeout(TimeoutKind::EngineRun))
                             && let Some(retry_policy) =
                                 node_aegis.as_ref().and_then(|a| a.retry.as_ref())
                             && attempt < retry_policy.max_attempts
@@ -1794,8 +2099,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         // FINAL failed attempt only when this node has a
                         // resolved Aegis; a no-Aegis node's failure stays on
                         // the byte-identical pre-Phase-25 path (D-09).
+                        // --- D-20: a timeout is the one exception -- it is
+                        // always structured, whether or not the node has an
+                        // Aegis, because the ENGINE's own run budget
+                        // (`Timeout(EngineRun)`) can cut a node that declared
+                        // no policy at all, and the bound that fired must
+                        // still be a typed `TimeoutKind` on the record.
                         let node_error = match (&outcome, node_aegis.as_ref()) {
                             (NodeRunOutcome::Failed(failure), Some(_)) => {
+                                failure.node_error(&nid, attempt)
+                            }
+                            (NodeRunOutcome::Failed(failure @ NodeFailure::Timeout(_)), None) => {
                                 failure.node_error(&nid, attempt)
                             }
                             _ => None,
@@ -1819,6 +2133,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         let mut deltas = Vec::with_capacity(handles.len());
         let mut completed_records = Vec::with_capacity(handles.len());
         let mut node_failure: Option<(NodeId, NodeFailure, Option<NodeError>)> = None;
+        // --- FT-FR-10, D-20: the first (dispatch-order) attempt this
+        // superstep that the ENGINE budget cut. Checked ahead of
+        // `node_failure` below: when the budget is what expired, the run
+        // ends `RunTimeoutExceeded` rather than merely failing that node.
+        let mut engine_budget_cut: Option<(NodeId, NodeError)> = None;
         // --- CF-02: per-superstep runtime values derived from this
         // superstep's `Directive`s, NOT `Frontier` state (RESEARCH.md
         // Pattern 3) -- rebuilt fresh every superstep, never persisted.
@@ -2176,6 +2495,12 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         attempts: failed_attempts,
                         cache_hit: false,
                     });
+                    if matches!(e, NodeFailure::Timeout(TimeoutKind::EngineRun))
+                        && engine_budget_cut.is_none()
+                        && let Some(cut) = node_error.clone()
+                    {
+                        engine_budget_cut = Some((node_id.clone(), cut));
+                    }
                     if node_failure.is_none() {
                         node_failure = Some((node_id, e, node_error));
                     }
@@ -2183,6 +2508,42 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             }
         }
         completed_records.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+
+        // --- FT-FR-10, D-20, ENG-FR-03: the engine budget expired
+        // MID-superstep and cut an in-flight attempt. The run ends with the
+        // typed `RunTimeoutExceeded` through the SAME limit-failure helper
+        // the boundary-time limits use, carrying this superstep's records
+        // and the cut attempt's `Timeout(EngineRun)` NodeError on the
+        // Waypoint. Checked ahead of `node_failure` so the budget, not an
+        // incidental sibling failure, names the outcome.
+        if let Some((failed_node, cut)) = engine_budget_cut
+            && let Some(limit) = graph.limits().run_timeout
+        {
+            let error = EngineError::RunTimeoutExceeded {
+                elapsed: run_started_at.elapsed(),
+                limit,
+            };
+            return persist_limit_failure(
+                waypoint_port,
+                durability,
+                trace,
+                &thread,
+                parent_waypoint_id,
+                superstep_number,
+                graph,
+                &battlefield,
+                vanguard.clone(),
+                completed_records,
+                error,
+                failed_node,
+                Some(cut),
+                visit_counts,
+                frontier.snapshot(graph),
+                checkpoint_ns.clone(),
+                fork_of,
+            )
+            .await;
+        }
 
         if let Some((node_id, err, node_error)) = node_failure {
             // --- D-08, X-06: an Aegis-governed node's exhausted (or
@@ -2199,11 +2560,19 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             // routing through the generic `EngineError::Node` every other
             // node-execution failure uses.
             let error = match (err, node_error) {
-                (NodeFailure::Node(_) | NodeFailure::Paladin(_), Some(node_error)) => {
-                    EngineError::NodeFailed(node_error)
-                }
+                (
+                    NodeFailure::Node(_) | NodeFailure::Paladin(_) | NodeFailure::Timeout(_),
+                    Some(node_error),
+                ) => EngineError::NodeFailed(node_error),
                 (NodeFailure::Node(e), None) => EngineError::Node(e),
                 (NodeFailure::Paladin(e), None) => EngineError::Node(StateNodeError(e.to_string())),
+                // --- D-20: unreachable in practice -- a timeout's
+                // `node_error` is always `Some` (see the retry loop) -- but
+                // library code must not `unreachable!()` an invariant it
+                // cannot enforce; render through the generic path instead.
+                (NodeFailure::Timeout(kind), None) => {
+                    EngineError::Node(StateNodeError(format!("{kind} timeout")))
+                }
                 (NodeFailure::DirectiveParse(e), _) => EngineError::DirectiveParseFailed {
                     node: node_id.clone(),
                     reason: e.reason,
@@ -9899,6 +10268,815 @@ mod tests {
         assert!(
             first.vanguard.contains(&node2),
             "the Halted Waypoint's vanguard must be exactly the nodes that would have run next"
+        );
+    }
+
+    // --- Plan 25-09 Task 1: HeartbeatHandle, NodeContext.attempt/heartbeat(),
+    // and the defaulted PaladinPort::execute_observed (D-18, D-19) ----------
+
+    use crate::engine::test_support::{HeartbeatingNode, ObservedCallRecordingPort};
+
+    /// A retry policy that retries `Unknown`-classified `StateNodeError`s
+    /// (the default `TransientOnly` never would) with a 1 ms, jitter-free
+    /// backoff -- `engine::mod`'s `retrying_aegis` shape, restated here for
+    /// this module's own retry-aware tests.
+    fn retrying_aegis(max_attempts: u32) -> Aegis {
+        Aegis {
+            retry: Some(paladin_core::platform::container::aegis::RetryPolicy {
+                max_attempts,
+                retry_on:
+                    paladin_core::platform::container::aegis::RetryPredicate::TransientAndUnknown,
+                jitter: false,
+                initial_interval: std::time::Duration::from_millis(1),
+                ..paladin_core::platform::container::aegis::RetryPolicy::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// D-18: `ctx.heartbeat()` on a node with NO `idle_timeout` (no Aegis at
+    /// all here) neither panics nor changes the run -- the handle exists
+    /// but nothing is watching it, and the run completes normally.
+    #[tokio::test]
+    async fn heartbeat_is_a_no_op_without_an_idle_timeout() {
+        let out = field("out");
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("beater");
+        let node = HeartbeatingNode::new(1, 50, out.clone());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("heartbeat-no-op").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(final_state.get_raw(&out), Some(&serde_json::json!("done")));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(node.observed_attempts(), vec![1]);
+    }
+
+    /// D-18: on a node's second attempt, `ctx.attempt` is `2` -- the
+    /// context is rebuilt per attempt with the retry loop's own counter.
+    #[tokio::test]
+    async fn node_context_exposes_the_current_attempt() {
+        let out = field("out");
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("second-try");
+        let node = HeartbeatingNode::new(2, 0, out.clone());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(3));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("ctx-attempt").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "expected Completed, got {outcome:?}"
+        );
+        assert_eq!(
+            node.observed_attempts(),
+            vec![1, 2],
+            "attempt 1 fails, attempt 2 sees ctx.attempt == 2 and succeeds"
+        );
+    }
+
+    /// D-19: the engine dispatches EVERY `NodeSpec::Paladin` node through
+    /// `PaladinPort::execute_observed`, never `execute` directly -- a port
+    /// that overrides the defaulted method sees exactly one observed call
+    /// and zero direct calls.
+    #[tokio::test]
+    async fn the_engine_always_calls_execute_observed() {
+        let out = field("out");
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("scribe");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin("scribe"),
+                InputMapping::new("scribe"),
+                out.clone(),
+            ),
+        );
+        graph.add_entry(node_id);
+
+        let recording = ObservedCallRecordingPort::new();
+        let port: Arc<dyn PaladinPort> = recording.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("always-observed").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("observed")),
+                    "the output written is the one execute_observed produced"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(recording.observed_calls(), 1);
+        assert_eq!(
+            recording.direct_calls(),
+            0,
+            "the engine must never call execute() directly for a Paladin node"
+        );
+    }
+
+    // --- Plan 25-09 Task 2: per-attempt run_timeout / idle_timeout, named
+    // by the typed TimeoutKind (FT-FR-08, FT-FR-09, D-20). Every test here
+    // uses the paused-clock idiom `engine/retry.rs` established
+    // (`#[tokio::test(start_paused = true)]`): no wall-clock sleeps. ------
+
+    use crate::engine::test_support::{BeatingPaladinPort, TimedFunctionNode};
+    use paladin_core::platform::container::aegis::TimeoutPolicy;
+    use paladin_core::platform::container::node_error::TimeoutKind;
+    use std::time::Duration;
+
+    fn ms(millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
+
+    fn timeout_aegis(run: Option<Duration>, idle: Option<Duration>) -> Aegis {
+        Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: run,
+                idle_timeout: idle,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A single-`Paladin`-node graph whose node writes to `out`.
+    fn one_paladin_graph(out: &FieldName) -> (WarGraph, NodeId) {
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("scout");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(make_paladin("scout"), InputMapping::new("go"), out.clone()),
+        );
+        graph.add_entry(node_id.clone());
+        (graph, node_id)
+    }
+
+    /// A single-`Function`-node graph over `node`, writing to `out`, under
+    /// the default `EngineLimits`.
+    fn one_function_graph(out: &FieldName, node: Arc<dyn StateNode>) -> (WarGraph, NodeId) {
+        one_function_graph_with_limits(out, node, EngineLimits::default())
+    }
+
+    /// As [`one_function_graph`], under caller-supplied `limits`.
+    fn one_function_graph_with_limits(
+        out: &FieldName,
+        node: Arc<dyn StateNode>,
+        limits: EngineLimits,
+    ) -> (WarGraph, NodeId) {
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, limits);
+        let node_id = NodeId::new("worker");
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+        (graph, node_id)
+    }
+
+    /// FT-FR-09: a stream emitting a chunk every 100 ms is HEALTHY -- under
+    /// `idle_timeout: 250 ms` and `run_timeout: 10 s`, a port that beats
+    /// every 100 ms for 2 s completes, and neither bound fires.
+    #[tokio::test(start_paused = true)]
+    async fn a_port_beating_every_100ms_survives_a_250ms_idle_timeout() {
+        let out = field("out");
+        let (mut graph, node_id) = one_paladin_graph(&out);
+        graph.set_aegis(node_id, timeout_aegis(Some(ms(10_000)), Some(ms(250))));
+
+        let port_impl = BeatingPaladinPort::new(ms(100), 20, ms(0), "scouted");
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("idle-survives").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("scouted"))
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            port_impl.call_count(),
+            1,
+            "exactly one attempt, no timeout fired"
+        );
+    }
+
+    /// FT-FR-09: the SAME policy, but a port that beats then goes silent
+    /// for 300 ms, fails with `Timeout(Idle)` classified `Transient`.
+    #[tokio::test(start_paused = true)]
+    async fn a_port_that_stalls_300ms_fails_with_timeout_idle() {
+        let out = field("out");
+        let (mut graph, node_id) = one_paladin_graph(&out);
+        graph.set_aegis(
+            node_id.clone(),
+            timeout_aegis(Some(ms(10_000)), Some(ms(250))),
+        );
+
+        let port_impl = BeatingPaladinPort::new(ms(100), 2, ms(300), "never");
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("idle-fires").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        let node_error = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        assert_eq!(node_error.node_id, node_id);
+        assert_eq!(node_error.attempt, 1);
+        assert_eq!(node_error.transience, Transience::Transient);
+        assert_eq!(
+            node_error.source,
+            NodeErrorSource::Timeout(TimeoutKind::Idle),
+            "the idle bound fired, named by its typed kind"
+        );
+        assert_eq!(port_impl.call_count(), 1, "no retry policy: one attempt");
+    }
+
+    /// FT-FR-08: a node that keeps beating is still cut by the wall-clock
+    /// `run_timeout`, and the failure names `Run` (not `Idle`) -- progress
+    /// cannot extend the hard cap (T-25-39).
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_but_progressing_node_fails_on_run_timeout_not_idle() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("too late"))],
+            Some(ms(100)),
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(node_id.clone(), timeout_aegis(Some(ms(500)), Some(ms(250))));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("run-beats-idle").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        let node_error = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        assert_eq!(node_error.node_id, node_id);
+        assert_eq!(node_error.transience, Transience::Transient);
+        assert_eq!(
+            node_error.source,
+            NodeErrorSource::Timeout(TimeoutKind::Run),
+            "the wall-clock bound fired even though the node kept beating"
+        );
+        assert_eq!(node.observed_attempts(), vec![1]);
+    }
+
+    /// FT-FR-08, D-20: a `Timeout(Run)` is `Transient`, so under the
+    /// default `TransientOnly` retry predicate the attempt is retried and a
+    /// faster later attempt completes the run; the attempt history records
+    /// the timed-out attempt with its typed kind.
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_attempt_is_retried_as_transient() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![
+                (ms(1_000), serde_json::json!("partial")),
+                (ms(10), serde_json::json!("final")),
+            ],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(
+            node_id.clone(),
+            Aegis {
+                retry: Some(paladin_core::platform::container::aegis::RetryPolicy {
+                    max_attempts: 3,
+                    jitter: false,
+                    initial_interval: ms(1),
+                    ..paladin_core::platform::container::aegis::RetryPolicy::default()
+                }),
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(ms(200)),
+                    idle_timeout: None,
+                }),
+                ..Default::default()
+            },
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("timeout-retried").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "expected Completed, got {outcome:?}"
+        );
+        assert_eq!(node.observed_attempts(), vec![1, 2]);
+        let waypoints = store.saved_waypoints(&thread).await;
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.node_id, node_id);
+        assert_eq!(record.attempt, 2, "the succeeding attempt is attempt 2");
+        assert_eq!(record.attempts.len(), 1);
+        assert_eq!(record.attempts[0].attempt, 1);
+        assert_eq!(
+            record.attempts[0].error.source,
+            NodeErrorSource::Timeout(TimeoutKind::Run)
+        );
+        assert_eq!(record.attempts[0].error.transience, Transience::Transient);
+    }
+
+    /// FT-FR-03/FT-FR-08 (T-25-41): a timed-out attempt's partial delta is
+    /// discarded exactly like any other failed attempt's -- only the
+    /// succeeding attempt's value reaches the merged Battlefield.
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_attempts_partial_work_is_discarded() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![
+                (ms(1_000), serde_json::json!("partial")),
+                (ms(10), serde_json::json!("final")),
+            ],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(
+            node_id,
+            Aegis {
+                retry: Some(paladin_core::platform::container::aegis::RetryPolicy {
+                    max_attempts: 2,
+                    jitter: false,
+                    initial_interval: ms(1),
+                    ..paladin_core::platform::container::aegis::RetryPolicy::default()
+                }),
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(ms(200)),
+                    idle_timeout: None,
+                }),
+                ..Default::default()
+            },
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("partial-discarded").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("final")),
+                    "only the succeeding attempt's delta merges"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(
+            waypoints.len(),
+            1,
+            "no Waypoint is written between attempts"
+        );
+        assert_ne!(
+            waypoints[0].battlefield.get_raw(&out),
+            Some(&serde_json::json!("partial"))
+        );
+    }
+
+    /// `TimeoutPolicy { run_timeout: None, idle_timeout: None }` arms
+    /// nothing: a node under it behaves exactly as one with no policy --
+    /// a 5 s hold completes with one attempt and no timer ever fires.
+    #[tokio::test(start_paused = true)]
+    async fn timeout_policy_with_both_fields_none_is_a_no_op() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(5_000), serde_json::json!("eventually"))],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(node_id.clone(), timeout_aegis(None, None));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("no-op-policy").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("eventually"))
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        let waypoints = store.saved_waypoints(&thread).await;
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.node_id, node_id);
+        assert_eq!(record.attempt, 1);
+        assert!(record.attempts.is_empty());
+    }
+
+    /// T-25-42: which bound fired is read from the typed `TimeoutKind`
+    /// field by value -- this test never renders the error to a string and
+    /// never inspects a message.
+    #[tokio::test(start_paused = true)]
+    async fn the_fired_bound_is_read_from_the_typed_kind() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("silent"))],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node);
+        graph.set_aegis(node_id, timeout_aegis(Some(ms(10_000)), Some(ms(250))));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("typed-kind").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        let node_error = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        // Typed, by value: a `match` on the variant, not a substring search.
+        let fired: TimeoutKind = match node_error.source {
+            NodeErrorSource::Timeout(kind) => kind,
+            other => panic!("expected a Timeout source, got {other:?}"),
+        };
+        assert_eq!(fired, TimeoutKind::Idle);
+        assert_ne!(fired, TimeoutKind::Run);
+    }
+
+    // --- Plan 25-09 Task 3: the run-level bound -- EngineLimits.run_timeout
+    // enforced, nested with the per-attempt bound, and named (D-20,
+    // FT-FR-10, ENG-FR-03). ------------------------------------------------
+
+    /// A three-node chain `a -> b -> c` of `TimedFunctionNode`s each holding
+    /// `hold` and writing `out`, under `limits`.
+    fn three_step_chain(out: &FieldName, hold: Duration, limits: EngineLimits) -> WarGraph {
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, limits);
+        let ids: Vec<NodeId> = ["a", "b", "c"].into_iter().map(NodeId::new).collect();
+        for id in &ids {
+            let node = TimedFunctionNode::new(
+                out.clone(),
+                vec![(hold, serde_json::json!(id.as_str()))],
+                None,
+            );
+            graph.add_node(id.clone(), NodeSpec::Function(node));
+        }
+        for pair in ids.windows(2) {
+            graph.add_edge(EdgeSpec {
+                from: pair[0].clone(),
+                to: pair[1].clone(),
+                condition: None,
+            });
+        }
+        graph.add_entry(ids[0].clone());
+        graph
+    }
+
+    /// ENG-FR-03, D-20: a run whose total wall clock exhausts
+    /// `EngineLimits.run_timeout` at a superstep BOUNDARY ends with the
+    /// typed `EngineError::RunTimeoutExceeded`, and writes the SAME kind of
+    /// `Failed` Waypoint `NodeVisitLimitExceeded`/`RecursionLimitExceeded`
+    /// write today: `node_error: None`, `failed_node` = the first node that
+    /// would have run next, the pending vanguard recorded verbatim.
+    ///
+    /// Shape: two 100 ms supersteps under a 200 ms budget -- superstep 2's
+    /// node completes on the SAME virtual tick the budget expires (the race
+    /// is biased toward the result, so it merges), and the top-of-loop
+    /// check then ends the run before superstep 3 starts.
+    #[tokio::test(start_paused = true)]
+    async fn engine_run_timeout_ends_the_run_with_a_typed_error() {
+        let out = field("out");
+        let graph = three_step_chain(
+            &out,
+            ms(100),
+            EngineLimits {
+                run_timeout: Some(ms(200)),
+                ..EngineLimits::default()
+            },
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("engine-run-timeout-boundary").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        let waypoint_id = match outcome {
+            RunOutcome::Failed {
+                error: EngineError::RunTimeoutExceeded { elapsed, limit },
+                waypoint: Some(waypoint_id),
+            } => {
+                assert_eq!(limit, ms(200));
+                assert!(elapsed >= limit, "elapsed {elapsed:?} >= limit {limit:?}");
+                waypoint_id
+            }
+            other => panic!("expected Failed(RunTimeoutExceeded), got {other:?}"),
+        };
+
+        let saved = store.saved_waypoints(&thread).await;
+        let failed = saved
+            .iter()
+            .find(|w| w.waypoint_id == waypoint_id)
+            .expect("the failure Waypoint was persisted");
+        match &failed.status {
+            WaypointStatus::Failed {
+                failed_node,
+                node_error,
+                ..
+            } => {
+                assert_eq!(
+                    failed_node,
+                    &NodeId::new("c"),
+                    "the first node that would run next"
+                );
+                assert!(
+                    node_error.is_none(),
+                    "a limit failure carries no NodeError, like NodeVisitLimitExceeded"
+                );
+            }
+            other => panic!("expected a Failed Waypoint, got {other:?}"),
+        }
+        assert_eq!(failed.vanguard, vec![NodeId::new("c")]);
+        assert_eq!(
+            failed.battlefield.get_raw(&out),
+            Some(&serde_json::json!("b")),
+            "superstep 2 merged before the boundary check ended the run"
+        );
+    }
+
+    /// FT-FR-10, D-20: an attempt cut MID-SUPERSTEP by the engine budget
+    /// records `Timeout(EngineRun)` -- not `Run`, not `Idle` -- on the
+    /// failure Waypoint, and the run ends `RunTimeoutExceeded` rather than
+    /// merely failing that node.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_cut_by_the_engine_bound_records_timeout_enginerun() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("never"))],
+            None,
+        );
+        let (graph, node_id) = one_function_graph_with_limits(
+            &out,
+            node.clone(),
+            EngineLimits {
+                run_timeout: Some(ms(150)),
+                ..EngineLimits::default()
+            },
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("engine-run-cuts-attempt").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        let waypoint_id = match outcome {
+            RunOutcome::Failed {
+                error: EngineError::RunTimeoutExceeded { limit, .. },
+                waypoint: Some(waypoint_id),
+            } => {
+                assert_eq!(limit, ms(150));
+                waypoint_id
+            }
+            other => panic!("expected Failed(RunTimeoutExceeded), got {other:?}"),
+        };
+
+        let saved = store.saved_waypoints(&thread).await;
+        let failed = saved
+            .iter()
+            .find(|w| w.waypoint_id == waypoint_id)
+            .expect("the failure Waypoint was persisted");
+        match &failed.status {
+            WaypointStatus::Failed {
+                failed_node,
+                node_error: Some(node_error),
+                ..
+            } => {
+                assert_eq!(failed_node, &node_id);
+                assert_eq!(node_error.node_id, node_id);
+                assert_eq!(node_error.attempt, 1);
+                assert_eq!(node_error.transience, Transience::Transient);
+                assert_eq!(
+                    node_error.source,
+                    NodeErrorSource::Timeout(TimeoutKind::EngineRun)
+                );
+            }
+            other => panic!("expected Failed with a NodeError, got {other:?}"),
+        }
+        let record = failed
+            .completed
+            .iter()
+            .find(|r| r.node_id == node_id)
+            .expect("the cut node's record is on the Waypoint");
+        assert_eq!(record.attempt, 1, "never retried: the budget is gone");
+        assert!(matches!(record.outcome, NodeOutcomeKind::Failed));
+        assert_eq!(node.observed_attempts(), vec![1]);
+    }
+
+    /// D-20: the per-attempt deadline is `min(attempt run_timeout,
+    /// remaining engine budget)` and the fired kind names whichever was
+    /// tightest -- both directions, by typed kind.
+    #[tokio::test(start_paused = true)]
+    async fn the_tightest_bound_fires() {
+        // --- (a) attempt bound 10 s, engine budget 200 ms -> EngineRun.
+        let out = field("out");
+        let slow = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("never"))],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph_with_limits(
+            &out,
+            slow,
+            EngineLimits {
+                run_timeout: Some(ms(200)),
+                ..EngineLimits::default()
+            },
+        );
+        graph.set_aegis(node_id.clone(), timeout_aegis(Some(ms(10_000)), None));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("tightest-engine").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Failed {
+                    error: EngineError::RunTimeoutExceeded { .. },
+                    ..
+                }
+            ),
+            "expected RunTimeoutExceeded, got {outcome:?}"
+        );
+        let saved = store.saved_waypoints(&thread).await;
+        let engine_kind = match &saved[0].status {
+            WaypointStatus::Failed {
+                node_error: Some(node_error),
+                ..
+            } => match node_error.source {
+                NodeErrorSource::Timeout(kind) => kind,
+                ref other => panic!("expected Timeout, got {other:?}"),
+            },
+            other => panic!("expected Failed with a NodeError, got {other:?}"),
+        };
+        assert_eq!(engine_kind, TimeoutKind::EngineRun);
+
+        // --- (b) attempt bound 200 ms, engine budget 10 s -> Run.
+        let slow = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("never"))],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph_with_limits(
+            &out,
+            slow,
+            EngineLimits {
+                run_timeout: Some(ms(10_000)),
+                ..EngineLimits::default()
+            },
+        );
+        graph.set_aegis(node_id, timeout_aegis(Some(ms(200)), None));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("tightest-attempt").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        let node_error = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        let attempt_kind = match node_error.source {
+            NodeErrorSource::Timeout(kind) => kind,
+            other => panic!("expected Timeout, got {other:?}"),
+        };
+        assert_eq!(attempt_kind, TimeoutKind::Run);
+    }
+
+    /// `EngineLimits { run_timeout: None, .. }` (the default) arms no
+    /// run-level bound: a 5 s node under the default limits completes.
+    #[tokio::test(start_paused = true)]
+    async fn no_engine_run_timeout_means_no_run_level_bound() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(5_000), serde_json::json!("eventually"))],
+            None,
+        );
+        let (graph, _) = one_function_graph(&out, node);
+        assert_eq!(graph.limits().run_timeout, None);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("no-engine-bound").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("eventually"))
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Phase 23 D-18 regression guard: `EngineLimits.run_timeout` stays
+    /// EXCLUDED from `WarGraph::fingerprint()` like every other limit, so
+    /// loosening or tightening the run budget never looks like a graph
+    /// change to `resume`'s `GraphMismatch` check.
+    #[test]
+    fn run_timeout_is_not_hashed_into_the_fingerprint() {
+        let out = field("out");
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let a = WarGraph::new(
+            s.clone(),
+            EngineLimits {
+                run_timeout: None,
+                ..EngineLimits::default()
+            },
+        );
+        let b = WarGraph::new(
+            s,
+            EngineLimits {
+                run_timeout: Some(Duration::from_secs(90)),
+                ..EngineLimits::default()
+            },
+        );
+        assert_eq!(a.fingerprint(), b.fingerprint());
+    }
+
+    /// D-20, X-03: the legacy-bridge `WarGraph`s carry NO legacy Battalion
+    /// timeout into `EngineLimits` -- `run_timeout` comes from `EngineConfig`
+    /// only -- so PRD 04 FT-FR-10's "any legacy Battalion timeout" clause is
+    /// satisfied vacuously. Asserted both behaviourally (every bridge yields
+    /// `run_timeout: None`) and as a source tripwire on `bridges.rs`.
+    #[test]
+    fn bridges_carry_no_legacy_battalion_timeout() {
+        assert_eq!(
+            WarGraph::from_formation(Vec::new()).limits().run_timeout,
+            None
+        );
+        assert_eq!(
+            WarGraph::from_phalanx(Vec::new()).limits().run_timeout,
+            None
+        );
+        let bridges_source = include_str!("bridges.rs");
+        assert!(
+            !bridges_source.contains("run_timeout"),
+            "bridges.rs must never set EngineLimits.run_timeout from a legacy Battalion timeout"
+        );
+        assert!(
+            bridges_source.contains("EngineLimits::default()"),
+            "every bridge builds its EngineLimits from the default (run_timeout: None)"
         );
     }
 }

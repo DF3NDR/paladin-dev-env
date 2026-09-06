@@ -15,6 +15,7 @@ pub mod execution_result;
 pub mod garrison;
 pub mod garrison_error;
 pub mod handoff;
+pub mod heartbeat;
 pub mod herald;
 pub mod herald_error;
 pub mod job;

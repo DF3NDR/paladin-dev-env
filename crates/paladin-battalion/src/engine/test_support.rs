@@ -24,6 +24,7 @@ use paladin_ports::output::waypoint_port::{
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use tokio_util::sync::CancellationToken;
 
+use crate::engine::heartbeat::HeartbeatHandle;
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor};
 use crate::engine::node::{NodeContext, StateNode, StateNodeError};
 
@@ -1057,6 +1058,287 @@ impl StateNode for AttemptObservingNode {
         }
         let mut delta = StateDelta::new();
         delta.set_raw(self.field.clone(), serde_json::json!("recovered"));
+        Ok(delta.into())
+    }
+}
+
+// --- Phase 25 Plan 09: heartbeat / execute_observed test doubles ------------
+
+/// A [`StateNode`] test double for plan 25-09 (D-18): on every run it
+/// records the `ctx.attempt` it observed, beats `ctx.heartbeat()`
+/// `beats_per_run` times, and fails with a `StateNodeError` until its
+/// `fail_until_attempt`-th run -- so a test can prove both that
+/// `heartbeat()` on a node with no `idle_timeout` is a harmless no-op, and
+/// that `NodeContext.attempt` really is the 1-indexed attempt number the
+/// retry loop is on.
+pub struct HeartbeatingNode {
+    fail_until_attempt: u32,
+    beats_per_run: usize,
+    field: FieldName,
+    observed_attempts: Mutex<Vec<u32>>,
+}
+
+impl HeartbeatingNode {
+    /// Construct a node that beats `beats_per_run` times per run and fails
+    /// before its `fail_until_attempt`-th run (`1` never fails).
+    pub fn new(fail_until_attempt: u32, beats_per_run: usize, field: FieldName) -> Arc<Self> {
+        Arc::new(Self {
+            fail_until_attempt,
+            beats_per_run,
+            field,
+            observed_attempts: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Every `ctx.attempt` value this node observed, in run order.
+    pub fn observed_attempts(&self) -> Vec<u32> {
+        self.observed_attempts.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for HeartbeatingNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        self.observed_attempts.lock().unwrap().push(ctx.attempt);
+        for _ in 0..self.beats_per_run {
+            ctx.heartbeat();
+        }
+        if ctx.attempt < self.fail_until_attempt {
+            return Err(StateNodeError("transient".to_string()));
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), serde_json::json!("done"));
+        Ok(delta.into())
+    }
+}
+
+/// A [`PaladinPort`] test double for plan 25-09 (D-19) that overrides
+/// `execute_observed` and counts, separately, how many times the engine
+/// invoked `execute_observed` versus `execute` directly -- the double the
+/// engine-always-calls-`execute_observed` test asserts against. Beats the
+/// supplied handle once per `execute_observed` call so a test can also see
+/// the beat reach the engine's timer.
+#[derive(Default)]
+pub struct ObservedCallRecordingPort {
+    observed_calls: AtomicUsize,
+    direct_calls: AtomicUsize,
+}
+
+impl ObservedCallRecordingPort {
+    /// Construct a port with both counters at zero.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// How many times `execute_observed` was called.
+    pub fn observed_calls(&self) -> usize {
+        self.observed_calls.load(Ordering::SeqCst)
+    }
+
+    /// How many times `execute` was called directly (never through the
+    /// `execute_observed` default body, which this double overrides).
+    pub fn direct_calls(&self) -> usize {
+        self.direct_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl PaladinPort for ObservedCallRecordingPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.direct_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(PaladinResult {
+            output: "direct".to_string(),
+            ..Default::default()
+        })
+    }
+
+    async fn execute_observed(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+        heartbeat: &HeartbeatHandle,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.observed_calls.fetch_add(1, Ordering::SeqCst);
+        heartbeat.beat();
+        Ok(PaladinResult {
+            output: "observed".to_string(),
+            ..Default::default()
+        })
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("ObservedCallRecordingPort only supports execute_observed()")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+// --- Phase 25 Plan 09 Task 2: paused-clock-friendly timeout doubles ---------
+
+/// A scriptable [`PaladinPort`] for plan 25-09's idle-vs-run tests
+/// (FT-FR-09, D-19): on every `execute_observed` call it sleeps
+/// `beat_every`, beats the handle, repeats that `beats` times, then sleeps
+/// `then_stall` WITHOUT beating, and finally returns `output`. Every sleep
+/// is a `tokio::time::sleep`, so under `#[tokio::test(start_paused = true)]`
+/// the whole schedule is driven by the virtual clock -- "beats every 100 ms
+/// for 2 s" and "beats then stalls 300 ms" are both exact, never racy.
+pub struct BeatingPaladinPort {
+    beat_every: std::time::Duration,
+    beats: usize,
+    then_stall: std::time::Duration,
+    output: String,
+    calls: AtomicUsize,
+}
+
+impl BeatingPaladinPort {
+    /// Construct a port that beats every `beat_every` for `beats` beats,
+    /// then stalls `then_stall` silently, then returns `output`.
+    pub fn new(
+        beat_every: std::time::Duration,
+        beats: usize,
+        then_stall: std::time::Duration,
+        output: impl Into<String>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            beat_every,
+            beats,
+            then_stall,
+            output: output.into(),
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    /// How many times `execute_observed` (or `execute`) has been called --
+    /// i.e. how many attempts the engine made.
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    async fn play(&self, heartbeat: Option<&HeartbeatHandle>) -> PaladinResult {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        for _ in 0..self.beats {
+            tokio::time::sleep(self.beat_every).await;
+            if let Some(heartbeat) = heartbeat {
+                heartbeat.beat();
+            }
+        }
+        tokio::time::sleep(self.then_stall).await;
+        PaladinResult {
+            output: self.output.clone(),
+            ..Default::default()
+        }
+    }
+}
+
+#[async_trait]
+impl PaladinPort for BeatingPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        Ok(self.play(None).await)
+    }
+
+    async fn execute_observed(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+        heartbeat: &HeartbeatHandle,
+    ) -> Result<PaladinResult, PaladinError> {
+        Ok(self.play(Some(heartbeat)).await)
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("BeatingPaladinPort only supports execute_observed()")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// A scriptable [`StateNode`] for plan 25-09's per-attempt timeout tests:
+/// attempt `n` holds for `attempts[n - 1].0` (the LAST entry repeats for
+/// any later attempt), optionally beating `ctx.heartbeat()` every
+/// `beat_every` while it holds, then writes `attempts[n - 1].1` to `field`.
+/// A timed-out attempt is cancelled mid-hold and never reaches its write,
+/// which is exactly what "partial work is discarded" tests observe. Every
+/// wait is a `tokio::time::sleep`, so the paused clock drives it.
+pub struct TimedFunctionNode {
+    field: FieldName,
+    attempts: Vec<(std::time::Duration, serde_json::Value)>,
+    beat_every: Option<std::time::Duration>,
+    observed_attempts: Mutex<Vec<u32>>,
+}
+
+impl TimedFunctionNode {
+    /// Construct a node scripted per attempt. `attempts` must be non-empty.
+    pub fn new(
+        field: FieldName,
+        attempts: Vec<(std::time::Duration, serde_json::Value)>,
+        beat_every: Option<std::time::Duration>,
+    ) -> Arc<Self> {
+        assert!(
+            !attempts.is_empty(),
+            "TimedFunctionNode needs at least one attempt script"
+        );
+        Arc::new(Self {
+            field,
+            attempts,
+            beat_every,
+            observed_attempts: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Every `ctx.attempt` this node observed, in run order.
+    pub fn observed_attempts(&self) -> Vec<u32> {
+        self.observed_attempts.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for TimedFunctionNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        self.observed_attempts.lock().unwrap().push(ctx.attempt);
+        let index = (ctx.attempt.max(1) as usize - 1).min(self.attempts.len() - 1);
+        let (hold, value) = &self.attempts[index];
+        match self.beat_every {
+            Some(beat_every) if !beat_every.is_zero() => {
+                let mut elapsed = std::time::Duration::ZERO;
+                while elapsed < *hold {
+                    let slice = beat_every.min(*hold - elapsed);
+                    tokio::time::sleep(slice).await;
+                    elapsed += slice;
+                    ctx.heartbeat();
+                }
+            }
+            _ => tokio::time::sleep(*hold).await,
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), value.clone());
         Ok(delta.into())
     }
 }

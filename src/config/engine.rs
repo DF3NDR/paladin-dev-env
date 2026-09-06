@@ -45,9 +45,21 @@ pub struct EngineConfig {
     /// Maximum number of times any single node may execute within one run,
     /// before `EngineError::NodeVisitLimitExceeded`. Must be `>= 1`.
     pub max_node_visits: u32,
-    /// Optional wall-clock timeout for the whole run, in seconds. `None`
-    /// means no timeout (plumbing-only this phase; Doc 04/`FT-03` owns
-    /// timeout semantics).
+    /// Optional wall-clock budget for the WHOLE run, in seconds. `None`
+    /// (the default) means no run-level bound. Env
+    /// `APP_ENGINE_RUN_TIMEOUT_SECS`.
+    ///
+    /// Enforced from Phase 25 (Doc 04 FT-FR-10, D-20; plan 25-09): converts
+    /// EXACTLY to `EngineLimits::run_timeout` via `Duration::from_secs`
+    /// (`config_seconds_convert_to_duration_exactly`), and the engine ends a
+    /// run whose total wall clock exceeds it with the typed
+    /// `EngineError::RunTimeoutExceeded` -- through the same `Failed`
+    /// Waypoint path `RecursionLimitExceeded` and `NodeVisitLimitExceeded`
+    /// take. It nests OUTSIDE every per-node `TimeoutPolicy`: an attempt's
+    /// effective deadline is `min(its run_timeout, the remaining run budget)`,
+    /// and an attempt the run budget cuts records `Timeout(EngineRun)`.
+    /// `Some(0)` is rejected by [`EngineConfig::validate`]. Like every other
+    /// `EngineLimits` field, never hashed into `WarGraph::fingerprint()`.
     pub run_timeout_secs: Option<u64>,
     /// Whether a Waypoint persistence failure fails the run (`Strict`,
     /// default; ENG-FR-11) or is logged as a warning while the run continues
@@ -323,6 +335,36 @@ mod tests {
         let config = EngineConfig::default();
         assert!(config.validate().is_ok());
         assert_eq!(config.run_timeout_secs, None);
+    }
+
+    /// Plan 25-09, D-20: `run_timeout_secs` converts to
+    /// `EngineLimits.run_timeout` EXACTLY (`Duration::from_secs`), and the
+    /// field is no longer carried without effect -- the engine now enforces
+    /// it as `EngineError::RunTimeoutExceeded`.
+    #[test]
+    fn config_seconds_convert_to_duration_exactly() {
+        let config = EngineConfig {
+            run_timeout_secs: Some(90),
+            ..EngineConfig::default()
+        };
+        config
+            .validate()
+            .expect("a positive run_timeout_secs validates");
+        let limits: EngineLimits = config.into();
+        assert_eq!(limits.run_timeout, Some(Duration::from_secs(90)));
+
+        let unset: EngineLimits = EngineConfig::default().into();
+        assert_eq!(unset.run_timeout, None);
+
+        // The rustdoc must no longer describe the field as carried-but-
+        // unenforced. The phrase is assembled at compile time so this
+        // test's own source never contains it.
+        let stale_wording = concat!("plumbing", "-", "only");
+        let source = include_str!("engine.rs");
+        assert!(
+            !source.contains(stale_wording),
+            "run_timeout_secs is enforced from plan 25-09 on; the rustdoc must say so"
+        );
     }
 
     // --- Phase 24 Plan 08: shutdown_grace_secs / graceful_shutdown (HITL-04,

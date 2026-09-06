@@ -62,7 +62,7 @@ coverage:
       - kind: unit
         ref: "crates/paladin-llm/src/http_status.rs#tests::{unmapped_statuses_become_provider_error_with_the_status_field,dedicated_statuses_keep_their_existing_variants,unknown_4xx_becomes_provider_error_not_processing_error,excerpt_is_redacted_before_it_is_bounded,multibyte_body_is_bounded_on_char_boundaries,empty_body_produces_an_empty_message_and_still_classifies}"
         status: pass
-      - kind: doc
+      - kind: other
         ref: "cargo test --doc -p paladin-llm --all-features (6 passed)"
         status: pass
     human_judgment: false

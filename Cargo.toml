@@ -297,6 +297,10 @@ path = "tests/integration/parley_resume_stress_test.rs"
 name = "e2e_compensation_chain"
 path = "tests/integration/e2e_compensation_chain_test.rs"
 
+[[test]]
+name = "aegis_retry_stress"
+path = "tests/integration/aegis_retry_stress_test.rs"
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"

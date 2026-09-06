@@ -818,6 +818,13 @@ impl WarGraph {
         // structural checks above it).
         self.validate_aegis_undeclared_nodes()?;
         self.validate_aegis_node_kind_matrix()?;
+        // --- plan 25-10, D-21: the `on_error` handler's graph/schema
+        // wiring (a `Route` target that does not exist or is a worker
+        // template, an `error_field`/`fallback_delta` field the schema does
+        // not declare, a summed `error_field`) -- structural like the
+        // undeclared-node and node-kind clauses above it, so it precedes
+        // the per-policy value checks and the registry lookups below.
+        self.validate_aegis_handler_wiring()?;
         self.validate_aegis_policy_values()?;
         self.validate_aegis_custom_registrations(registries)?;
 
@@ -1020,6 +1027,167 @@ impl WarGraph {
                     });
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Every `ErrorHandlerSpec::Route { to }` target reachable from any
+    /// declared node's RESOLVED `Aegis` (own entry or `default_aegis`),
+    /// deduplicated -- the set [`WarGraph::validate_eligible_set`] seeds
+    /// into its reachability worklist and
+    /// [`WarGraph::unschedulable_unfed_nodes`] exempts from its unfed-cycle
+    /// survivors (D-21): a node named only by a Route is a declared runtime
+    /// entry, exactly like a [`WarGraph::mark_dynamic_target`] node.
+    fn route_targets(&self) -> HashSet<NodeId> {
+        self.node_order
+            .iter()
+            .filter_map(|id| self.route_target_of(id))
+            .cloned()
+            .collect()
+    }
+
+    /// The `Route { to }` target of `id`'s RESOLVED `Aegis`, if its
+    /// `on_error` is a `Route`.
+    fn route_target_of(&self, id: &NodeId) -> Option<&NodeId> {
+        match self.aegis_for(id).and_then(|a| a.on_error.as_ref()) {
+            Some(ErrorHandlerSpec::Route { to, .. }) => Some(to),
+            _ => None,
+        }
+    }
+
+    /// D-21's handler-wiring clause (plan 25-10, FT-FR-11/12, T-25-46,
+    /// T-25-49): for every node's RESOLVED `Aegis` (own entry or
+    /// `default_aegis`) carrying an `on_error` handler --
+    ///
+    /// - `Route { to, .. }`: `to` must be a declared node
+    ///   ([`EngineError::RouteTargetUnknown`]) and must not be a worker
+    ///   template ([`EngineError::RouteTargetIsWorkerTemplate`] -- a worker
+    ///   template runs only as a Muster task dispatch, so the message names
+    ///   the alternative: handle it at the aggregator);
+    /// - `Route { error_field, .. }`: `error_field` must be declared in the
+    ///   schema ([`EngineError::RouteErrorFieldUndeclared`]) with a
+    ///   dispatch other than `Sum`
+    ///   ([`EngineError::RouteErrorFieldDispatchInvalid`] -- a serialized
+    ///   `NodeError` object is not summable);
+    /// - `Absorb { fallback_delta }`: every field the delta writes must be
+    ///   declared ([`EngineError::AbsorbDeltaSchemaInvalid`]); an EMPTY
+    ///   delta is legal and passes.
+    ///
+    /// Each class collects EVERY offender (in `node_order`, ENG-FR-04, so
+    /// the message is deterministic) rather than failing on the first,
+    /// matching the CF-01 discipline every sibling clause follows; the
+    /// classes are checked shallowest-first (an undeclared target is
+    /// structural, like `UnknownNode`; a field-level fault is more
+    /// specific), so a graph with several fault classes sees one error
+    /// naming the shallowest class's full offender list. A `Custom(name)`
+    /// handler has no wiring of its own here -- its registration is
+    /// [`WarGraph::validate_aegis_custom_registrations`]'s job, and its
+    /// returned `Directive` is validated at runtime exactly as a node's own
+    /// is.
+    fn validate_aegis_handler_wiring(&self) -> Result<(), EngineError> {
+        let mut unknown_targets: Vec<String> = Vec::new();
+        let mut template_targets: Vec<String> = Vec::new();
+        let mut undeclared_fields: Vec<String> = Vec::new();
+        let mut summed_fields: Vec<String> = Vec::new();
+        let mut absorb_fields: Vec<String> = Vec::new();
+        for id in &self.node_order {
+            let Some(on_error) = self.aegis_for(id).and_then(|a| a.on_error.as_ref()) else {
+                continue;
+            };
+            match on_error {
+                ErrorHandlerSpec::Route { to, error_field } => {
+                    if !self.nodes.contains_key(to) {
+                        unknown_targets.push(format!("{id}: Route target `{to}` is not declared"));
+                    } else if self.is_worker_template(to) {
+                        template_targets
+                            .push(format!("{id}: Route target `{to}` is a worker template"));
+                    }
+                    match self.schema.field_spec(error_field) {
+                        None => undeclared_fields.push(format!(
+                            "{id}: error_field `{error_field}` is not declared in the schema"
+                        )),
+                        Some(spec) if matches!(spec.dispatch, DispatchRule::Sum) => summed_fields
+                            .push(format!(
+                                "{id}: error_field `{error_field}` is declared with \
+                                 DispatchRule::Sum"
+                            )),
+                        Some(_) => {}
+                    }
+                }
+                ErrorHandlerSpec::Absorb { fallback_delta } => {
+                    let mut fields: Vec<&FieldName> = fallback_delta
+                        .values
+                        .keys()
+                        .filter(|field| self.schema.field_spec(field).is_none())
+                        .collect();
+                    // `StateDelta.values` is a `HashMap`: sort so the
+                    // offender list is deterministic (ENG-FR-04).
+                    fields.sort();
+                    for field in fields {
+                        absorb_fields.push(format!(
+                            "{id}: fallback_delta writes undeclared field `{field}`"
+                        ));
+                    }
+                }
+                // A `Custom` handler resolves through the registry clause;
+                // `#[non_exhaustive]` on the spec enum requires the arm.
+                _ => {}
+            }
+        }
+
+        if !unknown_targets.is_empty() {
+            return Err(EngineError::RouteTargetUnknown {
+                reason: format!(
+                    "Route {{ to }} must name a declared node: {} -- add the recovery node with \
+                     WarGraph::add_node, or fix the target name",
+                    unknown_targets.join("; ")
+                ),
+                offenders: unknown_targets,
+            });
+        }
+        if !template_targets.is_empty() {
+            return Err(EngineError::RouteTargetIsWorkerTemplate {
+                reason: format!(
+                    "Route {{ to }} must not name a worker template: {} -- a worker template runs \
+                     only as a NextStep::Muster task dispatch, never as a routing target; handle \
+                     the failure at the aggregator node instead (or Absorb it on the template so \
+                     its fallback delta becomes that task's contribution)",
+                    template_targets.join("; ")
+                ),
+                offenders: template_targets,
+            });
+        }
+        if !undeclared_fields.is_empty() {
+            return Err(EngineError::RouteErrorFieldUndeclared {
+                reason: format!(
+                    "Route {{ error_field }} must name a field declared in the BattlefieldSchema: \
+                     {} -- the serialized NodeError is written there as an ordinary delta, which \
+                     the merge would otherwise reject as an unknown field",
+                    undeclared_fields.join("; ")
+                ),
+                offenders: undeclared_fields,
+            });
+        }
+        if !summed_fields.is_empty() {
+            return Err(EngineError::RouteErrorFieldDispatchInvalid {
+                reason: format!(
+                    "Route {{ error_field }} must not name a DispatchRule::Sum field: {} -- the \
+                     value written there is a serialized NodeError JSON object, and an object \
+                     cannot be summed; declare the field with LastWrite (or any non-Sum dispatch)",
+                    summed_fields.join("; ")
+                ),
+                offenders: summed_fields,
+            });
+        }
+        if !absorb_fields.is_empty() {
+            return Err(EngineError::AbsorbDeltaSchemaInvalid {
+                reason: format!(
+                    "Absorb {{ fallback_delta }} must write only fields declared in the \
+                     BattlefieldSchema: {} -- an empty fallback_delta is legal and merges nothing",
+                    absorb_fields.join("; ")
+                ),
+                offenders: absorb_fields,
+            });
         }
         Ok(())
     }
@@ -1395,15 +1563,15 @@ impl WarGraph {
         // D-12) are reachable only via dynamic fan-out (`NextStep::Muster`),
         // never a static edge, so they are seeded exactly like a
         // `dynamic_target` -- the SAME worklist this function's rustdoc
-        // already named as the unfilled seam for exactly this concept. One
-        // more future source of eligibility plugs into this same worklist:
-        // nodes named as `Route { to }` targets in an eligible node's Aegis
-        // `on_error` policy (Phase 25 / CF-FR handler routing) -- which is
-        // why this is a fixed point rather than a single pass: a route
-        // target discovered late can itself carry outgoing edges that need
-        // re-expanding. That concept does not exist in this tree yet;
-        // nothing is fabricated here to stand in for it -- it remains an
-        // insertion point, not a stub.
+        // already named as the unfilled seam for exactly this concept. The
+        // fourth source of eligibility (plan 25-10, D-21) plugs into this
+        // same worklist at its documented insertion point: a node named as
+        // the `Route { to }` target of an ELIGIBLE node's resolved Aegis
+        // `on_error` policy becomes eligible the moment that node does --
+        // which is why this is a fixed point rather than a single pass: a
+        // route target discovered late can itself carry outgoing edges
+        // that need re-expanding. No `mark_dynamic_target` call is needed
+        // for a recovery node reachable only by routing.
         let mut eligible: HashSet<NodeId> = HashSet::new();
         let mut worklist: Vec<NodeId> = Vec::new();
         for id in self
@@ -1421,6 +1589,14 @@ impl WarGraph {
                 if edge.from == current && eligible.insert(edge.to.clone()) {
                     worklist.push(edge.to.clone());
                 }
+            }
+            // --- plan 25-10, D-21: the eligible node's own Route target
+            // (aegis sidecar, resolved through `aegis_for`) joins the
+            // worklist exactly like a static successor would.
+            if let Some(target) = self.route_target_of(&current)
+                && eligible.insert(target.clone())
+            {
+                worklist.push(target.clone());
             }
         }
 
@@ -1473,10 +1649,12 @@ impl WarGraph {
     /// survivors after the fixpoint converges: a dynamic target is the
     /// declared runtime-entry escape hatch (ENG-FR-02a / BUG-02) and is
     /// exempt from this check for the same reason it is exempt from the
-    /// eligible-set check -- ENG-FR-02a's future worker-template (Phase 23)
-    /// and Route-target (Phase 25) exemptions join this same exclusion list
-    /// when those features land; nothing is fabricated here to stand in for
-    /// either.
+    /// eligible-set check. A `Route { to }` target of any node's resolved
+    /// Aegis (plan 25-10, D-21) is on the same exclusion list for the same
+    /// reason: the failed node's handler admits it directly into the next
+    /// Vanguard. (A worker template never has an incoming edge at all --
+    /// `validate_worker_templates` rejects one -- so it never enters
+    /// `unfed` and needs no exemption here.)
     ///
     /// Returns the survivors in `self.node_order` order (ENG-FR-04,
     /// deterministic, never `HashMap`/`HashSet` order).
@@ -1511,9 +1689,18 @@ impl WarGraph {
             }
         }
 
+        // --- plan 25-10, D-21: a `Route { to }` target joins the same
+        // exclusion list a `dynamic_target` is on -- it is a declared
+        // runtime entry the failed node's handler admits directly into the
+        // next Vanguard, so a component fed only through it is schedulable.
+        let route_targets = self.route_targets();
         self.node_order
             .iter()
-            .filter(|id| unfed.contains(*id) && !self.dynamic_targets.contains(*id))
+            .filter(|id| {
+                unfed.contains(*id)
+                    && !self.dynamic_targets.contains(*id)
+                    && !route_targets.contains(*id)
+            })
             .cloned()
             .collect()
     }
@@ -5368,7 +5555,10 @@ mod tests {
     fn absorb_aegis(fields: &[&str]) -> Aegis {
         let mut delta = paladin_core::platform::container::battlefield::StateDelta::new();
         for name in fields {
-            delta.set_raw(FieldName::new(*name).unwrap(), serde_json::json!("fallback"));
+            delta.set_raw(
+                FieldName::new(*name).unwrap(),
+                serde_json::json!("fallback"),
+            );
         }
         Aegis {
             on_error: Some(ErrorHandlerSpec::Absorb {
@@ -5383,7 +5573,10 @@ mod tests {
     /// target-kind tests below isolate ONE fault each.
     fn book_cancel_graph() -> WarGraph {
         let mut graph = WarGraph::new(handler_schema(), EngineLimits::default());
-        graph.add_node(NodeId::new("book"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("book"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
         graph.add_node(
             NodeId::new("cancel"),
             NodeSpec::Function(StdArc::new(NoopNode)),
@@ -5411,9 +5604,18 @@ mod tests {
         match err {
             EngineError::RouteErrorFieldUndeclared { offenders, reason } => {
                 assert_eq!(offenders.len(), 1, "exactly one offender: {offenders:?}");
-                assert!(offenders[0].contains("book"), "names the node: {offenders:?}");
-                assert!(offenders[0].contains("nope"), "names the field: {offenders:?}");
-                assert!(reason.contains("nope"), "the reason names the field: {reason}");
+                assert!(
+                    offenders[0].contains("book"),
+                    "names the node: {offenders:?}"
+                );
+                assert!(
+                    offenders[0].contains("nope"),
+                    "names the field: {offenders:?}"
+                );
+                assert!(
+                    reason.contains("nope"),
+                    "the reason names the field: {reason}"
+                );
             }
             other => panic!("expected RouteErrorFieldUndeclared, got {other:?}"),
         }
@@ -5429,7 +5631,10 @@ mod tests {
         match err {
             EngineError::RouteErrorFieldDispatchInvalid { offenders, reason } => {
                 assert_eq!(offenders.len(), 1, "exactly one offender: {offenders:?}");
-                assert!(offenders[0].contains("total"), "names the field: {offenders:?}");
+                assert!(
+                    offenders[0].contains("total"),
+                    "names the field: {offenders:?}"
+                );
                 let text = format!("{reason} {}", offenders.join(" "));
                 assert!(
                     text.contains("summed") || text.contains("Sum"),
@@ -5451,8 +5656,14 @@ mod tests {
         match err {
             EngineError::RouteTargetUnknown { offenders, reason } => {
                 assert_eq!(offenders.len(), 1, "exactly one offender: {offenders:?}");
-                assert!(offenders[0].contains("ghost"), "names the target: {offenders:?}");
-                assert!(reason.contains("ghost"), "the reason names the target: {reason}");
+                assert!(
+                    offenders[0].contains("ghost"),
+                    "names the target: {offenders:?}"
+                );
+                assert!(
+                    reason.contains("ghost"),
+                    "the reason names the target: {reason}"
+                );
             }
             other => panic!("expected RouteTargetUnknown, got {other:?}"),
         }
@@ -5472,7 +5683,10 @@ mod tests {
         match err {
             EngineError::RouteTargetIsWorkerTemplate { offenders, reason } => {
                 assert_eq!(offenders.len(), 1, "exactly one offender: {offenders:?}");
-                assert!(offenders[0].contains("worker"), "names the target: {offenders:?}");
+                assert!(
+                    offenders[0].contains("worker"),
+                    "names the target: {offenders:?}"
+                );
                 assert!(
                     reason.contains("aggregator"),
                     "the message names the alternative (route at the aggregator): {reason}"
@@ -5490,7 +5704,10 @@ mod tests {
         // `validate_eligible_set`'s documented insertion point, so this
         // validates cleanly with no extra marker call.
         let mut graph = WarGraph::new(handler_schema(), EngineLimits::default());
-        graph.add_node(NodeId::new("book"), NodeSpec::Function(StdArc::new(NoopNode)));
+        graph.add_node(
+            NodeId::new("book"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
         graph.add_node(
             NodeId::new("recovery"),
             NodeSpec::Function(StdArc::new(NoopNode)),
@@ -5512,7 +5729,10 @@ mod tests {
         // And the same shape WITHOUT the Route is still the stranded-node
         // rejection -- proving the Route seeding is what made it eligible.
         let mut stranded = WarGraph::new(handler_schema(), EngineLimits::default());
-        stranded.add_node(NodeId::new("book"), NodeSpec::Function(StdArc::new(NoopNode)));
+        stranded.add_node(
+            NodeId::new("book"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
         stranded.add_node(
             NodeId::new("recovery"),
             NodeSpec::Function(StdArc::new(NoopNode)),
@@ -5560,9 +5780,18 @@ mod tests {
         match err {
             EngineError::AbsorbDeltaSchemaInvalid { offenders, reason } => {
                 assert_eq!(offenders.len(), 1, "exactly one offender: {offenders:?}");
-                assert!(offenders[0].contains("book"), "names the node: {offenders:?}");
-                assert!(offenders[0].contains("nope"), "names the field: {offenders:?}");
-                assert!(reason.contains("nope"), "the reason names the field: {reason}");
+                assert!(
+                    offenders[0].contains("book"),
+                    "names the node: {offenders:?}"
+                );
+                assert!(
+                    offenders[0].contains("nope"),
+                    "names the field: {offenders:?}"
+                );
+                assert!(
+                    reason.contains("nope"),
+                    "the reason names the field: {reason}"
+                );
             }
             other => panic!("expected AbsorbDeltaSchemaInvalid, got {other:?}"),
         }

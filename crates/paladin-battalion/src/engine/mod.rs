@@ -1038,6 +1038,81 @@ pub enum EngineError {
         /// Why the policy was rejected.
         reason: String,
     },
+
+    /// `WarGraph::validate` found one or more `ErrorHandlerSpec::Route { to }`
+    /// values (D-21, plan 25-10, FT-FR-11) reachable from any node's
+    /// resolved `Aegis` whose `to` is not a declared node. Checked before
+    /// any node executes -- a Route never silently drops its target at
+    /// runtime. Carries EVERY offending (node, target) pairing, pre-formatted,
+    /// mirroring [`EngineError::AegisUnsupportedForNodeKind`]'s discipline.
+    #[error("route target undeclared: {reason}")]
+    RouteTargetUnknown {
+        /// Every offending node/target pairing, pre-formatted.
+        offenders: Vec<String>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found one or more `ErrorHandlerSpec::Route { to }`
+    /// values (D-21, D-22, plan 25-10) whose `to` is a worker template
+    /// (`WarGraph::add_worker_template`). A worker template runs only as a
+    /// `NextStep::Muster` task dispatch, never as an ordinary vanguard
+    /// entry, so it can never be a routing target -- the message names the
+    /// alternative (handle the failure at the aggregator, or `Absorb` it on
+    /// the template). Carries EVERY offending pairing, pre-formatted.
+    #[error("route target is a worker template: {reason}")]
+    RouteTargetIsWorkerTemplate {
+        /// Every offending node/target pairing, pre-formatted.
+        offenders: Vec<String>,
+        /// Explains the rule, names the offenders and the alternative.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found one or more
+    /// `ErrorHandlerSpec::Route { error_field }` values (D-21, plan 25-10)
+    /// naming a field the `BattlefieldSchema` does not declare. The
+    /// serialized `NodeError` is written into `error_field` as an ordinary
+    /// delta, and `Battlefield::merge` would reject an undeclared field at
+    /// runtime -- this clause rejects it before any node executes instead.
+    /// Carries EVERY offending (node, field) pairing, pre-formatted.
+    #[error("route error_field undeclared: {reason}")]
+    RouteErrorFieldUndeclared {
+        /// Every offending node/field pairing, pre-formatted.
+        offenders: Vec<String>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found one or more
+    /// `ErrorHandlerSpec::Route { error_field }` values (D-21, plan 25-10,
+    /// T-25-46) naming a declared field whose `DispatchRule` is `Sum`. The
+    /// value written there is a serialized `NodeError` JSON object, and an
+    /// object cannot be summed -- the merge would fail with `TypeMismatch`
+    /// at the worst possible moment (after the node has already failed).
+    /// Declare the field with any other dispatch (`LastWrite` is the usual
+    /// choice). Carries EVERY offending (node, field) pairing, pre-formatted.
+    #[error("route error_field dispatch invalid: {reason}")]
+    RouteErrorFieldDispatchInvalid {
+        /// Every offending node/field pairing, pre-formatted.
+        offenders: Vec<String>,
+        /// Explains why a serialized error object is not summable and
+        /// names the offenders.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found one or more
+    /// `ErrorHandlerSpec::Absorb { fallback_delta }` values (D-21, plan
+    /// 25-10, FT-FR-12) whose delta writes a field the `BattlefieldSchema`
+    /// does not declare. An EMPTY `fallback_delta` is legal (it merges
+    /// nothing); only undeclared fields are rejected. Carries EVERY
+    /// offending (node, field) pairing, pre-formatted.
+    #[error("absorb fallback_delta invalid: {reason}")]
+    AbsorbDeltaSchemaInvalid {
+        /// Every offending node/field pairing, pre-formatted.
+        offenders: Vec<String>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.

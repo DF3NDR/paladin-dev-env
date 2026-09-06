@@ -479,7 +479,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 25-10-PLAN.md — Typed error handlers: Route/Absorb/Custom validation and dispatch, max_node_visits loop bound
+- [x] 25-10-PLAN.md — Typed error handlers: Route/Absorb/Custom validation and dispatch, max_node_visits loop bound
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

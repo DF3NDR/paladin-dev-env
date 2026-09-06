@@ -1113,6 +1113,53 @@ pub enum EngineError {
         /// Explains the rule and names the offenders.
         reason: String,
     },
+
+    /// `WarGraph::validate` found one or more worker templates
+    /// (`WarGraph::add_worker_template`) whose resolved `Aegis.on_error` is
+    /// `ErrorHandlerSpec::Route` (D-22, plan 25-11). A worker template runs
+    /// only as a `NextStep::Muster` task dispatch, and a mustered task's
+    /// result is exactly ONE contribution to its Muster's aggregation --
+    /// routing out of a single task would leave that aggregation with an
+    /// undefined shape (what does the aggregator read for the routed slot?),
+    /// so the case is rejected rather than guessed. Only `Absorb` and a
+    /// delta-only `Custom` handler are permitted on a template; the message
+    /// names the alternative -- handle the failure at the aggregator node.
+    /// Carries EVERY offending template, pre-formatted.
+    #[error("handler not allowed on worker template: {reason}")]
+    HandlerNotAllowedOnWorkerTemplate {
+        /// Every offending template/handler pairing, pre-formatted.
+        offenders: Vec<String>,
+        /// Explains the rule, names the offenders and the alternative.
+        reason: String,
+    },
+
+    /// An `ErrorHandlerSpec::Custom` handler dispatched for a FAILED mustered
+    /// task (D-22, plan 25-11) returned a `Directive` whose `NextStep` is not
+    /// `Edges`. Inside a Muster a handler may only contribute a delta -- that
+    /// delta becomes the task's contribution to the aggregation, in the same
+    /// shape a successful task contributes -- because `Goto`, `End`,
+    /// `Parley` and `Muster` all change control flow for the WHOLE run from
+    /// inside one of many concurrent tasks, and the aggregation's semantics
+    /// for that are undefined. Whether a handler is delta-only is a runtime
+    /// property, so unlike a `Route` (rejected at validation) this surfaces
+    /// when the handler actually runs; both `node` and `task_key` are named
+    /// so the failing task is identifiable in a wide fan-out. Handle the
+    /// failure at the aggregator node instead.
+    #[error(
+        "muster handler must be delta-only: worker template `{node}` task `{task_key}` handler \
+         returned NextStep::{returned}; inside a Muster a handler may only return \
+         NextStep::Edges (its delta becomes the task's contribution to the aggregation) -- \
+         handle the failure at the aggregator node instead"
+    )]
+    MusterHandlerMustBeDeltaOnly {
+        /// The worker template whose task failed.
+        node: NodeId,
+        /// The `task_key` of the failed mustered task.
+        task_key: String,
+        /// The offending `NextStep` arm's name (`Goto`, `End`, `Parley` or
+        /// `Muster`).
+        returned: String,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.

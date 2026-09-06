@@ -475,7 +475,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 25-09-PLAN.md — Timeouts: HeartbeatHandle, defaulted PaladinPort::execute_observed, run/idle/EngineRun nesting, RunTimeoutExceeded
+- [x] 25-09-PLAN.md — Timeouts: HeartbeatHandle, defaulted PaladinPort::execute_observed, run/idle/EngineRun nesting, RunTimeoutExceeded
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

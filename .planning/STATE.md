@@ -5,10 +5,10 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 25
 current_phase_name: Node-Level Fault Tolerance
 status: executing
-stopped_at: Phase 25 wave 4 complete — 25-08 merged; wave 5 (25-09) next
-last_updated: "2026-09-05T23:24:25.000Z"
+stopped_at: Phase 25 wave 5 complete — 25-09 merged; wave 6 (25-10) next
+last_updated: "2026-09-06T00:23:02.000Z"
 last_activity: 2026-09-05
-last_activity_desc: Phase 25 wave 4 complete (25-08 merged)
+last_activity_desc: Phase 25 wave 5 complete (25-09 merged)
 progress:
   total_phases: 5
   completed_phases: 4
@@ -52,9 +52,9 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 25 (Node-Level Fault Tolerance) — EXECUTING
-Plan: 9 of 14
+Plan: 10 of 14
 Status: Executing Phase 25
-Last activity: 2026-09-05 — Phase 25 wave 4 complete (8/14 plans merged)
+Last activity: 2026-09-06 — Phase 25 wave 5 complete (9/14 plans merged)
 
 ## Performance Metrics
 

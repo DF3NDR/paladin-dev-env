@@ -12,10 +12,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
-use paladin_core::platform::container::directive::Directive;
+use paladin_core::platform::container::directive::{Directive, NextStep};
 use paladin_core::platform::container::node_error::NodeError;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::parley::ParleyRequest;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink, TraceSinkError};
@@ -1494,5 +1495,100 @@ impl ErrorHandler for RecordingErrorHandler {
         self.invocations.fetch_add(1, Ordering::SeqCst);
         self.seen.lock().unwrap().push((err.clone(), state.clone()));
         (self.reply)(err, state)
+    }
+}
+
+// --- Phase 25 Plan 11: handler-raised Parley doubles (D-23) ---------------
+
+impl RecordingErrorHandler {
+    /// Convenience: a handler that always asks a human -- replies
+    /// `NextStep::Parley(request)` with an empty delta, the scripted
+    /// `ParleyRequest` cloned verbatim on every invocation (the engine
+    /// re-stamps `node_id` from the failed node regardless, HITL-01).
+    pub fn parleying(request: ParleyRequest) -> Arc<Self> {
+        Self::new(move |_err, _state| {
+            Ok(Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Parley(request.clone()),
+            })
+        })
+    }
+}
+
+/// A [`StateNode`] test double for the handler-raised Parley tests (D-23):
+/// fails with `StateNodeError(message)` on every run whose
+/// `ctx.parley_response()` is `None` -- the raising visit and every retry
+/// attempt of it -- and, unless constructed `always_failing`, succeeds on
+/// the post-resume visit by writing the delivered response value to
+/// `field`. Records `(ctx.attempt, parley_response value)` for EVERY run,
+/// so a test can assert the post-resume re-run is a fresh attempt 1 with
+/// the answer in scope (Phase 24 D-07/D-08) and that a suspension spent no
+/// retry budget (FT-FR-05).
+pub struct ParleyObservingNode {
+    field: FieldName,
+    message: String,
+    always_failing: bool,
+    runs: Mutex<Vec<(u32, Option<serde_json::Value>)>>,
+}
+
+impl ParleyObservingNode {
+    /// Construct a node that fails until answered, then writes the answer
+    /// to `field`.
+    pub fn new(field: FieldName, message: impl Into<String>) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            message: message.into(),
+            always_failing: false,
+            runs: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Construct a node that fails on EVERY run, answered or not -- so a
+    /// post-resume re-run exhausts its retry budget again and reaches its
+    /// handler a second time.
+    pub fn always_failing(field: FieldName, message: impl Into<String>) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            message: message.into(),
+            always_failing: true,
+            runs: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Every run so far as `(attempt, parley_response value)`, in run
+    /// order.
+    pub fn runs(&self) -> Vec<(u32, Option<serde_json::Value>)> {
+        self.runs.lock().unwrap().clone()
+    }
+
+    /// The `ctx.attempt` of every run so far, in run order.
+    pub fn observed_attempts(&self) -> Vec<u32> {
+        self.runs()
+            .into_iter()
+            .map(|(attempt, _)| attempt)
+            .collect()
+    }
+}
+
+#[async_trait]
+impl StateNode for ParleyObservingNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        let answer = ctx.parley_response().map(|r| r.value.clone());
+        self.runs
+            .lock()
+            .unwrap()
+            .push((ctx.attempt, answer.clone()));
+        match answer {
+            Some(value) if !self.always_failing => {
+                let mut delta = StateDelta::new();
+                delta.set_raw(self.field.clone(), value);
+                Ok(delta.into())
+            }
+            _ => Err(StateNodeError(self.message.clone())),
+        }
     }
 }

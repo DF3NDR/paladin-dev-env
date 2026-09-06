@@ -507,7 +507,16 @@ impl NodeFailure {
 ///   `registries.error_handlers` (D-13, FT-FR-13) is `await`ed with
 ///   `(err, state)` and its `Directive` returned verbatim -- `Edges`,
 ///   `Goto`, `End`, `Parley` and `Muster` are all honoured by the caller
-///   exactly as a node's own `NextStep` is. `WarGraph::validate` already
+///   exactly as a node's own `NextStep` is. In particular a handler may ask
+///   a human (D-23, plan 25-11): `Parley` takes the ONE existing HITL-01
+///   suspension path a node-raised parley takes -- one `AwaitingInput`
+///   Waypoint, `RunOutcome::AwaitingInput` -- and the post-resume re-run
+///   is a fresh attempt 1 with `ctx.parley_response()` set (Phase 24
+///   D-07/D-08), having spent no retry budget (a parley is not an attempt
+///   failure). Inside a Muster task only `Edges` is honoured (D-22): the
+///   caller rejects anything else as `MusterHandlerMustBeDeltaOnly`, so a
+///   handler-raised parley never suspends from inside a fan-out.
+///   `WarGraph::validate` already
 ///   rejected an unregistered name before any node ran (plan 25-03), so a
 ///   miss here is unreachable in practice; library code must still not
 ///   panic on an invariant it cannot enforce, so it re-fails with the
@@ -12408,5 +12417,396 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    // --- Plan 25-11 Task 2: a Custom handler may Parley (D-23) -------------
+
+    use crate::engine::WarEngine;
+    use crate::engine::test_support::ParleyObservingNode;
+    use paladin_core::platform::container::parley::ParleyResponse;
+
+    /// The scripted request the `ask-human` handler raises: `node_id` is
+    /// deliberately left blank to prove the engine re-stamps it from the
+    /// failed node (HITL-01), exactly as for a node-raised parley.
+    fn approval_request(parley_id: ParleyId) -> ParleyRequest {
+        ParleyRequest {
+            parley_id,
+            node_id: NodeId::new(""),
+            kind: ParleyKind::Approval,
+            prompt: "payment failed -- approve a manual retry?".to_string(),
+            payload: serde_json::json!({ "amount": 42 }),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
+        }
+    }
+
+    fn approval(parley_id: ParleyId, value: serde_json::Value) -> ParleyResponse {
+        ParleyResponse {
+            parley_id,
+            kind: ParleyKind::Approval,
+            prompt: String::new(),
+            value,
+            responded_by: Some("tester".to_string()),
+            responded_at: Utc::now(),
+            defaulted: false,
+        }
+    }
+
+    /// `payment` (a [`ParleyObservingNode`], entry, `aegis` with
+    /// `Custom("ask-human")`) beside `peer` (entry, writes `peer_field =
+    /// "ran"`), over `result`/`peer_field` (`LastWrite`).
+    fn payment_graph(
+        payment_node: Arc<ParleyObservingNode>,
+        aegis: Aegis,
+    ) -> (WarGraph, NodeId, NodeId) {
+        let s = schema(vec![
+            FieldSpec::new(field("result"), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(field("peer_field"), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let payment = NodeId::new("payment");
+        let peer = NodeId::new("peer");
+        graph.add_node(payment.clone(), NodeSpec::Function(payment_node));
+        graph.add_node(
+            peer.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("peer_field"),
+                serde_json::json!("ran"),
+            )),
+        );
+        graph.add_entry(payment.clone());
+        graph.add_entry(peer.clone());
+        graph.set_aegis(payment.clone(), aegis);
+        (graph, payment, peer)
+    }
+
+    /// A real `WarEngine` over `store` with the `ask-human` handler
+    /// registered -- the tests below need `resume_with`, which only the
+    /// engine exposes.
+    fn parley_engine(
+        store: Arc<RecordingWaypointStore>,
+        handler: Arc<RecordingErrorHandler>,
+    ) -> WarEngine<RecordingWaypointStore> {
+        WarEngine::new(no_paladin_port(), store).with_error_handler("ask-human", handler)
+    }
+
+    fn custom_aegis_with_retry(name: &str, max_attempts: u32) -> Aegis {
+        Aegis {
+            on_error: Some(ErrorHandlerSpec::Custom(name.to_string())),
+            ..retrying_aegis(max_attempts)
+        }
+    }
+
+    /// D-23, T-25-54: a handler returning `NextStep::Parley` suspends the
+    /// run through the EXISTING HITL-01 path -- `RunOutcome::AwaitingInput`
+    /// carrying the handler's request (re-stamped with the failed node's
+    /// id), exactly one persisted `AwaitingInput` Waypoint for the
+    /// superstep whose `vanguard` is exactly the failed node, and the
+    /// node's record reading `Failed` (it DID fail; the handler asked).
+    #[tokio::test]
+    async fn a_handler_raised_parley_suspends_the_run() {
+        let parley_id = ParleyId::new();
+        let node = ParleyObservingNode::new(field("result"), "card declined");
+        let (graph, payment, _peer) = payment_graph(node.clone(), custom_aegis("ask-human"));
+        let handler = RecordingErrorHandler::parleying(approval_request(parley_id));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = parley_engine(store.clone(), handler.clone());
+        let thread = ThreadId::new("handler-parley-suspends").unwrap();
+
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .expect("start suspends, never errors");
+
+        match &outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                assert_eq!(parleys[0].parley_id, parley_id, "the handler's own request");
+                assert_eq!(
+                    parleys[0].node_id, payment,
+                    "re-stamped with the failed node"
+                );
+                assert_eq!(
+                    parleys[0].prompt,
+                    "payment failed -- approve a manual retry?"
+                );
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+        assert_eq!(handler.invocation_count(), 1);
+        assert_eq!(
+            node.runs().len(),
+            1,
+            "no retry policy: one attempt raised the parley"
+        );
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        let awaiting: Vec<&Waypoint> = waypoints
+            .iter()
+            .filter(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. }))
+            .collect();
+        assert_eq!(
+            awaiting.len(),
+            1,
+            "exactly one AwaitingInput Waypoint is persisted"
+        );
+        match &awaiting[0].status {
+            WaypointStatus::AwaitingInput { parleys, responses } => {
+                assert_eq!(parleys.len(), 1);
+                assert_eq!(parleys[0].parley_id, parley_id);
+                assert_eq!(parleys[0].node_id, payment);
+                assert!(responses.is_empty());
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+        assert_eq!(
+            awaiting[0].vanguard,
+            vec![payment.clone()],
+            "the persisted vanguard is exactly the parleying node (D-02)"
+        );
+        let record = awaiting[0]
+            .completed
+            .iter()
+            .find(|r| r.node_id == payment)
+            .expect("payment's record");
+        assert_eq!(
+            record.outcome,
+            NodeOutcomeKind::Failed,
+            "a handler-compensated failure records the failure it was (D-21)"
+        );
+    }
+
+    /// D-23 + Phase 24 D-07/D-08: after `resume_with`, the failed node
+    /// re-runs as a FRESH attempt 1 with `ctx.parley_response()` carrying
+    /// the submitted value, and the run completes with that value written.
+    #[tokio::test]
+    async fn the_post_resume_rerun_is_a_fresh_attempt_one() {
+        let parley_id = ParleyId::new();
+        let node = ParleyObservingNode::new(field("result"), "card declined");
+        let (graph, _payment, _peer) =
+            payment_graph(node.clone(), custom_aegis_with_retry("ask-human", 3));
+        let handler = RecordingErrorHandler::parleying(approval_request(parley_id));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = parley_engine(store.clone(), handler.clone());
+        let thread = ThreadId::new("handler-parley-fresh-attempt").unwrap();
+
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .expect("start suspends");
+        assert!(matches!(suspended, RunOutcome::AwaitingInput { .. }));
+        assert_eq!(
+            node.observed_attempts(),
+            vec![1, 2, 3],
+            "the retry budget was spent BEFORE the handler asked"
+        );
+
+        let resumed = engine
+            .resume_with(
+                &graph,
+                thread.clone(),
+                vec![approval(parley_id, serde_json::json!(true))],
+            )
+            .await
+            .expect("resume completes the run");
+        let final_state = completed_state(resumed);
+
+        let runs = node.runs();
+        assert_eq!(
+            runs.len(),
+            4,
+            "three raising attempts, then ONE answered re-run"
+        );
+        assert_eq!(runs[3].0, 1, "the post-resume re-run is a fresh attempt 1");
+        assert_eq!(
+            runs[3].1,
+            Some(serde_json::json!(true)),
+            "ctx.parley_response() carries the submitted value"
+        );
+        assert!(
+            runs[..3].iter().all(|(_, answer)| answer.is_none()),
+            "no raising attempt ever saw a response"
+        );
+        assert_eq!(
+            final_state.get_raw(&field("result")),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            handler.invocation_count(),
+            1,
+            "the answered re-run succeeded"
+        );
+    }
+
+    /// D-23, T-25-55, FT-FR-05: a `Parley` is not an attempt failure. The
+    /// suspension advances no retry counter: a node that fails AGAIN after
+    /// resume has its full `max_attempts` budget, reaching the handler a
+    /// second time only after spending all of it.
+    #[tokio::test]
+    async fn a_handler_raised_parley_does_not_consume_the_retry_budget() {
+        let parley_id = ParleyId::new();
+        let node = ParleyObservingNode::always_failing(field("result"), "card declined");
+        let (graph, payment, _peer) =
+            payment_graph(node.clone(), custom_aegis_with_retry("ask-human", 3));
+        let handler = RecordingErrorHandler::parleying(approval_request(parley_id));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = parley_engine(store.clone(), handler.clone());
+        let thread = ThreadId::new("handler-parley-budget").unwrap();
+
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .expect("start suspends");
+        assert!(matches!(suspended, RunOutcome::AwaitingInput { .. }));
+        assert_eq!(node.observed_attempts(), vec![1, 2, 3]);
+
+        let resumed = engine
+            .resume_with(
+                &graph,
+                thread.clone(),
+                vec![approval(parley_id, serde_json::json!(true))],
+            )
+            .await
+            .expect("resume suspends again, never errors");
+        assert!(
+            matches!(resumed, RunOutcome::AwaitingInput { .. }),
+            "still failing: the handler asks again, got {resumed:?}"
+        );
+        assert_eq!(
+            node.observed_attempts(),
+            vec![1, 2, 3, 1, 2, 3],
+            "the post-resume run has its FULL attempt budget again"
+        );
+        assert_eq!(
+            handler.invocation_count(),
+            2,
+            "one dispatch per exhausted budget"
+        );
+
+        // The second AwaitingInput Waypoint's record shows a full budget
+        // spent this time too: attempt 3 final, two failed attempts before.
+        let waypoints = store.saved_waypoints(&thread).await;
+        let latest = &waypoints[0];
+        assert!(matches!(
+            latest.status,
+            WaypointStatus::AwaitingInput { .. }
+        ));
+        let record = latest
+            .completed
+            .iter()
+            .find(|r| r.node_id == payment)
+            .expect("payment's record");
+        assert_eq!(record.attempt, 3);
+        assert_eq!(record.attempts.len(), 2);
+    }
+
+    /// D-23: peers of the suspending superstep merge their deltas exactly as
+    /// they do for a node-raised parley -- the persisted Battlefield carries
+    /// the peer's write, the peer's record reads `Succeeded`, and the
+    /// vanguard is still exactly the parleying node.
+    #[tokio::test]
+    async fn the_suspending_supersteps_peers_merge_normally() {
+        let parley_id = ParleyId::new();
+        let node = ParleyObservingNode::new(field("result"), "card declined");
+        let (graph, payment, peer) = payment_graph(node.clone(), custom_aegis("ask-human"));
+        let handler = RecordingErrorHandler::parleying(approval_request(parley_id));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = parley_engine(store.clone(), handler.clone());
+        let thread = ThreadId::new("handler-parley-peers").unwrap();
+
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .expect("start suspends");
+        assert!(matches!(suspended, RunOutcome::AwaitingInput { .. }));
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        let awaiting = waypoints
+            .iter()
+            .find(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. }))
+            .expect("an AwaitingInput waypoint must exist");
+        assert_eq!(
+            awaiting
+                .battlefield
+                .get::<String>(&field("peer_field"))
+                .unwrap(),
+            Some("ran".to_string()),
+            "the peer's delta merges normally"
+        );
+        let peer_record = awaiting
+            .completed
+            .iter()
+            .find(|r| r.node_id == peer)
+            .expect("peer's record");
+        assert_eq!(peer_record.outcome, NodeOutcomeKind::Succeeded);
+        assert_eq!(awaiting.vanguard, vec![payment.clone()]);
+
+        // And the resumed run completes with both writes intact.
+        let resumed = engine
+            .resume_with(
+                &graph,
+                thread,
+                vec![approval(parley_id, serde_json::json!(true))],
+            )
+            .await
+            .expect("resume completes");
+        let final_state = completed_state(resumed);
+        assert_eq!(
+            final_state.get_raw(&field("peer_field")),
+            Some(&serde_json::json!("ran"))
+        );
+        assert_eq!(
+            final_state.get_raw(&field("result")),
+            Some(&serde_json::json!(true))
+        );
+    }
+
+    /// D-22 over D-23: inside a Muster the delta-only rule wins -- a
+    /// worker-template handler returning `Parley` is
+    /// `MusterHandlerMustBeDeltaOnly`, never a suspension.
+    #[tokio::test]
+    async fn a_handler_raised_parley_inside_a_muster_is_rejected() {
+        let (graph, worker, _worker_node) = failing_muster_graph(custom_aegis("ask-human"));
+        let handler = RecordingErrorHandler::parleying(approval_request(ParleyId::new()));
+        let registries = registries_with("ask-human", handler.clone());
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("worker-handler-parley").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &registries,
+        )
+        .await;
+
+        match &outcome {
+            RunOutcome::Failed {
+                error:
+                    EngineError::MusterHandlerMustBeDeltaOnly {
+                        node,
+                        task_key,
+                        returned,
+                    },
+                ..
+            } => {
+                assert_eq!(node, &worker);
+                assert_eq!(task_key, "b");
+                assert_eq!(returned, "Parley");
+            }
+            other => panic!("expected Failed(MusterHandlerMustBeDeltaOnly), got {other:?}"),
+        }
+        assert_eq!(handler.invocation_count(), 1);
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert!(
+            waypoints
+                .iter()
+                .all(|w| !matches!(w.status, WaypointStatus::AwaitingInput { .. })),
+            "a rejected handler parley never suspends"
+        );
+        assert!(matches!(waypoints[0].status, WaypointStatus::Failed { .. }));
     }
 }

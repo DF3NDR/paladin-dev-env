@@ -492,7 +492,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 25-14-PLAN.md — Fault-tolerance guide, MIGRATION §9.1-§9.7 close-out, traceability anchors, semver/MSRV/security/coverage gate evidence
+- [x] 25-14-PLAN.md — Fault-tolerance guide, MIGRATION §9.1-§9.7 close-out, traceability anchors, semver/MSRV/security/coverage gate evidence
 
 ### Phase 26: Agent Runtime Enhancements
 

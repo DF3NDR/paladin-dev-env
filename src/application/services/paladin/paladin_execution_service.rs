@@ -69,6 +69,7 @@ use crate::infrastructure::adapters::arsenal::tool_result_formatter::ToolResultF
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use log::{debug, error, info, warn};
 use paladin_battalion::llm_failure::to_paladin_error;
+use paladin_core::platform::container::transience::Transience;
 use paladin_llm::fallback::SERVED_BY_METADATA_KEY;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
@@ -1633,6 +1634,10 @@ impl PaladinExecutionService {
     ///
     /// Returns `PaladinError` if:
     /// - Circuit breaker is open
+    /// - The failure is [`Transience::Permanent`](paladin_core::platform::container::transience::Transience::Permanent)
+    ///   (e.g. a rejected credential or a malformed prompt) -- returned
+    ///   immediately on the attempt that first observes it, never retried
+    ///   (WR-02, `25-REVIEW.md`)
     /// - All retry attempts are exhausted
     /// - LLM call fails with a non-retryable error
     async fn execute_with_retry_and_temperature(
@@ -1722,6 +1727,28 @@ impl PaladinExecutionService {
                         execution_id, loop_num
                     );
                     return Err(PaladinError::CircuitBreakerOpen);
+                }
+                // WR-02 (`25-REVIEW.md`): a `Permanent` failure (e.g. a
+                // rejected credential or a malformed prompt) needs operator
+                // intervention, not a retry -- the identical request would
+                // fail identically on every subsequent attempt. Checked
+                // BEFORE the `attempt >= max_attempts` arm so it fails fast
+                // on the FIRST attempt rather than burning the full retry
+                // budget (up to 10 attempts, exponential backoff) first.
+                // Returns the underlying typed error (usually
+                // `PaladinError::LlmFailure`) rather than
+                // `MaxRetriesExceeded`, so the operator sees the real
+                // cause -- every adapter's own retry loop in this crate
+                // (`anthropic::execute_with_retry`,
+                // `deepseek::call_api_with_retry`,
+                // `compat::CompatEngine::call_api_with_retry`) already
+                // excludes its permanent-failure set for the same reason.
+                Err(e) if e.transience() == Transience::Permanent => {
+                    error!(
+                        "LLM call failed permanently, not retrying: id={}, loop={}, attempt={}, error={}",
+                        execution_id, loop_num, attempt, e
+                    );
+                    return Err(e);
                 }
                 Err(_e) if attempt >= max_attempts => {
                     // Exhausted retries
@@ -1846,6 +1873,19 @@ impl PaladinExecutionService {
                         execution_id, loop_num
                     );
                     return Err(PaladinError::CircuitBreakerOpen);
+                }
+                // WR-02 (`25-REVIEW.md`): see the identical arm in
+                // `execute_with_retry_and_temperature` for the full
+                // rationale -- a `Permanent` failure needs operator
+                // intervention, not a retry, and is checked before the
+                // `attempt >= max_attempts` arm so it fails fast on the
+                // FIRST attempt.
+                Err(e) if e.transience() == Transience::Permanent => {
+                    error!(
+                        "LLM call failed permanently, not retrying: id={}, loop={}, attempt={}, error={}",
+                        execution_id, loop_num, attempt, e
+                    );
+                    return Err(e);
                 }
                 Err(_e) if attempt >= max_attempts => {
                     // Exhausted retries
@@ -2558,6 +2598,102 @@ mod tests {
             1,
             "the breaker must reject the second attempt"
         );
+    }
+
+    /// WR-02 (`25-REVIEW.md`) regression: a `Permanent`-classified failure
+    /// (a rejected credential) must be returned immediately, on the FIRST
+    /// attempt, rather than retried up to `max_attempts` with exponential
+    /// backoff. Uses a generous breaker (threshold well above 1) so a
+    /// `CircuitBreakerOpen` on a later attempt cannot be mistaken for the
+    /// fail-fast behaviour under test -- `port.calls() == 1` is the only
+    /// way this test can pass.
+    #[tokio::test]
+    async fn permanent_failure_is_not_retried_by_buffered_retry_sites() {
+        use crate::core::platform::container::paladin::MaxLoops;
+
+        let mut paladin = create_test_paladin();
+        paladin.node.max_loops = MaxLoops::Fixed(5);
+
+        // Site: execute_with_retry_and_temperature.
+        let (port, service) = failing_service(auth_failure, FailAt::Open, default_breaker());
+        let result = service
+            .execute_with_retry_and_temperature(&paladin, "hello", 0.5, Uuid::new_v4(), 1)
+            .await;
+        match result {
+            Err(PaladinError::LlmFailure { transience, .. }) => {
+                assert_eq!(transience, Transience::Permanent);
+            }
+            other => panic!("expected Err(LlmFailure {{ Permanent }}), got {other:?}"),
+        }
+        assert_eq!(
+            port.calls(),
+            1,
+            "a Permanent failure must return on the first attempt, never retried"
+        );
+
+        // Site: execute_with_retry.
+        let (port, service) = failing_service(auth_failure, FailAt::Open, default_breaker());
+        let result = service
+            .execute_with_retry(&paladin, "hello", Uuid::new_v4(), 1)
+            .await;
+        match result {
+            Err(PaladinError::LlmFailure { transience, .. }) => {
+                assert_eq!(transience, Transience::Permanent);
+            }
+            other => panic!("expected Err(LlmFailure {{ Permanent }}), got {other:?}"),
+        }
+        assert_eq!(
+            port.calls(),
+            1,
+            "a Permanent failure must return on the first attempt, never retried"
+        );
+    }
+
+    /// WR-02 (`25-REVIEW.md`) regression, the complementary case: a
+    /// `Transient` failure (unchanged) and an `Unknown`-classified failure
+    /// (`ProcessingError`, which has no typed field to tell it apart from a
+    /// permanent one) must both still be retried up to `max_attempts`,
+    /// exactly as before this fix -- only `Permanent` short-circuits.
+    #[tokio::test(start_paused = true)]
+    async fn transient_and_unknown_failures_still_retry_until_max_attempts() {
+        use crate::core::platform::container::paladin::MaxLoops;
+
+        fn processing_error() -> LlmError {
+            LlmError::ProcessingError("transient decode noise".to_string())
+        }
+
+        let mut paladin = create_test_paladin();
+        paladin.node.max_loops = MaxLoops::Fixed(2);
+
+        for make in [provider_503, processing_error] {
+            let (port, service) = failing_service(make, FailAt::Open, default_breaker());
+            let result = service
+                .execute_with_retry_and_temperature(&paladin, "hello", 0.5, Uuid::new_v4(), 1)
+                .await;
+            assert!(
+                matches!(result, Err(PaladinError::MaxRetriesExceeded(2))),
+                "expected MaxRetriesExceeded(2), got {result:?}"
+            );
+            assert_eq!(
+                port.calls(),
+                2,
+                "both attempts must be spent before surfacing MaxRetriesExceeded"
+            );
+
+            let (port, service) = failing_service(make, FailAt::Open, default_breaker());
+            let result = service
+                .execute_with_retry(&paladin, "hello", Uuid::new_v4(), 1)
+                .await;
+            assert!(
+                matches!(result, Err(PaladinError::MaxRetriesExceeded(2))),
+                "expected MaxRetriesExceeded(2), got {result:?}"
+            );
+            assert_eq!(
+                port.calls(),
+                2,
+                "both attempts must be spent before surfacing MaxRetriesExceeded"
+            );
+        }
     }
 
     /// Plan 25-06 Test 5 (X-03, T-25-27): for a fixed `LlmError`, what each

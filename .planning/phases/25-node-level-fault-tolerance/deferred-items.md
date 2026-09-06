@@ -64,3 +64,15 @@ after wave merges so sibling worktree agents never race on this file.
   `Serialize` (removing it is a semver-major trait removal, not a close-out change). Candidate for
   a storage-crate hardening pass: a redacting `Debug` on `RedisQueueConfig`, and a decision on
   whether either config should be `Serialize` at all.
+- **`lcov.info` is a tracked file at the repository root.** It was committed by the pre-v0.8 CLI
+  unit-test commits (`5d487584`, `a2380777`) and is overwritten by every `cargo llvm-cov ...
+  --lcov --output-path lcov.info` run (`scripts/coverage.sh`, `make coverage`, CI's `coverage`
+  job), so a local coverage measurement dirties the working tree with a 5 MB artifact. 25-14
+  restored it with `git checkout -- lcov.info` after measuring rather than committing a stale
+  report. Candidate for a `chore`: `git rm --cached lcov.info` plus a `.gitignore` entry.
+- **`parley_resume_stress::stress_run_completes_within_the_timeout_guard` is wall-clock
+  sensitive.** It failed once during 25-14's first `cargo test --workspace` run (a 10 s
+  `tokio::time::timeout` guard around ten concurrent SQLite resumes, with the container's load
+  average at ~7 on 8 cores from sibling work) and passed on the standalone re-run (34/34 in
+  3.7 s) and on the full workspace re-run. Nothing in Phase 25 touches it. Candidate for a
+  Phase 24 follow-up: widen the guard or move the scenario onto a paused clock.

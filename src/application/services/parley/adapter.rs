@@ -432,7 +432,7 @@ mod tests {
     use paladin_battalion::engine::node::{NodeContext, StateNode, StateNodeError};
     use paladin_battalion::engine::{EngineLimits, NodeSpec, WaypointDurability};
     use paladin_core::platform::container::battlefield::{
-        Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
+        Battlefield, BattlefieldSchema, CacheMarker, DispatchRule, FieldName, FieldSpec,
     };
     use paladin_core::platform::container::directive::{Directive, NextStep};
     use paladin_core::platform::container::paladin::Paladin;
@@ -508,6 +508,7 @@ mod tests {
             dispatch: DispatchRule::LastWrite,
             default: None,
             required: false,
+            cache: CacheMarker::Allow,
         }]);
         let mut graph = WarGraph::new(schema, EngineLimits::default());
         graph.add_node(
@@ -768,6 +769,7 @@ mod tests {
             dispatch: DispatchRule::LastWrite,
             default: None,
             required: false,
+            cache: CacheMarker::Allow,
         }]);
         let mut graph = WarGraph::new(schema, EngineLimits::default());
         graph.add_node(

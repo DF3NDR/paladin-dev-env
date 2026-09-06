@@ -28,6 +28,11 @@ rand          = "0.8"
 tokio-util    = "0.7"
 petgraph      = "0.6"
 regex         = "1.11.1"
+# The node-cache key digest (`engine::cache_key`, plan 25-13, D-28): the
+# same blake3 `paladin-core`'s `GraphFingerprint` already hashes with, at
+# the same pinned version -- a new dependency EDGE on an already-resolved
+# workspace package, never a new package in the lock file.
+blake3        = "1.8.2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }

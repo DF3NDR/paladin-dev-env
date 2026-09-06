@@ -93,9 +93,51 @@ pub enum DispatchRule {
     Custom(String),
 }
 
+/// Whether a field's value may be served from the per-node result cache
+/// (Doc 04 FT-FR-20, D-29; plan 25-13).
+///
+/// A `NodeCachePort` hit merges a node's STORED delta instead of
+/// re-executing the node, so every field that delta touches is replayed
+/// verbatim. For a `LastWrite`/`MergeObject` field that replay is
+/// idempotent; for an [`DispatchRule::Append`] (or `Sum`) field it is NOT
+/// -- a fork or branch that re-visits the node appends (or adds) the same
+/// item a second time. `Deny` is the author's opt-in to keep such a field
+/// out of the cache: `WarGraph::validate` rejects a `CachePolicy` on a
+/// Paladin node whose `output_field` is `Deny`
+/// (`EngineError::CachePolicyOnDeniedField`), and the engine never stores a
+/// Function node's delta that touches a `Deny` field. The default is
+/// `Allow` -- leaving an `Append` field cacheable is legal and deliberate;
+/// the replay hazard is documented in the fault-tolerance guide.
+///
+/// `#[non_exhaustive]`: the engine treats any variant other than `Allow`
+/// as a denial, so a future marker kind fails closed.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::battlefield::{
+///     CacheMarker, DispatchRule, FieldName, FieldSpec,
+/// };
+///
+/// let spec = FieldSpec::new(FieldName::new("log").unwrap(), DispatchRule::Append, None, false);
+/// assert_eq!(spec.cache, CacheMarker::Allow);
+/// let denied = spec.with_cache(CacheMarker::Deny);
+/// assert_eq!(denied.cache, CacheMarker::Deny);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+pub enum CacheMarker {
+    /// The field may be served from a cached delta (the default).
+    #[default]
+    Allow,
+    /// The field must never be served from a cached delta.
+    Deny,
+}
+
 /// Declares one field of a `Battlefield`'s schema: its name, merge strategy,
-/// optional default value, and whether the engine must refuse to start a run
-/// that cannot resolve a value for it.
+/// optional default value, whether the engine must refuse to start a run
+/// that cannot resolve a value for it, and whether its value may be served
+/// from the node cache.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FieldSpec {
     /// The field's name.
@@ -108,10 +150,17 @@ pub struct FieldSpec {
     /// When `true`, the engine errors at `start` if this field cannot be
     /// resolved from the initial delta or `default` before any node runs.
     pub required: bool,
+    /// Whether this field may be served from the node cache (FT-FR-20,
+    /// D-29). Additive and `#[serde(default)]` (`Allow`), following
+    /// `NodeExecutionRecord.attempts`' precedent, so a schema persisted
+    /// before plan 25-13 deserializes unchanged and
+    /// [`BATTLEFIELD_SCHEMA_VERSION`] does not move.
+    #[serde(default)]
+    pub cache: CacheMarker,
 }
 
 impl FieldSpec {
-    /// Construct a new `FieldSpec`.
+    /// Construct a new `FieldSpec` with the default [`CacheMarker::Allow`].
     pub fn new(
         name: FieldName,
         dispatch: DispatchRule,
@@ -123,7 +172,15 @@ impl FieldSpec {
             dispatch,
             default,
             required,
+            cache: CacheMarker::default(),
         }
+    }
+
+    /// Set this field's [`CacheMarker`] (builder-style, so every existing
+    /// [`FieldSpec::new`] call site keeps its four-argument shape).
+    pub fn with_cache(mut self, cache: CacheMarker) -> Self {
+        self.cache = cache;
+        self
     }
 }
 
@@ -741,6 +798,61 @@ fn json_type_name(value: &serde_json::Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Plan 25-13, Task 1: the schema cache marker (FT-FR-20, D-29) --
+
+    #[test]
+    fn field_spec_cache_marker_defaults_to_allow() {
+        // A payload written before the marker existed carries no `cache`
+        // key and must still deserialize -- to `Allow`.
+        let legacy = r#"{"name":"summary","dispatch":"LastWrite","default":null,"required":false}"#;
+        let spec: FieldSpec = serde_json::from_str(legacy).expect("legacy FieldSpec deserializes");
+        assert_eq!(spec.cache, CacheMarker::Allow);
+
+        // The unchanged four-argument constructor produces the same.
+        let constructed = FieldSpec::new(
+            FieldName::new("summary").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        );
+        assert_eq!(constructed.cache, CacheMarker::Allow);
+        assert_eq!(constructed, spec);
+
+        // And `Deny` round-trips.
+        let denied = constructed.with_cache(CacheMarker::Deny);
+        let json = serde_json::to_string(&denied).unwrap();
+        assert!(json.contains(r#""cache":"Deny""#));
+        let back: FieldSpec = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.cache, CacheMarker::Deny);
+    }
+
+    #[test]
+    fn schema_version_is_unchanged_by_the_cache_marker() {
+        assert_eq!(
+            BATTLEFIELD_SCHEMA_VERSION, "1.0.0",
+            "the cache marker is additive (#[serde(default)]); it must not move the schema version"
+        );
+        // A whole pre-marker Battlefield payload still loads under the
+        // current version and reads its field as `Allow`.
+        let legacy = r#"{"schema":{"fields":[{"name":"x","dispatch":"Append","default":null,"required":false}],"schema_version":"1.0.0"},"values":{}}"#;
+        let battlefield = Battlefield::from_json(legacy).expect("pre-marker payload loads");
+        assert_eq!(
+            battlefield.schema().fields[0].cache,
+            CacheMarker::Allow,
+            "an absent marker is Allow, never a denial"
+        );
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                FieldName::new("x").unwrap(),
+                DispatchRule::Append,
+                None,
+                false,
+            )
+            .with_cache(CacheMarker::Deny),
+        ]);
+        assert_eq!(schema.schema_version, BATTLEFIELD_SCHEMA_VERSION);
+    }
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;

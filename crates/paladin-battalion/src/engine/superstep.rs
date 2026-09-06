@@ -34,14 +34,16 @@ use tokio_util::sync::CancellationToken;
 
 use uuid::Uuid;
 
-use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec};
+use paladin_core::platform::container::aegis::{Aegis, CachePolicy, ErrorHandlerSpec};
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
-    Battlefield, CustomDispatchResolver, FieldName, StateDelta,
+    BATTLEFIELD_SCHEMA_VERSION, Battlefield, BattlefieldSchema, CacheMarker,
+    CustomDispatchResolver, FieldName, StateDelta,
 };
 use paladin_core::platform::container::directive::{
     Directive, MusterContext, MusterTask, NextStep,
 };
+use paladin_core::platform::container::node_cache::{CachedDelta, NODE_CACHE_SCHEMA_VERSION};
 use paladin_core::platform::container::node_error::{
     AttemptRecord, NodeError, NodeErrorSource, TimeoutKind,
 };
@@ -52,14 +54,17 @@ use paladin_core::platform::container::parley::{
 };
 use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::waypoint::{
-    FrontierEdgeState, FrontierSnapshot, MusterProgress, NodeExecutionRecord, NodeId,
-    NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
+    FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeExecutionRecord,
+    NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus,
+    canonical_edge_condition,
 };
+use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::trace_sink_port::TraceEvent;
 use paladin_ports::output::waypoint_port::WaypointPort;
 
 use crate::edge_evaluator::EdgeEvaluatorRegistry;
+use crate::engine::cache_key;
 use crate::engine::directive_parser::{DirectiveParseError, DirectiveParser};
 use crate::engine::graph::{EngineLimits, GateRequestTemplate, NodeSpec, StateMap, WarGraph};
 use crate::engine::heartbeat::HeartbeatHandle;
@@ -114,6 +119,150 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     /// batch against a mid-superstep cancellation (a runtime setting shared
     /// by the whole run tree, exactly like `fork_of` above).
     shutdown_grace: std::time::Duration,
+    /// THIS run's node cache backend (FT-FR-18, D-29; plan 25-13) --
+    /// inherited by a nested `NodeSpec::Battalion` child run wholesale,
+    /// like every other engine resource, so a child graph's own
+    /// `CachePolicy` nodes are served by the same backend the parent's are.
+    node_cache: Option<Arc<dyn NodeCachePort>>,
+}
+
+/// One dispatched node's resolved cache binding (Doc 04 FT-FR-18, D-29;
+/// plan 25-13): `Some` only when the node's resolved `Aegis` carries a
+/// `cache` policy AND this run has a backend -- `WarGraph::
+/// validate_node_cache_backend` already rejected the policy-without-backend
+/// case before any node ran, so a `None` here always means "no policy".
+#[derive(Clone)]
+struct NodeCacheBinding {
+    policy: CachePolicy,
+    cache: Arc<dyn NodeCachePort>,
+    graph_fingerprint: GraphFingerprint,
+}
+
+/// Compose this dispatch's cache key (D-28, `engine::cache_key`): a
+/// `NodeSpec::Paladin` node keys on the SAME rendered input string
+/// `execute_vanguard_node` will hand the port (rendered here a second time
+/// over the same immutable snapshot -- cheap, and it keeps the key
+/// composition a pure function of the dispatch rather than a side channel
+/// out of the attempt); a `Function` node keys on the snapshot. `None` when
+/// the input cannot be rendered (the attempt will then fail with the same
+/// `InputMapping` error, so there is nothing to look up) or for a dispatch
+/// kind that never carries a cache policy (`Battalion`, rejected at
+/// validation).
+fn compose_node_cache_key<W: WaypointPort + 'static>(
+    binding: &NodeCacheBinding,
+    dispatch: &NodeDispatch<W>,
+    snapshot: &Battlefield,
+    ctx: &NodeContext,
+) -> Option<NodeCacheKey> {
+    match dispatch {
+        NodeDispatch::Function(_) => Some(cache_key::compose(&cache_key::CacheKeyInputs {
+            graph_fingerprint: &binding.graph_fingerprint,
+            node_id: &ctx.node_id,
+            input: cache_key::InputComponent::Snapshot(snapshot),
+            snapshot,
+            key_spec: &binding.policy.key,
+            muster: ctx.muster.as_ref(),
+            paladin: None,
+        })),
+        NodeDispatch::Paladin {
+            paladin,
+            input_template,
+            ..
+        } => {
+            let rendered = input_template
+                .render(snapshot, ctx.muster.as_ref(), ctx.parley_response())
+                .ok()?;
+            Some(cache_key::compose(&cache_key::CacheKeyInputs {
+                graph_fingerprint: &binding.graph_fingerprint,
+                node_id: &ctx.node_id,
+                input: cache_key::InputComponent::Rendered(&rendered),
+                snapshot,
+                key_spec: &binding.policy.key,
+                muster: ctx.muster.as_ref(),
+                paladin: Some(paladin.as_ref()),
+            }))
+        }
+        NodeDispatch::Battalion { .. } => None,
+    }
+}
+
+/// The lookup BEFORE attempt 1 (FT-FR-18, D-29). `Some(cached)` only for a
+/// live hit: a backend `Err` is a MISS (logged, never a failure -- the
+/// cache is best-effort by construction), an entry at or past its
+/// `expires_at` is a miss even if the backend served it (the closed TTL
+/// boundary, re-checked here so the engine and every backend agree on what
+/// `expires_at` means), and an entry authored under a different
+/// `CachedDelta`/`StateDelta` schema version is a miss rather than a delta
+/// this build might mis-merge.
+async fn lookup_node_cache(
+    binding: &NodeCacheBinding,
+    key: &NodeCacheKey,
+    node_id: &NodeId,
+) -> Option<CachedDelta> {
+    match binding.cache.get(key).await {
+        Ok(Some(cached)) => {
+            if cached.is_expired_at(Utc::now()) {
+                log::debug!("node cache: entry for {node_id} is expired -- miss");
+                return None;
+            }
+            if cached.schema_version != NODE_CACHE_SCHEMA_VERSION
+                || cached.delta.schema_version != BATTLEFIELD_SCHEMA_VERSION
+            {
+                log::debug!(
+                    "node cache: entry for {node_id} carries schema versions {}/{} (this build: \
+                     {NODE_CACHE_SCHEMA_VERSION}/{BATTLEFIELD_SCHEMA_VERSION}) -- miss",
+                    cached.schema_version,
+                    cached.delta.schema_version
+                );
+                return None;
+            }
+            Some(cached)
+        }
+        Ok(None) => None,
+        Err(err) => {
+            warn!("node cache: get failed for {node_id}: {err} -- treated as a miss (D-29)");
+            None
+        }
+    }
+}
+
+/// The store AFTER a successful attempt (FT-FR-18, D-29): called only for a
+/// genuine `NodeRunOutcome::Succeeded` whose `Directive` routes via
+/// `NextStep::Edges` -- never for a failed attempt, a handler-compensated
+/// failure, or a `Goto`/`End`/`Parley`/`Muster` directive (a `CachedDelta`
+/// stores a delta alone, and replaying only the delta of a routing
+/// directive would silently drop its routing). A delta touching a field the
+/// schema marks other than `CacheMarker::Allow` is never stored (FT-FR-20:
+/// the `Function`-node half of the `Deny` guarantee, since a `StateNode`'s
+/// write set is only knowable here). A backend `Err` is logged and never
+/// fails the run.
+async fn store_node_cache(
+    binding: &NodeCacheBinding,
+    key: &NodeCacheKey,
+    delta: &StateDelta,
+    schema: &BattlefieldSchema,
+    node_id: &NodeId,
+) {
+    let denied: Vec<&str> = delta
+        .values
+        .keys()
+        .filter(|field| {
+            schema
+                .field_spec(field)
+                .is_some_and(|spec| !matches!(spec.cache, CacheMarker::Allow))
+        })
+        .map(FieldName::as_str)
+        .collect();
+    if !denied.is_empty() {
+        log::debug!(
+            "node cache: not storing {node_id}'s delta -- it writes cache: Deny field(s) {}",
+            denied.join(", ")
+        );
+        return;
+    }
+    if let Err(err) = binding.cache.put(key, delta, binding.policy.ttl).await {
+        warn!("node cache: put failed for {node_id}: {err} -- ignored, the run continues (D-29)");
+    }
 }
 
 /// Pairs a spawned node task's own dispatch-order position with its
@@ -1070,6 +1219,9 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     // superstep, so a parent `idle_timeout` over a
                     // Battalion node measures child-superstep progress.
                     Some(ctx.heartbeat.clone()),
+                    // --- FT-FR-18, D-29: the child run serves its own
+                    // `CachePolicy` nodes from the SAME backend.
+                    resources.node_cache.clone(),
                 ));
                 let outcome = child_fut.await;
 
@@ -1192,6 +1344,10 @@ struct NodeTaskOutput {
     /// (the byte-identical pre-Phase-25 path, D-09), and a
     /// `DirectiveParse`/`Battalion` failure.
     node_error: Option<NodeError>,
+    /// Whether `outcome` was served from the node cache (FT-FR-18, D-29)
+    /// rather than by executing the node -- `true` only for a
+    /// `Succeeded` outcome on `attempt: 1` with no `failed_attempts`.
+    cache_hit: bool,
 }
 
 /// The `tasks.len() > limits.max_muster_tasks` comparison (D-13's
@@ -1351,6 +1507,12 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     // signature (forwarded verbatim to [`run_with_namespace`]), not one
     // this plan can fix to a constant.
     shutdown_grace: std::time::Duration,
+    // --- FT-FR-18, D-29 (plan 25-13): the engine's node cache backend,
+    // like `shutdown_grace` a real, always-present engine setting every
+    // top-level caller forwards (`None` when no backend is wired --
+    // `WarGraph::validate_node_cache_backend` has then already rejected
+    // any `CachePolicy` in the graph).
+    node_cache: Option<Arc<dyn NodeCachePort>>,
 ) -> Result<RunOutcome, EngineError> {
     // --- CF-FR-15, D-20: a top-level call through this public entry point
     // (`WarEngine::start`/`resume_with_options`, and every existing test
@@ -1401,6 +1563,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         // idle timer it could feed -- only a `NodeSpec::Battalion` child
         // dispatch ever passes `Some` here.
         None,
+        node_cache,
     )
     .await
 }
@@ -1487,7 +1650,16 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // parent `idle_timeout` over a Battalion node observes child progress.
     // `None` for every top-level `start`/`resume`/`fork` call.
     parent_heartbeat: Option<HeartbeatHandle>,
+    // --- FT-FR-18, D-29 (plan 25-13): this run's node cache backend, if
+    // any; a nested `NodeSpec::Battalion` child run inherits the SAME
+    // backend via `ChildEngineResources::node_cache`.
+    node_cache: Option<Arc<dyn NodeCachePort>>,
 ) -> Result<RunOutcome, EngineError> {
+    // --- FT-FR-20, D-28: the graph fingerprint every cache key composed in
+    // this run starts with -- computed ONCE per run (never per dispatch),
+    // and only when a backend is wired at all.
+    let cache_graph_fingerprint: Option<GraphFingerprint> =
+        node_cache.as_ref().map(|_| graph.fingerprint());
     // --- FT-FR-10, D-20, ENG-FR-03: the run-level budget. Measured from
     // the moment THIS call starts (a resumed run's budget restarts with the
     // resume; a Battalion child run measures its OWN budget against its
@@ -1523,6 +1695,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 checkpoint_ns: checkpoint_ns.clone(),
                 fork_of,
                 shutdown_grace,
+                node_cache: node_cache.clone(),
             })
         });
 
@@ -1980,9 +2153,76 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             // it touches, mirroring every other per-dispatch clone above.
             let node_aegis: Option<Aegis> = graph.aegis_for(node_id).cloned();
             let node_cancellation = cancellation.clone();
+            // --- FT-FR-18, D-29: this node's cache binding -- `Some` only
+            // with BOTH a resolved `cache` policy and a wired backend.
+            let node_cache_binding: Option<NodeCacheBinding> = match (
+                node_aegis.as_ref().and_then(|a| a.cache.as_ref()),
+                node_cache.as_ref(),
+                cache_graph_fingerprint.as_ref(),
+            ) {
+                (Some(policy), Some(cache), Some(fingerprint)) => Some(NodeCacheBinding {
+                    policy: policy.clone(),
+                    cache: Arc::clone(cache),
+                    graph_fingerprint: fingerprint.clone(),
+                }),
+                _ => None,
+            };
             handles.push(IndexedHandle {
                 index: dispatch_index,
                 handle: tokio::spawn(async move {
+                    // --- FT-FR-18, D-29, D-14: the cache lookup happens
+                    // BEFORE attempt 1 and OUTSIDE the interceptor chain
+                    // (the cache is part of the Aegis, which wraps the whole
+                    // per-attempt sequence, so a hit runs no `before`/
+                    // `after` interceptor -- nothing executes). A hit merges
+                    // the stored delta as a `Succeeded` outcome on attempt 1
+                    // with `cache_hit: true`, emits exactly one
+                    // `NodeStarted`/`NodeFinished { cache_hit: true }` pair,
+                    // consumes no retry budget and calls no port. A `get`
+                    // error is a miss (`lookup_node_cache`), never a failure.
+                    let cache_key: Option<NodeCacheKey> =
+                        node_cache_binding.as_ref().and_then(|binding| {
+                            compose_node_cache_key(binding, &dispatch, &snap, &base_ctx)
+                        });
+                    if let (Some(binding), Some(key)) = (&node_cache_binding, &cache_key)
+                        && let Some(cached) = lookup_node_cache(binding, key, &nid).await
+                    {
+                        let started_at = Utc::now();
+                        node_trace.emit(TraceEvent::NodeStarted {
+                            thread_id: base_ctx.thread_id.clone(),
+                            superstep: base_ctx.superstep,
+                            node_id: nid.clone(),
+                            attempt: 1,
+                        });
+                        let paladin_id = match &dispatch {
+                            NodeDispatch::Paladin { paladin, .. } => Some(paladin.uuid),
+                            _ => None,
+                        };
+                        let duration_ms =
+                            (Utc::now() - started_at).num_milliseconds().max(0) as u64;
+                        node_trace.emit(TraceEvent::NodeFinished {
+                            thread_id: base_ctx.thread_id.clone(),
+                            superstep: base_ctx.superstep,
+                            node_id: nid.clone(),
+                            attempt: 1,
+                            cache_hit: true,
+                        });
+                        return NodeTaskOutput {
+                            node_id: nid,
+                            started_at,
+                            duration_ms,
+                            paladin_id,
+                            token_count: 0,
+                            outcome: NodeRunOutcome::Succeeded(Directive {
+                                delta: cached.delta,
+                                next: NextStep::Edges,
+                            }),
+                            attempt: 1,
+                            failed_attempts: Vec::new(),
+                            node_error: None,
+                            cache_hit: true,
+                        };
+                    }
                     // --- D-14: the retry loop wraps the ENTIRE per-attempt
                     // sequence below -- the `NodeStarted` emit, the whole
                     // `before` interceptor chain, `execute_vanguard_node`,
@@ -2074,6 +2314,27 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                             // interceptor this phase.
                                             for interceptor in &node_interceptors {
                                                 interceptor.after(&ctx, &mut directive.delta).await;
+                                            }
+                                            // --- FT-FR-18, D-29: `put` ONLY here --
+                                            // after a SUCCESSFUL attempt, once the
+                                            // `after` chain has produced the delta
+                                            // that will actually merge, and only
+                                            // for an `Edges`-routed directive
+                                            // (`store_node_cache`'s own contract).
+                                            // No failed attempt, handler outcome or
+                                            // error ever reaches this call.
+                                            if let (Some(binding), Some(key)) =
+                                                (&node_cache_binding, &cache_key)
+                                                && matches!(directive.next, NextStep::Edges)
+                                            {
+                                                store_node_cache(
+                                                    binding,
+                                                    key,
+                                                    &directive.delta,
+                                                    snap.schema(),
+                                                    &nid,
+                                                )
+                                                .await;
                                             }
                                             (
                                                 paladin_id,
@@ -2176,6 +2437,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                 attempt,
                                 failed_attempts,
                                 node_error: None,
+                                cache_hit: false,
                             };
                         }
                         // --- D-08: the structured error travels with a
@@ -2207,6 +2469,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             attempt,
                             failed_attempts,
                             node_error,
+                            cache_hit: false,
                         };
                     }
                 }),
@@ -2356,6 +2619,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 attempt,
                 failed_attempts,
                 node_error,
+                cache_hit,
             }) = results[dispatch_index].take()
             else {
                 // --- D-19: aborted past the shared grace deadline. Recorded
@@ -2574,7 +2838,9 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         },
                         attempt,
                         attempts: failed_attempts,
-                        cache_hit: false,
+                        // Plan 25-13: `true` only for a served-from-cache
+                        // outcome (`attempt: 1`, no failed attempts).
+                        cache_hit,
                     });
 
                     if is_muster_task {
@@ -3991,6 +4257,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
         )
         .await
         .unwrap()
@@ -4030,6 +4297,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
         )
         .await
         .unwrap()
@@ -4075,6 +4343,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
         )
         .await
         .unwrap()
@@ -4812,6 +5081,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
         )
         .await
         .unwrap();
@@ -6272,6 +6542,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
         )
         .await;
 
@@ -6323,6 +6594,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
         )
         .await
         .unwrap();
@@ -6905,6 +7177,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
         )
         .await;
 
@@ -6939,6 +7212,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
         )
         .await
         .unwrap();
@@ -6999,6 +7273,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
         )
         .await
         .unwrap();
@@ -8500,6 +8775,7 @@ mod tests {
             cancellation,
             Some(Arc::clone(store)),
             default_shutdown_grace(),
+            None,
         )
         .await
     }
@@ -9899,6 +10175,7 @@ mod tests {
             cancellation,
             None,
             shutdown_grace,
+            None,
         )
         .await
         .unwrap()
@@ -9941,6 +10218,7 @@ mod tests {
             &None,
             None,
             shutdown_grace,
+            None,
         )
         .await
         .unwrap()
@@ -11364,6 +11642,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
         )
         .await
         .unwrap()

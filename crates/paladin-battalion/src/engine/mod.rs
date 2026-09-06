@@ -50,6 +50,10 @@
 //!   later engine plans assert against.
 
 pub mod bridges;
+/// Node-cache key composition (Doc 04 FT-FR-20, D-28): the graph
+/// fingerprint, node id, resolved input and Paladin configuration
+/// fingerprint that address a `NodeCachePort` entry.
+pub mod cache_key;
 pub mod directive_parser;
 pub mod dispatch_registry;
 pub mod graph;
@@ -90,6 +94,7 @@ use paladin_core::platform::container::parley::{
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, ThreadId, WaypointId, WaypointStatus,
 };
+use paladin_ports::output::node_cache_port::NodeCachePort;
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink};
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
@@ -1160,6 +1165,57 @@ pub enum EngineError {
         /// `Muster`).
         returned: String,
     },
+
+    /// `WarGraph::validate_node_cache_backend` found one or more nodes
+    /// carrying a resolved `Aegis.cache` policy while the `WarEngine` has no
+    /// backend wired via [`WarEngine::with_node_cache`] (D-29, plan 25-13,
+    /// FT-FR-18). Fail-closed: a graph author who asked for caching and
+    /// silently got none would have no signal, so this is a typed error
+    /// before any node runs -- never a degradation to "no caching". A node
+    /// inside a `NodeSpec::Battalion` child graph is named as
+    /// `{battalion node}/{child node}`. Carries EVERY offender, sorted,
+    /// mirroring [`EngineError::AegisOnUndeclaredNode`]'s discipline.
+    #[error("cache policy without a cache backend: {reason}")]
+    CachePolicyWithoutCacheBackend {
+        /// Every node carrying a `CachePolicy`, sorted.
+        nodes: Vec<NodeId>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found a node carrying a resolved `Aegis.cache`
+    /// policy whose `NodeSpec::Paladin` `output_field` is declared
+    /// `CacheMarker::Deny` in the `BattlefieldSchema` (D-29, plan 25-13,
+    /// FT-FR-20). A Paladin node's write set is exactly its `output_field`,
+    /// so the denial is checked here, before any node executes; a
+    /// `Function` node's write set is not statically knowable, so ITS
+    /// denial is enforced at store time instead (a delta touching a `Deny`
+    /// field is never written to the cache). Carries EVERY offending
+    /// (node, field) pairing, pre-formatted, mirroring
+    /// [`EngineError::RouteErrorFieldUndeclared`]'s discipline.
+    #[error("cache policy on a denied field: {reason}")]
+    CachePolicyOnDeniedField {
+        /// Every offending node/field pairing, pre-formatted.
+        offenders: Vec<String>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found a node whose resolved `Aegis.cache`
+    /// policy uses `CacheKeySpec::Fields` naming a field the
+    /// `BattlefieldSchema` does not declare (D-28, plan 25-13). An
+    /// undeclared field would silently contribute an "absent" marker to
+    /// every key, so a typo would narrow the key to less than the author
+    /// intended and serve stale hits -- rejected before any node executes
+    /// instead. Carries EVERY offending (node, field) pairing,
+    /// pre-formatted.
+    #[error("cache key field undeclared: {reason}")]
+    CacheKeyFieldUndeclared {
+        /// Every offending node/field pairing, pre-formatted.
+        offenders: Vec<String>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -1220,6 +1276,14 @@ pub struct WarEngine<W: WaypointPort> {
     /// graph fingerprint -- see [`WarEngine::with_shutdown_grace`].
     /// Defaults to 30 seconds.
     shutdown_grace: std::time::Duration,
+    /// The per-node result cache backend (Doc 04 FT-FR-18, D-29), wired via
+    /// [`WarEngine::with_node_cache`]. `None` by default: a graph with no
+    /// `CachePolicy` anywhere runs identically with or without one, and a
+    /// graph WITH a `CachePolicy` fails validation
+    /// (`EngineError::CachePolicyWithoutCacheBackend`) rather than silently
+    /// running uncached. Forwarded wholesale into every
+    /// `NodeSpec::Battalion` child run, like every other engine resource.
+    node_cache: Option<Arc<dyn NodeCachePort>>,
 }
 
 // --- CF-FR-16, D-21: `+ 'static` is required here (not on the struct
@@ -1246,6 +1310,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             interceptors: Vec::new(),
             cancellation_token: None,
             shutdown_grace: std::time::Duration::from_secs(30),
+            node_cache: None,
         }
     }
 
@@ -1399,6 +1464,58 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         self
     }
 
+    /// Wire `cache` as this engine's per-node result cache backend (Doc 04
+    /// FT-FR-18, D-29; plan 25-13). Replaces any previously configured
+    /// backend.
+    ///
+    /// With a backend wired, every node carrying a resolved
+    /// `Aegis.cache` [`CachePolicy`](paladin_core::platform::container::aegis::CachePolicy)
+    /// is looked up BEFORE its first attempt under a key composed by
+    /// [`cache_key`] (graph fingerprint, node id, resolved input, Paladin
+    /// configuration fingerprint) -- a hit merges the stored delta with no
+    /// execution and records `cache_hit: true`; a miss executes the node
+    /// and, on a successful attempt whose `Directive` routes via
+    /// `NextStep::Edges`, stores its delta under the policy's TTL. The
+    /// cache is best-effort by construction: a `get` failure is a miss and
+    /// a `put` failure is logged, never a run failure.
+    ///
+    /// Without a backend, a `CachePolicy` anywhere in the graph (including
+    /// inside a `NodeSpec::Battalion` child) fails
+    /// [`WarEngine::start`]/`resume` with
+    /// [`EngineError::CachePolicyWithoutCacheBackend`] before any node runs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use async_trait::async_trait;
+    /// use paladin_battalion::engine::WarEngine;
+    /// use paladin_core::platform::container::paladin::Paladin;
+    /// use paladin_core::platform::container::paladin_error::PaladinError;
+    /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    /// use paladin_storage::node_cache::in_memory::InMemoryNodeCache;
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    ///
+    /// struct NoopPort;
+    /// #[async_trait]
+    /// impl PaladinPort for NoopPort {
+    ///     async fn execute(&self, _p: &Paladin, _i: &str) -> Result<PaladinResult, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     async fn execute_stream(&self, _p: &Paladin, _i: &str) -> Result<PaladinStream, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     fn validate(&self, _p: &Paladin) -> Result<(), PaladinError> { Ok(()) }
+    /// }
+    ///
+    /// let engine = WarEngine::new(Arc::new(NoopPort), Arc::new(InMemoryWaypointStore::new()))
+    ///     .with_node_cache(Arc::new(InMemoryNodeCache::new()));
+    /// ```
+    pub fn with_node_cache(mut self, cache: Arc<dyn NodeCachePort>) -> Self {
+        self.node_cache = Some(cache);
+        self
+    }
+
     /// Start a new run of `graph` under `thread`, seeded with `initial`.
     ///
     /// Runs the full superstep loop (ENG-FR-01): validates the graph,
@@ -1417,6 +1534,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
     ) -> Result<RunOutcome, EngineError> {
         let registry = self.dispatch_registry.resolver();
         graph.validate(registry, &self.registries)?;
+        graph.validate_node_cache_backend(self.node_cache.is_some())?;
 
         let battlefield = Battlefield::initialize(graph.schema().clone(), &initial)?;
         battlefield.validate_required()?;
@@ -1445,6 +1563,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.cancellation_token,
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
+            self.node_cache.clone(),
         )
         .await;
         self.trace_dispatcher
@@ -1609,6 +1728,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
 
         let registry = self.dispatch_registry.resolver();
         graph.validate(registry, &self.registries)?;
+        graph.validate_node_cache_backend(self.node_cache.is_some())?;
 
         self.trace_dispatcher.emit(TraceEvent::RunStarted {
             thread_id: thread.clone(),
@@ -1644,6 +1764,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.cancellation_token,
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
+            self.node_cache.clone(),
         )
         .await;
         self.trace_dispatcher
@@ -1733,6 +1854,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
 
         let registry = self.dispatch_registry.resolver();
         graph.validate(registry, &self.registries)?;
+        graph.validate_node_cache_backend(self.node_cache.is_some())?;
 
         let now = Utc::now();
         let already_answered: BTreeSet<ParleyId> =
@@ -1976,6 +2098,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // --- FT-FR-09, D-19: a top-level resume has no parent node to
             // beat -- only a Battalion child dispatch passes `Some`.
             None,
+            self.node_cache.clone(),
         )
         .await;
         self.trace_dispatcher
@@ -2067,6 +2190,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
 
         let registry = self.dispatch_registry.resolver();
         graph.validate(registry, &self.registries)?;
+        graph.validate_node_cache_backend(self.node_cache.is_some())?;
 
         // --- HITL-03, D-16: `fork`'s edit is merged through the schema's
         // OWN dispatch rules -- an undeclared field is `EngineError::Battlefield`
@@ -2125,6 +2249,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // --- FT-FR-09, D-19: a top-level fork has no parent node to
             // beat -- only a Battalion child dispatch passes `Some`.
             None,
+            self.node_cache.clone(),
         )
         .await;
         self.trace_dispatcher.emit(TraceEvent::RunFinished {
@@ -8219,5 +8344,271 @@ mod tests {
         );
         assert!(record.attempts.is_empty());
         assert_eq!(record.outcome, NodeOutcomeKind::Succeeded);
+    }
+
+    // --- Phase 25 Plan 13, Task 1: the fail-closed cache validation
+    //     clauses (FT-FR-18, FT-FR-20, D-29) ---------------------------------
+    mod node_cache_validation_tests {
+        use super::*;
+        use crate::engine::graph::StateMap;
+        use crate::engine::test_support::RecordingNodeCache;
+        use paladin_core::platform::container::aegis::{CacheKeySpec, CachePolicy};
+        use paladin_core::platform::container::battlefield::CacheMarker;
+        use std::time::Duration;
+
+        fn cache_aegis() -> Aegis {
+            Aegis {
+                cache: Some(CachePolicy {
+                    ttl: Duration::from_secs(60),
+                    key: CacheKeySpec::Default,
+                }),
+                ..Aegis::default()
+            }
+        }
+
+        fn engine_with_cache(
+            port: Arc<dyn PaladinPort>,
+        ) -> (WarEngine<InMemoryWaypointStore>, Arc<RecordingNodeCache>) {
+            let cache = RecordingNodeCache::new();
+            let engine = WarEngine::new(port, Arc::new(InMemoryWaypointStore::new()))
+                .with_node_cache(cache.clone());
+            (engine, cache)
+        }
+
+        fn cached_function_graph(names: &[&str]) -> WarGraph {
+            let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+            for name in names {
+                let id = NodeId::new(*name);
+                graph.add_node(
+                    id.clone(),
+                    NodeSpec::Function(CountingFunctionNode::fixed(
+                        FieldName::new("result").unwrap(),
+                        serde_json::json!("v"),
+                    )),
+                );
+                graph.add_entry(id.clone());
+                graph.set_aegis(id, cache_aegis());
+            }
+            graph
+        }
+
+        /// Test 2: a `CachePolicy` on a node, run through a `WarEngine` with
+        /// no `with_node_cache`, fails validation with a typed error naming
+        /// the node -- never a silent no-op.
+        #[tokio::test]
+        async fn a_cache_policy_without_an_engine_cache_fails_validation() {
+            let graph = cached_function_graph(&["cached"]);
+            let err = engine()
+                .start(
+                    &graph,
+                    ThreadId::new("no-backend").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap_err();
+            match err {
+                EngineError::CachePolicyWithoutCacheBackend { nodes, reason } => {
+                    assert_eq!(nodes, vec![NodeId::new("cached")]);
+                    assert!(reason.contains("cached"));
+                    assert!(reason.contains("with_node_cache"));
+                }
+                other => panic!("expected CachePolicyWithoutCacheBackend, got {other:?}"),
+            }
+        }
+
+        /// The same graph WITH a backend validates and runs -- the clause is
+        /// about the backend's absence, not the policy's presence.
+        #[tokio::test]
+        async fn a_cache_policy_with_an_engine_cache_validates() {
+            let graph = cached_function_graph(&["cached"]);
+            let (engine, _cache) = engine_with_cache(Arc::new(UnimplementedPaladinPort));
+            let outcome = engine
+                .start(
+                    &graph,
+                    ThreadId::new("with-backend").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+            assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        }
+
+        /// Test 3: a Paladin node whose `output_field` is marked
+        /// `CacheMarker::Deny` cannot carry a `CachePolicy`; the typed error
+        /// names the field and the node.
+        #[tokio::test]
+        async fn a_cache_policy_on_a_deny_output_field_fails_validation() {
+            let summary = FieldName::new("summary").unwrap();
+            let schema = BattlefieldSchema::new(vec![
+                FieldSpec::new(summary.clone(), DispatchRule::LastWrite, None, false)
+                    .with_cache(CacheMarker::Deny),
+            ]);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let node_id = NodeId::new("summarise");
+            graph.add_node(
+                node_id.clone(),
+                NodeSpec::paladin(make_paladin("p"), InputMapping::new("go"), summary),
+            );
+            graph.add_entry(node_id.clone());
+            graph.set_aegis(node_id, cache_aegis());
+
+            let (engine, _cache) = engine_with_cache(Arc::new(RecordingPaladinPort::new()));
+            let err = engine
+                .start(
+                    &graph,
+                    ThreadId::new("deny-field").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap_err();
+            match err {
+                EngineError::CachePolicyOnDeniedField { offenders, reason } => {
+                    assert_eq!(offenders.len(), 1);
+                    assert!(offenders[0].contains("summarise"), "{offenders:?}");
+                    assert!(offenders[0].contains("summary"), "{offenders:?}");
+                    assert!(reason.contains("Deny"));
+                }
+                other => panic!("expected CachePolicyOnDeniedField, got {other:?}"),
+            }
+        }
+
+        /// Test 4: three offending nodes produce ONE error naming all three.
+        #[tokio::test]
+        async fn validation_lists_every_cache_offender() {
+            let graph = cached_function_graph(&["charlie", "alpha", "bravo"]);
+            let err = engine()
+                .start(
+                    &graph,
+                    ThreadId::new("three-offenders").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap_err();
+            match err {
+                EngineError::CachePolicyWithoutCacheBackend { nodes, reason } => {
+                    assert_eq!(
+                        nodes,
+                        vec![
+                            NodeId::new("alpha"),
+                            NodeId::new("bravo"),
+                            NodeId::new("charlie")
+                        ],
+                        "every offender, sorted"
+                    );
+                    for name in ["alpha", "bravo", "charlie"] {
+                        assert!(reason.contains(name), "{reason}");
+                    }
+                }
+                other => panic!("expected CachePolicyWithoutCacheBackend, got {other:?}"),
+            }
+        }
+
+        /// Test 6: the marker is opt-in denial, not automatic -- an `Append`
+        /// field left at `Allow` validates (the replay hazard is
+        /// documentation, FT-FR-20).
+        #[tokio::test]
+        async fn an_append_dispatch_field_may_still_be_cached_when_marked_allow() {
+            let log = FieldName::new("log").unwrap();
+            let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+                log.clone(),
+                DispatchRule::Append,
+                None,
+                false,
+            )]);
+            assert_eq!(schema.fields[0].cache, CacheMarker::Allow);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let node_id = NodeId::new("append-writer");
+            graph.add_node(
+                node_id.clone(),
+                NodeSpec::paladin(make_paladin("p"), InputMapping::new("go"), log.clone()),
+            );
+            graph.add_entry(node_id.clone());
+            graph.set_aegis(node_id, cache_aegis());
+
+            let port = Arc::new(RecordingPaladinPort::new());
+            port.set_output("p", "entry");
+            let (engine, cache) = engine_with_cache(port);
+            let outcome = engine
+                .start(
+                    &graph,
+                    ThreadId::new("append-allow").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+            match outcome {
+                RunOutcome::Completed { final_state, .. } => {
+                    assert_eq!(
+                        final_state.get::<Vec<String>>(&log).unwrap(),
+                        Some(vec!["entry".to_string()])
+                    );
+                }
+                other => panic!("expected Completed, got {other:?}"),
+            }
+            assert_eq!(cache.put_count(), 1, "an Allow field IS cached");
+        }
+
+        /// A `CachePolicy` inside a `NodeSpec::Battalion` child graph is just
+        /// as fail-closed as one on the parent: the child inherits the
+        /// engine's cache wholesale, so it inherits the absence too.
+        #[tokio::test]
+        async fn a_cache_policy_inside_a_battalion_child_fails_without_a_backend() {
+            let child = Arc::new(cached_function_graph(&["inner"]));
+            let mut parent = WarGraph::new(one_field_schema(), EngineLimits::default());
+            let battalion = NodeId::new("outer");
+            parent.add_node(
+                battalion.clone(),
+                NodeSpec::battalion(child, StateMap::default()),
+            );
+            parent.add_entry(battalion);
+            let err = engine()
+                .start(
+                    &parent,
+                    ThreadId::new("child-no-backend").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap_err();
+            match err {
+                EngineError::CachePolicyWithoutCacheBackend { nodes, .. } => {
+                    assert_eq!(nodes, vec![NodeId::new("outer/inner")]);
+                }
+                other => panic!("expected CachePolicyWithoutCacheBackend, got {other:?}"),
+            }
+        }
+
+        /// A `CacheKeySpec::Fields` naming a field the schema does not
+        /// declare is rejected before any node runs -- a typo must never
+        /// silently narrow the key.
+        #[tokio::test]
+        async fn a_cache_key_spec_naming_an_undeclared_field_fails_validation() {
+            let mut graph = cached_function_graph(&["cached"]);
+            graph.set_aegis(
+                NodeId::new("cached"),
+                Aegis {
+                    cache: Some(CachePolicy {
+                        ttl: Duration::from_secs(60),
+                        key: CacheKeySpec::Fields(vec![FieldName::new("nope").unwrap()]),
+                    }),
+                    ..Aegis::default()
+                },
+            );
+            let (engine, _cache) = engine_with_cache(Arc::new(UnimplementedPaladinPort));
+            let err = engine
+                .start(
+                    &graph,
+                    ThreadId::new("undeclared-key-field").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap_err();
+            match err {
+                EngineError::CacheKeyFieldUndeclared { offenders, .. } => {
+                    assert_eq!(offenders.len(), 1);
+                    assert!(offenders[0].contains("cached") && offenders[0].contains("nope"));
+                }
+                other => panic!("expected CacheKeyFieldUndeclared, got {other:?}"),
+            }
+        }
     }
 }

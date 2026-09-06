@@ -3986,7 +3986,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             graph,
             ThreadId::new("reachability-regression").unwrap(),
             Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap(),

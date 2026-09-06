@@ -66,7 +66,6 @@ use crate::engine::heartbeat::HeartbeatHandle;
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::{NodeContext, StateNode, StateNodeError};
-#[cfg(test)]
 use crate::engine::registries::EngineRegistries;
 use crate::engine::retry;
 use crate::engine::{EngineError, RunOutcome, WaypointDurability};
@@ -75,8 +74,10 @@ use crate::llm_failure;
 /// Every parent engine resource D-21 requires forwarding into a
 /// `NodeSpec::Battalion` node's child run (CF-FR-16): the `WaypointPort`,
 /// `WaypointDurability`, the parallelism setting, the dispatch resolver,
-/// the edge-evaluator registry, the trace sink, the interceptor chain and
-/// the shared `CancellationToken`. `PaladinPort` is forwarded separately
+/// the whole `EngineRegistries` bundle (edge evaluators, retry predicates
+/// and error handlers -- a child inherits the parent's registries
+/// wholesale, Phase 23 D-21 / Phase 25 D-13), the trace sink, the
+/// interceptor chain and the shared `CancellationToken`. `PaladinPort` is forwarded separately
 /// (already `Arc<dyn PaladinPort>` at every call site, no bundling
 /// needed). Gathered ONCE per [`run`] call -- never per-dispatch -- and
 /// `Arc`-wrapped so every per-superstep node's `tokio::spawn`'d task can
@@ -91,7 +92,7 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     durability: WaypointDurability,
     parallelism: Option<usize>,
     registry: CustomDispatchResolver,
-    evaluators: EdgeEvaluatorRegistry,
+    registries: EngineRegistries,
     trace: Arc<TraceDispatcher>,
     interceptors: Vec<Arc<dyn NodeInterceptor>>,
     cancellation: Option<CancellationToken>,
@@ -949,7 +950,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     resources.durability,
                     resources.parallelism,
                     &resources.registry,
-                    &resources.evaluators,
+                    &resources.registries,
                     child_graph.as_ref(),
                     child_thread.clone(),
                     child_battlefield,
@@ -1244,7 +1245,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     durability: WaypointDurability,
     parallelism: Option<usize>,
     registry: &CustomDispatchResolver,
-    evaluators: &EdgeEvaluatorRegistry,
+    registries: &EngineRegistries,
     graph: &WarGraph,
     thread: ThreadId,
     battlefield: Battlefield,
@@ -1285,7 +1286,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         durability,
         parallelism,
         registry,
-        evaluators,
+        registries,
         graph,
         thread,
         battlefield,
@@ -1340,7 +1341,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     durability: WaypointDurability,
     parallelism: Option<usize>,
     registry: &CustomDispatchResolver,
-    evaluators: &EdgeEvaluatorRegistry,
+    registries: &EngineRegistries,
     graph: &WarGraph,
     thread: ThreadId,
     mut battlefield: Battlefield,
@@ -1433,7 +1434,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 durability,
                 parallelism,
                 registry: registry.clone(),
-                evaluators: evaluators.clone(),
+                registries: registries.clone(),
                 trace: Arc::clone(trace),
                 interceptors: interceptors.to_vec(),
                 cancellation: cancellation.clone(),
@@ -2737,7 +2738,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     node_id,
                     superstep_number,
                     &battlefield,
-                    evaluators,
+                    &registries.edge_evaluators,
                     &thread,
                     notfiring_nodes.contains(node_id),
                 )
@@ -3787,7 +3788,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             graph,
             thread,
             Battlefield::initialize(
@@ -3826,7 +3827,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             graph,
             thread,
             Battlefield::initialize(
@@ -3875,7 +3876,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             graph,
             thread,
             battlefield,
@@ -4612,7 +4613,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread,
             Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap(),
@@ -6068,7 +6069,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread.clone(),
             Battlefield::initialize(
@@ -6119,7 +6120,7 @@ mod tests {
             WaypointDurability::BestEffort,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread.clone(),
             Battlefield::initialize(
@@ -6705,7 +6706,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -6739,7 +6740,7 @@ mod tests {
             WaypointDurability::BestEffort,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -6799,7 +6800,7 @@ mod tests {
             WaypointDurability::Strict,
             Some(2),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -8292,7 +8293,7 @@ mod tests {
         store: &Arc<RecordingWaypointStore>,
         port: &Arc<dyn PaladinPort>,
         registry: &CustomDispatchResolver,
-        evaluators: &EdgeEvaluatorRegistry,
+        registries: &EngineRegistries,
         cancellation: &Option<CancellationToken>,
     ) -> Result<RunOutcome, EngineError> {
         run(
@@ -8300,7 +8301,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             registry,
-            evaluators,
+            registries,
             graph,
             thread,
             Battlefield::initialize(graph.schema().clone(), &initial).unwrap(),
@@ -8390,7 +8391,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -8462,7 +8463,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -8526,7 +8527,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -8594,7 +8595,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -8688,7 +8689,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -8776,7 +8777,7 @@ mod tests {
             &store,
             &port_dyn,
             &registry,
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -8854,7 +8855,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -8904,7 +8905,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -8988,7 +8989,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &Some(token),
         )
         .await
@@ -9095,7 +9096,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -9199,7 +9200,7 @@ mod tests {
             &resumed_store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -9296,7 +9297,7 @@ mod tests {
             &resumed_store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -9385,7 +9386,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -9451,7 +9452,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -9695,7 +9696,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             graph,
             thread,
             Battlefield::initialize(
@@ -9741,7 +9742,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             graph,
             thread,
             latest.battlefield,

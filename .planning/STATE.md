@@ -5,8 +5,8 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 26
 current_phase_name: Agent Runtime Enhancements
 status: planning
-stopped_at: Phase 25 complete — 14/14 plans, verification passed (5/5); Phase 26 ready to plan
-last_updated: "2026-09-06T03:39:52.494Z"
+stopped_at: Phase 25 complete — 14/14 plans, verification passed (5/5), UAT 76/76 passed in 25-UAT.md (2026-09-06; the one issue, a red api-surface CI job from a stale public-API baseline, fixed by 0e5c106c and green on run 34051074633); 25-SECURITY.md not yet produced; Phase 26 ready to plan
+last_updated: "2026-09-06T19:44:34.000Z"
 last_activity: 2026-09-06
 last_activity_desc: Phase 25 complete, transitioned to Phase 26
 progress:
@@ -20,15 +20,15 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-05 after Phase 24)
+See: .planning/PROJECT.md (updated 2026-09-06 after Phase 25)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 25 — Node-Level Fault Tolerance
+**Current focus:** Phase 26 — Agent Runtime Enhancements
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
-**Progress:** [████░░░░░░] v0.10.0 — 4 of 9 phases complete (22, 22.1, 23, 24); 50/50 planned plans executed (Phase 25 not yet planned)
+**Progress:** [██████░░░░] v0.10.0 — 5 of 9 phases complete (22, 22.1, 23, 24, 25); 64/64 planned plans executed (Phase 26 not yet planned)
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -358,6 +358,19 @@ Entering them here would fabricate authority the corpus does not contain.
 None yet.
 
 ### Blockers/Concerns
+
+**Phase 25 close (2026-09-06): no blockers.** UAT 76/76 passed (`25-UAT.md`: 72 deliverables
+auto-passed from SUMMARY coverage blocks, 4 human checkpoints; the CI-only Redis node-cache and
+Postgres Waypoint tiers were read green on runs `34042790005` and `34051074633`). Carried concerns:
+(1) The `api-surface` CI job had been red since Phase 24: `.project/current-exports.txt` was last
+regenerated at plan 23-12 and Phases 24 + 25 added 123 public items (purely additive) without
+regenerating it. Fixed by `0e5c106c` (gap G-25-1); no close-out plan runs
+`scripts/check-api-surface.sh`, so add it to the X-10/X-11 gate list from Phase 26 on. (2)
+`25-05-SUMMARY.md`'s coverage block labels one verification `kind: doc`, which `uat
+classify-coverage` rejects — change it to `kind: other` so D1 auto-passes on any re-run. (3)
+`25-SECURITY.md` is not yet produced (Phase 24 ran `/gsd-secure-phase` before advancing) and
+`25-VALIDATION.md` is still `status: draft`. (4) Phase 23's carried concern (3) is closed: plan
+25-12 replaced the E2E-3 mock attempt-counter seam with a real per-task Aegis retry.
 
 **Phase 24 close (2026-09-05): no blockers.** Carried concern from UAT: the untracked, gitignored
 local `config.yml` in the devcontainer no longer deserialises into `Settings` (it lacks
@@ -828,14 +841,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 25 context gathered
+**Stopped at:** Phase 25 complete — UAT 76/76 passed (2026-09-06), canonical verification `passed`, security review not yet run. Next: `/gsd-secure-phase 25`, then `/gsd-discuss-phase 26` and `/gsd-plan-phase 26`.
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-05T14:33:33.253Z
-Resume file: .planning/phases/25-node-level-fault-tolerance/25-CONTEXT.md
+Last session: 2026-09-06T19:44:34.000Z
+Resume file: None
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**
@@ -896,4 +909,5 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
-- `/gsd-discuss-phase 24` — gather context for Phase 24 (no CONTEXT.md exists yet), then `/gsd-plan-phase 24`
+- `/gsd-secure-phase 25` — security review for Phase 25 (Phase 24 precedent: `24-SECURITY.md` verified, `threats_open: 0`, before advancing)
+- `/gsd-discuss-phase 26` — gather context for Phase 26 (no CONTEXT.md exists yet), then `/gsd-plan-phase 26`

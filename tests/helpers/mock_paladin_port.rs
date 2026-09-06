@@ -4,12 +4,14 @@
 //! to enable testing of Formation, Phalanx, and other Battalion patterns.
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
 use paladin::core::platform::container::paladin::Paladin;
 use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
+use paladin_core::platform::container::transience::Transience;
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::paladin_port::{
     PaladinPort, PaladinResult, PaladinStream, PaladinStreamChunk, StopReason,
@@ -65,11 +67,13 @@ impl PaladinPort for MockPaladinPort {
 
 /// Configurable failing [`PaladinPort`] mock for exercising Commander error paths.
 ///
-/// Unlike [`MockPaladinPort`], which always succeeds, `FaultyPaladinPort` supports four
+/// Unlike [`MockPaladinPort`], which always succeeds, `FaultyPaladinPort` supports five
 /// independently-configurable fault modes — fail always, fail a named Paladin, fail until
-/// the Nth attempt (an invocation counter), and a controllable per-execution delay — so
-/// tests can exercise `ErrorStrategy::FailFast`, `ErrorStrategy::ContinueOnError` and
-/// `ErrorStrategy::RetryThenContinue` against a Commander without a real LLM.
+/// the Nth attempt (a GLOBAL invocation counter), fail a named Paladin until ITS OWN Nth
+/// call (a per-Paladin counter, Phase 25 D-31), and a controllable per-execution delay —
+/// so tests can exercise `ErrorStrategy::FailFast`, `ErrorStrategy::ContinueOnError` and
+/// `ErrorStrategy::RetryThenContinue` against a Commander without a real LLM, and a real
+/// Aegis per-task retry against the `WarEngine`.
 ///
 /// This is the mock D-09/D-10 asked for: a single shared home for Commander error-path
 /// testing, built by combining the retry-counter idiom from
@@ -77,8 +81,22 @@ impl PaladinPort for MockPaladinPort {
 /// `fail_until_attempt` pattern in `FormationExecutionService`'s in-crate test mock and the
 /// `fail_paladin_names` + `delay_ms` pattern in `PhalanxExecutionService`'s.
 ///
+/// # Precedence when several fault modes are configured
+///
+/// `execute` decides a call in this fixed order, and the first mode that applies wins:
+///
+/// 1. `fail_until_attempt` (the global counter, shared across every Paladin);
+/// 2. `fail_paladin_until_attempt` (this Paladin's own counter);
+/// 3. `fail_always`;
+/// 4. `fail_paladin` (`fail_paladin_names`).
+///
+/// Every call advances BOTH the global counter and the executed Paladin's own counter,
+/// whether or not an earlier mode already decided that call — so a per-Paladin threshold
+/// counts the Paladin's calls, not the calls that reached step 2.
+///
 /// All interior state uses `Arc<Mutex<_>>`, never `Rc`/`RefCell`, so the type is
-/// `Send + Sync` and safe to share across concurrent Paladin executions (Phalanx, Campaign).
+/// `Send + Sync` and safe to share across concurrent Paladin executions (Phalanx, Campaign,
+/// a mustered `WarGraph` superstep).
 #[derive(Clone)]
 pub struct FaultyPaladinPort {
     /// Total number of `execute` calls made across every Paladin, in invocation order.
@@ -92,11 +110,22 @@ pub struct FaultyPaladinPort {
     /// When `Some(n)`, `execute` fails while the invocation counter is at or below `n`,
     /// then succeeds on every call after that — the retry-count pattern.
     fail_until_attempt: Option<usize>,
+    /// Per-Paladin failure thresholds (Phase 25 D-31), keyed by `paladin.node.name`: a
+    /// Paladin listed here fails while ITS OWN call counter is at or below the threshold
+    /// and succeeds afterwards, with a Transient-classified `LlmFailure`. Purely
+    /// additive beside `fail_until_attempt`, whose global semantics are unchanged.
+    fail_paladin_until_attempt: Arc<Mutex<HashMap<String, usize>>>,
+    /// Per-Paladin call counters backing `fail_paladin_until_attempt`, keyed by
+    /// `paladin.node.name` and advanced on EVERY call for that Paladin.
+    per_paladin_calls: Arc<Mutex<HashMap<String, usize>>>,
     /// Milliseconds `execute` sleeps before deciding success or failure.
     delay_ms: u64,
 }
 
 impl FaultyPaladinPort {
+    /// The provider name carried by every per-Paladin `LlmFailure` this mock produces.
+    pub const PROVIDER: &'static str = "faulty-paladin-port";
+
     /// Creates a `FaultyPaladinPort` with no configured failures: every `execute` call
     /// succeeds and is recorded in the execution log.
     pub fn new() -> Self {
@@ -106,6 +135,8 @@ impl FaultyPaladinPort {
             fail_always: false,
             fail_paladin_names: Arc::new(Mutex::new(Vec::new())),
             fail_until_attempt: None,
+            fail_paladin_until_attempt: Arc::new(Mutex::new(HashMap::new())),
+            per_paladin_calls: Arc::new(Mutex::new(HashMap::new())),
             delay_ms: 0,
         }
     }
@@ -125,9 +156,33 @@ impl FaultyPaladinPort {
 
     /// Fails every `execute` call while the invocation counter is at or below `n`, then
     /// succeeds from the `n + 1`th call onward. The counter is shared across every
-    /// Paladin executed through this port, not scoped per Paladin.
+    /// Paladin executed through this port, not scoped per Paladin — for a counter scoped
+    /// to ONE named Paladin, see [`FaultyPaladinPort::fail_paladin_until_attempt`].
     pub fn fail_until_attempt(mut self, n: usize) -> Self {
         self.fail_until_attempt = Some(n);
+        self
+    }
+
+    /// Fails the Paladin named `name` while ITS OWN call counter is at or below `n`, then
+    /// succeeds from that Paladin's `n + 1`th call onward (Phase 25 D-31). Chainable —
+    /// call once per Paladin; each named Paladin's counter is independent of every
+    /// other's and of the global [`FaultyPaladinPort::fail_until_attempt`] counter,
+    /// which keeps its documented cross-Paladin semantics unchanged.
+    ///
+    /// The failure produced is `PaladinError::LlmFailure { transience: Transient,
+    /// status: Some(503), provider: Some(PROVIDER), .. }` — classified Transient BY VALUE,
+    /// so the default `RetryPredicate::TransientOnly` retries it without any test
+    /// widening the predicate (FT-FR-01, FT-FR-05, FT-FR-06 proven together).
+    ///
+    /// Precedence relative to the other fault modes (see the type-level rustdoc): the
+    /// global `fail_until_attempt` is consulted FIRST, this per-Paladin counter SECOND,
+    /// then `fail_always`, then `fail_paladin`. The Paladin's own counter advances on
+    /// every one of its calls, including calls the global counter already failed.
+    pub fn fail_paladin_until_attempt(self, name: impl Into<String>, n: usize) -> Self {
+        self.fail_paladin_until_attempt
+            .lock()
+            .unwrap()
+            .insert(name.into(), n);
         self
     }
 
@@ -172,11 +227,22 @@ impl PaladinPort for FaultyPaladinPort {
             *count
         };
 
+        // Advance THIS Paladin's own counter on every call (D-31), independently of the
+        // global counter above and of whichever fault mode decides the call below.
+        let paladin_attempt = {
+            let mut per_paladin = self.per_paladin_calls.lock().unwrap();
+            let count = per_paladin.entry(paladin.node.name.clone()).or_insert(0);
+            *count += 1;
+            *count
+        };
+
         if self.delay_ms > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
         }
 
-        // Precedence: fail_until_attempt, then fail_always, then fail_paladin_names.
+        // Precedence (documented on the type): fail_until_attempt (global), then
+        // fail_paladin_until_attempt (per-Paladin), then fail_always, then
+        // fail_paladin_names.
         if let Some(threshold) = self.fail_until_attempt
             && current_attempt <= threshold
         {
@@ -184,6 +250,30 @@ impl PaladinPort for FaultyPaladinPort {
                 "FaultyPaladinPort: {} failed on attempt {} (fail_until_attempt={})",
                 paladin.node.name, current_attempt, threshold
             )));
+        }
+
+        let per_paladin_threshold = self
+            .fail_paladin_until_attempt
+            .lock()
+            .unwrap()
+            .get(&paladin.node.name)
+            .copied();
+        if let Some(threshold) = per_paladin_threshold
+            && paladin_attempt <= threshold
+        {
+            // A Transient-classified, status-carrying failure -- the shape a real
+            // provider adapter produces for a 503 -- so the DEFAULT TransientOnly
+            // retry predicate retries it by value.
+            return Err(PaladinError::LlmFailure {
+                transience: Transience::Transient,
+                status: Some(503),
+                provider: Some(Self::PROVIDER.to_string()),
+                message: format!(
+                    "FaultyPaladinPort: {} failed on its own attempt {} \
+                     (fail_paladin_until_attempt={})",
+                    paladin.node.name, paladin_attempt, threshold
+                ),
+            });
         }
 
         if self.fail_always {

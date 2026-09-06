@@ -11080,4 +11080,531 @@ mod tests {
             "every bridge builds its EngineLimits from the default (run_timeout: None)"
         );
     }
+
+    // --- Plan 25-10 Task 2: Route / Absorb / no-handler dispatch after
+    // retries exhaust (D-21, D-08, FT-FR-05, FT-FR-11, FT-FR-12, FT-FR-14) --
+
+    use crate::engine::test_support::{FailingPaladinPort, PermanentlyFailingNode, RecoveryNode};
+    use paladin_core::platform::container::aegis::{ErrorHandlerSpec, RetryPolicy};
+    use paladin_core::platform::container::node_error::NodeErrorSource;
+    use paladin_core::platform::container::transience::Transience;
+
+    /// `result` (the ordinary output field), `booking_error` (a Route's
+    /// `error_field`) and `recovered` (what a recovery node or an Absorb
+    /// fallback writes) -- all `LastWrite`.
+    fn handler_schema() -> BattlefieldSchema {
+        schema(
+            ["result", "booking_error", "recovered"]
+                .into_iter()
+                .map(|name| FieldSpec::new(field(name), DispatchRule::LastWrite, None, false))
+                .collect(),
+        )
+    }
+
+    fn route_aegis(to: &NodeId, error_field: &FieldName) -> Aegis {
+        Aegis {
+            on_error: Some(ErrorHandlerSpec::Route {
+                to: to.clone(),
+                error_field: error_field.clone(),
+            }),
+            ..Aegis::default()
+        }
+    }
+
+    fn absorb_aegis(fallback_delta: StateDelta) -> Aegis {
+        Aegis {
+            on_error: Some(ErrorHandlerSpec::Absorb { fallback_delta }),
+            ..Aegis::default()
+        }
+    }
+
+    /// `TransientOnly` (the default predicate), jitter-free, 1 ms initial
+    /// interval -- so a Permanent failure gets exactly one attempt and a
+    /// Transient one retries up to `max_attempts` under the paused clock.
+    fn transient_only_retry(max_attempts: u32) -> RetryPolicy {
+        RetryPolicy {
+            max_attempts,
+            jitter: false,
+            initial_interval: Duration::from_millis(1),
+            ..RetryPolicy::default()
+        }
+    }
+
+    /// A port whose every call fails `Permanent` (a `ConfigurationError`
+    /// classifies Permanent by `PaladinError::transience`, D-05).
+    fn permanent_port() -> Arc<FailingPaladinPort> {
+        FailingPaladinPort::new(|| PaladinError::ConfigurationError("card declined".to_string()))
+    }
+
+    /// A port whose every call fails with a 503-classified `Transient`
+    /// `LlmFailure`.
+    fn transient_port() -> Arc<FailingPaladinPort> {
+        FailingPaladinPort::new(|| PaladinError::LlmFailure {
+            transience: Transience::Transient,
+            status: Some(503),
+            provider: Some("mock".to_string()),
+            message: "service unavailable".to_string(),
+        })
+    }
+
+    fn paladin_node(name: &str, out: &FieldName) -> NodeSpec {
+        NodeSpec::paladin(make_paladin(name), InputMapping::new("go"), out.clone())
+    }
+
+    /// Run `graph` from its entry through the real superstep loop over
+    /// `port`, with `registries` (so a `Custom` handler resolves).
+    async fn run_handled(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        port: &Arc<dyn PaladinPort>,
+        registries: &EngineRegistries,
+    ) -> RunOutcome {
+        run(
+            store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            registries,
+            graph,
+            thread,
+            Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            1,
+            port,
+            &no_trace(),
+            &no_interceptors(),
+            &None,
+            None,
+            default_shutdown_grace(),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// The `NodeExecutionRecord` for `node` across every saved Waypoint of
+    /// `thread` (oldest superstep first).
+    async fn records_for(
+        store: &RecordingWaypointStore,
+        thread: &ThreadId,
+        node: &NodeId,
+    ) -> Vec<NodeExecutionRecord> {
+        let mut waypoints = store.saved_waypoints(thread).await;
+        waypoints.reverse();
+        waypoints
+            .iter()
+            .flat_map(|wp| wp.completed.iter().filter(|r| &r.node_id == node).cloned())
+            .collect()
+    }
+
+    fn completed_state(outcome: RunOutcome) -> Battlefield {
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// `book` (a Paladin node under `aegis`) with `cancel` (a
+    /// [`RecoveryNode`] writing `recovered = "cancelled"`) declared but NOT
+    /// statically wired -- reachable only by routing.
+    fn book_cancel_graph(aegis: Aegis) -> (WarGraph, NodeId, NodeId, Arc<RecoveryNode>) {
+        let mut graph = WarGraph::new(handler_schema(), EngineLimits::default());
+        let book = NodeId::new("book");
+        let cancel = NodeId::new("cancel");
+        let recovery = RecoveryNode::new(field("recovered"), serde_json::json!("cancelled"));
+        graph.add_node(book.clone(), paladin_node("book", &field("result")));
+        graph.add_node(cancel.clone(), NodeSpec::Function(recovery.clone()));
+        graph.add_entry(book.clone());
+        graph.set_aegis(book.clone(), aegis);
+        (graph, book, cancel, recovery)
+    }
+
+    /// FT-FR-11, D-21: the compensation-chain shape from CONTEXT.md --
+    /// `book` fails permanently, routes to `cancel`, the run Completes,
+    /// `booking_error` holds the NodeError JSON, `book`'s record reads
+    /// `outcome: Failed`. Compared as PARSED JSON fields, never bytes.
+    #[tokio::test]
+    async fn route_writes_the_structured_error_and_places_the_target() {
+        let error_field = field("booking_error");
+        let (graph, book, cancel, recovery) =
+            book_cancel_graph(route_aegis(&NodeId::new("cancel"), &error_field));
+        let port_impl = permanent_port();
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("route-structured").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        let written = final_state
+            .get_raw(&error_field)
+            .expect("booking_error holds the routed NodeError");
+        assert_eq!(written["node_id"], serde_json::json!("book"));
+        assert_eq!(written["attempt"], serde_json::json!(1));
+        assert_eq!(written["transience"], serde_json::json!("Permanent"));
+        let message = written["source"]["Paladin"]["message"]
+            .as_str()
+            .expect("source.Paladin.message is a string");
+        assert!(
+            message.contains("card declined"),
+            "the source message matches the failure: {message}"
+        );
+        // And it round-trips into the typed value.
+        let parsed: NodeError =
+            serde_json::from_value(written.clone()).expect("error_field parses as a NodeError");
+        assert_eq!(parsed.node_id, book);
+        assert_eq!(parsed.transience, Transience::Permanent);
+        assert!(matches!(parsed.source, NodeErrorSource::Paladin { .. }));
+
+        assert_eq!(port_impl.call_count(), 1, "no retry policy: one attempt");
+        assert!(recovery.ran(), "the Route target ran");
+        assert_eq!(
+            final_state.get_raw(&field("recovered")),
+            Some(&serde_json::json!("cancelled"))
+        );
+        let book_records = records_for(&store, &thread, &book).await;
+        assert_eq!(book_records.len(), 1);
+        assert_eq!(book_records[0].outcome, NodeOutcomeKind::Failed);
+        assert_eq!(book_records[0].attempt, 1);
+        let cancel_records = records_for(&store, &thread, &cancel).await;
+        assert_eq!(cancel_records.len(), 1);
+        assert_eq!(cancel_records[0].outcome, NodeOutcomeKind::Succeeded);
+    }
+
+    /// D-21: the routed target REPLACES the failed node's static
+    /// successors -- `confirm` (book's ordinary successor) never runs.
+    #[tokio::test]
+    async fn route_replaces_the_failed_nodes_static_successors() {
+        let error_field = field("booking_error");
+        let (mut graph, book, _cancel, recovery) =
+            book_cancel_graph(route_aegis(&NodeId::new("cancel"), &error_field));
+        let confirm = NodeId::new("confirm");
+        let confirm_node = RecoveryNode::new(field("result"), serde_json::json!("confirmed"));
+        graph.add_node(confirm.clone(), NodeSpec::Function(confirm_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: book.clone(),
+            to: confirm.clone(),
+            condition: None,
+        });
+        let port: Arc<dyn PaladinPort> = permanent_port();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("route-replaces").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert!(recovery.ran(), "only the routed target ran");
+        assert!(
+            !confirm_node.ran(),
+            "the failed node's static successor must NOT run"
+        );
+        assert!(final_state.get_raw(&field("result")).is_none());
+        assert!(records_for(&store, &thread, &confirm).await.is_empty());
+    }
+
+    /// D-21: routing to a terminal recovery node (no outgoing edges) ends
+    /// the run `Completed` -- the final Waypoint's status says so, and no
+    /// starvation failure is raised for the unrun static successors.
+    #[tokio::test]
+    async fn a_route_target_with_no_outgoing_edges_completes_the_run_normally() {
+        let error_field = field("booking_error");
+        let (graph, _book, cancel, recovery) =
+            book_cancel_graph(route_aegis(&NodeId::new("cancel"), &error_field));
+        let port: Arc<dyn PaladinPort> = permanent_port();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("route-terminal").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert!(recovery.ran());
+        assert_eq!(
+            final_state.get_raw(&field("recovered")),
+            Some(&serde_json::json!("cancelled"))
+        );
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(waypoints.len(), 2, "one superstep for book, one for cancel");
+        assert_eq!(waypoints[0].status, WaypointStatus::Completed);
+        assert!(waypoints[0].vanguard.is_empty());
+        // The first Waypoint's vanguard placed exactly the Route target.
+        assert_eq!(waypoints[1].vanguard, vec![cancel]);
+        assert_eq!(waypoints[1].status, WaypointStatus::Running);
+    }
+
+    /// FT-FR-12, D-21: under `Absorb`, the record reads `Failed`, the
+    /// fallback delta merges, and the node's static edges fire as on
+    /// success.
+    #[tokio::test]
+    async fn absorb_merges_its_delta_and_fires_static_edges() {
+        let mut graph = WarGraph::new(handler_schema(), EngineLimits::default());
+        let book = NodeId::new("book");
+        let confirm = NodeId::new("confirm");
+        let failing = PermanentlyFailingNode::new("booking service down");
+        let confirm_node = RecoveryNode::new(field("result"), serde_json::json!("confirmed"));
+        graph.add_node(book.clone(), NodeSpec::Function(failing.clone()));
+        graph.add_node(confirm.clone(), NodeSpec::Function(confirm_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: book.clone(),
+            to: confirm.clone(),
+            condition: None,
+        });
+        graph.add_entry(book.clone());
+        let mut fallback = StateDelta::new();
+        fallback.set_raw(field("recovered"), serde_json::json!("fallback"));
+        graph.set_aegis(book.clone(), absorb_aegis(fallback));
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("absorb-merges").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(failing.run_count(), 1);
+        assert_eq!(
+            final_state.get_raw(&field("recovered")),
+            Some(&serde_json::json!("fallback")),
+            "the fallback delta merged"
+        );
+        assert!(confirm_node.ran(), "the static edge fired as on success");
+        assert_eq!(
+            final_state.get_raw(&field("result")),
+            Some(&serde_json::json!("confirmed"))
+        );
+        let book_records = records_for(&store, &thread, &book).await;
+        assert_eq!(book_records.len(), 1);
+        assert_eq!(book_records[0].outcome, NodeOutcomeKind::Failed);
+        // The absorbed node's own delta never existed; only the fallback
+        // and confirm's write are in the final state.
+        assert!(final_state.get_raw(&field("booking_error")).is_none());
+    }
+
+    /// FT-FR-12: an EMPTY fallback delta merges nothing -- the Battlefield
+    /// is unchanged by the absorbed node -- yet its static edges still
+    /// fire and the record still reads `Failed`.
+    #[tokio::test]
+    async fn absorb_with_an_empty_fallback_delta_merges_nothing_and_continues() {
+        let mut graph = WarGraph::new(handler_schema(), EngineLimits::default());
+        let book = NodeId::new("book");
+        let confirm = NodeId::new("confirm");
+        let failing = PermanentlyFailingNode::new("booking service down");
+        let confirm_node = RecoveryNode::new(field("result"), serde_json::json!("confirmed"));
+        graph.add_node(book.clone(), NodeSpec::Function(failing.clone()));
+        graph.add_node(confirm.clone(), NodeSpec::Function(confirm_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: book.clone(),
+            to: confirm.clone(),
+            condition: None,
+        });
+        graph.add_entry(book.clone());
+        graph.set_aegis(book.clone(), absorb_aegis(StateDelta::new()));
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("absorb-empty").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        // The Battlefield `confirm` observed (the post-absorb merge) is
+        // byte-identical to the initial state: nothing merged for `book`.
+        let observed = confirm_node.observed();
+        assert_eq!(observed.len(), 1);
+        let initial = Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap();
+        assert_eq!(observed[0], initial, "the absorbed node merged nothing");
+        assert!(confirm_node.ran(), "static edges still fire");
+        assert_eq!(
+            final_state.get_raw(&field("result")),
+            Some(&serde_json::json!("confirmed"))
+        );
+        let book_records = records_for(&store, &thread, &book).await;
+        assert_eq!(book_records.len(), 1);
+        assert_eq!(book_records[0].outcome, NodeOutcomeKind::Failed);
+    }
+
+    /// FT-FR-14, D-08: with no `on_error`, an exhausted failure writes a
+    /// `Failed` Waypoint whose `node_error` is `Some(..)` and returns
+    /// `RunOutcome::Failed` carrying the same value -- never a bare string.
+    #[tokio::test]
+    async fn no_handler_fails_the_run_with_the_structured_error() {
+        let (graph, book, _cancel, recovery) = book_cancel_graph(Aegis {
+            retry: Some(transient_only_retry(3)),
+            ..Aegis::default()
+        });
+        // `cancel` is declared but, with no Route, never reached -- it is
+        // the control proving nothing was routed.
+        let port_impl = permanent_port();
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("no-handler").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+
+        let exposed = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        assert_eq!(exposed.node_id, book);
+        assert_eq!(
+            exposed.attempt, 1,
+            "Permanent under TransientOnly: one attempt"
+        );
+        assert_eq!(exposed.transience, Transience::Permanent);
+        assert!(matches!(
+            &outcome,
+            RunOutcome::Failed {
+                error: EngineError::NodeFailed(_),
+                ..
+            }
+        ));
+        assert!(!recovery.ran(), "no handler: nothing routed");
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(waypoints.len(), 1);
+        match &waypoints[0].status {
+            WaypointStatus::Failed {
+                failed_node,
+                node_error,
+                ..
+            } => {
+                assert_eq!(failed_node, &book);
+                assert_eq!(node_error.as_ref(), Some(&exposed));
+            }
+            other => panic!("expected a Failed Waypoint, got {other:?}"),
+        }
+    }
+
+    /// FT-FR-05, T-25-48: a Transient failure under `max_attempts: 3`
+    /// reaches the handler only after the THIRD attempt fails -- the
+    /// recovery node runs exactly once, after three port calls, and the
+    /// routed error records `attempt: 3`.
+    #[tokio::test(start_paused = true)]
+    async fn a_handler_does_not_run_while_retries_remain() {
+        let error_field = field("booking_error");
+        let (graph, _book, _cancel, recovery) = book_cancel_graph(Aegis {
+            retry: Some(transient_only_retry(3)),
+            on_error: Some(ErrorHandlerSpec::Route {
+                to: NodeId::new("cancel"),
+                error_field: error_field.clone(),
+            }),
+            ..Aegis::default()
+        });
+        let port_impl = transient_port();
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("handler-after-retries").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(port_impl.call_count(), 3, "every attempt ran first");
+        assert_eq!(
+            recovery.run_count(),
+            1,
+            "exactly one handler invocation, after exhaustion"
+        );
+        let written = final_state.get_raw(&error_field).expect("routed error");
+        assert_eq!(written["attempt"], serde_json::json!(3));
+        assert_eq!(written["transience"], serde_json::json!("Transient"));
+        assert_eq!(written["source"]["Llm"]["status"], serde_json::json!(503));
+        let book_records = records_for(&store, &thread, &NodeId::new("book")).await;
+        assert_eq!(
+            book_records.len(),
+            1,
+            "one record, no Waypoint between attempts"
+        );
+        assert_eq!(book_records[0].attempt, 3);
+        assert_eq!(
+            book_records[0].attempts.len(),
+            2,
+            "two failed attempts before the final"
+        );
+    }
+
+    /// FT-FR-05: a Permanent failure under `TransientOnly` invokes the
+    /// handler after exactly one attempt -- the retry predicate refused it,
+    /// and the handler is entered at once.
+    #[tokio::test]
+    async fn a_non_retryable_error_reaches_the_handler_immediately() {
+        let error_field = field("booking_error");
+        let (graph, _book, _cancel, recovery) = book_cancel_graph(Aegis {
+            retry: Some(transient_only_retry(3)),
+            on_error: Some(ErrorHandlerSpec::Route {
+                to: NodeId::new("cancel"),
+                error_field: error_field.clone(),
+            }),
+            ..Aegis::default()
+        });
+        let port_impl = permanent_port();
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("handler-immediate").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(port_impl.call_count(), 1, "exactly one attempt");
+        assert_eq!(recovery.run_count(), 1);
+        let written = final_state.get_raw(&error_field).expect("routed error");
+        assert_eq!(written["attempt"], serde_json::json!(1));
+        assert_eq!(written["transience"], serde_json::json!("Permanent"));
+        let book_records = records_for(&store, &thread, &NodeId::new("book")).await;
+        assert_eq!(book_records[0].attempt, 1);
+        assert!(book_records[0].attempts.is_empty());
+    }
 }

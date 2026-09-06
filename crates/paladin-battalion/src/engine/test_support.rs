@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
 use paladin_core::platform::container::directive::Directive;
+use paladin_core::platform::container::node_error::NodeError;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
@@ -27,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 use crate::engine::heartbeat::HeartbeatHandle;
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor};
 use crate::engine::node::{NodeContext, StateNode, StateNodeError};
+use crate::error_handler::ErrorHandler;
 
 /// A [`WaypointPort`] test double wrapping an [`InMemoryWaypointStore`],
 /// additionally recording every `save` call and able to fail its NEXT save
@@ -1340,5 +1342,157 @@ impl StateNode for TimedFunctionNode {
         let mut delta = StateDelta::new();
         delta.set_raw(self.field.clone(), value.clone());
         Ok(delta.into())
+    }
+}
+
+// --- Phase 25 Plan 10: error-handler test doubles (D-21, D-13) -------------
+
+/// A [`StateNode`] test double that always fails with a fixed message
+/// (like [`FailingFunctionNode`]) but ALSO counts its runs, so a test can
+/// assert exactly how many attempts ran before an `on_error` handler was
+/// entered (FT-FR-05: a handler runs only after retries exhaust, never
+/// while attempts remain).
+pub struct PermanentlyFailingNode {
+    message: String,
+    runs: AtomicUsize,
+}
+
+impl PermanentlyFailingNode {
+    /// Construct a node that always returns `StateNodeError(message)`.
+    pub fn new(message: impl Into<String>) -> Arc<Self> {
+        Arc::new(Self {
+            message: message.into(),
+            runs: AtomicUsize::new(0),
+        })
+    }
+
+    /// How many times this node has run (every attempt counts).
+    pub fn run_count(&self) -> usize {
+        self.runs.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl StateNode for PermanentlyFailingNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        Err(StateNodeError(self.message.clone()))
+    }
+}
+
+/// A recovery-node [`StateNode`] test double for the `Route` handler tests:
+/// records whether (and how often) it ran, the Battlefield snapshot it
+/// observed on each run (cloned, so a test can assert the routed error was
+/// visible to it), and writes `value` to `field` on every run.
+pub struct RecoveryNode {
+    field: FieldName,
+    value: serde_json::Value,
+    runs: AtomicUsize,
+    observed: Mutex<Vec<Battlefield>>,
+}
+
+impl RecoveryNode {
+    /// Construct a recovery node writing `value` to `field` when it runs.
+    pub fn new(field: FieldName, value: serde_json::Value) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            value,
+            runs: AtomicUsize::new(0),
+            observed: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Whether this node has run at least once.
+    pub fn ran(&self) -> bool {
+        self.run_count() > 0
+    }
+
+    /// How many times this node has run.
+    pub fn run_count(&self) -> usize {
+        self.runs.load(Ordering::SeqCst)
+    }
+
+    /// The Battlefield snapshot observed on each run, in run order.
+    pub fn observed(&self) -> Vec<Battlefield> {
+        self.observed.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for RecoveryNode {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        self.observed.lock().unwrap().push(state.clone());
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), self.value.clone());
+        Ok(delta.into())
+    }
+}
+
+/// The reply a [`RecordingErrorHandler`] gives on every invocation.
+pub type HandlerReply =
+    dyn Fn(&NodeError, &Battlefield) -> Result<Directive, NodeError> + Send + Sync;
+
+/// An [`ErrorHandler`] test double for `ErrorHandlerSpec::Custom` (D-13):
+/// counts its invocations, records every `NodeError` it was handed and a
+/// clone of the `Battlefield` it observed alongside it, and replies with
+/// whatever the caller-supplied closure returns -- one double serves every
+/// `NextStep` arm (`Edges`/`Goto`/`End`/`Parley`/`Muster`) and the
+/// always-erroring case alike.
+pub struct RecordingErrorHandler {
+    invocations: AtomicUsize,
+    seen: Mutex<Vec<(NodeError, Battlefield)>>,
+    reply: Box<HandlerReply>,
+}
+
+impl RecordingErrorHandler {
+    /// Construct a handler replying with `reply(err, state)` on every
+    /// invocation.
+    pub fn new(
+        reply: impl Fn(&NodeError, &Battlefield) -> Result<Directive, NodeError> + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            invocations: AtomicUsize::new(0),
+            seen: Mutex::new(Vec::new()),
+            reply: Box::new(reply),
+        })
+    }
+
+    /// Convenience: a handler that always replies with the same
+    /// `Directive`.
+    pub fn replying(directive: Directive) -> Arc<Self> {
+        Self::new(move |_err, _state| Ok(directive.clone()))
+    }
+
+    /// Convenience: a handler that always fails with `error`.
+    pub fn erroring(error: NodeError) -> Arc<Self> {
+        Self::new(move |_err, _state| Err(error.clone()))
+    }
+
+    /// How many times `handle` has been called.
+    pub fn invocation_count(&self) -> usize {
+        self.invocations.load(Ordering::SeqCst)
+    }
+
+    /// Every `(NodeError, Battlefield)` pair observed, in invocation order.
+    pub fn seen(&self) -> Vec<(NodeError, Battlefield)> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl ErrorHandler for RecordingErrorHandler {
+    async fn handle(&self, err: &NodeError, state: &Battlefield) -> Result<Directive, NodeError> {
+        self.invocations.fetch_add(1, Ordering::SeqCst);
+        self.seen.lock().unwrap().push((err.clone(), state.clone()));
+        (self.reply)(err, state)
     }
 }

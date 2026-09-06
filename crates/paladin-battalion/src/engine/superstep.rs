@@ -503,10 +503,15 @@ impl NodeFailure {
 /// - `Absorb { fallback_delta }`: the fallback delta (possibly empty --
 ///   merges nothing) routed via `NextStep::Edges`, so the node's static
 ///   edges fire exactly as they would on success (FT-FR-12).
-/// - `Custom(name)`: **plan 25-10 Task 3** -- until that arm lands, an
-///   explicit re-fail with the original error, never a silent fallthrough
-///   to `Absorb`/`Edges`: the run fails `NodeFailed(err)` exactly as with
-///   no handler.
+/// - `Custom(name)`: the handler registered under `name` in
+///   `registries.error_handlers` (D-13, FT-FR-13) is `await`ed with
+///   `(err, state)` and its `Directive` returned verbatim -- `Edges`,
+///   `Goto`, `End`, `Parley` and `Muster` are all honoured by the caller
+///   exactly as a node's own `NextStep` is. `WarGraph::validate` already
+///   rejected an unregistered name before any node ran (plan 25-03), so a
+///   miss here is unreachable in practice; library code must still not
+///   panic on an invariant it cannot enforce, so it re-fails with the
+///   original error -- never a silent fallthrough to `Absorb`/`Edges`.
 ///
 /// Every arm reads `state` as the same immutable pre-superstep snapshot
 /// the node's attempts read (T-25-50). `serde_json::to_value` on a
@@ -519,7 +524,6 @@ async fn dispatch_error_handler(
     state: &Battlefield,
     registries: &EngineRegistries,
 ) -> Result<Directive, NodeError> {
-    let _ = (state, registries);
     match spec {
         ErrorHandlerSpec::Route { to, error_field } => {
             let serialized = serde_json::to_value(err).map_err(|_| err.clone())?;
@@ -534,9 +538,13 @@ async fn dispatch_error_handler(
             delta: fallback_delta.clone(),
             next: NextStep::Edges,
         }),
-        // Task 3 replaces this arm with the registry dispatch. The spec
-        // enum is `#[non_exhaustive]`, so the wildcard is required; it is
-        // deliberately a re-fail, never an `Absorb`-shaped fallthrough.
+        ErrorHandlerSpec::Custom(name) => match registries.error_handlers.get(name) {
+            Some(handler) => handler.handle(err, state).await,
+            None => Err(err.clone()),
+        },
+        // `ErrorHandlerSpec` is `#[non_exhaustive]`: a variant added later
+        // is deliberately a re-fail with the original error, never an
+        // `Absorb`-shaped fallthrough that would silently swallow it.
         _ => Err(err.clone()),
     }
 }

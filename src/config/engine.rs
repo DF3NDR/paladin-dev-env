@@ -325,6 +325,36 @@ mod tests {
         assert_eq!(config.run_timeout_secs, None);
     }
 
+    /// Plan 25-09, D-20: `run_timeout_secs` converts to
+    /// `EngineLimits.run_timeout` EXACTLY (`Duration::from_secs`), and the
+    /// field is no longer carried without effect -- the engine now enforces
+    /// it as `EngineError::RunTimeoutExceeded`.
+    #[test]
+    fn config_seconds_convert_to_duration_exactly() {
+        let config = EngineConfig {
+            run_timeout_secs: Some(90),
+            ..EngineConfig::default()
+        };
+        config
+            .validate()
+            .expect("a positive run_timeout_secs validates");
+        let limits: EngineLimits = config.into();
+        assert_eq!(limits.run_timeout, Some(Duration::from_secs(90)));
+
+        let unset: EngineLimits = EngineConfig::default().into();
+        assert_eq!(unset.run_timeout, None);
+
+        // The rustdoc must no longer describe the field as carried-but-
+        // unenforced. The phrase is assembled at compile time so this
+        // test's own source never contains it.
+        let stale_wording = concat!("plumbing", "-", "only");
+        let source = include_str!("engine.rs");
+        assert!(
+            !source.contains(stale_wording),
+            "run_timeout_secs is enforced from plan 25-09 on; the rustdoc must say so"
+        );
+    }
+
     // --- Phase 24 Plan 08: shutdown_grace_secs / graceful_shutdown (HITL-04,
     // D-20) -- RED: neither field exists on EngineConfig yet.
 

@@ -12044,4 +12044,299 @@ mod tests {
         assert!(a_node.run_count() + b_node.run_count() <= 5);
         assert!(matches!(waypoints[0].status, WaypointStatus::Failed { .. }));
     }
+
+    // --- Plan 25-11 Task 1: handlers inside a Muster are delta-only (D-22) --
+
+    use crate::engine::test_support::MusterFailThenSucceedWorker;
+
+    /// `planner -> Muster(a, b, c) -> worker` over an `Append` `results`
+    /// field. Task `b` ALWAYS fails (every attempt); `a` and `c` append
+    /// their own key at once. `worker_aegis` is set on the template, so the
+    /// failing task's final failure is dispatched to that handler.
+    fn failing_muster_graph(
+        worker_aegis: Aegis,
+    ) -> (WarGraph, NodeId, Arc<MusterFailThenSucceedWorker>) {
+        let results = field("results");
+        let s = schema(vec![FieldSpec::new(
+            results.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let worker_node =
+            MusterFailThenSucceedWorker::new(results.clone(), [("b", usize::MAX)], None);
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(vec![
+                    muster_task(&worker, serde_json::json!("a"), "a"),
+                    muster_task(&worker, serde_json::json!("b"), "b"),
+                    muster_task(&worker, serde_json::json!("c"), "c"),
+                ]),
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node.clone()));
+        graph.set_aegis(worker.clone(), worker_aegis);
+        graph.add_entry(planner);
+        (graph, worker, worker_node)
+    }
+
+    /// The merged `results` list, sorted.
+    fn sorted_results(state: &Battlefield) -> Vec<String> {
+        let mut out: Vec<String> = state
+            .get(&field("results"))
+            .expect("results reads")
+            .unwrap_or_default();
+        out.sort();
+        out
+    }
+
+    /// The muster superstep's worker records (the superstep whose
+    /// completed list carries `worker` entries), in record order.
+    async fn worker_records(
+        store: &RecordingWaypointStore,
+        thread: &ThreadId,
+        worker: &NodeId,
+    ) -> Vec<NodeExecutionRecord> {
+        let waypoints = store.saved_waypoints(thread).await;
+        waypoints
+            .iter()
+            .filter(|w| w.muster_progress.is_none())
+            .map(|w| {
+                w.completed
+                    .iter()
+                    .filter(|r| &r.node_id == worker)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .find(|records| !records.is_empty())
+            .unwrap_or_default()
+    }
+
+    /// D-22: a failing mustered task whose `Custom` handler returns
+    /// `NextStep::Edges` with a delta contributes THAT delta as its
+    /// aggregation entry -- indistinguishable in shape from a successful
+    /// sibling's contribution -- and the aggregation sees the full task
+    /// count. The task's own record still reads `Failed` (D-21).
+    #[tokio::test]
+    async fn a_worker_handler_returning_edges_contributes_its_delta_to_the_aggregation() {
+        let (graph, worker, worker_node) = failing_muster_graph(custom_aegis("compensate"));
+        let handler = RecordingErrorHandler::replying(Directive {
+            delta: delta_with("results", serde_json::json!("b-fallback")),
+            next: NextStep::Edges,
+        });
+        let registries = registries_with("compensate", handler.clone());
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("worker-handler-edges").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &registries,
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(handler.invocation_count(), 1, "one failed task, one dispatch");
+        assert_eq!(worker_node.run_count("b"), 1, "no retry policy: one attempt");
+        assert_eq!(
+            sorted_results(&final_state),
+            vec!["a", "b-fallback", "c"],
+            "the handler's delta is task b's contribution; the aggregation sees all three"
+        );
+        let records = worker_records(&store, &thread, &worker).await;
+        assert_eq!(records.len(), 3, "the aggregation's task count is unchanged");
+        assert_eq!(
+            records
+                .iter()
+                .filter(|r| r.outcome == NodeOutcomeKind::Failed)
+                .count(),
+            1,
+            "exactly one task (b) records the failure it was"
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|r| r.outcome == NodeOutcomeKind::Succeeded)
+                .count(),
+            2
+        );
+    }
+
+    /// D-22: a `Custom` handler returning `Goto` from inside a Muster task
+    /// is `EngineError::MusterHandlerMustBeDeltaOnly`, naming the worker
+    /// template AND the task key so the failing task is identifiable in a
+    /// wide fan-out; the run fails rather than guessing an aggregation.
+    #[tokio::test]
+    async fn a_worker_handler_returning_goto_fails_the_run_with_a_typed_error() {
+        let (graph, worker, _worker_node) = failing_muster_graph(custom_aegis("compensate"));
+        let handler = RecordingErrorHandler::replying(Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Goto(vec![NodeId::new("planner")]),
+        });
+        let registries = registries_with("compensate", handler.clone());
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("worker-handler-goto").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &registries,
+        )
+        .await;
+
+        match &outcome {
+            RunOutcome::Failed {
+                error:
+                    error @ EngineError::MusterHandlerMustBeDeltaOnly {
+                        node,
+                        task_key,
+                        returned,
+                    },
+                ..
+            } => {
+                assert_eq!(node, &worker);
+                assert_eq!(task_key, "b");
+                assert_eq!(returned, "Goto");
+                let text = error.to_string();
+                assert!(
+                    text.contains("worker") && text.contains("`b`") && text.contains("aggregator"),
+                    "names the template, the task key and the alternative: {text}"
+                );
+            }
+            other => panic!("expected Failed(MusterHandlerMustBeDeltaOnly), got {other:?}"),
+        }
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert!(
+            matches!(waypoints[0].status, WaypointStatus::Failed { .. }),
+            "the failure is durable"
+        );
+    }
+
+    /// D-22: `End`, `Parley` and `Muster` from a worker-task handler are the
+    /// same typed error as `Goto` -- every non-`Edges` arm is control flow
+    /// out of a single task.
+    #[tokio::test]
+    async fn a_worker_handler_returning_end_or_parley_or_muster_is_the_same_typed_error() {
+        let worker_id = NodeId::new("worker");
+        let arms: Vec<(&str, NextStep)> = vec![
+            ("End", NextStep::End),
+            (
+                "Parley",
+                NextStep::Parley(ParleyRequest {
+                    parley_id: ParleyId::new(),
+                    node_id: worker_id.clone(),
+                    kind: ParleyKind::Approval,
+                    prompt: "retry task b?".to_string(),
+                    payload: serde_json::json!({}),
+                    choices: None,
+                    expires_at: None,
+                    created_at: Utc::now(),
+                    on_expire: OnExpire::FailRun,
+                }),
+            ),
+            (
+                "Muster",
+                NextStep::Muster(vec![muster_task(
+                    &worker_id,
+                    serde_json::json!("b2"),
+                    "b2",
+                )]),
+            ),
+        ];
+        for (name, next) in arms {
+            let (graph, worker, _worker_node) = failing_muster_graph(custom_aegis("compensate"));
+            let handler = RecordingErrorHandler::replying(Directive {
+                delta: StateDelta::new(),
+                next,
+            });
+            let registries = registries_with("compensate", handler.clone());
+            let store = RecordingWaypointStore::new();
+            let thread = ThreadId::new(format!("worker-handler-{}", name.to_lowercase())).unwrap();
+
+            let outcome = run_handled(
+                &graph,
+                thread.clone(),
+                &store,
+                &no_paladin_port(),
+                &registries,
+            )
+            .await;
+
+            match &outcome {
+                RunOutcome::Failed {
+                    error:
+                        EngineError::MusterHandlerMustBeDeltaOnly {
+                            node,
+                            task_key,
+                            returned,
+                        },
+                    ..
+                } => {
+                    assert_eq!(node, &worker, "{name}");
+                    assert_eq!(task_key, "b", "{name}");
+                    assert_eq!(returned, name);
+                }
+                other => panic!(
+                    "{name}: expected Failed(MusterHandlerMustBeDeltaOnly), got {other:?}"
+                ),
+            }
+            // A handler-raised Parley inside a Muster never suspends: no
+            // AwaitingInput Waypoint is written for it (D-22 over D-23).
+            let waypoints = store.saved_waypoints(&thread).await;
+            assert!(
+                waypoints
+                    .iter()
+                    .all(|w| !matches!(w.status, WaypointStatus::AwaitingInput { .. })),
+                "{name}: no suspension"
+            );
+        }
+    }
+
+    /// D-22: an `Absorb`ed mustered task contributes its fallback delta and
+    /// the aggregation's task count is unchanged.
+    #[tokio::test]
+    async fn an_absorbed_worker_task_still_appears_in_the_aggregation() {
+        let (graph, worker, worker_node) = failing_muster_graph(absorb_aegis(delta_with(
+            "results",
+            serde_json::json!("b-absorbed"),
+        )));
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("worker-absorb").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(worker_node.run_count("b"), 1);
+        assert_eq!(
+            sorted_results(&final_state),
+            vec!["a", "b-absorbed", "c"],
+            "the fallback delta is task b's contribution"
+        );
+        let records = worker_records(&store, &thread, &worker).await;
+        assert_eq!(records.len(), 3, "the aggregation's task count is unchanged");
+        assert_eq!(
+            records
+                .iter()
+                .filter(|r| r.outcome == NodeOutcomeKind::Failed)
+                .count(),
+            1
+        );
+    }
 }

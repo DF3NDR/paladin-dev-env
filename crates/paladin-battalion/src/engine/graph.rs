@@ -5887,4 +5887,131 @@ mod tests {
             other => panic!("expected RouteTargetUnknown first, got {other:?}"),
         }
     }
+
+    // --- Plan 25-11 Task 1: worker-template handler restrictions (D-22) --
+
+    /// `planner` (entry) -> `cancel`, plus `worker`, a worker template
+    /// carrying `aegis`. Whether the planner ever musters is irrelevant to
+    /// validation: the restriction is on the template's RESOLVED handler,
+    /// checked before any node runs.
+    fn worker_template_graph(aegis: Aegis) -> WarGraph {
+        let mut graph = WarGraph::new(handler_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("planner"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_node(
+            NodeId::new("cancel"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.add_edge(EdgeSpec {
+            from: NodeId::new("planner"),
+            to: NodeId::new("cancel"),
+            condition: None,
+        });
+        graph.add_worker_template(
+            NodeId::new("worker"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.set_aegis(NodeId::new("worker"), aegis);
+        graph.add_entry(NodeId::new("planner"));
+        graph
+    }
+
+    /// D-22: a `Route` ON a worker template is rejected at validation with a
+    /// typed error whose message names the alternative -- handle the failure
+    /// at the aggregator -- because aggregation semantics for a routed task
+    /// are undefined and the case is rejected, not guessed.
+    #[test]
+    fn route_on_a_worker_template_is_rejected_at_validation() {
+        // The target itself is a perfectly legal ordinary node: the fault is
+        // WHERE the Route sits, not where it points.
+        let graph = worker_template_graph(route_aegis("cancel", "result"));
+
+        let err = validate_default(&graph)
+            .expect_err("a Route on a worker template must fail validation");
+        match err {
+            EngineError::HandlerNotAllowedOnWorkerTemplate { offenders, reason } => {
+                assert_eq!(offenders.len(), 1, "exactly one offender: {offenders:?}");
+                assert!(
+                    offenders[0].contains("worker"),
+                    "names the template: {offenders:?}"
+                );
+                assert!(
+                    reason.contains("aggregator"),
+                    "the message names the alternative (handle it at the aggregator): {reason}"
+                );
+                assert!(
+                    reason.contains("undefined") || reason.contains("deferred"),
+                    "the message says WHY (aggregation semantics for a routed task are \
+                     undefined / routing out of one task is deferred), not merely that the \
+                     Route is rejected: {reason}"
+                );
+            }
+            other => panic!("expected HandlerNotAllowedOnWorkerTemplate, got {other:?}"),
+        }
+    }
+
+    /// D-22: `Absorb` on a worker template validates -- its fallback delta
+    /// becomes that task's contribution to the aggregation.
+    #[test]
+    fn absorb_on_a_worker_template_validates() {
+        let graph = worker_template_graph(absorb_aegis(&["result"]));
+        validate_default(&graph).expect("Absorb on a worker template is permitted");
+    }
+
+    /// D-22: `Custom` on a worker template validates, because whether the
+    /// handler is delta-only is only knowable when it runs (enforced at
+    /// dispatch as `EngineError::MusterHandlerMustBeDeltaOnly`).
+    #[test]
+    fn custom_on_a_worker_template_validates() {
+        struct NoopHandler;
+        #[async_trait::async_trait]
+        impl crate::error_handler::ErrorHandler for NoopHandler {
+            async fn handle(
+                &self,
+                _err: &paladin_core::platform::container::node_error::NodeError,
+                _state: &Battlefield,
+            ) -> Result<
+                paladin_core::platform::container::directive::Directive,
+                paladin_core::platform::container::node_error::NodeError,
+            > {
+                Ok(paladin_core::platform::container::battlefield::StateDelta::new().into())
+            }
+        }
+        let graph = worker_template_graph(Aegis {
+            on_error: Some(ErrorHandlerSpec::Custom("compensate".to_string())),
+            ..Aegis::default()
+        });
+        let mut registries = EngineRegistries::default();
+        registries
+            .error_handlers
+            .register("compensate", StdArc::new(NoopHandler));
+        graph
+            .validate(&CustomDispatchResolver::new(), &registries)
+            .expect("Custom on a worker template is permitted at validation");
+    }
+
+    /// D-22: the template restriction lists EVERY offending template, and a
+    /// `Route` whose target is ALSO a worker template still reports the
+    /// template-placement fault first (it is the shallower class: the
+    /// handler cannot sit there at all, whatever it points at).
+    #[test]
+    fn every_worker_template_route_offender_is_listed() {
+        let mut graph = worker_template_graph(route_aegis("cancel", "result"));
+        graph.add_worker_template(
+            NodeId::new("worker2"),
+            NodeSpec::Function(StdArc::new(NoopNode)),
+        );
+        graph.set_aegis(NodeId::new("worker2"), route_aegis("worker", "result"));
+
+        match validate_default(&graph) {
+            Err(EngineError::HandlerNotAllowedOnWorkerTemplate { offenders, .. }) => {
+                assert_eq!(offenders.len(), 2, "{offenders:?}");
+                assert!(offenders.iter().any(|o| o.starts_with("worker:")));
+                assert!(offenders.iter().any(|o| o.starts_with("worker2:")));
+            }
+            other => panic!("expected HandlerNotAllowedOnWorkerTemplate, got {other:?}"),
+        }
+    }
 }

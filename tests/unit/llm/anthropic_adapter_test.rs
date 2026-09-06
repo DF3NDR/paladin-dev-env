@@ -404,3 +404,50 @@ async fn test_anthropic_malformed_response() {
         paladin_ports::output::llm_port::LlmError::ProcessingError(_)
     ));
 }
+
+#[tokio::test]
+async fn test_anthropic_malformed_response_excerpt_never_echoes_the_configured_api_key() {
+    // Follow-on to CR-01 (`25-REVIEW.md`): the deserialization-failure
+    // path embeds an excerpt of a 2xx body into `ProcessingError`. That
+    // body is third-party-influenceable (a gateway in front of `base_url`
+    // that echoes request headers back), so it must go through the crate's
+    // redact-then-bound helper like every other body-derived string in
+    // `paladin-llm` -- the configured `x-api-key` value must never survive
+    // into the operator-facing error.
+    let (mut server, adapter) = setup_mock_server().await;
+
+    // A 200 body that cannot deserialize as a Claude response AND echoes
+    // the configured credential plus a bearer-shaped token back verbatim.
+    let leaking_body = r#"{"echo":{"x-api-key":"test-api-key","authorization":"Bearer sk-leaked-token"},"missing":"content"}"#;
+
+    let _mock = server
+        .mock("POST", "/messages")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(leaking_body)
+        .create_async()
+        .await;
+
+    let request = create_user_request("Hello");
+    let error = adapter
+        .generate(request)
+        .await
+        .expect_err("a body that fails to deserialize must surface as an error");
+
+    let message = match error {
+        paladin_ports::output::llm_port::LlmError::ProcessingError(message) => message,
+        other => panic!("expected ProcessingError, got {other:?}"),
+    };
+    assert!(
+        message.contains("body excerpt"),
+        "diagnostic must still carry an excerpt: {message}"
+    );
+    assert!(
+        !message.contains("test-api-key"),
+        "configured API key leaked into the error: {message}"
+    );
+    assert!(
+        !message.contains("sk-leaked-token"),
+        "bearer token leaked into the error: {message}"
+    );
+}

@@ -466,7 +466,11 @@ impl LlmPort for AnthropicAdapter {
                      — see the `thinking`-block precedent in this adapter's tests): {} — \
                      body excerpt: {}",
                     e,
-                    bounded_excerpt(&body, RESPONSE_EXCERPT_CHAR_BUDGET)
+                    // Redact BEFORE bounding (load-bearing ordering, see
+                    // `crate::redaction`): a 2xx body from a gateway in front
+                    // of `base_url` can echo request headers -- including the
+                    // `x-api-key` credential -- back verbatim.
+                    crate::redaction::diagnostic_excerpt(&body, &self.config.api_key)
                 ))
             })?;
 
@@ -661,13 +665,6 @@ struct ClaudeUsage {
     output_tokens: u32,
 }
 
-/// Character budget for the diagnostic body excerpt shown in a
-/// deserialization-failure message. Large enough to reach the offending
-/// field in a typical response body; small enough not to dump a full
-/// generation (a captured production `thinking` block alone ran past
-/// 10,000 characters) into a single log line.
-const RESPONSE_EXCERPT_CHAR_BUDGET: usize = 512;
-
 /// Character budget for [`extract_regain_hint`]'s extracted prose. This is
 /// the T-41-03 mitigation against an oversized/adversarial provider body
 /// flooding the operator's terminal.
@@ -719,24 +716,6 @@ fn extract_regain_hint(body: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
-}
-
-/// Build a diagnostic excerpt of a response body, bounded by character
-/// count rather than byte count.
-///
-/// Slicing a UTF-8 `&str` by byte offset panics when the offset lands
-/// mid-character, and panics are forbidden in this library — a captured
-/// production response body is full of multi-byte characters in its
-/// markdown text. When `body` is longer than `budget` characters, an ASCII
-/// elision marker is appended reporting the total byte length of the
-/// untruncated body, so the reader knows how much was withheld.
-fn bounded_excerpt(body: &str, budget: usize) -> String {
-    if body.chars().count() <= budget {
-        return body.to_string();
-    }
-
-    let truncated: String = body.chars().take(budget).collect();
-    format!("{truncated}... [truncated, {} total bytes]", body.len())
 }
 
 /// Concatenate the text of every text-bearing content block, in array
@@ -814,6 +793,7 @@ struct ClaudeDelta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::redaction::{RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 

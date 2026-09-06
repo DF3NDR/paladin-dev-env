@@ -295,3 +295,13 @@ None.
 ---
 *Phase: 25-node-level-fault-tolerance*
 *Completed: 2026-09-06*
+
+## Self-Check: PASSED
+
+- Created/modified files verified present on disk (`engine/cache_key.rs`, `battlefield.rs`, `test_support.rs`, this SUMMARY).
+- Task commits verified in `git log`: `08fd78df`, `18d71e63`, `2bd0e162`; SUMMARY commit `8becdbb5`.
+- `cargo check --workspace --all-targets --all-features` exit 0.
+- `cargo test -p paladin-ai-core --lib` 489 passed; `cargo test -p paladin-battalion --lib` 721 passed; `cargo test -p paladin-storage --features sqlite --lib` 122 passed (three-backend Waypoint contract suite green); `cargo test -p paladin-ai --lib` 552 passed.
+- `cargo test --doc -p paladin-ai-core -p paladin-battalion` exit 0 (74 + 51 passed).
+- `cargo fmt --all -- --check` exit 0; `cargo clippy --workspace --all-targets --all-features -- -D warnings` exit 0.
+- No integration `[[test]]` binary added or touched. No `unwrap()`/`expect()`/`panic!` introduced in library code; `std::thread::sleep` count in `superstep.rs` is 0.

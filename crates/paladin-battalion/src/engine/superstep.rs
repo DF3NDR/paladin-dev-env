@@ -277,6 +277,63 @@ async fn race_attempt(
     }
 }
 
+/// The ONE path every engine-limit failure takes (ENG-FR-03, D-20):
+/// `RecursionLimitExceeded`, `NodeVisitLimitExceeded` and, from plan 25-09,
+/// `RunTimeoutExceeded` all persist a `WaypointStatus::Failed` Waypoint
+/// through here and return `RunOutcome::Failed` -- consistency is
+/// structural (one function), not three implementations kept in step by
+/// hand. `completed` is empty for a boundary-time limit (nothing ran this
+/// superstep) and carries the superstep's records for a mid-superstep cut;
+/// `node_error` is `None` for a boundary-time limit (exactly what the two
+/// pre-existing limits always wrote) and `Some` when the engine budget cut
+/// an in-flight attempt, so the typed `Timeout(EngineRun)` survives on the
+/// Waypoint.
+#[allow(clippy::too_many_arguments)]
+async fn persist_limit_failure<W: WaypointPort + 'static>(
+    waypoint_port: &W,
+    durability: WaypointDurability,
+    trace: &Arc<TraceDispatcher>,
+    thread: &ThreadId,
+    parent_waypoint_id: Option<WaypointId>,
+    superstep_number: u64,
+    graph: &WarGraph,
+    battlefield: &Battlefield,
+    vanguard: Vec<NodeId>,
+    completed: Vec<NodeExecutionRecord>,
+    error: EngineError,
+    failed_node: NodeId,
+    node_error: Option<NodeError>,
+    visit_counts: BTreeMap<NodeId, u32>,
+    frontier: FrontierSnapshot,
+    checkpoint_ns: Option<String>,
+    fork_of: Option<WaypointId>,
+) -> Result<RunOutcome, EngineError> {
+    let waypoint = build_waypoint(
+        thread,
+        parent_waypoint_id,
+        superstep_number,
+        graph,
+        battlefield,
+        vanguard,
+        completed,
+        WaypointStatus::Failed {
+            error: error.to_string(),
+            failed_node,
+            node_error,
+        },
+        visit_counts,
+        frontier,
+        None,
+        checkpoint_ns,
+        fork_of,
+    );
+    persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+    Ok(RunOutcome::Failed {
+        error,
+        waypoint: Some(waypoint.waypoint_id),
+    })
+}
+
 /// What one vanguard node resolves to for this superstep's execution: either
 /// a `Function` node's trait object, or the pieces of a `NodeSpec::Paladin`
 /// node needed to render its input and call the port, cloned out of the
@@ -1348,6 +1405,20 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // `None` for every top-level `start`/`resume`/`fork` call.
     parent_heartbeat: Option<HeartbeatHandle>,
 ) -> Result<RunOutcome, EngineError> {
+    // --- FT-FR-10, D-20, ENG-FR-03: the run-level budget. Measured from
+    // the moment THIS call starts (a resumed run's budget restarts with the
+    // resume; a Battalion child run measures its OWN budget against its
+    // OWN `EngineLimits`, per `child_uses_its_own_engine_limits`). The
+    // absolute deadline is threaded into every attempt so the per-attempt
+    // bound can be `min(attempt run_timeout, remaining budget)` and the
+    // top-of-loop check below can end a run whose budget is already gone.
+    // `tokio::time::Instant` (not `std`), so the paused clock drives it.
+    let run_started_at = tokio::time::Instant::now();
+    let engine_deadline: Option<tokio::time::Instant> = graph
+        .limits()
+        .run_timeout
+        .map(|limit| run_started_at + limit);
+
     // --- CF-FR-16, D-21: gathered ONCE per `run()` call, never per
     // dispatch -- see `ChildEngineResources`'s own rustdoc for why a
     // single construction site matters. `None` when this call has no
@@ -1528,12 +1599,39 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
 
         // --- ENG-FR-03: bounded iteration, checked at the top of the loop
         // so a run stops at exactly `max_supersteps` rather than one over.
+        // --- CR-01 (23-REVIEW.md): `vanguard` alone may be empty on a
+        // muster-only round -- this phase's Muster feature can re-enter
+        // this loop with `vanguard` empty and `pending_muster` carrying the
+        // next dispatch (`has_pending_muster` a few hundred lines below
+        // stands in for "there is more work" in exactly this situation).
+        // Mirrors the `Battlefield::merge` failure fallback's
+        // `dispatch_entries.first()` pattern a few hundred lines below,
+        // using `pending_muster` instead since `dispatch_entries` is not
+        // built yet at this point in the loop. The loop's own
+        // Completed-return checks guarantee at least one of `vanguard`/
+        // `pending_muster` is non-empty whenever a boundary-time limit
+        // fires, so the final placeholder is unreachable by construction --
+        // but must not panic if that invariant is ever violated (mirrors
+        // `MusterProgress::default`'s own placeholder
+        // `NodeId::new(String::new())`). Shared by every boundary-time
+        // limit below (recursion, run timeout).
+        let boundary_failed_node = || {
+            vanguard
+                .first()
+                .cloned()
+                .or_else(|| pending_muster.as_ref().map(|(node, _)| node.clone()))
+                .unwrap_or_else(|| NodeId::new(String::new()))
+        };
         if superstep_number >= graph.limits().max_supersteps {
             let error = EngineError::RecursionLimitExceeded {
                 limit: graph.limits().max_supersteps,
                 thread_id: thread.clone(),
             };
-            let waypoint = build_waypoint(
+            let failed_node = boundary_failed_node();
+            return persist_limit_failure(
+                waypoint_port,
+                durability,
+                trace,
                 &thread,
                 parent_waypoint_id,
                 superstep_number,
@@ -1541,43 +1639,50 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 &battlefield,
                 vanguard.clone(),
                 Vec::new(),
-                WaypointStatus::Failed {
-                    error: error.to_string(),
-                    // --- CR-01 (23-REVIEW.md): `vanguard` alone may be
-                    // empty on a muster-only round -- this phase's Muster
-                    // feature can re-enter this loop with `vanguard` empty
-                    // and `pending_muster` carrying the next dispatch
-                    // (`has_pending_muster` a few hundred lines below
-                    // stands in for "there is more work" in exactly this
-                    // situation). Mirrors the `Battlefield::merge` failure
-                    // fallback's `dispatch_entries.first()` pattern a few
-                    // hundred lines below, using `pending_muster` instead
-                    // since `dispatch_entries` is not built yet at this
-                    // point in the loop. The loop's own Completed-return
-                    // checks guarantee at least one of `vanguard`/
-                    // `pending_muster` is non-empty whenever this branch is
-                    // reached, so the final placeholder is unreachable by
-                    // construction -- but must not panic if that invariant
-                    // is ever violated (mirrors `MusterProgress::default`'s
-                    // own placeholder `NodeId::new(String::new())`).
-                    failed_node: vanguard
-                        .first()
-                        .cloned()
-                        .or_else(|| pending_muster.as_ref().map(|(node, _)| node.clone()))
-                        .unwrap_or_else(|| NodeId::new(String::new())),
-                    node_error: None,
-                },
+                error,
+                failed_node,
+                None,
                 visit_counts,
                 frontier.snapshot(graph),
-                None,
                 checkpoint_ns.clone(),
                 fork_of,
-            );
-            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
-            return Ok(RunOutcome::Failed {
-                error,
-                waypoint: Some(waypoint.waypoint_id),
-            });
+            )
+            .await;
+        }
+
+        // --- FT-FR-10, D-20, ENG-FR-03: the run-level wall-clock budget,
+        // checked at the SAME boundary as the recursion limit so a run
+        // whose budget expired during (or exactly at the end of) the
+        // previous superstep stops here rather than starting another one.
+        // A budget that expires MID-superstep is caught by the per-attempt
+        // race instead (`AttemptBounds::resolve` names it `EngineRun`) and
+        // surfaced through the same helper after the bookkeeping loop.
+        if let Some(limit) = graph.limits().run_timeout {
+            let elapsed = run_started_at.elapsed();
+            if elapsed >= limit {
+                let error = EngineError::RunTimeoutExceeded { elapsed, limit };
+                let failed_node = boundary_failed_node();
+                return persist_limit_failure(
+                    waypoint_port,
+                    durability,
+                    trace,
+                    &thread,
+                    parent_waypoint_id,
+                    superstep_number,
+                    graph,
+                    &battlefield,
+                    vanguard.clone(),
+                    Vec::new(),
+                    error,
+                    failed_node,
+                    None,
+                    visit_counts,
+                    frontier.snapshot(graph),
+                    checkpoint_ns.clone(),
+                    fork_of,
+                )
+                .await;
+            }
         }
 
         // --- ENG-FR-03: per-node visit bound, checked before a node is
@@ -1597,7 +1702,10 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 node: node.clone(),
                 limit: graph.limits().max_node_visits,
             };
-            let waypoint = build_waypoint(
+            return persist_limit_failure(
+                waypoint_port,
+                durability,
+                trace,
                 &thread,
                 parent_waypoint_id,
                 superstep_number,
@@ -1605,22 +1713,15 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 &battlefield,
                 vanguard.clone(),
                 Vec::new(),
-                WaypointStatus::Failed {
-                    error: error.to_string(),
-                    failed_node: node,
-                    node_error: None,
-                },
+                error,
+                node,
+                None,
                 visit_counts,
                 frontier.snapshot(graph),
-                None,
                 checkpoint_ns.clone(),
                 fork_of,
-            );
-            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
-            return Ok(RunOutcome::Failed {
-                error,
-                waypoint: Some(waypoint.waypoint_id),
-            });
+            )
+            .await;
         }
         visit_counts = candidate_counts;
 
@@ -1712,10 +1813,6 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         let snapshot = Arc::new(battlefield.clone());
         let limit = parallelism.unwrap_or(dispatch_entries.len()).max(1);
         let semaphore = Arc::new(Semaphore::new(limit));
-
-        // --- D-20: the run-level budget's absolute deadline, `None` until
-        // `EngineLimits::run_timeout` is enforced (plan 25-09 Task 3).
-        let engine_deadline: Option<tokio::time::Instant> = None;
 
         let mut handles = Vec::with_capacity(dispatch_entries.len());
         for (dispatch_index, (node_id, muster_ctx)) in dispatch_entries.iter().enumerate() {
@@ -2036,6 +2133,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         let mut deltas = Vec::with_capacity(handles.len());
         let mut completed_records = Vec::with_capacity(handles.len());
         let mut node_failure: Option<(NodeId, NodeFailure, Option<NodeError>)> = None;
+        // --- FT-FR-10, D-20: the first (dispatch-order) attempt this
+        // superstep that the ENGINE budget cut. Checked ahead of
+        // `node_failure` below: when the budget is what expired, the run
+        // ends `RunTimeoutExceeded` rather than merely failing that node.
+        let mut engine_budget_cut: Option<(NodeId, NodeError)> = None;
         // --- CF-02: per-superstep runtime values derived from this
         // superstep's `Directive`s, NOT `Frontier` state (RESEARCH.md
         // Pattern 3) -- rebuilt fresh every superstep, never persisted.
@@ -2393,6 +2495,12 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         attempts: failed_attempts,
                         cache_hit: false,
                     });
+                    if matches!(e, NodeFailure::Timeout(TimeoutKind::EngineRun))
+                        && engine_budget_cut.is_none()
+                        && let Some(cut) = node_error.clone()
+                    {
+                        engine_budget_cut = Some((node_id.clone(), cut));
+                    }
                     if node_failure.is_none() {
                         node_failure = Some((node_id, e, node_error));
                     }
@@ -2400,6 +2508,42 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             }
         }
         completed_records.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+
+        // --- FT-FR-10, D-20, ENG-FR-03: the engine budget expired
+        // MID-superstep and cut an in-flight attempt. The run ends with the
+        // typed `RunTimeoutExceeded` through the SAME limit-failure helper
+        // the boundary-time limits use, carrying this superstep's records
+        // and the cut attempt's `Timeout(EngineRun)` NodeError on the
+        // Waypoint. Checked ahead of `node_failure` so the budget, not an
+        // incidental sibling failure, names the outcome.
+        if let Some((failed_node, cut)) = engine_budget_cut
+            && let Some(limit) = graph.limits().run_timeout
+        {
+            let error = EngineError::RunTimeoutExceeded {
+                elapsed: run_started_at.elapsed(),
+                limit,
+            };
+            return persist_limit_failure(
+                waypoint_port,
+                durability,
+                trace,
+                &thread,
+                parent_waypoint_id,
+                superstep_number,
+                graph,
+                &battlefield,
+                vanguard.clone(),
+                completed_records,
+                error,
+                failed_node,
+                Some(cut),
+                visit_counts,
+                frontier.snapshot(graph),
+                checkpoint_ns.clone(),
+                fork_of,
+            )
+            .await;
+        }
 
         if let Some((node_id, err, node_error)) = node_failure {
             // --- D-08, X-06: an Aegis-governed node's exhausted (or

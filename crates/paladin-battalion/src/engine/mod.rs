@@ -241,6 +241,26 @@ pub enum EngineError {
         limit: u32,
     },
 
+    /// The run's total wall clock exceeded `EngineLimits::run_timeout`
+    /// (Doc 04 FT-FR-10, D-20, ENG-FR-03; plan 25-09). Takes the SAME
+    /// `Failed`-Waypoint and `RunOutcome::Failed` path
+    /// [`EngineError::RecursionLimitExceeded`] and
+    /// [`EngineError::NodeVisitLimitExceeded`] take -- consistent by
+    /// construction (`engine::superstep`'s one limit-failure helper), not a
+    /// second implementation. Raised either at a superstep boundary (budget
+    /// already exhausted) or mid-superstep when the budget cuts an in-flight
+    /// attempt, in which case that attempt's structured
+    /// `NodeError { source: Timeout(EngineRun), .. }` rides on the
+    /// Waypoint's `WaypointStatus::Failed.node_error`.
+    #[error("run timeout exceeded: {elapsed:?} elapsed against a limit of {limit:?}")]
+    RunTimeoutExceeded {
+        /// How long the run had been executing when the budget was found
+        /// exhausted.
+        elapsed: std::time::Duration,
+        /// The configured `EngineLimits::run_timeout` that was hit.
+        limit: std::time::Duration,
+    },
+
     /// `WarGraph::validate` rejected the graph's limits.
     #[error("invalid engine limits: {reason}")]
     InvalidLimits {

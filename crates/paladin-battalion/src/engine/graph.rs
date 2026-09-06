@@ -410,8 +410,27 @@ pub struct EngineLimits {
     /// Maximum number of times any single node may execute within one run,
     /// before `EngineError::NodeVisitLimitExceeded`. Must be `>= 1`.
     pub max_node_visits: u32,
-    /// Optional wall-clock timeout for the whole run. Carried and validated
-    /// but not acted on this phase — Doc 04 owns timeout semantics.
+    /// Optional wall-clock budget for the WHOLE run (Doc 04 FT-FR-10, D-20;
+    /// enforced from plan 25-09). Measured from the start of each
+    /// `WarEngine::start`/`resume` call; exceeding it ends the run with
+    /// `EngineError::RunTimeoutExceeded` through the same `Failed`-Waypoint
+    /// path `RecursionLimitExceeded` and `NodeVisitLimitExceeded` take.
+    /// Nests OUTSIDE every per-node `TimeoutPolicy`: an attempt's effective
+    /// deadline is `min(its run_timeout, the remaining run budget)`, named
+    /// by whichever is tightest, and an attempt this budget cuts records
+    /// `Timeout(EngineRun)`. A Battalion child run measures its OWN budget
+    /// against its OWN limits. Never hashed into [`WarGraph::fingerprint`]
+    /// (Phase 23 D-18), like every other field here.
+    ///
+    /// Set ONLY from `EngineConfig::run_timeout_secs` (via
+    /// `impl From<EngineConfig> for EngineLimits`) or by direct
+    /// construction: the legacy-service bridges (`WarGraph::from_formation`
+    /// / `from_phalanx` / `from_campaign`) build their limits from
+    /// `EngineLimits::default()` and carry NO legacy Battalion timeout into
+    /// this field, so PRD 04 FT-FR-10's "any legacy Battalion timeout"
+    /// clause is satisfied vacuously (`bridges_carry_no_legacy_battalion_timeout`
+    /// is the tripwire); the legacy Formation/Phalanx/Campaign services are
+    /// untouched (X-03).
     pub run_timeout: Option<Duration>,
     /// Maximum number of tasks a single `NextStep::Muster` directive may
     /// request (CF-FR-13, D-16, T-23-18). Must be `>= 1`. Enforced at

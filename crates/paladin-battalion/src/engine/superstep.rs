@@ -549,6 +549,18 @@ async fn dispatch_error_handler(
     }
 }
 
+/// The bare arm name of a [`NextStep`], for
+/// [`EngineError::MusterHandlerMustBeDeltaOnly`]'s `returned` field (D-22).
+fn next_step_arm_name(next: &NextStep) -> &'static str {
+    match next {
+        NextStep::Edges => "Edges",
+        NextStep::Goto(_) => "Goto",
+        NextStep::Muster(_) => "Muster",
+        NextStep::End => "End",
+        NextStep::Parley(_) => "Parley",
+    }
+}
+
 /// [`execute_vanguard_node`]'s per-node result: `paladin_id`/`token_count`
 /// (`None`/`0` for a `Function` or `Battalion` node) plus the resolved
 /// `Directive` or [`NodeFailure`].
@@ -2418,6 +2430,52 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             match outcome {
                 NodeRunOutcome::Succeeded(directive) => {
                     let Directive { delta, next } = directive;
+                    // --- Plan 25-11, D-22: a handler inside a Muster is
+                    // delta-only. A mustered task's result is exactly ONE
+                    // contribution to its Muster's aggregation; `Goto`,
+                    // `End`, `Parley` and `Muster` each change control flow
+                    // for the WHOLE run from inside one of many concurrent
+                    // tasks, and the aggregation's semantics for that are
+                    // undefined -- so the case is rejected with a typed
+                    // error naming the template AND the task key, BEFORE
+                    // any routing side effect (`notfiring_nodes`,
+                    // `goto_targets`, `parley_requests`, `mustered`) is
+                    // touched, through the same `routing_failure` path an
+                    // unknown `Goto` target takes. `Route` on a template is
+                    // already a validation error, so its `Goto` never
+                    // reaches here in practice; the guard still covers it.
+                    // A permitted `Edges` delta falls through to the
+                    // `is_muster_task` branch below and lands in
+                    // `muster_completed_so_far` exactly like a successful
+                    // sibling's -- the aggregation sees a full task count.
+                    if is_muster_task && handled_failure && !matches!(next, NextStep::Edges) {
+                        completed_records.push(NodeExecutionRecord {
+                            node_id: node_id.clone(),
+                            paladin_id,
+                            started_at,
+                            duration_ms,
+                            token_count,
+                            outcome: NodeOutcomeKind::Failed,
+                            attempt,
+                            attempts: failed_attempts,
+                            cache_hit: false,
+                        });
+                        if routing_failure.is_none() {
+                            let task_key = entry_muster_ctx
+                                .as_ref()
+                                .map(|ctx| ctx.task_key.clone())
+                                .unwrap_or_default();
+                            routing_failure = Some((
+                                node_id.clone(),
+                                EngineError::MusterHandlerMustBeDeltaOnly {
+                                    node: node_id,
+                                    task_key,
+                                    returned: next_step_arm_name(&next).to_string(),
+                                },
+                            ));
+                        }
+                        continue;
+                    }
                     let outcome_kind = match &next {
                         NextStep::Edges => NodeOutcomeKind::Succeeded,
                         NextStep::Goto(targets) => {
@@ -12144,15 +12202,27 @@ mod tests {
         .await;
         let final_state = completed_state(outcome);
 
-        assert_eq!(handler.invocation_count(), 1, "one failed task, one dispatch");
-        assert_eq!(worker_node.run_count("b"), 1, "no retry policy: one attempt");
+        assert_eq!(
+            handler.invocation_count(),
+            1,
+            "one failed task, one dispatch"
+        );
+        assert_eq!(
+            worker_node.run_count("b"),
+            1,
+            "no retry policy: one attempt"
+        );
         assert_eq!(
             sorted_results(&final_state),
             vec!["a", "b-fallback", "c"],
             "the handler's delta is task b's contribution; the aggregation sees all three"
         );
         let records = worker_records(&store, &thread, &worker).await;
-        assert_eq!(records.len(), 3, "the aggregation's task count is unchanged");
+        assert_eq!(
+            records.len(),
+            3,
+            "the aggregation's task count is unchanged"
+        );
         assert_eq!(
             records
                 .iter()
@@ -12246,11 +12316,7 @@ mod tests {
             ),
             (
                 "Muster",
-                NextStep::Muster(vec![muster_task(
-                    &worker_id,
-                    serde_json::json!("b2"),
-                    "b2",
-                )]),
+                NextStep::Muster(vec![muster_task(&worker_id, serde_json::json!("b2"), "b2")]),
             ),
         ];
         for (name, next) in arms {
@@ -12286,9 +12352,9 @@ mod tests {
                     assert_eq!(task_key, "b", "{name}");
                     assert_eq!(returned, name);
                 }
-                other => panic!(
-                    "{name}: expected Failed(MusterHandlerMustBeDeltaOnly), got {other:?}"
-                ),
+                other => {
+                    panic!("{name}: expected Failed(MusterHandlerMustBeDeltaOnly), got {other:?}")
+                }
             }
             // A handler-raised Parley inside a Muster never suspends: no
             // AwaitingInput Waypoint is written for it (D-22 over D-23).
@@ -12330,7 +12396,11 @@ mod tests {
             "the fallback delta is task b's contribution"
         );
         let records = worker_records(&store, &thread, &worker).await;
-        assert_eq!(records.len(), 3, "the aggregation's task count is unchanged");
+        assert_eq!(
+            records.len(),
+            3,
+            "the aggregation's task count is unchanged"
+        );
         assert_eq!(
             records
                 .iter()

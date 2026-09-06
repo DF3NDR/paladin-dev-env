@@ -591,6 +591,14 @@ impl WarGraph {
     /// `validate_eligible_set` exempts it from the "unreachable from
     /// entry" rejection the same way a [`WarGraph::mark_dynamic_target`]
     /// node already is.
+    ///
+    /// An `Aegis.on_error` on a worker template is delta-only (D-22, plan
+    /// 25-11): `Absorb` and `Custom` are permitted, `Route` is rejected by
+    /// `WarGraph::validate` (`EngineError::HandlerNotAllowedOnWorkerTemplate`),
+    /// and a `Custom` handler returning anything but `NextStep::Edges` from
+    /// inside a mustered task fails the run with
+    /// `EngineError::MusterHandlerMustBeDeltaOnly`. The permitted handler's
+    /// delta becomes that task's contribution to the aggregation.
     pub fn add_worker_template(&mut self, id: NodeId, spec: NodeSpec) -> &mut Self {
         self.add_node(id.clone(), spec);
         self.worker_templates.insert(id);
@@ -1084,7 +1092,17 @@ impl WarGraph {
     /// [`WarGraph::validate_aegis_custom_registrations`]'s job, and its
     /// returned `Directive` is validated at runtime exactly as a node's own
     /// is.
+    ///
+    /// The shallowest class of all (D-22, plan 25-11): a `Route` sitting ON
+    /// a worker template ([`WarGraph::add_worker_template`]). A mustered
+    /// task's result is exactly one contribution to its Muster's
+    /// aggregation, and routing out of a single task would leave that
+    /// aggregation undefined -- so only `Absorb` and a delta-only `Custom`
+    /// handler (enforced at dispatch, since delta-only is a runtime
+    /// property) are permitted there, and the message names the
+    /// alternative: handle the failure at the aggregator node.
     fn validate_aegis_handler_wiring(&self) -> Result<(), EngineError> {
+        let mut template_handlers: Vec<String> = Vec::new();
         let mut unknown_targets: Vec<String> = Vec::new();
         let mut template_targets: Vec<String> = Vec::new();
         let mut undeclared_fields: Vec<String> = Vec::new();
@@ -1094,6 +1112,9 @@ impl WarGraph {
             let Some(on_error) = self.aegis_for(id).and_then(|a| a.on_error.as_ref()) else {
                 continue;
             };
+            if self.is_worker_template(id) && matches!(on_error, ErrorHandlerSpec::Route { .. }) {
+                template_handlers.push(format!("{id}: Route on a worker template"));
+            }
             match on_error {
                 ErrorHandlerSpec::Route { to, error_field } => {
                     if !self.nodes.contains_key(to) {
@@ -1135,6 +1156,21 @@ impl WarGraph {
             }
         }
 
+        if !template_handlers.is_empty() {
+            return Err(EngineError::HandlerNotAllowedOnWorkerTemplate {
+                reason: format!(
+                    "only Absorb and a delta-only Custom handler are allowed on a worker \
+                     template: {} -- a mustered task's result is exactly one contribution to \
+                     its Muster's aggregation, and aggregation semantics for a task that \
+                     routes out of it are undefined today (routing out of a single mustered \
+                     task is a deferred idea); handle the failure at the aggregator node \
+                     instead, or Absorb it on the template so its fallback delta becomes that \
+                     task's contribution",
+                    template_handlers.join("; ")
+                ),
+                offenders: template_handlers,
+            });
+        }
         if !unknown_targets.is_empty() {
             return Err(EngineError::RouteTargetUnknown {
                 reason: format!(

@@ -13088,4 +13088,388 @@ mod tests {
         );
         assert!(matches!(waypoints[0].status, WaypointStatus::Failed { .. }));
     }
+
+    // --- Plan 25-13 Tasks 2/3: the node cache's hit/miss path and its
+    //     correctness under time, change and backend failure (FT-FR-18,
+    //     FT-FR-20, D-28, D-29) ---------------------------------------------
+
+    use crate::engine::test_support::{
+        RecordingInterceptor, RecordingNodeCache, RecordingTraceSink,
+    };
+    use paladin_core::platform::container::aegis::{CacheKeySpec, CachePolicy};
+
+    fn cache_aegis(ttl: Duration) -> Aegis {
+        Aegis {
+            cache: Some(CachePolicy {
+                ttl,
+                key: CacheKeySpec::Default,
+            }),
+            ..Aegis::default()
+        }
+    }
+
+    /// A cache policy AND a retry policy on the same node, so a hit's
+    /// zero-attempt accounting is observable against a budget that exists.
+    fn cached_retrying_aegis(ttl: Duration, max_attempts: u32) -> Aegis {
+        Aegis {
+            cache: Some(CachePolicy {
+                ttl,
+                key: CacheKeySpec::Default,
+            }),
+            retry: Some(RetryPolicy {
+                max_attempts,
+                initial_interval: Duration::from_millis(1),
+                jitter: false,
+                retry_on:
+                    paladin_core::platform::container::aegis::RetryPredicate::TransientAndUnknown,
+                ..RetryPolicy::default()
+            }),
+            ..Aegis::default()
+        }
+    }
+
+    /// The one-node graph every cache test starts from: `node` under
+    /// `aegis`, entry, writing into the `result` field.
+    fn cached_graph(node: Arc<dyn StateNode>, aegis: Aegis) -> (WarGraph, NodeId) {
+        let s = schema(vec![FieldSpec::new(
+            field("result"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let id = NodeId::new("cached");
+        graph.add_node(id.clone(), NodeSpec::Function(node));
+        graph.add_entry(id.clone());
+        graph.set_aegis(id.clone(), aegis);
+        (graph, id)
+    }
+
+    fn cached_engine(
+        port: Arc<dyn PaladinPort>,
+        store: Arc<RecordingWaypointStore>,
+        cache: Arc<RecordingNodeCache>,
+    ) -> WarEngine<RecordingWaypointStore> {
+        WarEngine::new(port, store).with_node_cache(cache)
+    }
+
+    async fn start_thread(
+        engine: &WarEngine<RecordingWaypointStore>,
+        graph: &WarGraph,
+        thread: &str,
+    ) -> RunOutcome {
+        engine
+            .start(graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap()
+    }
+
+    fn completed_result(outcome: &RunOutcome) -> Option<String> {
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                final_state.get::<String>(&field("result")).unwrap()
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Every `NodeExecutionRecord` for `node` on `thread`, across every
+    /// persisted Waypoint (newest first) -- a `&str`-thread twin of the
+    /// module's own `records_for`, since every cache test names its threads
+    /// inline.
+    async fn cache_records_for(
+        store: &RecordingWaypointStore,
+        thread: &str,
+        node: &NodeId,
+    ) -> Vec<NodeExecutionRecord> {
+        store
+            .saved_waypoints(&ThreadId::new(thread).unwrap())
+            .await
+            .iter()
+            .flat_map(|w| w.completed.iter())
+            .filter(|r| &r.node_id == node)
+            .cloned()
+            .collect()
+    }
+
+    /// Task 2, Test 7: a pre-populated cache (by a prior run of the same
+    /// graph) serves the second run with zero executions, the stored delta
+    /// merged, and a record reading Succeeded / attempt 1 / cache_hit true.
+    #[tokio::test]
+    async fn a_hit_merges_the_stored_delta_with_no_execution() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("computed"));
+        let (graph, id) = cached_graph(node.clone(), cache_aegis(Duration::from_secs(60)));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(no_paladin_port(), store.clone(), cache.clone());
+
+        let first = start_thread(&engine, &graph, "hit-1").await;
+        assert_eq!(completed_result(&first).as_deref(), Some("computed"));
+        assert_eq!(node.run_count(), 1);
+        assert_eq!(cache.put_count(), 1);
+        let first_record = &cache_records_for(&store, "hit-1", &id).await[0];
+        assert!(!first_record.cache_hit, "the populating run is a miss");
+
+        let second = start_thread(&engine, &graph, "hit-2").await;
+        assert_eq!(
+            completed_result(&second).as_deref(),
+            Some("computed"),
+            "the stored delta is merged"
+        );
+        assert_eq!(node.run_count(), 1, "a hit executes nothing");
+        assert_eq!(cache.get_count(), 2);
+        assert_eq!(cache.put_count(), 1, "a hit stores nothing");
+        let records = cache_records_for(&store, "hit-2", &id).await;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].outcome, NodeOutcomeKind::Succeeded);
+        assert_eq!(records[0].attempt, 1);
+        assert!(records[0].cache_hit);
+        assert_eq!(records[0].token_count, 0);
+    }
+
+    /// Task 2, Test 8: a hit emits exactly `NodeStarted { attempt: 1 }` and
+    /// `NodeFinished { attempt: 1, cache_hit: true }` for the node -- and no
+    /// other node event.
+    #[tokio::test]
+    async fn a_hit_emits_node_started_and_finished_with_cache_hit_true() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("v"));
+        let (graph, id) = cached_graph(node, cache_aegis(Duration::from_secs(60)));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let sink = RecordingTraceSink::new();
+        let engine = cached_engine(no_paladin_port(), store, cache).with_trace_sink(sink.clone());
+
+        start_thread(&engine, &graph, "trace-1").await;
+        start_thread(&engine, &graph, "trace-2").await;
+
+        // Give the background trace consumer a chance to drain.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let hit_thread = ThreadId::new("trace-2").unwrap();
+        let node_events: Vec<(&'static str, u32, Option<bool>)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|event| match event {
+                TraceEvent::NodeStarted {
+                    thread_id,
+                    node_id,
+                    attempt,
+                    ..
+                } if thread_id == &hit_thread && node_id == &id => {
+                    Some(("NodeStarted", *attempt, None))
+                }
+                TraceEvent::NodeFinished {
+                    thread_id,
+                    node_id,
+                    attempt,
+                    cache_hit,
+                    ..
+                } if thread_id == &hit_thread && node_id == &id => {
+                    Some(("NodeFinished", *attempt, Some(*cache_hit)))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            node_events,
+            vec![("NodeStarted", 1, None), ("NodeFinished", 1, Some(true))]
+        );
+        // And the populating run's own pair was NOT a hit.
+        let miss_thread = ThreadId::new("trace-1").unwrap();
+        let miss_finished: Vec<bool> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|event| match event {
+                TraceEvent::NodeFinished {
+                    thread_id,
+                    cache_hit,
+                    ..
+                } if thread_id == &miss_thread => Some(*cache_hit),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(miss_finished, vec![false]);
+    }
+
+    /// Task 2, Test 9: a miss executes exactly once and issues exactly one
+    /// `put` carrying the `CachePolicy`'s TTL and the merged delta.
+    #[tokio::test]
+    async fn a_miss_executes_and_stores_the_successful_delta_with_the_ttl() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("stored"));
+        let ttl = Duration::from_secs(1234);
+        let (graph, _id) = cached_graph(node.clone(), cache_aegis(ttl));
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(
+            no_paladin_port(),
+            Arc::new(RecordingWaypointStore::new()),
+            cache.clone(),
+        );
+
+        let outcome = start_thread(&engine, &graph, "miss").await;
+        assert_eq!(completed_result(&outcome).as_deref(), Some("stored"));
+        assert_eq!(node.run_count(), 1);
+        assert_eq!(cache.get_count(), 1, "exactly one lookup, before attempt 1");
+        let puts = cache.puts();
+        assert_eq!(puts.len(), 1, "exactly one put");
+        let (key, delta, put_ttl) = &puts[0];
+        assert_eq!(*put_ttl, ttl, "the put carries the policy's TTL");
+        assert_eq!(
+            delta.values.get(&field("result")),
+            Some(&serde_json::json!("stored"))
+        );
+        assert!(key.starts_with(&crate::engine::cache_key::node_prefix(
+            &graph.fingerprint(),
+            &NodeId::new("cached")
+        )));
+    }
+
+    /// Task 2, Test 10: a node that fails every attempt issues zero `put`
+    /// calls -- no error outcome is ever cached.
+    #[tokio::test]
+    async fn a_failed_attempt_is_never_stored() {
+        let (graph, id) = cached_graph(
+            FailingFunctionNode::new("boom"),
+            cached_retrying_aegis(Duration::from_secs(60), 3),
+        );
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(no_paladin_port(), store.clone(), cache.clone());
+
+        let outcome = start_thread(&engine, &graph, "always-fails").await;
+        assert!(matches!(outcome, RunOutcome::Failed { .. }));
+        assert_eq!(cache.get_count(), 1, "looked up once, before attempt 1");
+        assert_eq!(cache.put_count(), 0, "a failed attempt is never stored");
+        assert!(cache.keys().is_empty());
+        let records = cache_records_for(&store, "always-fails", &id).await;
+        assert_eq!(records[0].attempt, 3, "every retry ran");
+        assert!(!records[0].cache_hit);
+    }
+
+    /// Task 2, Test 11: a stored EMPTY delta is a hit that merges nothing --
+    /// `cache_hit: true`, no execution, Battlefield unchanged (FT-06 edge
+    /// assumption, engine side).
+    #[tokio::test]
+    async fn an_empty_cached_delta_is_a_hit_that_merges_nothing() {
+        let node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        let (graph, id) = cached_graph(node.clone(), cache_aegis(Duration::from_secs(60)));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(no_paladin_port(), store.clone(), cache.clone());
+
+        start_thread(&engine, &graph, "empty-1").await;
+        assert_eq!(cache.put_count(), 1, "an empty delta IS stored");
+        assert!(cache.puts()[0].1.values.is_empty());
+
+        let second = start_thread(&engine, &graph, "empty-2").await;
+        assert_eq!(completed_result(&second), None, "nothing merged");
+        assert_eq!(node.run_count(), 1, "served from cache, not re-executed");
+        let records = cache_records_for(&store, "empty-2", &id).await;
+        assert!(records[0].cache_hit);
+        assert_eq!(records[0].outcome, NodeOutcomeKind::Succeeded);
+    }
+
+    /// FT-FR-20's Function-node half of the `Deny` guarantee: a `StateNode`'s
+    /// write set is only knowable from its delta, so a delta touching a
+    /// `cache: Deny` field is never stored -- and the next run re-executes.
+    #[tokio::test]
+    async fn a_function_delta_touching_a_deny_field_is_never_stored() {
+        let log = field("log");
+        let s = schema(vec![
+            FieldSpec::new(field("result"), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(log.clone(), DispatchRule::Append, None, false)
+                .with_cache(CacheMarker::Deny),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let id = NodeId::new("appender");
+        let node = CountingFunctionNode::fixed(log.clone(), serde_json::json!("line"));
+        graph.add_node(id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(id.clone());
+        graph.set_aegis(id, cache_aegis(Duration::from_secs(60)));
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(
+            no_paladin_port(),
+            Arc::new(RecordingWaypointStore::new()),
+            cache.clone(),
+        );
+
+        let first = start_thread(&engine, &graph, "deny-1").await;
+        assert!(matches!(first, RunOutcome::Completed { .. }));
+        assert_eq!(
+            cache.put_count(),
+            0,
+            "a Deny-touching delta is never stored"
+        );
+        start_thread(&engine, &graph, "deny-2").await;
+        assert_eq!(node.run_count(), 2, "nothing to hit, so it re-executes");
+    }
+
+    /// D-14: the cache is part of the Aegis, which wraps OUTSIDE the
+    /// interceptor chain -- so a hit runs no `before`/`after` interceptor
+    /// (nothing executes), while the populating miss ran both.
+    #[tokio::test]
+    async fn a_hit_bypasses_the_interceptor_chain() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("v"));
+        let (graph, _id) = cached_graph(node, cache_aegis(Duration::from_secs(60)));
+        let interceptor = RecordingInterceptor::new();
+        let engine = cached_engine(
+            no_paladin_port(),
+            Arc::new(RecordingWaypointStore::new()),
+            RecordingNodeCache::new(),
+        )
+        .with_interceptors(vec![interceptor.clone()]);
+
+        start_thread(&engine, &graph, "intercept-1").await;
+        assert_eq!(interceptor.calls(), vec!["before", "after"]);
+        start_thread(&engine, &graph, "intercept-2").await;
+        assert_eq!(
+            interceptor.calls(),
+            vec!["before", "after"],
+            "the hit ran no interceptor"
+        );
+    }
+
+    /// A `Goto`-routed directive is never stored: a `CachedDelta` carries
+    /// only a delta, and replaying just the delta would drop the routing.
+    #[tokio::test]
+    async fn a_routing_directive_is_never_stored() {
+        let s = schema(vec![FieldSpec::new(
+            field("result"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let router = NodeId::new("router");
+        let target = NodeId::new("target");
+        let target_id = target.clone();
+        graph.add_node(
+            router.clone(),
+            NodeSpec::Function(CountingFunctionNode::with_directive(move |_run, _state| {
+                Directive {
+                    delta: StateDelta::new(),
+                    next: NextStep::Goto(vec![target_id.clone()]),
+                }
+            })),
+        );
+        graph.add_node(
+            target.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("result"),
+                serde_json::json!("routed"),
+            )),
+        );
+        graph.mark_dynamic_target(target);
+        graph.add_entry(router.clone());
+        graph.set_aegis(router, cache_aegis(Duration::from_secs(60)));
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(
+            no_paladin_port(),
+            Arc::new(RecordingWaypointStore::new()),
+            cache.clone(),
+        );
+        let outcome = start_thread(&engine, &graph, "goto").await;
+        assert_eq!(completed_result(&outcome).as_deref(), Some("routed"));
+        assert_eq!(cache.put_count(), 0, "a Goto directive is never cached");
+    }
 }

@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-09-04 03:20:49 UTC
+# Public API Surface - Generated 2026-09-06 15:45:53 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -144,6 +144,20 @@ pub mod paladin::application::services::battalion::flow_visualizer
 pub use paladin::application::services::battalion::flow_visualizer::<<paladin_battalion::maneuver::visualizer::*>>
 pub mod paladin::application::services::battalion::maneuver_service
 pub use paladin::application::services::battalion::maneuver_service::<<paladin_battalion::maneuver::service::*>>
+pub mod paladin::application::services::chronicle
+pub struct paladin::application::services::chronicle::ChronicleService
+impl paladin::application::services::chronicle::ChronicleService
+pub async fn paladin::application::services::chronicle::ChronicleService::history(&self, &paladin_core::platform::container::waypoint::ThreadId, usize, core::option::Option<paladin_core::platform::container::waypoint::WaypointId>) -> core::result::Result<alloc::vec::Vec<paladin_ports::output::waypoint_port::WaypointSummary>, paladin_ports::output::waypoint_port::WaypointError>
+pub async fn paladin::application::services::chronicle::ChronicleService::inspect(&self, &paladin_core::platform::container::waypoint::ThreadId, paladin_core::platform::container::waypoint::WaypointId) -> core::result::Result<paladin_core::platform::container::waypoint::Waypoint, paladin_ports::output::waypoint_port::WaypointError>
+pub async fn paladin::application::services::chronicle::ChronicleService::latest_on_branch(&self, &paladin_core::platform::container::waypoint::ThreadId, paladin_core::platform::container::waypoint::WaypointId) -> core::result::Result<core::option::Option<paladin_ports::output::waypoint_port::WaypointSummary>, paladin_ports::output::waypoint_port::WaypointError>
+pub fn paladin::application::services::chronicle::ChronicleService::new(alloc::sync::Arc<dyn paladin_ports::output::waypoint_port::WaypointPort>) -> Self
+impl core::marker::Freeze for paladin::application::services::chronicle::ChronicleService
+impl core::marker::Send for paladin::application::services::chronicle::ChronicleService
+impl core::marker::Sync for paladin::application::services::chronicle::ChronicleService
+impl core::marker::Unpin for paladin::application::services::chronicle::ChronicleService
+impl core::marker::UnsafeUnpin for paladin::application::services::chronicle::ChronicleService
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::chronicle::ChronicleService
+impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::chronicle::ChronicleService
 pub mod paladin::application::services::content
 pub mod paladin::application::services::content::content_ingestion_service
 pub enum paladin::application::services::content::content_ingestion_service::AuthType
@@ -1503,6 +1517,7 @@ pub mod paladin::application::services::paladin::paladin_execution_service
 pub struct paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService
 impl paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService
 pub async fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::execute(&self, &paladin_core::platform::container::paladin::Paladin, &str) -> core::result::Result<paladin_core::platform::container::execution_result::PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
+pub async fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::execute_observed(&self, &paladin_core::platform::container::paladin::Paladin, &str, &paladin_core::platform::container::heartbeat::HeartbeatHandle) -> core::result::Result<paladin_core::platform::container::execution_result::PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::format_result(&self, &paladin_core::platform::container::execution_result::PaladinResult, &paladin_core::platform::container::paladin::Paladin) -> core::result::Result<core::option::Option<alloc::string::String>, paladin_core::platform::container::paladin_error::PaladinError>
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::new(alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>, alloc::sync::Arc<paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker>, core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::garrison_port::GarrisonPort>>, core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::arsenal_port::ArsenalPort>>) -> Self
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::orchestrator_port(&self) -> core::option::Option<&alloc::sync::Arc<dyn paladin_ports::output::orchestrator_port::OrchestratorPort>>
@@ -1513,6 +1528,8 @@ pub fn paladin::application::services::paladin::paladin_execution_service::Palad
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::with_planning_service(self, alloc::sync::Arc<paladin::application::services::paladin::planning_service::PlanningService>) -> Self
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::with_prompt_generation_service(self, alloc::sync::Arc<paladin::application::services::paladin::prompt_generation_service::PromptGenerationService>) -> Self
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::with_rag_retrieval(self, alloc::sync::Arc<paladin_memory::services::rag_retrieval_service::RagRetrievalService>) -> Self
+impl paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService
+pub async fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::execute_stream_observed(&self, &paladin_core::platform::container::paladin::Paladin, &str, &paladin_core::platform::container::heartbeat::HeartbeatHandle) -> core::result::Result<paladin_ports::output::paladin_port::PaladinStream, paladin_core::platform::container::paladin_error::PaladinError>
 impl paladin_ports::output::paladin_executor_port::PaladinExecutorPort for paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::execute<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::execution_result::PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 impl paladin_ports::output::streaming_executor_port::StreamingExecutorPort for paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService
@@ -1602,6 +1619,61 @@ impl core::marker::Unpin for paladin::application::services::paladin::temperatur
 impl core::marker::UnsafeUnpin for paladin::application::services::paladin::temperature_service::TemperatureService
 impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::paladin::temperature_service::TemperatureService
 impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::paladin::temperature_service::TemperatureService
+pub mod paladin::application::services::parley
+pub mod paladin::application::services::parley::adapter
+pub struct paladin::application::services::parley::adapter::ParleyPortAdapter<W: paladin_ports::output::waypoint_port::WaypointPort + 'static>
+impl<W: paladin_ports::output::waypoint_port::WaypointPort + 'static> paladin::application::services::parley::adapter::ParleyPortAdapter<W>
+pub fn paladin::application::services::parley::adapter::ParleyPortAdapter<W>::new(alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>, alloc::sync::Arc<W>, alloc::sync::Arc<paladin::application::services::parley::registry::GraphRegistry>, paladin_battalion::engine::shutdown::ShutdownCoordinator) -> Self
+impl<W: paladin_ports::output::waypoint_port::WaypointPort + 'static> paladin_ports::input::parley_port::ParleyPort for paladin::application::services::parley::adapter::ParleyPortAdapter<W>
+pub fn paladin::application::services::parley::adapter::ParleyPortAdapter<W>::resume_with<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::waypoint::ThreadId, alloc::vec::Vec<paladin_core::platform::container::parley::ParleyResponse>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_ports::input::parley_port::ResumeAccepted, paladin_ports::input::parley_port::ParleyError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl<W> core::marker::Freeze for paladin::application::services::parley::adapter::ParleyPortAdapter<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Freeze, alloc::sync::Arc<W>: core::marker::Freeze
+impl<W> core::marker::Send for paladin::application::services::parley::adapter::ParleyPortAdapter<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Send, alloc::sync::Arc<W>: core::marker::Send
+impl<W> core::marker::Sync for paladin::application::services::parley::adapter::ParleyPortAdapter<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Sync, alloc::sync::Arc<W>: core::marker::Sync
+impl<W> core::marker::Unpin for paladin::application::services::parley::adapter::ParleyPortAdapter<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Unpin, alloc::sync::Arc<W>: core::marker::Unpin
+impl<W> core::marker::UnsafeUnpin for paladin::application::services::parley::adapter::ParleyPortAdapter<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::UnsafeUnpin, alloc::sync::Arc<W>: core::marker::UnsafeUnpin
+impl<W> !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::parley::adapter::ParleyPortAdapter<W>
+impl<W> !core::panic::unwind_safe::UnwindSafe for paladin::application::services::parley::adapter::ParleyPortAdapter<W>
+pub mod paladin::application::services::parley::registry
+pub struct paladin::application::services::parley::registry::GraphRegistry
+impl paladin::application::services::parley::registry::GraphRegistry
+pub fn paladin::application::services::parley::registry::GraphRegistry::new() -> Self
+pub fn paladin::application::services::parley::registry::GraphRegistry::register(&self, paladin_battalion::engine::graph::WarGraph) -> paladin_core::platform::container::waypoint::GraphFingerprint
+pub fn paladin::application::services::parley::registry::GraphRegistry::resolve(&self, &paladin_core::platform::container::waypoint::GraphFingerprint) -> core::option::Option<alloc::sync::Arc<paladin_battalion::engine::graph::WarGraph>>
+impl core::default::Default for paladin::application::services::parley::registry::GraphRegistry
+pub fn paladin::application::services::parley::registry::GraphRegistry::default() -> paladin::application::services::parley::registry::GraphRegistry
+impl !core::marker::Freeze for paladin::application::services::parley::registry::GraphRegistry
+impl core::marker::Send for paladin::application::services::parley::registry::GraphRegistry
+impl core::marker::Sync for paladin::application::services::parley::registry::GraphRegistry
+impl core::marker::Unpin for paladin::application::services::parley::registry::GraphRegistry
+impl core::marker::UnsafeUnpin for paladin::application::services::parley::registry::GraphRegistry
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::parley::registry::GraphRegistry
+impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::parley::registry::GraphRegistry
+pub struct paladin::application::services::parley::GraphRegistry
+impl paladin::application::services::parley::registry::GraphRegistry
+pub fn paladin::application::services::parley::registry::GraphRegistry::new() -> Self
+pub fn paladin::application::services::parley::registry::GraphRegistry::register(&self, paladin_battalion::engine::graph::WarGraph) -> paladin_core::platform::container::waypoint::GraphFingerprint
+pub fn paladin::application::services::parley::registry::GraphRegistry::resolve(&self, &paladin_core::platform::container::waypoint::GraphFingerprint) -> core::option::Option<alloc::sync::Arc<paladin_battalion::engine::graph::WarGraph>>
+impl core::default::Default for paladin::application::services::parley::registry::GraphRegistry
+pub fn paladin::application::services::parley::registry::GraphRegistry::default() -> paladin::application::services::parley::registry::GraphRegistry
+impl !core::marker::Freeze for paladin::application::services::parley::registry::GraphRegistry
+impl core::marker::Send for paladin::application::services::parley::registry::GraphRegistry
+impl core::marker::Sync for paladin::application::services::parley::registry::GraphRegistry
+impl core::marker::Unpin for paladin::application::services::parley::registry::GraphRegistry
+impl core::marker::UnsafeUnpin for paladin::application::services::parley::registry::GraphRegistry
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::parley::registry::GraphRegistry
+impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::parley::registry::GraphRegistry
+pub struct paladin::application::services::parley::ParleyPortAdapter<W: paladin_ports::output::waypoint_port::WaypointPort + 'static>
+impl<W: paladin_ports::output::waypoint_port::WaypointPort + 'static> paladin::application::services::parley::adapter::ParleyPortAdapter<W>
+pub fn paladin::application::services::parley::adapter::ParleyPortAdapter<W>::new(alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>, alloc::sync::Arc<W>, alloc::sync::Arc<paladin::application::services::parley::registry::GraphRegistry>, paladin_battalion::engine::shutdown::ShutdownCoordinator) -> Self
+impl<W: paladin_ports::output::waypoint_port::WaypointPort + 'static> paladin_ports::input::parley_port::ParleyPort for paladin::application::services::parley::adapter::ParleyPortAdapter<W>
+pub fn paladin::application::services::parley::adapter::ParleyPortAdapter<W>::resume_with<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::waypoint::ThreadId, alloc::vec::Vec<paladin_core::platform::container::parley::ParleyResponse>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_ports::input::parley_port::ResumeAccepted, paladin_ports::input::parley_port::ParleyError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl<W> core::marker::Freeze for paladin::application::services::parley::adapter::ParleyPortAdapter<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Freeze, alloc::sync::Arc<W>: core::marker::Freeze
+impl<W> core::marker::Send for paladin::application::services::parley::adapter::ParleyPortAdapter<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Send, alloc::sync::Arc<W>: core::marker::Send
+impl<W> core::marker::Sync for paladin::application::services::parley::adapter::ParleyPortAdapter<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Sync, alloc::sync::Arc<W>: core::marker::Sync
+impl<W> core::marker::Unpin for paladin::application::services::parley::adapter::ParleyPortAdapter<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Unpin, alloc::sync::Arc<W>: core::marker::Unpin
+impl<W> core::marker::UnsafeUnpin for paladin::application::services::parley::adapter::ParleyPortAdapter<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::UnsafeUnpin, alloc::sync::Arc<W>: core::marker::UnsafeUnpin
+impl<W> !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::parley::adapter::ParleyPortAdapter<W>
+impl<W> !core::panic::unwind_safe::UnwindSafe for paladin::application::services::parley::adapter::ParleyPortAdapter<W>
 pub mod paladin::application::services::queue_orchestrator
 pub use paladin::application::services::queue_orchestrator::QueueConfigAlias
 pub use paladin::application::services::queue_orchestrator::QueueStats
@@ -1972,10 +2044,12 @@ impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::citadel::Citad
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::citadel::CitadelConfig
 pub mod paladin::config::engine
 pub struct paladin::config::engine::EngineConfig
+pub paladin::config::engine::EngineConfig::graceful_shutdown: bool
 pub paladin::config::engine::EngineConfig::max_muster_tasks: u32
 pub paladin::config::engine::EngineConfig::max_node_visits: u32
 pub paladin::config::engine::EngineConfig::max_supersteps: u64
 pub paladin::config::engine::EngineConfig::run_timeout_secs: core::option::Option<u64>
+pub paladin::config::engine::EngineConfig::shutdown_grace_secs: u64
 pub paladin::config::engine::EngineConfig::waypoint_durability: paladin_battalion::engine::WaypointDurability
 impl paladin::config::engine::EngineConfig
 pub fn paladin::config::engine::EngineConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
@@ -2011,10 +2085,14 @@ impl paladin::config::env_utils::EnvOverridable for paladin::config::file_storag
 pub fn paladin::config::file_storage::FileStorageConfig::apply_env_overrides(&mut self)
 impl paladin::config::env_utils::EnvOverridable for paladin::config::herald::HeraldConfig
 pub fn paladin::config::herald::HeraldConfig::apply_env_overrides(&mut self)
+impl paladin::config::env_utils::EnvOverridable for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::apply_env_overrides(&mut self)
 impl paladin::config::env_utils::EnvOverridable for paladin::config::queue::QueueConfig
 pub fn paladin::config::queue::QueueConfig::apply_env_overrides(&mut self)
 impl paladin::config::env_utils::EnvOverridable for paladin::config::waypoint_retention::WaypointRetentionConfig
 pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::apply_env_overrides(&mut self)
+impl paladin::config::env_utils::EnvOverridable for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::apply_env_overrides(&mut self)
 pub fn paladin::config::env_utils::read_env<T: core::str::traits::FromStr>(&str) -> core::option::Option<T>
 pub mod paladin::config::file_storage
 pub struct paladin::config::file_storage::FileStorageConfig
@@ -2136,6 +2214,59 @@ impl core::marker::Unpin for paladin::config::herald::TableHeraldConfig
 impl core::marker::UnsafeUnpin for paladin::config::herald::TableHeraldConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::herald::TableHeraldConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::herald::TableHeraldConfig
+pub mod paladin::config::node_cache
+pub enum paladin::config::node_cache::NodeCacheBackend
+pub paladin::config::node_cache::NodeCacheBackend::InMemory
+pub paladin::config::node_cache::NodeCacheBackend::Redis
+impl core::clone::Clone for paladin::config::node_cache::NodeCacheBackend
+pub fn paladin::config::node_cache::NodeCacheBackend::clone(&self) -> paladin::config::node_cache::NodeCacheBackend
+impl core::cmp::Eq for paladin::config::node_cache::NodeCacheBackend
+impl core::cmp::PartialEq for paladin::config::node_cache::NodeCacheBackend
+pub fn paladin::config::node_cache::NodeCacheBackend::eq(&self, &paladin::config::node_cache::NodeCacheBackend) -> bool
+impl core::fmt::Debug for paladin::config::node_cache::NodeCacheBackend
+pub fn paladin::config::node_cache::NodeCacheBackend::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin::config::node_cache::NodeCacheBackend
+impl core::marker::StructuralPartialEq for paladin::config::node_cache::NodeCacheBackend
+impl serde_core::ser::Serialize for paladin::config::node_cache::NodeCacheBackend
+pub fn paladin::config::node_cache::NodeCacheBackend::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::node_cache::NodeCacheBackend
+pub fn paladin::config::node_cache::NodeCacheBackend::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::node_cache::NodeCacheBackend
+impl core::marker::Send for paladin::config::node_cache::NodeCacheBackend
+impl core::marker::Sync for paladin::config::node_cache::NodeCacheBackend
+impl core::marker::Unpin for paladin::config::node_cache::NodeCacheBackend
+impl core::marker::UnsafeUnpin for paladin::config::node_cache::NodeCacheBackend
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::node_cache::NodeCacheBackend
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::node_cache::NodeCacheBackend
+pub struct paladin::config::node_cache::NodeCacheConfig
+pub paladin::config::node_cache::NodeCacheConfig::backend: paladin::config::node_cache::NodeCacheBackend
+pub paladin::config::node_cache::NodeCacheConfig::enabled: bool
+pub paladin::config::node_cache::NodeCacheConfig::key_prefix: alloc::string::String
+pub paladin::config::node_cache::NodeCacheConfig::redis_db: u8
+pub paladin::config::node_cache::NodeCacheConfig::redis_host: alloc::string::String
+pub paladin::config::node_cache::NodeCacheConfig::redis_password: core::option::Option<alloc::string::String>
+pub paladin::config::node_cache::NodeCacheConfig::redis_port: u16
+impl paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::clone(&self) -> paladin::config::node_cache::NodeCacheConfig
+impl core::default::Default for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin::config::env_utils::EnvOverridable for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::apply_env_overrides(&mut self)
+impl serde_core::ser::Serialize for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::node_cache::NodeCacheConfig
+impl core::marker::Send for paladin::config::node_cache::NodeCacheConfig
+impl core::marker::Sync for paladin::config::node_cache::NodeCacheConfig
+impl core::marker::Unpin for paladin::config::node_cache::NodeCacheConfig
+impl core::marker::UnsafeUnpin for paladin::config::node_cache::NodeCacheConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::node_cache::NodeCacheConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::node_cache::NodeCacheConfig
 pub mod paladin::config::notifications
 pub mod paladin::config::queue
 pub struct paladin::config::queue::QueueConfig
@@ -2296,6 +2427,7 @@ pub async fn paladin::config::setup::service_runner::ServiceRunner::initialize_s
 pub fn paladin::config::setup::service_runner::ServiceRunner::new() -> Self
 pub async fn paladin::config::setup::service_runner::ServiceRunner::run_services(&mut self, alloc::sync::Arc<paladin::config::settings::Settings>) -> core::result::Result<(), alloc::boxed::Box<dyn core::error::Error>>
 pub async fn paladin::config::setup::service_runner::ServiceRunner::shutdown(&mut self) -> core::result::Result<(), alloc::boxed::Box<dyn core::error::Error>>
+pub fn paladin::config::setup::service_runner::ServiceRunner::shutdown_coordinator(&self) -> paladin_battalion::engine::shutdown::ShutdownCoordinator
 impl core::default::Default for paladin::config::setup::service_runner::ServiceRunner
 pub fn paladin::config::setup::service_runner::ServiceRunner::default() -> Self
 impl core::marker::Freeze for paladin::config::setup::service_runner::ServiceRunner
@@ -2344,6 +2476,54 @@ impl core::marker::Unpin for paladin::config::waypoint_retention::WaypointRetent
 impl core::marker::UnsafeUnpin for paladin::config::waypoint_retention::WaypointRetentionConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::waypoint_retention::WaypointRetentionConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub mod paladin::config::waypoint_store
+pub enum paladin::config::waypoint_store::WaypointStoreBackend
+pub paladin::config::waypoint_store::WaypointStoreBackend::Disabled
+pub paladin::config::waypoint_store::WaypointStoreBackend::Postgres
+pub paladin::config::waypoint_store::WaypointStoreBackend::Postgres::url_env: alloc::string::String
+pub paladin::config::waypoint_store::WaypointStoreBackend::Sqlite
+pub paladin::config::waypoint_store::WaypointStoreBackend::Sqlite::path: alloc::string::String
+impl core::clone::Clone for paladin::config::waypoint_store::WaypointStoreBackend
+pub fn paladin::config::waypoint_store::WaypointStoreBackend::clone(&self) -> paladin::config::waypoint_store::WaypointStoreBackend
+impl core::cmp::PartialEq for paladin::config::waypoint_store::WaypointStoreBackend
+pub fn paladin::config::waypoint_store::WaypointStoreBackend::eq(&self, &paladin::config::waypoint_store::WaypointStoreBackend) -> bool
+impl core::fmt::Debug for paladin::config::waypoint_store::WaypointStoreBackend
+pub fn paladin::config::waypoint_store::WaypointStoreBackend::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::waypoint_store::WaypointStoreBackend
+impl serde_core::ser::Serialize for paladin::config::waypoint_store::WaypointStoreBackend
+pub fn paladin::config::waypoint_store::WaypointStoreBackend::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::waypoint_store::WaypointStoreBackend
+pub fn paladin::config::waypoint_store::WaypointStoreBackend::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::marker::Send for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::marker::Sync for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::marker::Unpin for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::marker::UnsafeUnpin for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::waypoint_store::WaypointStoreBackend
+pub struct paladin::config::waypoint_store::WaypointStoreConfig
+pub paladin::config::waypoint_store::WaypointStoreConfig::backend: paladin::config::waypoint_store::WaypointStoreBackend
+impl paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::clone(&self) -> paladin::config::waypoint_store::WaypointStoreConfig
+impl core::default::Default for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin::config::env_utils::EnvOverridable for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::apply_env_overrides(&mut self)
+impl serde_core::ser::Serialize for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::marker::Send for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::marker::Sync for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::marker::Unpin for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::marker::UnsafeUnpin for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::waypoint_store::WaypointStoreConfig
 pub mod paladin::config::web_server
 pub struct paladin::config::web_server::MessageServiceSettings
 pub paladin::config::web_server::MessageServiceSettings::default_ttl_seconds: core::option::Option<i64>
@@ -2406,6 +2586,53 @@ impl core::marker::Unpin for paladin::config::web_server::SourceConfig
 impl core::marker::UnsafeUnpin for paladin::config::web_server::SourceConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::web_server::SourceConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::web_server::SourceConfig
+pub enum paladin::config::NodeCacheBackend
+pub paladin::config::NodeCacheBackend::InMemory
+pub paladin::config::NodeCacheBackend::Redis
+impl core::clone::Clone for paladin::config::node_cache::NodeCacheBackend
+pub fn paladin::config::node_cache::NodeCacheBackend::clone(&self) -> paladin::config::node_cache::NodeCacheBackend
+impl core::cmp::Eq for paladin::config::node_cache::NodeCacheBackend
+impl core::cmp::PartialEq for paladin::config::node_cache::NodeCacheBackend
+pub fn paladin::config::node_cache::NodeCacheBackend::eq(&self, &paladin::config::node_cache::NodeCacheBackend) -> bool
+impl core::fmt::Debug for paladin::config::node_cache::NodeCacheBackend
+pub fn paladin::config::node_cache::NodeCacheBackend::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin::config::node_cache::NodeCacheBackend
+impl core::marker::StructuralPartialEq for paladin::config::node_cache::NodeCacheBackend
+impl serde_core::ser::Serialize for paladin::config::node_cache::NodeCacheBackend
+pub fn paladin::config::node_cache::NodeCacheBackend::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::node_cache::NodeCacheBackend
+pub fn paladin::config::node_cache::NodeCacheBackend::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::node_cache::NodeCacheBackend
+impl core::marker::Send for paladin::config::node_cache::NodeCacheBackend
+impl core::marker::Sync for paladin::config::node_cache::NodeCacheBackend
+impl core::marker::Unpin for paladin::config::node_cache::NodeCacheBackend
+impl core::marker::UnsafeUnpin for paladin::config::node_cache::NodeCacheBackend
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::node_cache::NodeCacheBackend
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::node_cache::NodeCacheBackend
+pub enum paladin::config::WaypointStoreBackend
+pub paladin::config::WaypointStoreBackend::Disabled
+pub paladin::config::WaypointStoreBackend::Postgres
+pub paladin::config::WaypointStoreBackend::Postgres::url_env: alloc::string::String
+pub paladin::config::WaypointStoreBackend::Sqlite
+pub paladin::config::WaypointStoreBackend::Sqlite::path: alloc::string::String
+impl core::clone::Clone for paladin::config::waypoint_store::WaypointStoreBackend
+pub fn paladin::config::waypoint_store::WaypointStoreBackend::clone(&self) -> paladin::config::waypoint_store::WaypointStoreBackend
+impl core::cmp::PartialEq for paladin::config::waypoint_store::WaypointStoreBackend
+pub fn paladin::config::waypoint_store::WaypointStoreBackend::eq(&self, &paladin::config::waypoint_store::WaypointStoreBackend) -> bool
+impl core::fmt::Debug for paladin::config::waypoint_store::WaypointStoreBackend
+pub fn paladin::config::waypoint_store::WaypointStoreBackend::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::waypoint_store::WaypointStoreBackend
+impl serde_core::ser::Serialize for paladin::config::waypoint_store::WaypointStoreBackend
+pub fn paladin::config::waypoint_store::WaypointStoreBackend::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::waypoint_store::WaypointStoreBackend
+pub fn paladin::config::waypoint_store::WaypointStoreBackend::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::marker::Send for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::marker::Sync for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::marker::Unpin for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::marker::UnsafeUnpin for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::waypoint_store::WaypointStoreBackend
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::waypoint_store::WaypointStoreBackend
 pub struct paladin::config::AgentDefinition
 pub paladin::config::AgentDefinition::allowed_roles: alloc::vec::Vec<paladin_core::platform::container::user::UserRole>
 pub paladin::config::AgentDefinition::id: alloc::string::String
@@ -2581,10 +2808,12 @@ impl core::marker::UnsafeUnpin for paladin::config::agents::DocsConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::agents::DocsConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::agents::DocsConfig
 pub struct paladin::config::EngineConfig
+pub paladin::config::EngineConfig::graceful_shutdown: bool
 pub paladin::config::EngineConfig::max_muster_tasks: u32
 pub paladin::config::EngineConfig::max_node_visits: u32
 pub paladin::config::EngineConfig::max_supersteps: u64
 pub paladin::config::EngineConfig::run_timeout_secs: core::option::Option<u64>
+pub paladin::config::EngineConfig::shutdown_grace_secs: u64
 pub paladin::config::EngineConfig::waypoint_durability: paladin_battalion::engine::WaypointDurability
 impl paladin::config::engine::EngineConfig
 pub fn paladin::config::engine::EngineConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
@@ -2751,6 +2980,35 @@ impl core::marker::Unpin for paladin::config::web_server::MessageServiceSettings
 impl core::marker::UnsafeUnpin for paladin::config::web_server::MessageServiceSettings
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::web_server::MessageServiceSettings
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::web_server::MessageServiceSettings
+pub struct paladin::config::NodeCacheConfig
+pub paladin::config::NodeCacheConfig::backend: paladin::config::node_cache::NodeCacheBackend
+pub paladin::config::NodeCacheConfig::enabled: bool
+pub paladin::config::NodeCacheConfig::key_prefix: alloc::string::String
+pub paladin::config::NodeCacheConfig::redis_db: u8
+pub paladin::config::NodeCacheConfig::redis_host: alloc::string::String
+pub paladin::config::NodeCacheConfig::redis_password: core::option::Option<alloc::string::String>
+pub paladin::config::NodeCacheConfig::redis_port: u16
+impl paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::clone(&self) -> paladin::config::node_cache::NodeCacheConfig
+impl core::default::Default for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin::config::env_utils::EnvOverridable for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::apply_env_overrides(&mut self)
+impl serde_core::ser::Serialize for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::node_cache::NodeCacheConfig
+pub fn paladin::config::node_cache::NodeCacheConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::node_cache::NodeCacheConfig
+impl core::marker::Send for paladin::config::node_cache::NodeCacheConfig
+impl core::marker::Sync for paladin::config::node_cache::NodeCacheConfig
+impl core::marker::Unpin for paladin::config::node_cache::NodeCacheConfig
+impl core::marker::UnsafeUnpin for paladin::config::node_cache::NodeCacheConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::node_cache::NodeCacheConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::node_cache::NodeCacheConfig
 pub struct paladin::config::QueueConfig
 pub paladin::config::QueueConfig::connection_timeout: core::option::Option<u64>
 pub paladin::config::QueueConfig::enable_priority_queues: core::option::Option<bool>
@@ -2958,6 +3216,29 @@ impl core::marker::Unpin for paladin::config::waypoint_retention::WaypointRetent
 impl core::marker::UnsafeUnpin for paladin::config::waypoint_retention::WaypointRetentionConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::waypoint_retention::WaypointRetentionConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::waypoint_retention::WaypointRetentionConfig
+pub struct paladin::config::WaypointStoreConfig
+pub paladin::config::WaypointStoreConfig::backend: paladin::config::waypoint_store::WaypointStoreBackend
+impl paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::clone(&self) -> paladin::config::waypoint_store::WaypointStoreConfig
+impl core::default::Default for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin::config::env_utils::EnvOverridable for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::apply_env_overrides(&mut self)
+impl serde_core::ser::Serialize for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::waypoint_store::WaypointStoreConfig
+pub fn paladin::config::waypoint_store::WaypointStoreConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::marker::Send for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::marker::Sync for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::marker::Unpin for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::marker::UnsafeUnpin for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::waypoint_store::WaypointStoreConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::waypoint_store::WaypointStoreConfig
 pub struct paladin::config::WebHttpConfig
 pub paladin::config::WebHttpConfig::auth: paladin::config::agents::AuthConfig
 pub paladin::config::WebHttpConfig::body_limit_bytes: usize
@@ -2998,6 +3279,7 @@ pub use paladin::core::platform::container::execution_result
 pub use paladin::core::platform::container::garrison
 pub use paladin::core::platform::container::garrison_error
 pub use paladin::core::platform::container::handoff
+pub use paladin::core::platform::container::heartbeat
 pub use paladin::core::platform::container::herald
 pub use paladin::core::platform::container::herald_error
 pub use paladin::core::platform::container::job
@@ -3674,4 +3956,4 @@ impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services
 impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::paladin::paladin_builder::PaladinBuilder
 
 ## Summary
-Total public items: 2030
+Total public items: 2153

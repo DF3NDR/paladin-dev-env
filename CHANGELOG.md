@@ -195,6 +195,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`APP_WAYPOINT_STORE_BACKEND=sqlite|postgres`, disabled by default — every thread route answers
   `501 not_implemented` naming the config key until an operator sets it). `openapi.json`
   regenerated with the three new paths; every pre-existing `/v1/agents/*` path is unchanged.
+- **Execution middleware chain (RT-01, RT-02).** `PaladinExecutionService` gains an ordered
+  `Vec<Arc<dyn ExecutionMiddleware>>` (`with_middleware`/`with_middleware_chain`) hooking
+  `before_model`/`after_model`/`around_tool` — onion-ordered, short-circuiting on `Finish`, with
+  per-run state living on the context rather than the (stateless, `Arc`-shared) middleware itself.
+  An empty chain reproduces v0.9's rendered prompt bytes, port call count and `PaladinResult`
+  exactly. Applies automatically to a `NodeSpec::Paladin` node dispatched through a `WarEngine` —
+  no engine-side registry, documented as the second of two independent hook layers alongside
+  `NodeInterceptor` (see the [Agent Runtime guide](docs/src/user-guides/agent-runtime.md)).
+  Built-ins: `ModelCallLimit`/`TokenBudget` (new `StopReason::CallLimit`/`TokenBudget` variants,
+  both `is_successful() == true`), `ToolCallLimit` (denies via `ToolFlow::Deny`, never fails the
+  run), `Guardrail` (`Regex`/`Predicate` rules over prompt/response, `Fail`/`Redact`/`Finish`,
+  patterns compiled once under an explicit size bound), and retry/fallback middleware delegating
+  to Phase 25's `RetryPolicy`/`FallbackLlmAdapter` without duplicating logic. Every built-in is
+  configured through one grouped `AgentRuntimeConfig` (`APP_AGENT_RUNTIME_*`), every section
+  `enabled: false` by default — a v0.9 config boots v0.10 with an empty chain
+  (`build_chain_on_a_default_config_returns_an_empty_chain`).
+- **Context-window management (RT-03).** A synchronous, infallible `TokenCounterPort` (heuristic
+  default; the existing `content-processing`-gated tiktoken counter now also implements it — no
+  new dependency), a stable `HistoryTrimmer` that never splits a message, and a compounding
+  `SummarizationMiddleware` persisting summaries to Garrison via the new `GarrisonEntry.is_summary`
+  field (`#[serde(default)]`, additive SQLite column `002_add_garrison_is_summary.sql`) —
+  degrading to trimming, never failing the run, on summarizer failure.
+- **Vault: cross-session namespaced memory (RT-04).** New `VaultPort` (put/get/delete/list/search)
+  with `InMemoryVault`, `SqliteVault` (`003_create_vault_tables.sql`) and an ungated `SemanticVault`
+  composing an existing `SanctumPort` + `EmbeddingPort`, all sharing one contract suite.
+  Confinement is structural: a host-issued `RunScope` grants a `Namespace` subtree, and
+  `ConfinedVault` rejects any call outside it with `VaultError::NamespaceDenied` before the inner
+  store is ever touched (attack-tested: a sibling or parent namespace is always denied). New
+  `vault_get`/`vault_put` Armaments (via the new `InProcessArsenal` closure-backed `ArsenalPort`
+  and `CompositeArsenalPort`) take an absolute namespace argument. `PaladinPort::execute_scoped`
+  (defaulted) carries the grant through the engine to `NodeContext::vault()`.
+- **Structured output (RT-05).** `execute_structured<T: DeserializeOwned + JsonSchema>` via a new
+  `StructuredExecutorPort` (deliberately not on `PaladinPort`), schemas from `schemars::schema_for!`
+  (new direct facade dependency `schemars = "1.2"`, zero new lockfile packages — already resolved
+  via `rmcp`), a bounded repair loop (`PaladinError::StructuredOutputInvalid`, raw output
+  preserved), and native `response_format` on `LlmRequest` (new `#[non_exhaustive]` field, wired
+  for OpenAI/compat-engine/DeepSeek/Gemini; Anthropic has no native mode and relies on the
+  prompt-level instruction block — see the per-provider table in the Agent Runtime guide). A
+  `NodeSpec::Paladin.output_schema` writes the engine's parsed JSON to `output_field`
+  (`GRAPH_FINGERPRINT_VERSION` bumped `v5` → `v6`).
+- **Provider conformance close-out (RT-06).** A shared `ConformanceFixture` +
+  `llm_conformance_suite!` macro (`paladin-llm::conformance`) measures the shipped
+  OpenAI-compatible/Gemini/Ollama paths against one fixed case list (success, streaming assembly,
+  mid-stream errors, `401`/`404`/`400`/`402` dedicated mappings, `408`/`429`/`5xx` transient-by-value,
+  credential redaction, no credential-header redirect) and closes only the gaps it measures — no
+  adapter rebuilt. The Ollama recipe (env-probed `tests/integration/ollama_docker_test.rs`, CI's
+  `ollama-integration` job) is documented in the Agent Runtime guide rather than duplicated.
+- **`reasoning_agent` preset and tool-call protocol (RT-07).** `paladin::presets::reasoning_agent(llm,
+  arsenal, opts)` assembles a runnable `ReasoningAgent` from an executable `Arc<dyn ArsenalPort>` in
+  a ≤15-line, `{{#include}}`-compiled doc example. A prompt-level `ToolCallProtocolMiddleware` +
+  `FinishOnPlainAnswerMiddleware` pair (opt-in; installed by the preset) makes the reasoning loop's
+  tool branch reachable for a shipped provider without any wire-level change — ADR-0042's deferred
+  native tool calling is untouched. `tool_error_mode` (`FeedToModel` default, `FailRun` new opt-in
+  raising `PaladinError::ArmamentFailed`) names v0.9's existing feed-back-and-continue behavior
+  rather than changing it; the fed-back text is now redacted (bearer tokens, API-key shapes,
+  `key=`/`token=` values, JWT-shaped triples) before being bounded — see
+  [`MIGRATION.md` §9.1, M-B-03](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes).
 
 ## [0.9.0] - 2026-09-01
 

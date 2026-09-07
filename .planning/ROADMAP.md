@@ -538,7 +538,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 26-11-PLAN.md — `TokenCounterPort`, its adapters, and `HistoryTrimmer` (RT-03)
+- [x] 26-11-PLAN.md — `TokenCounterPort`, its adapters, and `HistoryTrimmer` (RT-03)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

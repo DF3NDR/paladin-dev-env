@@ -15,13 +15,16 @@
 //! {"delta": {"<field>": <json>, "..."}, "next": "edges" | {"goto": ["node_id"]} | "end" | {"muster": [{"worker": "w", "payload": {}, "task_key": "1"}]} | {"parley": {"kind": "Approval", "prompt": "...", "payload": {}, "choices": null, "expires_in_secs": null, "on_expire": "FailRun"}}}
 //! ```
 //!
-//! Extraction follows exactly one order, locked by D-11, checked in this
-//! sequence:
+//! Extraction follows exactly one order, locked by D-11 and, as of Phase 26
+//! (D-26), implemented by
+//! [`paladin_core::platform::container::structured::extract_json`] rather
+//! than a private copy in this module — exactly one implementation of "find
+//! the JSON in this model output" exists in the workspace:
 //!
-//! 1. The trimmed whole output, if it parses as a JSON object AND
-//!    deserializes into a valid envelope.
+//! 1. The trimmed whole output, if it parses as a JSON object; the result is
+//!    then deserialized into a valid envelope.
 //! 2. Otherwise, the content of the FIRST ` ```json ` fenced block found in
-//!    the output, if it deserializes into a valid envelope.
+//!    the output; the result is then deserialized into a valid envelope.
 //! 3. Otherwise, resolved through [`OnParseError`].
 //!
 //! An envelope's `delta` is handed to the same [`StateDelta`] the engine
@@ -55,6 +58,7 @@ use serde::{Deserialize, Serialize};
 use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
 use paladin_core::platform::container::directive::{Directive, MusterTask, NextStep};
 use paladin_core::platform::container::parley::{OnExpire, ParleyId, ParleyKind, ParleyRequest};
+use paladin_core::platform::container::structured::extract_json;
 use paladin_core::platform::container::waypoint::NodeId;
 
 use crate::engine::graph::validate_parley_value_for_kind;
@@ -300,7 +304,16 @@ impl DirectiveParser {
         match self {
             DirectiveParser::PlainOutput => Ok(plain_output_directive(output, output_field)),
             DirectiveParser::StructuredDirective { on_parse_error } => {
-                match extract_envelope(output) {
+                // D-26 (CF-FR-06): the JSON-extraction half of D-11's rule now
+                // lives in exactly one place, `paladin_core::platform::
+                // container::structured::extract_json` -- this is a lift, not
+                // a rewrite (Phase 26 plan 26-12). Only the extraction is
+                // shared; deserializing the extracted value into this
+                // module's own `Envelope` (deny_unknown_fields, `next`
+                // shape, `parley` validation) stays here, unchanged.
+                let envelope: Option<Envelope> =
+                    extract_json(output).and_then(|value| serde_json::from_value(value).ok());
+                match envelope {
                     // --- HITL-01, D-07: a successfully-EXTRACTED envelope
                     // whose `next.parley` carries a semantically invalid
                     // `on_expire: ResumeWithDefault` value fails HERE,
@@ -362,36 +375,6 @@ fn envelope_to_directive(envelope: Envelope) -> Result<Directive, DirectiveParse
         delta,
         next: envelope_next_step_to_next_step(envelope.next)?,
     })
-}
-
-/// D-11's locked extraction order: (i) the trimmed whole output, if it
-/// parses as a JSON object AND deserializes into a valid [`Envelope`]; (ii)
-/// otherwise the FIRST ` ```json ` fenced block found in the output, under
-/// the same parses-and-valid test; (iii) otherwise `None`, resolved by the
-/// caller through [`OnParseError`]. The order is locked, not discretionary
-/// (D-11) — do not reorder these two clauses.
-fn extract_envelope(output: &str) -> Option<Envelope> {
-    let trimmed = output.trim();
-    if let Ok(serde_json::Value::Object(_)) = serde_json::from_str::<serde_json::Value>(trimmed)
-        && let Ok(envelope) = serde_json::from_str::<Envelope>(trimmed)
-    {
-        return Some(envelope);
-    }
-
-    let block = first_fenced_json_block(output)?;
-    serde_json::from_str::<Envelope>(block.trim()).ok()
-}
-
-/// The content of the FIRST ` ```json ... ``` ` fenced block in `output`, if
-/// any (D-11's "first fenced block" rule — pinned by
-/// `output_with_two_fenced_json_blocks_uses_the_first`).
-fn first_fenced_json_block(output: &str) -> Option<&str> {
-    const FENCE_OPEN: &str = "```json";
-    const FENCE_CLOSE: &str = "```";
-    let start = output.find(FENCE_OPEN)? + FENCE_OPEN.len();
-    let rest = &output[start..];
-    let end = rest.find(FENCE_CLOSE)?;
-    Some(&rest[..end])
 }
 
 #[cfg(test)]

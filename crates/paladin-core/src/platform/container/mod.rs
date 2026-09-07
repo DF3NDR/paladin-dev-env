@@ -35,6 +35,8 @@ pub mod queue_item;
 pub mod registry_error;
 pub mod sanctum;
 pub mod schedule;
+/// Structured output machinery: pure value types and free functions (D-26, RT-05).
+pub mod structured;
 pub mod task;
 pub mod token_usage;
 pub mod transience;

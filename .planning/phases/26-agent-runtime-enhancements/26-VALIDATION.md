@@ -269,13 +269,23 @@ from scratch rather than trusting the close-out narrative.
 | G6 | 6 checkpoint rows | 26-03-01, 26-07-01, 26-14-02, 26-18-01, 26-19-01, 26-21-04 left `⬜ pending` though each was resolved (auto-selected / auto-approved under auto-mode) and recorded in its plan's SUMMARY "Checkpoint resolutions" | Marked `✅ resolved`; each remains listed under Manual-Only |
 | G7 | `paladin-battalion` doctests | **Two genuinely failing doctests**, making 26-01-03's `cargo test -p paladin-battalion --doc` red. `cache_key::graph_prefix` asserted the pre-26-18 tag `"k1:v5:"` while `GRAPH_FINGERPRINT_VERSION` has been `"v6"` since that plan bumped it; `WarEngine::with_vault`'s example ran a hidden `unimplemented!()` helper and panicked | Fixed in `56cabcde` (doc comments only, no behavior change): `v5`→`v6`, and the `with_vault` example marked `no_run` so it still compile-checks its wiring. Crate doctests now 54 passed / 0 failed |
 
-### Why G7 escaped the phase's own gate
+### Why G7 escaped the phase's own close-out evidence
 
-Neither instrument the phase relied on runs doctests. `cargo llvm-cov` does not execute them, and
-`cargo test --workspace --tests` excludes them by definition. The eight rows carrying a `--doc`
-target were therefore never actually exercised by the close-out evidence, despite the narrative
+Neither instrument the close-out relied on runs doctests. `cargo llvm-cov` does not execute them,
+and `cargo test --workspace --tests` excludes them by definition. The eight rows carrying a `--doc`
+target were therefore never actually exercised by the recorded evidence, despite the narrative
 claiming full coverage. **A `--doc` run belongs in this phase's sampling set explicitly** — it is
 now listed under Sampling Rate above as its own gate, not assumed to ride along with coverage.
+
+**CI was never blind to this.** `ci.yml`'s `Crate Isolation (paladin-battalion)` ("Build and test
+(extra flags)") and `Integration Tests` ("Run broad workspace integration suite") jobs both run
+doctests, and both caught exactly this pair on the first push of the branch — run
+[34146395148](https://github.com/DF3NDR/paladin-dev-env/actions/runs/34146395148), the only two
+failing jobs in it, each reporting `52 passed; 2 failed; 52 ignored` with no other failing test in
+the whole workspace. So the gap was in the *local* close-out evidence, which structurally could not
+see doctests, not in the project's CI coverage. The correct lesson is narrower than "no gate
+catches doctests": **do not seal a phase on a local `llvm-cov` + `--tests` pair and describe it as
+full coverage** — that pair has a doctest-shaped blind spot that CI will find later, on push.
 
 ### Verdict
 

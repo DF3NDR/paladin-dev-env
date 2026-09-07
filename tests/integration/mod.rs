@@ -74,6 +74,7 @@ pub mod provider_switching_test;
 pub mod qdrant_sanctum_tests;
 #[cfg(feature = "qdrant")]
 pub mod rag_integration_tests;
+pub mod reasoning_agent_test;
 #[cfg(feature = "redis-queue")]
 pub mod redis_queue_integration_test;
 pub mod scheduler_integration_test;

@@ -255,18 +255,18 @@ impl Guardrail {
 
     fn compile(
         rule: GuardrailRule,
-        _size_limit: usize,
+        size_limit: usize,
     ) -> Result<CompiledRule, GuardrailBuildError> {
-        // TODO(GREEN): compile through `RegexBuilder::size_limit` with the
-        // configured bound instead of this bare `Regex::new`, which relies
-        // on the crate's generous internal default.
         let compiled = match &rule.matcher {
-            GuardrailMatcher::Regex(pattern) => Some(Regex::new(pattern).map_err(|source| {
-                GuardrailBuildError::InvalidPattern {
-                    rule: rule.name.clone(),
-                    source,
-                }
-            })?),
+            GuardrailMatcher::Regex(pattern) => Some(
+                RegexBuilder::new(pattern)
+                    .size_limit(size_limit)
+                    .build()
+                    .map_err(|source| GuardrailBuildError::InvalidPattern {
+                        rule: rule.name.clone(),
+                        source,
+                    })?,
+            ),
             GuardrailMatcher::Predicate(_) => None,
         };
         Ok(CompiledRule { rule, compiled })
@@ -329,10 +329,18 @@ impl Guardrail {
                 rule: compiled.rule.name.clone(),
                 target: side.to_string(),
             })),
-            // TODO(GREEN): also write `message` into `*text` -- the
-            // service's `after_model` call site reads the FINAL output from
-            // `resp.content`, not from `FinalResult::output`.
-            GuardrailAction::Finish(message) => Some(RuleOutcome::Finish(message.clone())),
+            GuardrailAction::Finish(message) => {
+                // The service's `after_model` call site reads the FINAL
+                // output from `resp.content` (the mutable response view),
+                // not from `FinalResult::output` -- the same rule
+                // `TokenBudget::after_model` documents. Mutating the
+                // screened field directly keeps `before_model`'s path
+                // correct too: there, `FinalResult::output` builds the
+                // synthetic response view directly, so this write is inert
+                // but harmless (the run is finishing either way).
+                *text = message.clone();
+                Some(RuleOutcome::Finish(message.clone()))
+            }
             GuardrailAction::Redact(replacement) => {
                 Self::redact_in_place(compiled, text, replacement);
                 Some(RuleOutcome::Redacted)
@@ -384,9 +392,7 @@ impl ExecutionMiddleware for Guardrail {
         cx: &mut ModelCallContext<'_>,
     ) -> Result<MiddlewareFlow, PaladinError> {
         for compiled in &self.rules {
-            // TODO(GREEN): use `screens_prompt()` -- this exact-equality
-            // check misses `GuardrailTarget::Both`.
-            if compiled.rule.target != GuardrailTarget::Prompt {
+            if !compiled.rule.target.screens_prompt() {
                 continue;
             }
             match Self::apply_to_prompt(compiled, &mut cx.assembly) {

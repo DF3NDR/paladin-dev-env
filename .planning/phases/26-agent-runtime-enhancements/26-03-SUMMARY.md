@@ -242,3 +242,10 @@ None — no external service configuration required.
 ---
 *Phase: 26-agent-runtime-enhancements*
 *Completed: 2026-09-07*
+
+## Self-Check: PASSED
+
+All commits verified present in `git log --oneline --all`: `de7825de` (RED),
+`ca5fd799` (GREEN Task 2), `23e8af6e` (Task 3 migration), `3e070ef4` (this
+SUMMARY). `.planning/phases/26-agent-runtime-enhancements/26-03-SUMMARY.md`
+verified present on disk.

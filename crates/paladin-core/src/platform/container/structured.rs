@@ -61,6 +61,29 @@ impl Default for StructuredOptions {
     }
 }
 
+impl StructuredOptions {
+    /// Builds a [`StructuredOptions`] with a custom `max_repair_attempts`.
+    ///
+    /// `#[non_exhaustive]` blocks both struct-literal construction and
+    /// `..Default::default()` functional update from outside this crate
+    /// (X-10.3), so this constructor is the only way a downstream crate
+    /// (`paladin-ports`, the facade) can build a non-default value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::structured::StructuredOptions;
+    ///
+    /// let opts = StructuredOptions::new(3);
+    /// assert_eq!(opts.max_repair_attempts, 3);
+    /// ```
+    pub fn new(max_repair_attempts: u32) -> Self {
+        Self {
+            max_repair_attempts,
+        }
+    }
+}
+
 /// A reference to a JSON Schema (D-26): either the schema carried inline, or
 /// the name of a schema registered elsewhere (e.g. `WarEngine`'s schema
 /// registry, plan 26-18) and resolved by the consumer, not by this module.

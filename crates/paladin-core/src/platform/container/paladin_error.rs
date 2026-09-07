@@ -118,6 +118,32 @@ pub enum PaladinError {
         /// `"response"`.
         target: String,
     },
+
+    /// The bounded structured-output repair loop
+    /// (`paladin_ports::output::structured_executor_port::run_structured`,
+    /// built on [`crate::platform::container::structured`]'s pure machinery
+    /// — RT-FR-18, D-26) exhausted its attempts without producing output
+    /// that both parses as JSON and passes `shape_check` against the
+    /// caller's schema.
+    ///
+    /// Free under the pre-existing `#[non_exhaustive]` attribute (X-06) --
+    /// no new `MIGRATION.md` §9.2 row is created for this variant; the
+    /// existing `PaladinError` row's Change cell is extended instead (D-26,
+    /// D-37).
+    ///
+    /// `raw_output` preserves the model's LAST verbatim response -- the
+    /// whole point of a typed exhaustion error is that a caller can see what
+    /// the model actually said, not just that it failed (RT-FR-18).
+    #[error("structured output invalid after {attempts} attempt(s): {last_error}")]
+    StructuredOutputInvalid {
+        /// Total number of calls made to the underlying executor (the first
+        /// attempt plus every repair re-prompt).
+        attempts: u32,
+        /// The parse-or-shape-check failure from the LAST attempt.
+        last_error: String,
+        /// The model's raw output from the LAST attempt, verbatim.
+        raw_output: String,
+    },
 }
 
 impl PaladinError {
@@ -178,6 +204,13 @@ impl PaladinError {
             // retrying the exact same request reproduces the exact same
             // match.
             PaladinError::GuardrailTripped { .. } => Transience::Permanent,
+
+            // The bounded repair loop already retried internally
+            // (`max_repair_attempts`) before giving up -- retrying the
+            // identical prompt against the identical model and schema
+            // reproduces the identical exhaustion; only a different prompt,
+            // schema, or model changes the outcome.
+            PaladinError::StructuredOutputInvalid { .. } => Transience::Permanent,
 
             // Unresolvable from a bare string: no typed field distinguishes
             // a transient cause from a permanent one.
@@ -291,6 +324,14 @@ mod tests {
                 PaladinError::GuardrailTripped {
                     rule: "x".into(),
                     target: "prompt".into(),
+                },
+                Permanent,
+            ),
+            (
+                PaladinError::StructuredOutputInvalid {
+                    attempts: 2,
+                    last_error: "x".into(),
+                    raw_output: "y".into(),
                 },
                 Permanent,
             ),

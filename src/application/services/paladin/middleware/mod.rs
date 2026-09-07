@@ -30,6 +30,9 @@
 pub mod chain;
 pub mod context;
 pub mod guardrail;
+/// Keeps a run's Garrison history within a model's context window
+/// (Doc 05 RT-FR-08/10/11/12, D-14, D-15).
+pub mod history;
 pub mod limits;
 pub mod resilience;
 
@@ -42,6 +45,7 @@ pub use guardrail::{
     Guardrail, GuardrailAction, GuardrailBuildError, GuardrailMatcher, GuardrailRule,
     GuardrailTarget,
 };
+pub use history::HistoryTrimmer;
 pub use limits::{ModelCallLimit, TokenBudget, ToolCallLimit};
 pub use resilience::{ModelFallbackMiddleware, ModelRetryMiddleware};
 

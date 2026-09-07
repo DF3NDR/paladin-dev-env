@@ -35,6 +35,10 @@ pub mod guardrail;
 pub mod history;
 pub mod limits;
 pub mod resilience;
+/// Compresses an over-long conversation into a compounding Garrison
+/// summary, degrading to trimming rather than ever failing the run
+/// (Doc 05 RT-FR-08/11/12, D-16).
+pub mod summarization;
 
 pub use chain::{BeforeOutcome, run_after, run_around_tool, run_before};
 pub use context::{
@@ -48,6 +52,7 @@ pub use guardrail::{
 pub use history::HistoryTrimmer;
 pub use limits::{ModelCallLimit, TokenBudget, ToolCallLimit};
 pub use resilience::{ModelFallbackMiddleware, ModelRetryMiddleware};
+pub use summarization::{SUMMARIZATION_DEGRADED_KEY, SummarizationMiddleware};
 
 use crate::application::services::paladin::error::PaladinError;
 use crate::core::platform::container::arsenal::ArmamentCall;

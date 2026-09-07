@@ -86,7 +86,8 @@ COPY src ./src
 COPY crates ./crates
 COPY benches ./benches
 COPY tests ./tests
-COPY migrations ./migrations
+# SQL migrations are embedded in the binary at compile time (D-17,
+# crates/paladin-memory/src/migrations.rs) -- no migrations/ directory to copy.
 COPY config.test.yml ./
 
 # Pre-build dependencies

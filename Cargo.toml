@@ -67,11 +67,25 @@ include = [
     "tests/**",
     "examples/**",
     "benches/**",
-    "migrations/**",
     "README.md",
     "LICENSE-APACHE",
     "LICENSE-MIT",
 ]
+
+# X-10.6 deliberate-breaking suppression (RT-02, MIGRATION.md §9.2, Phase 26 plan 26-02).
+# `Settings` gained the additive `agent_runtime: AgentRuntimeConfig` field with
+# `#[serde(default)]`, so an absent `agent_runtime:` key resolves to a fully inert
+# default and a v0.9 config boots byte-identically. It deliberately stays a
+# constructible, NOT-`#[non_exhaustive]` struct for the same reason `PaladinResult`
+# does (D-26): `Settings` implements `Default`, and cross-crate functional-update
+# syntax (`..Default::default()`) is disallowed on `#[non_exhaustive]` structs, so
+# marking it would break every such downstream construction site. Only full struct
+# literals break; every in-tree one was migrated with the field.
+# Register/remove this suppression only in the same commit as the matching
+# MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml` entry (kept
+# set-equal by CI's `semver` job).
+[package.metadata.cargo-semver-checks.lints]
+constructible_struct_adds_field = "allow"
 
 [lib]
 name = "paladin"

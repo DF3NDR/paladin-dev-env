@@ -60,7 +60,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY crates ./crates
 COPY benches ./benches
-COPY migrations ./migrations
+# SQL migrations are embedded in the binary at compile time (D-17,
+# crates/paladin-memory/src/migrations.rs) -- no migrations/ directory to copy.
 # Note: config.yml is NOT baked into the image; provide at runtime via volume mount.
 
 # Build the application in release mode
@@ -92,8 +93,8 @@ COPY --from=app-builder /app/target/release/paladin /usr/local/bin/paladin
 # Note: config.yml must be provided at runtime via a volume mount or ConfigMap.
 # Example: docker run -v /path/to/config.yml:/etc/paladin/config.yml paladin:latest
 
-# Copy migrations (if needed at runtime)
-COPY --from=app-builder /app/migrations /etc/paladin/migrations
+# No migrations/ directory is copied at runtime: they are embedded in the
+# binary at compile time (D-17, crates/paladin-memory/src/migrations.rs).
 
 # Set working directory
 WORKDIR /app

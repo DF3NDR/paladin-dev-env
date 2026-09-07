@@ -29,7 +29,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY crates ./crates
 COPY benches ./benches
-COPY migrations ./migrations
+# SQL migrations are embedded in the binary at compile time (D-17,
+# crates/paladin-memory/src/migrations.rs) -- no migrations/ directory to copy.
 
 # Build only the server binary with its feature.
 RUN cargo build --release --bin paladin-server --features web-server

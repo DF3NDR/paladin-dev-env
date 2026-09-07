@@ -87,3 +87,10 @@ lint = "struct_marked_non_exhaustive"
 migration_row = "paladin-ai-core | GarrisonEntry"
 requirement_id = "RT-03"
 justification = "GarrisonEntry gained a persisted is_summary: bool field (RT-FR-12, D-17) marking a Garrison entry as a compressed stand-in for older history; #[serde(default)] keeps every pre-existing JSON/SQLite row reading is_summary == false, and #[non_exhaustive] plus the four constructors (new/with_metadata/with_token_count/summary) make the next field free without breaking downstream struct literals."
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | Settings"
+requirement_id = "RT-02"
+justification = "Settings gained the additive agent_runtime: AgentRuntimeConfig field (X-09, D-10) with #[serde(default)], so an absent agent_runtime: key resolves to a fully inert default and a v0.9 config boots with identical behavior. The struct stays constructible and is deliberately NOT #[non_exhaustive] for the same reason PaladinResult is not (D-26): Settings implements Default, and cross-crate functional-update syntax is disallowed on non_exhaustive structs, so marking it would break every ..Default::default() site downstream. Only full struct literals break, and every in-tree one was migrated with the field."

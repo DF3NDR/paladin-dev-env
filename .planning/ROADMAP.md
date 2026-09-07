@@ -559,7 +559,7 @@ Plans:
 
 **Wave 11** *(blocked on Wave 10 completion)*
 
-- [ ] 26-18-PLAN.md — Engine `output_schema`, schema registry, fingerprint `v6` (RT-05)
+- [x] 26-18-PLAN.md — Engine `output_schema`, schema registry, fingerprint `v6` (RT-05)
 
 **Wave 12** *(blocked on Wave 11 completion)*
 

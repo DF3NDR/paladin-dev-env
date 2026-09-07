@@ -10874,10 +10874,13 @@ mod tests {
         );
     }
 
-    /// D-19: the engine dispatches EVERY `NodeSpec::Paladin` node through
-    /// `PaladinPort::execute_observed`, never `execute` directly -- a port
-    /// that overrides the defaulted method sees exactly one observed call
-    /// and zero direct calls.
+    /// D-19, D-21 (plan 26-13): the engine dispatches EVERY `NodeSpec::Paladin`
+    /// node through `PaladinPort::execute_scoped`, never `execute` directly.
+    /// `ObservedCallRecordingPort` overrides `execute_observed`, not
+    /// `execute_scoped`, so this still proves the chain: `execute_scoped`'s
+    /// default body delegates to `execute_observed`, which the port
+    /// overrides and records -- exactly one observed call and zero direct
+    /// calls.
     #[tokio::test]
     async fn the_engine_always_calls_execute_observed() {
         let out = field("out");

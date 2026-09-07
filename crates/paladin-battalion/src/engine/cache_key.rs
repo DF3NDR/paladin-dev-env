@@ -71,7 +71,7 @@ pub const NODE_CACHE_KEY_VERSION: &str = "k1";
 ///
 /// let fingerprint = GraphFingerprint::from_canonical_bytes(b"example");
 /// let prefix = graph_prefix(&fingerprint);
-/// assert!(prefix.starts_with("k1:v5:"));
+/// assert!(prefix.starts_with("k1:v6:"));
 /// assert!(prefix.ends_with(':'));
 /// ```
 pub fn graph_prefix(fingerprint: &GraphFingerprint) -> String {

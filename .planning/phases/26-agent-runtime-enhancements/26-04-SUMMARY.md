@@ -201,3 +201,11 @@ None -- no external service configuration required.
 ---
 *Phase: 26-agent-runtime-enhancements*
 *Completed: 2026-09-07*
+
+## Self-Check: PASSED
+
+All created files verified present on disk (`crates/paladin-core/src/platform/container/vault.rs`,
+`crates/paladin-ports/src/output/vault_port.rs`,
+`crates/paladin-memory/src/vault/{mod,in_memory,contract_tests}.rs`, this SUMMARY.md); all eight
+commits (`ebbe3a35`, `18dbbb78`, `cd13be90`, `d887fef8`, `8a8bdf84`, `9bf57f89`, `58a066b8`,
+`0afb9e34`) verified present in `git log`.

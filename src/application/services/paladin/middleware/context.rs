@@ -26,7 +26,9 @@ use crate::core::platform::container::arsenal::ArmamentCall;
 use crate::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
 use crate::core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::aegis::RetryPolicy;
-use paladin_ports::output::llm_port::{FinishReason, FunctionCall, LlmPort, TokenUsage};
+use paladin_ports::output::llm_port::{
+    FinishReason, FunctionCall, LlmPort, ResponseFormat, TokenUsage,
+};
 use paladin_ports::output::vault_confined::ConfinedVault;
 
 /// Where a middleware-pushed [`PromptSection`] renders relative to the
@@ -247,6 +249,12 @@ pub struct ModelCallContext<'p> {
     /// A port-shaping retry policy override read once at the same call
     /// site (`ModelRetryMiddleware`, plan 26-10).
     pub retry_policy: Option<RetryPolicy>,
+    /// A structured-output hint set once by
+    /// [`crate::application::services::paladin::paladin_execution_service::PaladinExecutionService::execute_json_schema`]
+    /// (Doc 05 RT-05, D-27, D-28) and read at the same single model-call
+    /// site as `llm_override`/`retry_policy`. `None` for every ordinary
+    /// run -- only a structured run ever sets this field.
+    pub response_format: Option<ResponseFormat>,
     /// The confined Vault handle granted to this run, if any (D-21, D-25).
     /// `None` means this run has no Vault grant at all -- read by
     /// `VaultRecallMiddleware`, set exactly once by the service (in
@@ -270,6 +278,7 @@ impl<'p> ModelCallContext<'p> {
             scratch: HashMap::new(),
             llm_override: None,
             retry_policy: None,
+            response_format: None,
             vault: None,
             typed_state: HashMap::new(),
         }

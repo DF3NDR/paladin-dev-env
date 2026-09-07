@@ -2,13 +2,13 @@
 //!
 //! Implementations of `paladin_ports::output::vault_port::VaultPort`.
 //!
-//! - [`in_memory::InMemoryVault`] -- always available, ungated (this plan).
+//! - `InMemoryVault` -- always available, ungated (this plan).
 //! - `sqlite` (plan 26-09) -- persistent SQLite-backed store behind the
 //!   existing `sqlite` feature; not yet implemented.
 //! - `semantic` (plan 26-09) -- `SemanticVault`, composing a `SanctumPort` +
 //!   `EmbeddingPort`, ungated; not yet implemented.
 //!
-//! [`contract_tests`] is the shared specification every adapter above is
+//! `contract_tests` is the shared specification every adapter above is
 //! instantiated against -- a new adapter is not "done" until it appears
 //! there too.
 

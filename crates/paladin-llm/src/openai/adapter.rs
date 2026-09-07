@@ -9,7 +9,7 @@ use futures::{Stream, StreamExt};
 use paladin_core::platform::container::content::{ContentItem, ContentType};
 use paladin_core::platform::container::prompt::{PromptItem, PromptRole, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
     StreamingResponse, TokenUsage,
 };
 use rand::Rng;
@@ -122,6 +122,56 @@ struct OpenAIRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f32>,
     stream: bool,
+    /// `LlmRequest.response_format` on the wire (RT-FR-17, D-28). Omitted
+    /// entirely when the caller sets no hint, keeping the body byte
+    /// -identical to a pre-0.10 request (X-03).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<OpenAIResponseFormat>,
+}
+
+/// OpenAI's own two native JSON-mode wire shapes (RT-FR-17, D-28).
+///
+/// `{"type":"json_object"}` for [`ResponseFormat::JsonObject`], or
+/// `{"type":"json_schema","json_schema":{"name":..,"schema":..,"strict":..}}`
+/// for [`ResponseFormat::JsonSchema`] — OpenAI's documented `json_schema`
+/// response-format shape.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OpenAIResponseFormat {
+    JsonObject,
+    JsonSchema { json_schema: OpenAIJsonSchemaSpec },
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAIJsonSchemaSpec {
+    name: String,
+    schema: serde_json::Value,
+    strict: bool,
+}
+
+/// Convert the provider-agnostic [`ResponseFormat`] hint into OpenAI's wire
+/// shape.
+///
+/// `ResponseFormat` is `#[non_exhaustive]` (D-28), so a future variant this
+/// match has not been taught degrades to the plain JSON-object form rather
+/// than silently dropping the field — EDGE(RT-05/wire shape) requires
+/// `response_format` is never omitted once the caller asked for JSON.
+fn to_openai_response_format(format: &ResponseFormat) -> OpenAIResponseFormat {
+    match format {
+        ResponseFormat::JsonObject => OpenAIResponseFormat::JsonObject,
+        ResponseFormat::JsonSchema {
+            name,
+            schema,
+            strict,
+        } => OpenAIResponseFormat::JsonSchema {
+            json_schema: OpenAIJsonSchemaSpec {
+                name: name.clone(),
+                schema: schema.clone(),
+                strict: *strict,
+            },
+        },
+        _ => OpenAIResponseFormat::JsonObject,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -545,6 +595,10 @@ impl LlmPort for OpenAIAdapter {
             max_tokens: Some(max_tokens),
             top_p: Some(1.0),
             stream: false,
+            response_format: request
+                .response_format
+                .as_ref()
+                .map(to_openai_response_format),
         };
 
         let response = self.make_request_with_retries(&openai_request).await?;
@@ -603,6 +657,10 @@ impl LlmPort for OpenAIAdapter {
             max_tokens: Some(max_tokens),
             top_p: Some(1.0),
             stream: true,
+            response_format: request
+                .response_format
+                .as_ref()
+                .map(to_openai_response_format),
         };
 
         let stream = self.make_streaming_request(&openai_request).await?;
@@ -941,6 +999,145 @@ mod tests {
                 Ok(_) => panic!("expected Err(ProviderError), got Ok(<stream>)"),
                 Err(other) => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
             }
+        }
+    }
+
+    // ── Phase 26 (RT-05, D-28): response_format reaches the wire ──────────
+
+    mod response_format_wiring {
+        use super::*;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use serde_json::Value;
+        use std::collections::BTreeSet;
+        use std::sync::{Arc, Mutex};
+
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        /// Runs `generate()` against a mock `/chat/completions` endpoint,
+        /// capturing the raw outgoing request body as parsed JSON — mirrors
+        /// `CompatEngine`'s `generate_and_capture_body` test helper
+        /// (`compat/engine.rs`). Asserting on the parsed JSON rather than a
+        /// raw-string substring keeps this immune to key-ordering changes.
+        async fn generate_and_capture_body(request: LlmRequest) -> Value {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let captured_clone = Arc::clone(&captured);
+
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    let body_text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                    *captured_clone.lock().unwrap() = Some(body_text);
+                    serde_json::json!({
+                        "id": "cmpl-1",
+                        "model": "gpt-4o",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                    })
+                    .to_string()
+                    .into_bytes()
+                })
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url()).generate(request).await;
+            assert!(
+                result.is_ok(),
+                "mock server returned a well-formed response: {result:?}"
+            );
+
+            let body_text = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("mock must have been called exactly once");
+            serde_json::from_str(&body_text).expect("captured body must be valid JSON")
+        }
+
+        #[tokio::test]
+        async fn openai_request_carries_response_format_json_object() {
+            let request = build_request().with_response_format(ResponseFormat::JsonObject);
+            let body = generate_and_capture_body(request).await;
+
+            assert_eq!(
+                body.get("response_format"),
+                Some(&serde_json::json!({"type": "json_object"}))
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_request_carries_response_format_json_schema() {
+            let schema = serde_json::json!({
+                "type": "object",
+                "properties": {"answer": {"type": "string"}}
+            });
+            let request = build_request().with_response_format(ResponseFormat::JsonSchema {
+                name: "answer_schema".to_string(),
+                schema: schema.clone(),
+                strict: true,
+            });
+
+            let body = generate_and_capture_body(request).await;
+
+            assert_eq!(body["response_format"]["type"], "json_schema");
+            assert_eq!(
+                body["response_format"]["json_schema"]["name"],
+                "answer_schema"
+            );
+            assert_eq!(body["response_format"]["json_schema"]["schema"], schema);
+            assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+        }
+
+        #[tokio::test]
+        async fn openai_request_without_response_format_is_byte_identical_to_today() {
+            let body = generate_and_capture_body(build_request()).await;
+            let obj = body.as_object().expect("body must be a JSON object");
+
+            assert!(
+                !obj.contains_key("response_format"),
+                "absent response_format must not appear on the wire, got: {obj:?}"
+            );
+            // The full key set must be exactly what a pre-0.10 request
+            // produced -- proving this is an additive, X-03-compliant change
+            // rather than an accidental reshape of the existing fields.
+            let keys: BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+            assert_eq!(
+                keys,
+                BTreeSet::from([
+                    "model",
+                    "messages",
+                    "temperature",
+                    "max_tokens",
+                    "top_p",
+                    "stream"
+                ])
+            );
         }
     }
 }

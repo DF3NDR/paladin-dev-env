@@ -58,8 +58,15 @@
 //! [`ModelRetryConfig`] / [`ModelFallbackConfig`] last.
 
 use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+use paladin_core::platform::container::aegis::{RetryPolicy, RetryPredicate};
+use paladin_llm::provider_factory::LlmProviderFactory;
+use paladin_ports::output::llm_port::LlmPort;
 
 use crate::config::env_utils::{EnvOverridable, read_env};
 
@@ -748,6 +755,26 @@ impl EnvOverridable for ModelRetryConfig {
     }
 }
 
+impl From<&ModelRetryConfig> for RetryPolicy {
+    /// Maps all six mirrored fields 1:1 (D-12). `ModelRetryConfig::default()`
+    /// converts to a `RetryPolicy` equal to `RetryPolicy::default()` field
+    /// for field -- both mirror the exact same six values, so the two
+    /// cannot drift (`tests::model_retry_config_maps_to_retry_policy_defaults`).
+    fn from(config: &ModelRetryConfig) -> Self {
+        RetryPolicy {
+            max_attempts: config.max_attempts,
+            initial_interval: Duration::from_millis(config.initial_interval_ms),
+            backoff_factor: config.backoff_factor,
+            max_interval: Duration::from_millis(config.max_interval_ms),
+            jitter: config.jitter,
+            retry_on: match config.retry_on {
+                RetryOnConfig::TransientOnly => RetryPredicate::TransientOnly,
+                RetryOnConfig::TransientAndUnknown => RetryPredicate::TransientAndUnknown,
+            },
+        }
+    }
+}
+
 // ── model_fallback ───────────────────────────────────────────────────────────
 
 /// Falls back across a named provider chain on a transient model failure
@@ -785,6 +812,155 @@ impl EnvOverridable for ModelFallbackConfig {
         }
         // `providers` is config-file only (see module docs) -- no env var
         // reads into this list.
+    }
+}
+
+/// Every provider name `paladin_llm::provider_factory` can ever construct,
+/// independent of which cargo features happen to be compiled into the
+/// CURRENT build (D-12). Mirrors that crate's own registry declaration
+/// order (`provider_factory.rs`'s `build_provider_registry`) and its own
+/// `CONFIG_RECOGNISED_SPELLINGS` test list; a divergence between this list
+/// and either of those is the defect class both exist to avoid.
+///
+/// [`ModelFallbackConfig::resolve_chain`] uses this list to distinguish an
+/// outright-unknown provider name from a real provider whose feature is
+/// simply not compiled into the CURRENT build -- a distinction
+/// `LlmProviderFactory::create` itself cannot make, because a
+/// feature-gated-off provider has no row in its registry at all and so is
+/// indistinguishable, from inside that crate, from a name that was never a
+/// provider (D-10's own "structurally absent" design in that crate).
+const KNOWN_PROVIDER_NAMES: [&str; 9] = [
+    "openai",
+    "deepseek",
+    "anthropic",
+    "kimi",
+    "qwen",
+    "grok",
+    "gemini",
+    "openai-compatible",
+    "ollama",
+];
+
+/// One provider name [`ModelFallbackConfig::resolve_chain`] could not
+/// resolve, distinguishing three failure kinds an operator should not
+/// confuse (D-12).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnresolvedProvider {
+    /// `name` is not a provider name `paladin_llm` recognises at all --
+    /// likely a typo.
+    Unknown {
+        /// The offending name, exactly as configured.
+        name: String,
+    },
+    /// `name` is a real provider, but its cargo feature was not compiled
+    /// into this build.
+    NotCompiled {
+        /// The offending name, exactly as configured.
+        name: String,
+    },
+    /// `name` is a real, compiled-in provider, but
+    /// `LlmProviderFactory::create` failed to construct it for another
+    /// reason (typically a missing credential) -- NEVER misreported as
+    /// `Unknown`/`NotCompiled`, because the name itself was recognised.
+    ConstructionFailed {
+        /// The offending name, exactly as configured.
+        name: String,
+        /// The underlying factory error's message.
+        reason: String,
+    },
+}
+
+impl fmt::Display for UnresolvedProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UnresolvedProvider::Unknown { name } => write!(f, "unknown provider '{name}'"),
+            UnresolvedProvider::NotCompiled { name } => {
+                write!(f, "provider '{name}' is not compiled into this build")
+            }
+            UnresolvedProvider::ConstructionFailed { name, reason } => {
+                write!(f, "provider '{name}' could not be constructed: {reason}")
+            }
+        }
+    }
+}
+
+/// Errors from [`ModelFallbackConfig::resolve_chain`] (D-12).
+#[derive(Debug, thiserror::Error)]
+pub enum AgentRuntimeConfigError {
+    /// One or more configured provider names could not be resolved.
+    /// Collects EVERY offending name rather than stopping at the first, so
+    /// an operator fixing a config learns about every typo in one pass.
+    #[error(
+        "agent_runtime.model_fallback.providers: {}",
+        .0.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+    )]
+    UnresolvedProviders(Vec<UnresolvedProvider>),
+}
+
+impl ModelFallbackConfig {
+    /// Resolve `providers` (in configured order) through `factory`, one
+    /// [`paladin_ports::output::llm_port::LlmPort`] per name, forming the
+    /// fallback chain [`crate::application::services::paladin::middleware::ModelFallbackMiddleware::new`]
+    /// consumes (D-12). Returns an empty chain without touching `factory`
+    /// at all when `!self.enabled` -- a disabled section installs nothing
+    /// (mirrors every other built-in's `enabled`-first check, D-10).
+    ///
+    /// Collects EVERY unresolvable name into one
+    /// [`AgentRuntimeConfigError::UnresolvedProviders`] rather than
+    /// stopping at the first, distinguishing an outright-unknown name from
+    /// a real provider whose cargo feature is not compiled into this
+    /// build (via [`KNOWN_PROVIDER_NAMES`], a list independent of the
+    /// CURRENT build's compiled features).
+    ///
+    /// Credentials are NEVER read from or stored in this struct (D-12,
+    /// D-41): every resolved port's credential continues to come from
+    /// `LlmProviderFactory`'s existing env/config path -- this method only
+    /// ever passes a provider NAME to `factory.create`.
+    ///
+    /// Called from `AgentRuntimeConfig::build_chain` (plan 26-20); code
+    /// composition (`ModelFallbackMiddleware::new(chain)` directly) remains
+    /// the primary API, and this is the configuration path (D-12).
+    pub fn resolve_chain(
+        &self,
+        factory: &LlmProviderFactory,
+    ) -> Result<Vec<Arc<dyn LlmPort>>, AgentRuntimeConfigError> {
+        if !self.enabled {
+            return Ok(Vec::new());
+        }
+
+        let mut chain = Vec::with_capacity(self.providers.len());
+        let mut problems = Vec::new();
+
+        for name in &self.providers {
+            match factory.create(name) {
+                Ok(port) => chain.push(port),
+                // Only `UnknownProvider` means "this name has no registry
+                // row" -- which is ambiguous between "never a provider" and
+                // "a provider, but its feature is off" until resolved
+                // against `KNOWN_PROVIDER_NAMES`. Any OTHER factory error
+                // (`ConfigurationMissing`, `AdapterCreationFailed`) means
+                // the name WAS recognised and compiled in, but construction
+                // failed for a different reason -- never misreported as
+                // Unknown/NotCompiled.
+                Err(paladin_llm::provider_factory::ProviderFactoryError::UnknownProvider(_)) => {
+                    let normalized = name.to_lowercase().replace('_', "-");
+                    if KNOWN_PROVIDER_NAMES.contains(&normalized.as_str()) {
+                        problems.push(UnresolvedProvider::NotCompiled { name: name.clone() });
+                    } else {
+                        problems.push(UnresolvedProvider::Unknown { name: name.clone() });
+                    }
+                }
+                Err(other) => problems.push(UnresolvedProvider::ConstructionFailed {
+                    name: name.clone(),
+                    reason: other.to_string(),
+                }),
+            }
+        }
+
+        if !problems.is_empty() {
+            return Err(AgentRuntimeConfigError::UnresolvedProviders(problems));
+        }
+        Ok(chain)
     }
 }
 
@@ -1142,5 +1318,160 @@ mod tests {
         assert!(ToolErrorConfig::default().validate().is_ok());
         assert!(StructuredOutputConfig::default().validate().is_ok());
         assert!(VaultToolsConfig::default().validate().is_ok());
+    }
+
+    // ── ModelFallbackConfig::resolve_chain (plan 26-10, D-12) ───────────
+
+    /// Test 1: `{ enabled: true, providers: ["openai", "deepseek"] }`
+    /// resolves to two ports, in that order. Both are default-compiled
+    /// features, so this runs under both the default and `--all-features`
+    /// builds; credentials come only from the factory's own env path
+    /// (D-12) -- set here, under `#[serial]`, exactly like this module's
+    /// own `env_overrides_apply_to_scalar_fields_only`.
+    #[test]
+    #[serial]
+    fn resolve_chain_builds_ports_in_configured_order() {
+        unsafe {
+            env::set_var("OPENAI_API_KEY", "sk-test-key-for-resolve-chain");
+            env::set_var("DEEPSEEK_API_KEY", "sk-test-key-for-resolve-chain");
+        }
+
+        let config = ModelFallbackConfig {
+            enabled: true,
+            providers: vec!["openai".to_string(), "deepseek".to_string()],
+        };
+        let factory = LlmProviderFactory::new();
+        let result = config.resolve_chain(&factory);
+
+        unsafe {
+            env::remove_var("OPENAI_API_KEY");
+            env::remove_var("DEEPSEEK_API_KEY");
+        }
+
+        let chain = result.expect("both providers are compiled and credentialed");
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].get_provider_name(), "openai");
+        assert_eq!(chain[1].get_provider_name(), "deepseek");
+    }
+
+    /// Test 2: two entirely bogus names both surface in the SAME typed
+    /// error, not just the first (D-12: an operator learns about every
+    /// typo at once).
+    #[test]
+    fn unknown_provider_is_a_typed_error_listing_every_offender() {
+        let config = ModelFallbackConfig {
+            enabled: true,
+            providers: vec![
+                "totally-bogus-one".to_string(),
+                "totally-bogus-two".to_string(),
+            ],
+        };
+        let factory = LlmProviderFactory::new();
+        // `Vec<Arc<dyn LlmPort>>` is not `Debug` (a trait object), so
+        // `.unwrap_err()` cannot be used here -- match instead.
+        let err = match config.resolve_chain(&factory) {
+            Err(e) => e,
+            Ok(_) => panic!("two bogus provider names must not resolve"),
+        };
+
+        let AgentRuntimeConfigError::UnresolvedProviders(problems) = &err;
+        assert_eq!(problems.len(), 2);
+        assert!(matches!(
+            &problems[0],
+            UnresolvedProvider::Unknown { name } if name == "totally-bogus-one"
+        ));
+        assert!(matches!(
+            &problems[1],
+            UnresolvedProvider::Unknown { name } if name == "totally-bogus-two"
+        ));
+        let message = err.to_string();
+        assert!(message.contains("totally-bogus-one"), "{message}");
+        assert!(message.contains("totally-bogus-two"), "{message}");
+    }
+
+    /// Test 3: `"ollama"` is a REAL provider name, but this crate's default
+    /// feature set (`llm-openai`, `llm-anthropic`, `llm-deepseek`) does not
+    /// compile it in -- reported as `NotCompiled`, never `Unknown`.
+    /// Deliberately run under the DEFAULT feature set, not
+    /// `--all-features`: under `--all-features` every `KNOWN_PROVIDER_NAMES`
+    /// entry is compiled, so no name can ever exercise this branch (there
+    /// would be nothing left "not compiled" to name) -- corrected from the
+    /// plan's stated `--all-features` invocation for this one test
+    /// (deviation, Rule 3).
+    #[cfg(not(feature = "llm-ollama"))]
+    #[test]
+    fn uncompiled_provider_is_reported_distinctly_from_unknown() {
+        let config = ModelFallbackConfig {
+            enabled: true,
+            providers: vec!["ollama".to_string()],
+        };
+        let factory = LlmProviderFactory::new();
+        let err = match config.resolve_chain(&factory) {
+            Err(e) => e,
+            Ok(_) => panic!("ollama must not resolve when its feature is not compiled in"),
+        };
+
+        let AgentRuntimeConfigError::UnresolvedProviders(problems) = &err;
+        assert_eq!(
+            problems,
+            &vec![UnresolvedProvider::NotCompiled {
+                name: "ollama".to_string()
+            }]
+        );
+        assert!(err.to_string().contains("not compiled into this build"));
+    }
+
+    /// Test 4: `enabled: false` (the default) resolves to no chain and
+    /// never touches the factory -- an invalid/unresolvable `providers`
+    /// list has zero effect while disabled.
+    #[test]
+    fn disabled_config_resolves_to_no_chain() {
+        let config = ModelFallbackConfig {
+            enabled: false,
+            providers: vec!["this-would-be-unresolvable".to_string()],
+        };
+        let factory = LlmProviderFactory::new();
+        // `Vec<Arc<dyn LlmPort>>` is not `Debug`/`PartialEq` (a trait
+        // object), so `assert_eq!` against `Vec::new()` cannot be used --
+        // `.is_empty()` instead.
+        match config.resolve_chain(&factory) {
+            Ok(chain) => assert!(chain.is_empty()),
+            Err(e) => panic!("a disabled config must never fail to resolve: {e}"),
+        }
+    }
+
+    /// Test 5: resolution reads credentials from the factory's existing
+    /// env/config path only -- `ModelFallbackConfig` itself contributes no
+    /// credential, and a resolved port still works when the ONLY source of
+    /// its credential is that env var.
+    #[test]
+    #[serial]
+    fn config_holds_no_credential() {
+        unsafe {
+            env::set_var("OPENAI_API_KEY", "sk-test-key-for-resolve-chain");
+        }
+
+        let config = ModelFallbackConfig {
+            enabled: true,
+            providers: vec!["openai".to_string()],
+        };
+        let factory = LlmProviderFactory::new();
+        let result = config.resolve_chain(&factory);
+
+        unsafe {
+            env::remove_var("OPENAI_API_KEY");
+        }
+
+        let chain = result.expect("openai resolves once its credential is in the environment");
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].get_provider_name(), "openai");
+    }
+
+    /// Test 6: `ModelRetryConfig::default()` converts to a `RetryPolicy`
+    /// equal to `RetryPolicy::default()`, field for field.
+    #[test]
+    fn model_retry_config_maps_to_retry_policy_defaults() {
+        let converted: RetryPolicy = (&ModelRetryConfig::default()).into();
+        assert_eq!(converted, RetryPolicy::default());
     }
 }

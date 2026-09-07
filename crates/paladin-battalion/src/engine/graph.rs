@@ -22,6 +22,7 @@ use paladin_core::platform::container::battlefield::{
 use paladin_core::platform::container::battlefield_error::BattlefieldError;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{OnExpire, ParleyKind};
+use paladin_core::platform::container::structured::SchemaRef;
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, canonical_edge_condition,
 };
@@ -55,6 +56,22 @@ pub enum NodeSpec {
         /// `Directive` (CF-02, D-11). Defaults to `DirectiveParser::PlainOutput`
         /// via [`NodeSpec::paladin`], reproducing pre-CF-02 behavior exactly.
         directive_parser: DirectiveParser,
+        /// New in 0.10 (deliberate-zero note, not a §9.2 row -- the type is
+        /// absent at the `v0.9.0` tag, D-29/D-37): when `Some`, this node
+        /// dispatches through the engine's structured executor instead of
+        /// the plain `PaladinPort` path, and the PARSED JSON value -- never
+        /// the raw string -- is written to `output_field` (RT-05, RT-FR-19).
+        /// `None` by default via [`NodeSpec::paladin`]; set with
+        /// [`NodeSpec::with_output_schema`]. `WarGraph::validate` rejects,
+        /// before any node runs: an engine with no structured executor
+        /// wired (checked separately by
+        /// [`WarGraph::validate_structured_executor_backend`], mirroring the
+        /// node-cache-backend split), a `SchemaRef::Registered` name absent
+        /// from the engine's schema registry, a non-`PlainOutput`
+        /// `directive_parser` set alongside this field (combining the two
+        /// is a Deferred Idea), and an `output_field` declared with a
+        /// `DispatchRule` that cannot hold a JSON value.
+        output_schema: Option<SchemaRef>,
     },
     /// A pure, deterministic state -> delta node.
     Function(Arc<dyn StateNode>),
@@ -234,7 +251,46 @@ impl NodeSpec {
             input_template,
             output_field,
             directive_parser,
+            output_schema: None,
         }
+    }
+
+    /// Set this `NodeSpec::Paladin` node's `output_schema` (D-29, RT-FR-19),
+    /// completing the construction chain the same way
+    /// [`GateRequestTemplate`]'s own `with_*` methods complete
+    /// [`GateRequestTemplate::new`]: `NodeSpec::paladin(..).with_output_schema(schema)`.
+    ///
+    /// A no-op on every other `NodeSpec` variant (`Function`/`Battalion`/
+    /// `Gate`, and any future variant this `#[non_exhaustive]` enum may
+    /// add): an `output_schema` is meaningful only for a Paladin node, and
+    /// this method exists to chain immediately off `NodeSpec::paladin(..)`'s
+    /// own return value -- never to be called on a variant it cannot
+    /// affect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_battalion::engine::graph::NodeSpec;
+    /// use paladin_battalion::engine::InputMapping;
+    /// use paladin_core::platform::container::battlefield::FieldName;
+    /// use paladin_core::platform::container::paladin::{Paladin, PaladinData};
+    /// use paladin_core::platform::container::structured::SchemaRef;
+    /// use paladin_core::base::entity::node::Node;
+    ///
+    /// let paladin: Paladin = Node::new(PaladinData::default(), None);
+    /// let node = NodeSpec::paladin(
+    ///     paladin,
+    ///     InputMapping::new("hi"),
+    ///     FieldName::new("out").unwrap(),
+    /// )
+    /// .with_output_schema(SchemaRef::Inline(serde_json::json!({"type": "object"})));
+    /// assert!(matches!(node, NodeSpec::Paladin { output_schema: Some(_), .. }));
+    /// ```
+    pub fn with_output_schema(mut self, schema: SchemaRef) -> Self {
+        if let NodeSpec::Paladin { output_schema, .. } = &mut self {
+            *output_schema = Some(schema);
+        }
+        self
     }
 
     /// Construct a `NodeSpec::Battalion` embedding `graph`, defaulting
@@ -817,6 +873,15 @@ impl WarGraph {
         self.validate_edge_evaluators(&registries.edge_evaluators)?;
         self.validate_worker_templates()?;
         self.validate_battalion_state_maps()?;
+        // --- plan 26-18, D-29: the three graph-local `output_schema`
+        // checks (unregistered name, directive-parser conflict, field-type
+        // incompatibility) -- structural like the checks above it, ahead of
+        // the Aegis sidecar's own checks below. The fourth D-29 check (no
+        // structured executor wired) is engine-config, not graph-local, and
+        // is checked separately by
+        // `WarGraph::validate_structured_executor_backend`, mirroring the
+        // `validate_node_cache_backend` split.
+        self.validate_output_schemas(registries)?;
         // --- plan 25-03, D-13: the Aegis sidecar's own well-formedness --
         // ordered shallowest-structural-error-first, matching this
         // function's existing discipline: an aegis on a node that does not
@@ -907,6 +972,211 @@ impl WarGraph {
             reason: "every StateMap-mapped field must exist in its declared schema (CF-FR-14) \
                      -- rename the field or add it to the missing schema"
                 .to_string(),
+        })
+    }
+
+    /// D-29's three graph-local (non-engine-config) `output_schema`
+    /// fail-closed checks (RT-05, RT-FR-19, plan 26-18) -- everything
+    /// checkable from the graph and `registries` alone, without knowing
+    /// whether a structured executor is wired
+    /// ([`WarGraph::validate_structured_executor_backend`] handles that one
+    /// separately, mirroring the node-cache-backend split):
+    ///
+    /// 1. a `SchemaRef::Registered(name)` naming a schema not present in
+    ///    `registries.output_schemas` (`EngineError::UnregisteredOutputSchema`);
+    /// 2. a node with BOTH `output_schema` and a non-`PlainOutput`
+    ///    `directive_parser` (`EngineError::OutputSchemaWithStructuredDirective`
+    ///    -- combining them is a Deferred Idea, D-29);
+    /// 3. a node's `output_field` declared with a `DispatchRule` that cannot
+    ///    hold a JSON value written by a structured node
+    ///    (`EngineError::OutputSchemaFieldNotJson` -- `DispatchRule::Sum`,
+    ///    the only rule requiring the field to be strictly numeric, is the
+    ///    one an arbitrary structured JSON object can never satisfy).
+    ///
+    /// Each collects EVERY offender across the whole graph before returning,
+    /// mirroring [`WarGraph::validate_aegis_cache_fields`]'s "collect two
+    /// distinct offender sets in one pass" discipline; checked in this
+    /// order -- unregistered name first (an unresolved reference, the most
+    /// basic structural defect), then the directive-parser conflict, then
+    /// the field type -- so a graph tripping more than one at once reports
+    /// the most fundamental problem first.
+    fn validate_output_schemas(&self, registries: &EngineRegistries) -> Result<(), EngineError> {
+        let mut unregistered: Vec<String> = Vec::new();
+        for id in &self.node_order {
+            let Some(NodeSpec::Paladin {
+                output_schema: Some(SchemaRef::Registered(name)),
+                ..
+            }) = self.nodes.get(id)
+            else {
+                continue;
+            };
+            if !registries.output_schemas.contains_key(name) {
+                unregistered.push(format!(
+                    "{id}: output_schema names unregistered schema '{name}'"
+                ));
+            }
+        }
+        if !unregistered.is_empty() {
+            unregistered.sort();
+            return Err(EngineError::UnregisteredOutputSchema {
+                reason: format!(
+                    "every SchemaRef::Registered name must be registered via \
+                     WarEngine::with_output_schema before validation: {} -- register the \
+                     schema or fix the name",
+                    unregistered.join("; ")
+                ),
+                offenders: unregistered,
+            });
+        }
+
+        let mut directive_conflicts: Vec<String> = Vec::new();
+        for id in &self.node_order {
+            let Some(NodeSpec::Paladin {
+                output_schema: Some(_),
+                directive_parser,
+                ..
+            }) = self.nodes.get(id)
+            else {
+                continue;
+            };
+            if !matches!(directive_parser, DirectiveParser::PlainOutput) {
+                directive_conflicts.push(format!(
+                    "{id}: output_schema is set but directive_parser is not PlainOutput"
+                ));
+            }
+        }
+        if !directive_conflicts.is_empty() {
+            directive_conflicts.sort();
+            return Err(EngineError::OutputSchemaWithStructuredDirective {
+                reason: format!(
+                    "output_schema and a structured DirectiveParser are mutually exclusive \
+                     (combining them is a Deferred Idea): {} -- set directive_parser to \
+                     PlainOutput, or remove the output_schema",
+                    directive_conflicts.join("; ")
+                ),
+                offenders: directive_conflicts,
+            });
+        }
+
+        let mut incompatible_fields: Vec<String> = Vec::new();
+        for id in &self.node_order {
+            let Some(NodeSpec::Paladin {
+                output_schema: Some(_),
+                output_field,
+                ..
+            }) = self.nodes.get(id)
+            else {
+                continue;
+            };
+            if self
+                .schema
+                .field_spec(output_field)
+                .is_some_and(|spec| matches!(spec.dispatch, DispatchRule::Sum))
+            {
+                incompatible_fields.push(format!(
+                    "{id}: output_field '{}' is declared DispatchRule::Sum, which cannot hold \
+                     a structured JSON value",
+                    output_field.as_str()
+                ));
+            }
+        }
+        if !incompatible_fields.is_empty() {
+            incompatible_fields.sort();
+            return Err(EngineError::OutputSchemaFieldNotJson {
+                reason: format!(
+                    "a structured output_schema node's output_field must be able to hold a \
+                     JSON value: {} -- declare the field with a JSON-compatible DispatchRule \
+                     (LastWrite, Append or MergeObject)",
+                    incompatible_fields.join("; ")
+                ),
+                offenders: incompatible_fields,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Collects every node (in this graph and, recursively, in every
+    /// embedded [`NodeSpec::Battalion`] child graph) whose `output_schema`
+    /// is `Some`, for [`WarGraph::validate_structured_executor_backend`].
+    /// Mirrors [`WarGraph::collect_cache_policy_nodes`] exactly: `path`
+    /// prefixes a nested child's node ids as `{battalion node}/{child}`, and
+    /// `ancestry` (the child `WarGraph`'s `Arc` pointer identity) bounds the
+    /// recursion so a self-embedding graph -- already rejected by
+    /// `WarGraph::validate` -- can never loop here.
+    fn collect_output_schema_nodes(
+        &self,
+        path: &str,
+        out: &mut Vec<NodeId>,
+        ancestry: &mut Vec<*const WarGraph>,
+    ) {
+        for id in &self.node_order {
+            if let Some(NodeSpec::Paladin {
+                output_schema: Some(_),
+                ..
+            }) = self.nodes.get(id)
+            {
+                out.push(NodeId::new(format!("{path}{}", id.as_str())));
+            }
+            if let Some(NodeSpec::Battalion { graph: child, .. }) = self.nodes.get(id) {
+                let child_ptr: *const WarGraph = Arc::as_ptr(child);
+                if ancestry.contains(&child_ptr) || std::ptr::eq(child_ptr, self) {
+                    continue;
+                }
+                ancestry.push(child_ptr);
+                child.collect_output_schema_nodes(
+                    &format!("{path}{}/", id.as_str()),
+                    out,
+                    ancestry,
+                );
+                ancestry.pop();
+            }
+        }
+    }
+
+    /// D-29's fail-closed backend clause for structured output (RT-05,
+    /// RT-FR-19, plan 26-18): when the `WarEngine` running this graph has
+    /// NO structured executor wired (`executor_configured == false`), every
+    /// node -- in this graph and, recursively, in every embedded
+    /// [`NodeSpec::Battalion`] child graph, which inherits the engine's
+    /// structured executor wholesale -- whose `output_schema` is `Some` is
+    /// an offender (`EngineError::StructuredExecutorMissing`). Mirrors
+    /// [`WarGraph::validate_node_cache_backend`]'s discipline exactly: a
+    /// graph author who declared an `output_schema` and silently got a
+    /// plain string written instead would have no signal, so this is a
+    /// typed error before any node runs, never a degradation to writing
+    /// text.
+    ///
+    /// Called by the engine (`WarEngine::start`/`resume*`/`fork`)
+    /// immediately after [`WarGraph::validate`], since only the engine
+    /// knows whether a structured executor is configured; a child node is
+    /// named `{battalion node}/{child node}`. Collects EVERY offender,
+    /// sorted.
+    pub fn validate_structured_executor_backend(
+        &self,
+        executor_configured: bool,
+    ) -> Result<(), EngineError> {
+        if executor_configured {
+            return Ok(());
+        }
+        let mut offenders: Vec<NodeId> = Vec::new();
+        self.collect_output_schema_nodes("", &mut offenders, &mut Vec::new());
+        if offenders.is_empty() {
+            return Ok(());
+        }
+        offenders.sort();
+        let names = offenders
+            .iter()
+            .map(NodeId::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(EngineError::StructuredExecutorMissing {
+            reason: format!(
+                "node(s) declare an output_schema but no structured executor is wired via \
+                 WarEngine::with_structured_executor: {names} -- wire one, or remove the \
+                 output_schema"
+            ),
+            nodes: offenders,
         })
     }
 
@@ -2073,6 +2343,20 @@ impl WarGraph {
     /// two would hash identically under the resolved value, silently
     /// erasing a real authoring difference the fingerprint exists to
     /// capture.
+    ///
+    /// **`v6` (Phase 26, D-29) adds one more section for each
+    /// `NodeSpec::Paladin` node's `output_schema` (RT-FR-19, plan 26-18):**
+    /// a node's `output_schema` genuinely changes what it produces --
+    /// writing a parsed JSON object rather than a plain string -- and
+    /// therefore what downstream state contains, so it is hashed by the
+    /// same rule `v5` states for `on_error`/`cache` (changes ROUTING or
+    /// MERGE semantics), unlike `EngineLimits`, which stays pure tuning
+    /// (Phase 23 D-18). Encoded exactly like the `directive_parsers`
+    /// section above it: a "has output_schema" tag byte, then, when
+    /// present, the canonical serde JSON of the `SchemaRef` itself -- the
+    /// schema value for `Inline`, the registered name for `Registered` --
+    /// length-prefixed through [`push_field`], sorted by node id via
+    /// `node_order` (already `HashMap`-independent).
     pub fn fingerprint(&self) -> GraphFingerprint {
         let mut node_ids: Vec<&NodeId> = self.nodes.keys().collect();
         node_ids.sort();
@@ -2178,6 +2462,29 @@ impl WarGraph {
             push_field(&mut buf, id.as_str().as_bytes());
             let parser_json = serde_json::to_string(directive_parser).unwrap_or_default();
             push_field(&mut buf, parser_json.as_bytes());
+        }
+        // --- v6 (Phase 26, D-29): one more scheduling/merge-relevant
+        // section for each `NodeSpec::Paladin` node's `output_schema` --
+        // canonical JSON of the `SchemaRef` (the inline schema value, or the
+        // registered name), preceded by a "has output_schema" tag byte
+        // exactly like the "has output field" marker above. A node's
+        // `output_schema` changes what it produces (and therefore what
+        // downstream state contains), so it is hashed here -- unlike
+        // `EngineLimits`, which stays excluded as tuning (Phase 23 D-18).
+        buf.extend_from_slice(b";output_schemas:");
+        for id in &self.node_order {
+            let Some(NodeSpec::Paladin { output_schema, .. }) = self.nodes.get(id) else {
+                continue;
+            };
+            push_field(&mut buf, id.as_str().as_bytes());
+            match output_schema {
+                Some(schema_ref) => {
+                    buf.push(1); // "has output_schema" tag
+                    let schema_json = serde_json::to_string(schema_ref).unwrap_or_default();
+                    push_field(&mut buf, schema_json.as_bytes());
+                }
+                None => buf.push(0), // "no output_schema" tag
+            }
         }
         // --- v4 (Phase 24, D-09): one more scheduling/merge-relevant
         // section for NodeSpec::Gate, see `fingerprint`'s rustdoc above for
@@ -2898,12 +3205,16 @@ mod tests {
         // Re-pinned again for Phase 25 D-11's `v5` bump (plan 25-03): same
         // reason -- the version tag alone moves the literal even though
         // this fixture has no Aegis sidecar entries either.
-        // `fingerprint_golden_hex_v5` (originally `fingerprint_golden_hex_pins_canonical_bytes`, Task 2 of Plan 22-01) is the
+        // Re-pinned again for Phase 26 D-29's `v6` bump (plan 26-18): same
+        // reason -- the version tag alone moves the literal even though
+        // this fixture has no `output_schema` set on its Paladin node
+        // either.
+        // `fingerprint_golden_hex_v6` (originally `fingerprint_golden_hex_pins_canonical_bytes`, Task 2 of Plan 22-01) is the
         // dedicated golden test guarding future canonicalization changes;
         // this assertion only re-confirms same-input determinism.
         assert_eq!(
             a.as_str(),
-            "v5:1ba3965ddeac27b3babc40353b93929ed15d8e90e2f9e37a00dbe43e0b9c3589"
+            "v6:6f9111b00aeae4b81cb01436888ab92ad2b0c89aec4ece8c6dbcfdc7bc2e7cc1"
         );
     }
 
@@ -3085,12 +3396,18 @@ mod tests {
     /// so only the version tag and the (empty) new `;aegis:`/
     /// `;default_aegis:` section markers move the literal. Renamed to
     /// `fingerprint_golden_hex_v5`.
+    ///
+    /// Re-pinned again for Phase 26 D-29's `v6` bump (plan 26-18): same
+    /// reason again -- the reference graph's "worker" Paladin node has no
+    /// `output_schema` set, so only the version tag and the (empty) new
+    /// `;output_schemas:` section marker move the literal. Renamed to
+    /// `fingerprint_golden_hex_v6`.
     #[test]
-    fn fingerprint_golden_hex_v5() {
+    fn fingerprint_golden_hex_v6() {
         let graph = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
         assert_eq!(
             graph.fingerprint().as_str(),
-            "v5:a26b00e514c5adf137fadd279c644555ac5848897bae13b178431d3110138850",
+            "v6:f1140cceded9a81929934207d608a54c494c8e9eafe6e85ce05bfcabc81dbd51",
             "canonicalization changed -- this invalidates every stored Waypoint's \
              fingerprint; only update this literal together with a deliberate \
              format-version bump"
@@ -3263,10 +3580,17 @@ mod tests {
         StdArc::new(child)
     }
 
-    /// Test 1 (plan 25-03): the version tag is `v5` and appears in the
-    /// hashed preamble (D-11).
+    /// Historical (plan 25-03): the version tag `v5` used to be checked
+    /// here; superseded by `fingerprint_version_is_v6_and_the_golden_is_repinned`
+    /// below (Task 2, Test 8, plan 26-18, D-29).
+    ///
+    /// Test 8 (plan 26-18): the version tag is `v6`, every fingerprint
+    /// string starts with `v6:`, and the golden fixture
+    /// (`fingerprint_golden_hex_v6`) matches -- i.e. this test and the
+    /// golden test agree on both halves of "the bump landed and the
+    /// re-pinning happened in the same change" (D-29).
     #[test]
-    fn fingerprint_version_is_v5() {
+    fn fingerprint_version_is_v6_and_the_golden_is_repinned() {
         let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
         graph.add_node(
             NodeId::new("solo"),
@@ -3274,10 +3598,327 @@ mod tests {
         );
         graph.add_entry(NodeId::new("solo"));
 
-        assert!(graph.fingerprint().as_str().starts_with("v5:"));
+        assert!(graph.fingerprint().as_str().starts_with("v6:"));
         assert_eq!(
             paladin_core::platform::container::waypoint::GRAPH_FINGERPRINT_VERSION,
-            "v5"
+            "v6"
+        );
+
+        let golden = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        assert!(golden.fingerprint().as_str().starts_with("v6:"));
+    }
+
+    /// Test 9 (plan 26-18, D-29): the Phase 23 D-18 `EngineLimits` exclusion
+    /// still holds under `v6` -- changing `EngineLimits` (including
+    /// `max_muster_tasks`, RESEARCH.md Pitfall 5) must not move the
+    /// fingerprint any more than it did before this plan's `output_schema`
+    /// section was added.
+    #[test]
+    fn engine_limits_are_still_excluded_from_the_hash() {
+        let base = golden_fingerprint_fixture(&FingerprintFixtureSpec::default());
+        let variant = golden_fingerprint_fixture(&FingerprintFixtureSpec {
+            limits: EngineLimits {
+                max_supersteps: 999,
+                max_node_visits: 999,
+                run_timeout: None,
+                max_muster_tasks: 999,
+            },
+            ..FingerprintFixtureSpec::default()
+        });
+        assert_eq!(base.fingerprint(), variant.fingerprint());
+    }
+
+    /// Test 7 (plan 26-18, D-29): two graphs identical except for one
+    /// node's `output_schema` produce different fingerprints; two graphs
+    /// with the SAME schema produce the same fingerprint.
+    #[test]
+    fn fingerprint_changes_when_output_schema_changes() {
+        use paladin_core::platform::container::structured::SchemaRef;
+
+        fn graph_with_schema(schema: Option<SchemaRef>) -> WarGraph {
+            let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+            let mut spec = NodeSpec::paladin(
+                make_fixture_paladin("worker", "prompt", "gpt-4"),
+                InputMapping::new("prompt"),
+                FieldName::new("result").unwrap(),
+            );
+            if let Some(schema) = schema {
+                spec = spec.with_output_schema(schema);
+            }
+            graph.add_node(NodeId::new("worker"), spec);
+            graph.add_entry(NodeId::new("worker"));
+            graph
+        }
+
+        let none = graph_with_schema(None);
+        let inline_a = graph_with_schema(Some(SchemaRef::Inline(
+            serde_json::json!({"type": "object", "properties": {"a": {"type": "string"}}}),
+        )));
+        let inline_a_again = graph_with_schema(Some(SchemaRef::Inline(
+            serde_json::json!({"type": "object", "properties": {"a": {"type": "string"}}}),
+        )));
+        let inline_b = graph_with_schema(Some(SchemaRef::Inline(
+            serde_json::json!({"type": "object", "properties": {"b": {"type": "string"}}}),
+        )));
+        let registered = graph_with_schema(Some(SchemaRef::Registered("weather".to_string())));
+
+        assert_ne!(none.fingerprint(), inline_a.fingerprint());
+        assert_ne!(inline_a.fingerprint(), inline_b.fingerprint());
+        assert_ne!(inline_a.fingerprint(), registered.fingerprint());
+        assert_eq!(
+            inline_a.fingerprint(),
+            inline_a_again.fingerprint(),
+            "two graphs with the identical output_schema must fingerprint identically"
+        );
+    }
+
+    // --- Plan 26-18, D-29: `output_schema` construction, the fail-closed
+    // validation matrix, and `TypedSchema`'s full-deserialization
+    // validation.
+
+    /// Test 1: `NodeSpec::paladin(..)` still constructs without an output
+    /// schema, and `with_output_schema` adds one -- no existing
+    /// construction site breaks.
+    #[test]
+    fn node_spec_paladin_constructor_is_preserved() {
+        let plain = NodeSpec::paladin(
+            make_fixture_paladin("worker", "prompt", "gpt-4"),
+            InputMapping::new("prompt"),
+            FieldName::new("out").unwrap(),
+        );
+        assert!(matches!(
+            plain,
+            NodeSpec::Paladin {
+                output_schema: None,
+                ..
+            }
+        ));
+
+        let with_schema = NodeSpec::paladin(
+            make_fixture_paladin("worker", "prompt", "gpt-4"),
+            InputMapping::new("prompt"),
+            FieldName::new("out").unwrap(),
+        )
+        .with_output_schema(SchemaRef::Inline(serde_json::json!({"type": "object"})));
+        assert!(matches!(
+            with_schema,
+            NodeSpec::Paladin {
+                output_schema: Some(_),
+                ..
+            }
+        ));
+    }
+
+    /// Test 2: a graph with an `output_schema` node on an engine with no
+    /// structured executor fails validation with a typed `EngineError`
+    /// naming the node -- BEFORE any node runs.
+    ///
+    /// Tested directly against `WarGraph::validate_structured_executor_backend`
+    /// (the method a real `WarEngine::start`/`resume`/`fork` calls
+    /// immediately after `WarGraph::validate`), mirroring how
+    /// `validate_node_cache_backend`'s own analogous check is a `WarGraph`
+    /// method rather than requiring a full `WarEngine` + `PaladinPort`
+    /// double to exercise.
+    #[test]
+    fn output_schema_without_a_structured_executor_fails_validation() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("worker"),
+            NodeSpec::paladin(
+                make_fixture_paladin("worker", "prompt", "gpt-4"),
+                InputMapping::new("prompt"),
+                FieldName::new("status").unwrap(),
+            )
+            .with_output_schema(SchemaRef::Inline(serde_json::json!({"type": "object"}))),
+        );
+        graph.add_entry(NodeId::new("worker"));
+
+        let err = graph
+            .validate_structured_executor_backend(false)
+            .unwrap_err();
+        match err {
+            EngineError::StructuredExecutorMissing { nodes, reason } => {
+                assert_eq!(nodes, vec![NodeId::new("worker")]);
+                assert!(reason.contains("worker"));
+            }
+            other => panic!("expected StructuredExecutorMissing, got {other:?}"),
+        }
+
+        // With an executor configured, the same graph passes.
+        assert!(graph.validate_structured_executor_backend(true).is_ok());
+    }
+
+    /// Test 3: two nodes referencing two unregistered `SchemaRef::Registered`
+    /// names produce ONE error listing BOTH names.
+    #[test]
+    fn unregistered_schema_name_fails_validation_listing_every_offender() {
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(
+                FieldName::new("out_a").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+            FieldSpec::new(
+                FieldName::new("out_b").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(
+            NodeId::new("node_a"),
+            NodeSpec::paladin(
+                make_fixture_paladin("node_a", "prompt", "gpt-4"),
+                InputMapping::new("prompt"),
+                FieldName::new("out_a").unwrap(),
+            )
+            .with_output_schema(SchemaRef::Registered("missing_one".to_string())),
+        );
+        graph.add_node(
+            NodeId::new("node_b"),
+            NodeSpec::paladin(
+                make_fixture_paladin("node_b", "prompt", "gpt-4"),
+                InputMapping::new("prompt"),
+                FieldName::new("out_b").unwrap(),
+            )
+            .with_output_schema(SchemaRef::Registered("missing_two".to_string())),
+        );
+        graph.add_entry(NodeId::new("node_a"));
+        graph.add_entry(NodeId::new("node_b"));
+
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .unwrap_err();
+        match err {
+            EngineError::UnregisteredOutputSchema { reason, offenders } => {
+                assert_eq!(offenders.len(), 2);
+                assert!(reason.contains("missing_one"));
+                assert!(reason.contains("missing_two"));
+            }
+            other => panic!("expected UnregisteredOutputSchema, got {other:?}"),
+        }
+    }
+
+    /// Test 4: a node with both `output_schema` and a non-`PlainOutput`
+    /// `directive_parser` fails with the dedicated
+    /// `OutputSchemaWithStructuredDirective` variant.
+    #[test]
+    fn output_schema_with_a_structured_directive_parser_fails_validation() {
+        let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+        graph.add_node(
+            NodeId::new("worker"),
+            NodeSpec::paladin_with_directive_parser(
+                make_fixture_paladin("worker", "prompt", "gpt-4"),
+                InputMapping::new("prompt"),
+                FieldName::new("status").unwrap(),
+                DirectiveParser::StructuredDirective {
+                    on_parse_error: OnParseError::FailRun,
+                },
+            )
+            .with_output_schema(SchemaRef::Inline(serde_json::json!({"type": "object"}))),
+        );
+        graph.add_entry(NodeId::new("worker"));
+
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::OutputSchemaWithStructuredDirective { .. }
+        ));
+    }
+
+    /// Test 5: a node whose `output_field` is declared with a
+    /// `DispatchRule` that cannot hold a JSON value (`Sum`, strictly
+    /// numeric) fails validation with a dedicated variant naming the field.
+    #[test]
+    fn output_field_must_accept_json() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("total").unwrap(),
+            DispatchRule::Sum,
+            Some(serde_json::json!(0)),
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        graph.add_node(
+            NodeId::new("worker"),
+            NodeSpec::paladin(
+                make_fixture_paladin("worker", "prompt", "gpt-4"),
+                InputMapping::new("prompt"),
+                FieldName::new("total").unwrap(),
+            )
+            .with_output_schema(SchemaRef::Inline(serde_json::json!({"type": "object"}))),
+        );
+        graph.add_entry(NodeId::new("worker"));
+
+        let err = graph
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
+            .unwrap_err();
+        match err {
+            EngineError::OutputSchemaFieldNotJson { reason, offenders } => {
+                assert_eq!(offenders.len(), 1);
+                assert!(reason.contains("total"));
+            }
+            other => panic!("expected OutputSchemaFieldNotJson, got {other:?}"),
+        }
+    }
+
+    /// Test 6: `TypedSchema::<Weather>::new(..)` accepts a conforming value
+    /// and rejects one that fails `serde_json::from_value::<Weather>` --
+    /// full typed validation, not the partial shape check (D-29, D-30).
+    #[test]
+    fn typed_schema_validates_by_deserialization() {
+        use crate::engine::{StructuredSchema, TypedSchema};
+
+        #[derive(serde::Deserialize)]
+        struct Weather {
+            #[allow(dead_code)]
+            city: String,
+            #[allow(dead_code)]
+            temp_c: f64,
+        }
+
+        let schema = TypedSchema::<Weather>::new(serde_json::json!({
+            "type": "object",
+            "required": ["city", "temp_c"],
+            "properties": {
+                "city": {"type": "string"},
+                "temp_c": {"type": "number"}
+            }
+        }));
+
+        assert!(
+            schema
+                .validate(&serde_json::json!({"city": "Oslo", "temp_c": 4.5}))
+                .is_ok()
+        );
+        // Passes the object-safe port's shape_check (a string is a string)
+        // but fails serde deserialization into `f64` -- this is exactly
+        // the "full typed validation, not the partial shape check"
+        // distinction Test 6 exists to pin.
+        assert!(
+            schema
+                .validate(&serde_json::json!({"city": "Oslo", "temp_c": "not a number"}))
+                .is_err()
+        );
+        assert!(
+            schema
+                .validate(&serde_json::json!({"city": "Oslo"}))
+                .is_err()
+        );
+
+        assert_eq!(
+            schema.to_json_schema(),
+            serde_json::json!({
+                "type": "object",
+                "required": ["city", "temp_c"],
+                "properties": {
+                    "city": {"type": "string"},
+                    "temp_c": {"type": "number"}
+                }
+            })
         );
     }
 
@@ -4201,6 +4842,7 @@ mod tests {
             &None,
             None,
             std::time::Duration::from_secs(30),
+            None,
             None,
             None,
         )

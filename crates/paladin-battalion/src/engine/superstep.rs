@@ -53,6 +53,7 @@ use paladin_core::platform::container::parley::{
     ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
 use paladin_core::platform::container::run_scope::RunScope;
+use paladin_core::platform::container::structured::SchemaRef;
 use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeExecutionRecord,
@@ -61,6 +62,7 @@ use paladin_core::platform::container::waypoint::{
 };
 use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::PaladinPort;
+use paladin_ports::output::structured_executor_port::{StructuredExecutorPort, StructuredOptions};
 use paladin_ports::output::trace_sink_port::TraceEvent;
 use paladin_ports::output::vault_confined::ConfinedVault;
 use paladin_ports::output::waypoint_port::WaypointPort;
@@ -131,6 +133,12 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     /// like every other engine resource, so a child graph's own nodes
     /// receive the SAME grant the parent's do.
     vault: Option<ConfinedVault>,
+    /// THIS engine's structured-output executor (RT-05, RT-FR-19, D-29;
+    /// plan 26-18) -- inherited by a nested `NodeSpec::Battalion` child run
+    /// wholesale, like every other engine resource, so a child graph's own
+    /// `output_schema` nodes dispatch through the SAME executor the
+    /// parent's do.
+    structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
 }
 
 /// One dispatched node's resolved cache binding (Doc 04 FT-FR-18, D-29;
@@ -513,6 +521,15 @@ enum NodeDispatch<W: WaypointPort + 'static> {
         output_field: FieldName,
         /// How this node's raw output becomes a routing `Directive`.
         directive_parser: DirectiveParser,
+        /// This node's `output_schema`, ALREADY RESOLVED to its JSON Schema
+        /// value (RT-05, RT-FR-19, D-29, plan 26-18) -- `SchemaRef::Inline`
+        /// unwrapped, `SchemaRef::Registered(name)` looked up in
+        /// `registries.output_schemas` and rendered via
+        /// `StructuredSchema::to_json_schema` -- both resolved ONCE, before
+        /// this dispatch entry is spawned (never per-attempt), by the
+        /// dispatch-building loop below. `None` for an ordinary node,
+        /// unchanged from before this phase.
+        output_schema: Option<serde_json::Value>,
     },
     /// A `NodeSpec::Battalion` node's execution inputs (CF-FR-14, D-19).
     Battalion {
@@ -546,11 +563,13 @@ impl<W: WaypointPort + 'static> Clone for NodeDispatch<W> {
                 input_template,
                 output_field,
                 directive_parser,
+                output_schema,
             } => NodeDispatch::Paladin {
                 paladin: paladin.clone(),
                 input_template: input_template.clone(),
                 output_field: output_field.clone(),
                 directive_parser: directive_parser.clone(),
+                output_schema: output_schema.clone(),
             },
             NodeDispatch::Battalion {
                 graph,
@@ -605,6 +624,22 @@ enum NodeFailure {
     /// failure; `EngineRun` is never retried (the budget is gone) and ends
     /// the whole run with `EngineError::RunTimeoutExceeded`.
     Timeout(TimeoutKind),
+    /// A `NodeSpec::Paladin` node's `output_schema` structured-output
+    /// repair loop exhausted (D-29, RT-FR-19, Phase 25 D-05): ALWAYS
+    /// classified `Transience::Unknown` in `node_error` below -- NEVER
+    /// delegated to `PaladinError::transience()`'s general `Permanent`
+    /// verdict for `PaladinError::StructuredOutputInvalid` (the verdict a
+    /// non-engine caller of `execute_structured` correctly gets, since it
+    /// has no different-graph/different-model retry available). The engine
+    /// repair loop already retried internally (`max_repair_attempts`)
+    /// before this failure surfaced, so it is not a transient network
+    /// condition -- but it is not provably permanent either, and a
+    /// `TransientAndUnknown` Aegis may legitimately retry the WHOLE node
+    /// with a different prompt/model. Deliberately a DISTINCT variant from
+    /// `Paladin(PaladinError)` above rather than a special case inside it,
+    /// so this divergence from the general classification is visible at
+    /// the type level, not buried inside a conditional.
+    StructuredOutputInvalid(PaladinError),
 }
 
 impl NodeFailure {
@@ -633,6 +668,11 @@ impl NodeFailure {
             NodeFailure::Node(err) => (Transience::Unknown, NodeErrorSource::from(err.clone())),
             NodeFailure::Paladin(err) => (err.transience(), llm_failure::to_node_error_source(err)),
             NodeFailure::Timeout(kind) => (Transience::Transient, NodeErrorSource::Timeout(*kind)),
+            // --- D-29, Phase 25 D-05: hardcoded `Unknown`, never
+            // `err.transience()` -- see this variant's own rustdoc.
+            NodeFailure::StructuredOutputInvalid(err) => {
+                (Transience::Unknown, llm_failure::to_node_error_source(err))
+            }
             NodeFailure::DirectiveParse(_) | NodeFailure::Battalion(_) => return None,
         };
         Some(NodeError {
@@ -901,6 +941,11 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
     snapshot: &'a Battlefield,
     ctx: &'a crate::engine::node::NodeContext,
     paladin_port: &'a Arc<dyn PaladinPort>,
+    // --- RT-05, RT-FR-19, D-29 (plan 26-18): this run's structured-output
+    // executor, if any -- consulted ONLY when this dispatch's
+    // `output_schema` is `Some` (an ordinary node ignores this entirely,
+    // exactly as before this phase).
+    structured_executor: &'a Option<Arc<dyn StructuredExecutorPort>>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = NodeDispatchResult> + Send + 'a>> {
     Box::pin(async move {
         match dispatch {
@@ -913,6 +958,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                 input_template,
                 output_field,
                 directive_parser,
+                output_schema,
             } => {
                 let paladin_id = Some(paladin.uuid);
                 // --- CF-03, D-15: the executing task's Muster context (`Some`
@@ -952,6 +998,69 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                 // degrades to a per-attempt wall clock rather than to no
                 // bound at all.
                 //
+                // --- RT-05, RT-FR-19, D-29: when `output_schema` is `Some`,
+                // dispatch through the engine's structured executor instead
+                // of the plain `PaladinPort` path below -- the PARSED JSON
+                // value, never a string, is written to `output_field`.
+                // `WarGraph::validate` (`validate_output_schemas`,
+                // `directive_parser` must be `PlainOutput`) and
+                // `WarGraph::validate_structured_executor_backend` have
+                // already guaranteed, before any node ran, that
+                // `structured_executor` is `Some` whenever `output_schema`
+                // is `Some` -- this `let Some(..) else` unwraps that
+                // invariant defensively rather than by `.expect()` (library
+                // code must not panic on an invariant it cannot enforce),
+                // failing just this node closed should it somehow not hold.
+                if let Some(schema_json) = output_schema {
+                    let Some(executor) = structured_executor else {
+                        return (
+                            paladin_id,
+                            0,
+                            Err(NodeFailure::Node(StateNodeError(format!(
+                                "node has output_schema but no structured executor is wired -- \
+                                 WarGraph::validate_structured_executor_backend should have \
+                                 rejected this before any node ran (node output_field: {})",
+                                output_field.as_str()
+                            )))),
+                        );
+                    };
+                    return match executor
+                        .execute_json_schema_observed(
+                            &paladin,
+                            &rendered,
+                            &schema_json,
+                            &StructuredOptions::default(),
+                            &ctx.heartbeat,
+                        )
+                        .await
+                    {
+                        Ok(structured) => {
+                            let token_count = u64::from(structured.raw.token_count);
+                            let mut delta = StateDelta::new();
+                            delta.set_raw(output_field, structured.value);
+                            (paladin_id, token_count, Ok(delta.into()))
+                        }
+                        // --- D-29, Phase 25 D-05: exhaustion is ALWAYS
+                        // `Transience::Unknown` here -- never delegated to
+                        // `PaladinError::transience()`'s general `Permanent`
+                        // verdict for `StructuredOutputInvalid` (that
+                        // verdict is correct for a non-engine caller of
+                        // `execute_structured`, who has no different-graph
+                        // retry available) -- see `NodeFailure::
+                        // StructuredOutputInvalid`'s own rustdoc for why.
+                        Err(err @ PaladinError::StructuredOutputInvalid { .. }) => (
+                            paladin_id,
+                            0,
+                            Err(NodeFailure::StructuredOutputInvalid(err)),
+                        ),
+                        // Any OTHER underlying failure (e.g. an LLM call
+                        // failure inside the repair loop) keeps its own
+                        // natural classification via the ordinary
+                        // `NodeFailure::Paladin` path.
+                        Err(other) => (paladin_id, 0, Err(NodeFailure::Paladin(other))),
+                    };
+                }
+
                 // --- RT-04, D-21: the `RunScope` carries this run's own
                 // Vault grant (`ctx.vault`'s granted namespace, if any) so
                 // a port that overrides `execute_scoped` can act on it. The
@@ -1249,6 +1358,10 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     // --- RT-04, D-21: the child run's nodes receive the
                     // SAME Vault grant the parent's do.
                     resources.vault.clone(),
+                    // --- RT-05, RT-FR-19, D-29: the child run's own
+                    // `output_schema` nodes dispatch through the SAME
+                    // structured executor the parent's do.
+                    resources.structured_executor.clone(),
                 ));
                 let outcome = child_fut.await;
 
@@ -1545,6 +1658,13 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     // top-level caller forwards (`None` when `WarEngine::with_vault` was
     // never called).
     vault: Option<ConfinedVault>,
+    // --- RT-05, RT-FR-19, D-29 (plan 26-18): the engine's structured-output
+    // executor, if any -- like `node_cache`/`vault`, a real, always-present
+    // engine setting every top-level caller forwards (`None` when
+    // `WarEngine::with_structured_executor` was never called --
+    // `WarGraph::validate_structured_executor_backend` has then already
+    // rejected any `output_schema` in the graph).
+    structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
 ) -> Result<RunOutcome, EngineError> {
     // --- CF-FR-15, D-20: a top-level call through this public entry point
     // (`WarEngine::start`/`resume_with_options`, and every existing test
@@ -1597,6 +1717,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         None,
         node_cache,
         vault,
+        structured_executor,
     )
     .await
 }
@@ -1692,6 +1813,13 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // wholesale by a nested `NodeSpec::Battalion` child run via
     // `ChildEngineResources::vault`, like every other engine resource.
     vault: Option<ConfinedVault>,
+    // --- RT-05, RT-FR-19, D-29 (plan 26-18): this engine's structured-output
+    // executor, if any -- consulted by a `NodeSpec::Paladin` node whose
+    // `output_schema` is `Some`, and inherited wholesale by a nested
+    // `NodeSpec::Battalion` child run via
+    // `ChildEngineResources::structured_executor`, like every other engine
+    // resource.
+    structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
 ) -> Result<RunOutcome, EngineError> {
     // --- FT-FR-20, D-28: the graph fingerprint every cache key composed in
     // this run starts with -- computed ONCE per run (never per dispatch),
@@ -1735,6 +1863,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 shutdown_grace,
                 node_cache: node_cache.clone(),
                 vault: vault.clone(),
+                structured_executor: structured_executor.clone(),
             })
         });
 
@@ -2123,12 +2252,54 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     input_template,
                     output_field,
                     directive_parser,
-                } => NodeDispatch::Paladin {
-                    paladin: paladin.clone(),
-                    input_template: input_template.clone(),
-                    output_field: output_field.clone(),
-                    directive_parser: directive_parser.clone(),
-                },
+                    output_schema,
+                } => {
+                    // --- RT-05, RT-FR-19, D-29: resolve `output_schema`
+                    // ONCE here, before this dispatch entry is spawned --
+                    // `SchemaRef::Inline` unwraps directly; `SchemaRef::
+                    // Registered(name)` looks the name up in
+                    // `registries.output_schemas`, already proven present
+                    // by `WarGraph::validate` (`validate_output_schemas`)
+                    // before any node ran, so this lookup is infallible in
+                    // practice -- but library code must not `.expect()` an
+                    // invariant it cannot enforce (mirroring the Battalion
+                    // arm's own `resources` lookup below), so a defensive
+                    // miss still fails the run with a typed error rather
+                    // than panicking.
+                    let resolved_schema = match output_schema {
+                        None => None,
+                        Some(SchemaRef::Inline(value)) => Some(value.clone()),
+                        Some(SchemaRef::Registered(name)) => {
+                            let schema = registries.output_schemas.get(name).ok_or_else(|| {
+                                EngineError::Node(StateNodeError(format!(
+                                    "node {node_id}: output_schema registered name \
+                                         '{name}' not found in registries at dispatch time -- \
+                                         WarGraph::validate should have rejected this before \
+                                         any node ran"
+                                )))
+                            })?;
+                            Some(schema.to_json_schema())
+                        }
+                        // `SchemaRef` is `#[non_exhaustive]` from this
+                        // crate's point of view -- a future variant fails
+                        // closed here (a typed error naming the node)
+                        // rather than silently falling through to "no
+                        // schema".
+                        Some(_) => {
+                            return Err(EngineError::Node(StateNodeError(format!(
+                                "node {node_id}: output_schema uses a SchemaRef variant this \
+                                 engine does not yet resolve"
+                            ))));
+                        }
+                    };
+                    NodeDispatch::Paladin {
+                        paladin: paladin.clone(),
+                        input_template: input_template.clone(),
+                        output_field: output_field.clone(),
+                        directive_parser: directive_parser.clone(),
+                        output_schema: resolved_schema,
+                    }
+                }
                 NodeSpec::Battalion {
                     graph: child_graph,
                     state_map,
@@ -2167,6 +2338,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             let snap = Arc::clone(&snapshot);
             let sem = Arc::clone(&semaphore);
             let port = Arc::clone(paladin_port);
+            // --- RT-05, RT-FR-19, D-29: this run's structured-output
+            // executor, cloned out of the outer scope so the spawned task
+            // owns everything it touches, mirroring `port` immediately
+            // above.
+            let node_structured_executor = structured_executor.clone();
             let node_trace = Arc::clone(trace);
             let node_interceptors = interceptors.to_vec();
             // --- D-18: the attempt-INVARIANT part of this dispatch's
@@ -2340,7 +2516,13 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                     // a Directive, T-25-41) and the failure
                                     // names the bound by typed `TimeoutKind`.
                                     let (paladin_id, token_count, result) = race_attempt(
-                                        execute_vanguard_node(dispatch.clone(), &snap, &ctx, &port),
+                                        execute_vanguard_node(
+                                            dispatch.clone(),
+                                            &snap,
+                                            &ctx,
+                                            &port,
+                                            &node_structured_executor,
+                                        ),
                                         &attempt_bounds,
                                         &ctx.heartbeat,
                                     )
@@ -3053,11 +3235,22 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             // node-execution failure uses.
             let error = match (err, node_error) {
                 (
-                    NodeFailure::Node(_) | NodeFailure::Paladin(_) | NodeFailure::Timeout(_),
+                    NodeFailure::Node(_)
+                    | NodeFailure::Paladin(_)
+                    | NodeFailure::StructuredOutputInvalid(_)
+                    | NodeFailure::Timeout(_),
                     Some(node_error),
                 ) => EngineError::NodeFailed(node_error),
                 (NodeFailure::Node(e), None) => EngineError::Node(e),
                 (NodeFailure::Paladin(e), None) => EngineError::Node(StateNodeError(e.to_string())),
+                // --- D-29: mirrors the `Paladin(e), None` fallback
+                // immediately above -- unreachable in practice (this
+                // variant's own `node_error` always returns `Some`), but
+                // library code must not `unreachable!()` an invariant it
+                // cannot enforce.
+                (NodeFailure::StructuredOutputInvalid(e), None) => {
+                    EngineError::Node(StateNodeError(e.to_string()))
+                }
                 // --- D-20: unreachable in practice -- a timeout's
                 // `node_error` is always `Some` (see the retry loop) -- but
                 // library code must not `unreachable!()` an invariant it
@@ -4301,6 +4494,7 @@ mod tests {
             default_shutdown_grace(),
             None,
             None,
+            None,
         )
         .await
         .unwrap()
@@ -4340,6 +4534,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
         )
@@ -4387,6 +4582,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
         )
@@ -5126,6 +5322,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
         )
@@ -6590,6 +6787,7 @@ mod tests {
             default_shutdown_grace(),
             None,
             None,
+            None,
         )
         .await;
 
@@ -6641,6 +6839,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
         )
@@ -7227,6 +7426,7 @@ mod tests {
             default_shutdown_grace(),
             None,
             None,
+            None,
         )
         .await;
 
@@ -7261,6 +7461,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
         )
@@ -7323,6 +7524,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
         )
@@ -8828,6 +9030,7 @@ mod tests {
             default_shutdown_grace(),
             None,
             None,
+            None,
         )
         .await
     }
@@ -10229,6 +10432,7 @@ mod tests {
             shutdown_grace,
             None,
             None,
+            None,
         )
         .await
         .unwrap()
@@ -10271,6 +10475,7 @@ mod tests {
             &None,
             None,
             shutdown_grace,
+            None,
             None,
             None,
         )
@@ -11699,6 +11904,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
         )

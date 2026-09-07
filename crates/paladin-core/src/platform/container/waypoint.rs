@@ -363,6 +363,18 @@ impl std::fmt::Display for NodeId {
 /// to let a resumed run continue must never trip `GraphMismatch`. Every
 /// `v4`-tagged fingerprint is now recognised as stale on `resume` rather
 /// than silently reinterpreted under the new layout.
+///
+/// Bumped to `v6` (Phase 26, D-29): one new `;output_schemas:` section was
+/// added to `WarGraph::fingerprint`'s hashed bytes for each
+/// `NodeSpec::Paladin` node's `output_schema` (RT-FR-19, plan 26-18) --
+/// the canonical JSON of an `Inline` schema, or the registered name for a
+/// `Registered` one, sorted by node id and written through the same
+/// length-prefixed `push_field` helper. A node's `output_schema` genuinely
+/// changes what it produces and therefore what downstream state contains --
+/// unlike `EngineLimits`, which stays excluded as tuning (Phase 23 D-18) --
+/// so two graphs differing only in this field must never fingerprint
+/// identically. Every `v5`-tagged fingerprint is now recognised as stale on
+/// `resume` rather than silently reinterpreted under the new layout.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct GraphFingerprint(String);
@@ -371,8 +383,9 @@ pub struct GraphFingerprint(String);
 /// bumped to `v2` by Phase 22.1 CR-01 / D-17's collision-free re-encoding;
 /// bumped to `v3` by Phase 23 D-18's three new hashed sections; bumped to
 /// `v4` by Phase 24 D-09's `;gates:` section; bumped to `v5` by Phase 25
-/// D-11's `;aegis:` section).
-pub const GRAPH_FINGERPRINT_VERSION: &str = "v5";
+/// D-11's `;aegis:` section; bumped to `v6` by Phase 26 D-29's
+/// `;output_schemas:` section).
+pub const GRAPH_FINGERPRINT_VERSION: &str = "v6";
 
 impl GraphFingerprint {
     /// Compute a `GraphFingerprint` over a caller-supplied canonical byte
@@ -383,7 +396,7 @@ impl GraphFingerprint {
         Self(format!("{GRAPH_FINGERPRINT_VERSION}:{}", hash.to_hex()))
     }
 
-    /// Borrow the encoded fingerprint string (`"v5:{hex}"`).
+    /// Borrow the encoded fingerprint string (`"v6:{hex}"`).
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -1111,7 +1124,7 @@ mod tests {
         let a = GraphFingerprint::from_canonical_bytes(b"node:a|edge:none|schema:result");
         let b = GraphFingerprint::from_canonical_bytes(b"node:a|edge:none|schema:result");
         assert_eq!(a, b);
-        assert!(a.as_str().starts_with("v5:"));
+        assert!(a.as_str().starts_with("v6:"));
     }
 
     #[test]

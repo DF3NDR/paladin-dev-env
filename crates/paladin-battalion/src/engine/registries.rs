@@ -16,14 +16,19 @@
 //! parent `WarEngine` resolves inside every nested child graph with no
 //! re-registration.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use crate::edge_evaluator::EdgeEvaluatorRegistry;
+use crate::engine::StructuredSchema;
 use crate::error_handler::ErrorHandlerRegistry;
 use crate::retry_predicate::RetryPredicateRegistry;
 
 /// The bundle of every named-registration registry `WarGraph::validate`
-/// resolves a graph's `Custom` names against (D-13): `EdgeCondition::Custom`
-/// (BUG-01, CF-01), `RetryPredicate::Custom` and `ErrorHandlerSpec::Custom`
-/// (plan 25-03).
+/// resolves a graph's `Custom`/`Registered` names against (D-13):
+/// `EdgeCondition::Custom` (BUG-01, CF-01), `RetryPredicate::Custom` and
+/// `ErrorHandlerSpec::Custom` (plan 25-03), and `SchemaRef::Registered`
+/// (D-29, plan 26-18).
 #[derive(Default, Clone)]
 pub struct EngineRegistries {
     /// Registered `EdgeCondition::Custom` evaluators (BUG-01, CF-01).
@@ -32,6 +37,16 @@ pub struct EngineRegistries {
     pub retry_predicates: RetryPredicateRegistry,
     /// Registered `ErrorHandlerSpec::Custom` handlers (D-13).
     pub error_handlers: ErrorHandlerRegistry,
+    /// Registered `SchemaRef::Registered(name)` schemas (D-29, RT-FR-19,
+    /// plan 26-18), consulted by `WarGraph::validate` (an unregistered name
+    /// is `EngineError::UnregisteredOutputSchema`) and resolved by
+    /// `engine::superstep`'s Paladin dispatch (`StructuredSchema::to_json_schema`)
+    /// once validation has already proven the name present. A plain
+    /// `HashMap` rather than a dedicated registry type (mirroring
+    /// `RetryPredicateRegistry`'s own shape): no reserved-name guard is
+    /// needed here either, since a `SchemaRef::Registered` name collides
+    /// with no other named-registration vocabulary.
+    pub output_schemas: HashMap<String, Arc<dyn StructuredSchema>>,
 }
 
 impl EngineRegistries {

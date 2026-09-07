@@ -198,6 +198,11 @@ fn paladin_error_kind(err: &PaladinError) -> &'static str {
         PaladinError::GarrisonError(_) => "GarrisonError",
         PaladinError::GarrisonRequired => "GarrisonRequired",
         PaladinError::ArsenalError(_) => "ArsenalError",
+        // --- D-29, RT-FR-19 (plan 26-18): the engine's structured-output
+        // repair loop exhaustion. The transience this `kind` is paired
+        // with is decided separately by the CALLER (`NodeFailure::
+        // node_error`), never by this function.
+        PaladinError::StructuredOutputInvalid { .. } => "StructuredOutputInvalid",
         _ => "Other",
     }
 }

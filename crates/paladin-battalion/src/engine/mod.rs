@@ -97,6 +97,7 @@ use paladin_core::platform::container::waypoint::{
 };
 use paladin_ports::output::node_cache_port::NodeCachePort;
 use paladin_ports::output::paladin_port::PaladinPort;
+use paladin_ports::output::structured_executor_port::StructuredExecutorPort;
 use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink};
 use paladin_ports::output::vault_confined::ConfinedVault;
 use paladin_ports::output::vault_port::VaultPort;
@@ -124,6 +125,102 @@ fn node_failed_message(err: &NodeError) -> String {
         | NodeErrorSource::Llm { message, .. }
         | NodeErrorSource::Function { message } => message.clone(),
         other => other.to_string(),
+    }
+}
+
+/// A named, engine-registered schema resolved by `SchemaRef::Registered`
+/// (D-29, RT-FR-19, plan 26-18).
+///
+/// Declared here -- engine-registry machinery, not a core/ports value type
+/// -- mirroring [`RetryPredicateEvaluator`]/[`ErrorHandler`]'s own placement
+/// (D-13, CF-01 precedent): application-layer responsibility, registered
+/// under a name via [`WarEngine::with_output_schema`], resolved by
+/// [`WarGraph::validate`] (an unregistered name is
+/// [`EngineError::UnregisteredOutputSchema`]) before any node runs, and by
+/// `engine::superstep`'s Paladin dispatch (an infallible lookup once
+/// validation has proven the name present) at execution time.
+///
+/// Object-safe (no generic method), so `Arc<dyn StructuredSchema>` is the
+/// registry's value type -- the SAME object-safety-at-the-JSON-level
+/// discipline [`paladin_ports::output::structured_executor_port::StructuredExecutorPort`]
+/// (D-27) already establishes for this phase's structured-output surface.
+pub trait StructuredSchema: Send + Sync {
+    /// Validate `value` against this schema. [`TypedSchema<T>`]'s
+    /// implementation is `serde_json::from_value::<T>` -- FULL typed
+    /// validation by deserialization (D-29, D-30), not the object-safe
+    /// port's partial [`paladin_core::platform::container::structured::shape_check`].
+    fn validate(&self, value: &serde_json::Value) -> Result<(), String>;
+
+    /// The JSON Schema this registration resolves to, for a
+    /// `SchemaRef::Registered(name)` node -- resolved once, before
+    /// dispatch, by `engine::superstep`'s Paladin arm, exactly as a
+    /// `SchemaRef::Inline` node's own schema value is used directly.
+    fn to_json_schema(&self) -> serde_json::Value;
+}
+
+/// A [`StructuredSchema`] whose [`StructuredSchema::validate`] is
+/// `serde_json::from_value::<T>` -- full typed validation by
+/// deserialization (D-29, D-30), not the object-safe port's partial shape
+/// check.
+///
+/// Carries its JSON Schema as a plain `serde_json::Value` supplied at
+/// construction, rather than deriving it via `schemars::schema_for!`:
+/// `schemars` is a direct dependency of the facade crate ONLY (D-26,
+/// ADR-0015's core/ports dependency allowlist) -- `paladin-battalion` (this
+/// crate) does not depend on it, and must not gain the dependency just for
+/// this type. A caller that already has a `schemars`-derived schema (e.g.
+/// the facade, or a test) passes its rendered `serde_json::Value` in
+/// directly.
+pub struct TypedSchema<T> {
+    schema: serde_json::Value,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> TypedSchema<T> {
+    /// Construct a `TypedSchema<T>` from a JSON Schema value. `T`'s own
+    /// `Deserialize` implementation is what [`StructuredSchema::validate`]
+    /// checks a resolved value against -- `schema` itself is never
+    /// introspected or regenerated from `T`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_battalion::engine::{StructuredSchema, TypedSchema};
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Weather {
+    ///     city: String,
+    /// }
+    ///
+    /// let schema = TypedSchema::<Weather>::new(serde_json::json!({
+    ///     "type": "object",
+    ///     "required": ["city"],
+    ///     "properties": {"city": {"type": "string"}}
+    /// }));
+    /// assert!(schema.validate(&serde_json::json!({"city": "Oslo"})).is_ok());
+    /// assert!(schema.validate(&serde_json::json!({"city": 4})).is_err());
+    /// ```
+    pub fn new(schema: serde_json::Value) -> Self {
+        Self {
+            schema,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T> StructuredSchema for TypedSchema<T>
+where
+    T: serde::de::DeserializeOwned + Send + Sync,
+{
+    fn validate(&self, value: &serde_json::Value) -> Result<(), String> {
+        serde_json::from_value::<T>(value.clone())
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn to_json_schema(&self) -> serde_json::Value {
+        self.schema.clone()
     }
 }
 
@@ -1219,6 +1316,57 @@ pub enum EngineError {
         /// Explains the rule and names the offenders.
         reason: String,
     },
+
+    /// `WarGraph::validate_structured_executor_backend` found one or more
+    /// nodes carrying an `output_schema` while the `WarEngine` has no
+    /// structured executor wired via [`WarEngine::with_structured_executor`]
+    /// (D-29, RT-FR-19, plan 26-18). Fail-closed, mirroring
+    /// [`EngineError::CachePolicyWithoutCacheBackend`]'s discipline: a graph
+    /// author who declared a schema and silently got a plain string written
+    /// instead would have no signal.
+    #[error("output_schema without a structured executor: {reason}")]
+    StructuredExecutorMissing {
+        /// Every node declaring an `output_schema`, sorted.
+        nodes: Vec<NodeId>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found a `SchemaRef::Registered(name)` naming a
+    /// schema not present in the engine's schema registry
+    /// ([`WarEngine::with_output_schema`], D-29, RT-FR-19, plan 26-18).
+    /// Carries EVERY offending node/name pairing, pre-formatted.
+    #[error("unregistered output schema: {reason}")]
+    UnregisteredOutputSchema {
+        /// Every offending node/name pairing, pre-formatted.
+        offenders: Vec<String>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found a node with BOTH `output_schema` and a
+    /// non-`PlainOutput` `directive_parser` (D-29, RT-FR-19, plan 26-18) --
+    /// combining them is a Deferred Idea, never a silent precedence rule.
+    /// Carries EVERY offending node, pre-formatted.
+    #[error("output_schema with a structured directive: {reason}")]
+    OutputSchemaWithStructuredDirective {
+        /// Every offending node, pre-formatted.
+        offenders: Vec<String>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
+
+    /// `WarGraph::validate` found a node whose `output_schema` writes to an
+    /// `output_field` declared with a `DispatchRule` that cannot hold a
+    /// JSON value (D-29, RT-FR-19, plan 26-18). Carries EVERY offending
+    /// node/field pairing, pre-formatted.
+    #[error("output_schema field not JSON-compatible: {reason}")]
+    OutputSchemaFieldNotJson {
+        /// Every offending node/field pairing, pre-formatted.
+        offenders: Vec<String>,
+        /// Explains the rule and names the offenders.
+        reason: String,
+    },
 }
 
 /// Options controlling [`WarEngine::resume_with_options`]'s behavior.
@@ -1297,6 +1445,16 @@ pub struct WarEngine<W: WaypointPort> {
     /// sub-namespace is the host's own choice via the `base` passed to
     /// `with_vault`, never something this engine derives on its own.
     vault: Option<ConfinedVault>,
+    /// This engine's structured-output executor (RT-05, RT-FR-19, D-29;
+    /// plan 26-18), wired via [`WarEngine::with_structured_executor`].
+    /// `None` by default: a graph with no `output_schema` anywhere runs
+    /// identically with or without one, and a graph WITH an `output_schema`
+    /// fails validation (`EngineError::StructuredExecutorMissing`) rather
+    /// than silently falling back to writing a plain string -- the same
+    /// fail-closed discipline `node_cache` above already establishes.
+    /// Forwarded wholesale into every `NodeSpec::Battalion` child run, like
+    /// every other engine resource.
+    structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
 }
 
 // --- CF-FR-16, D-21: `+ 'static` is required here (not on the struct
@@ -1325,6 +1483,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             shutdown_grace: std::time::Duration::from_secs(30),
             node_cache: None,
             vault: None,
+            structured_executor: None,
         }
     }
 
@@ -1530,6 +1689,38 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         self
     }
 
+    /// Wire `executor` as this engine's structured-output executor (RT-05,
+    /// RT-FR-19, D-29; plan 26-18), the shape `WarEngine::with_node_cache`
+    /// establishes: a plain `Option<Arc<dyn _>>` field, checked separately
+    /// from [`WarGraph::validate`] via
+    /// [`WarGraph::validate_structured_executor_backend`] since only the
+    /// engine knows whether one is configured.
+    ///
+    /// Without a backend, an `output_schema` anywhere in the graph
+    /// (including inside a `NodeSpec::Battalion` child) fails
+    /// [`WarEngine::start`]/`resume` with
+    /// [`EngineError::StructuredExecutorMissing`] before any node runs.
+    pub fn with_structured_executor(mut self, executor: Arc<dyn StructuredExecutorPort>) -> Self {
+        self.structured_executor = Some(executor);
+        self
+    }
+
+    /// Register `schema` under `name` for `SchemaRef::Registered(name)`
+    /// resolution (D-29, RT-FR-19, plan 26-18), shaped like
+    /// [`WarEngine::with_retry_predicate`]: no reserved-name failure mode,
+    /// infallible, replacing any prior registration under the same name. An
+    /// unregistered `Registered` name still fails [`WarGraph::validate`]
+    /// (and therefore [`WarEngine::start`]/[`WarEngine::resume`]) before any
+    /// node executes -- never a runtime surprise.
+    pub fn with_output_schema(
+        mut self,
+        name: impl Into<String>,
+        schema: Arc<dyn StructuredSchema>,
+    ) -> Self {
+        self.registries.output_schemas.insert(name.into(), schema);
+        self
+    }
+
     /// Wire `vault` as this engine's Vault store, granting `base` to every
     /// node of every run on this engine (Doc 05 RT-04, D-21). Replaces any
     /// previously configured grant.
@@ -1602,6 +1793,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         let registry = self.dispatch_registry.resolver();
         graph.validate(registry, &self.registries)?;
         graph.validate_node_cache_backend(self.node_cache.is_some())?;
+        graph.validate_structured_executor_backend(self.structured_executor.is_some())?;
 
         let battlefield = Battlefield::initialize(graph.schema().clone(), &initial)?;
         battlefield.validate_required()?;
@@ -1632,6 +1824,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.shutdown_grace,
             self.node_cache.clone(),
             self.vault.clone(),
+            self.structured_executor.clone(),
         )
         .await;
         self.trace_dispatcher
@@ -1797,6 +1990,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         let registry = self.dispatch_registry.resolver();
         graph.validate(registry, &self.registries)?;
         graph.validate_node_cache_backend(self.node_cache.is_some())?;
+        graph.validate_structured_executor_backend(self.structured_executor.is_some())?;
 
         self.trace_dispatcher.emit(TraceEvent::RunStarted {
             thread_id: thread.clone(),
@@ -1834,6 +2028,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.shutdown_grace,
             self.node_cache.clone(),
             self.vault.clone(),
+            self.structured_executor.clone(),
         )
         .await;
         self.trace_dispatcher
@@ -1924,6 +2119,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         let registry = self.dispatch_registry.resolver();
         graph.validate(registry, &self.registries)?;
         graph.validate_node_cache_backend(self.node_cache.is_some())?;
+        graph.validate_structured_executor_backend(self.structured_executor.is_some())?;
 
         let now = Utc::now();
         let already_answered: BTreeSet<ParleyId> =
@@ -2169,6 +2365,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             None,
             self.node_cache.clone(),
             self.vault.clone(),
+            self.structured_executor.clone(),
         )
         .await;
         self.trace_dispatcher
@@ -2261,6 +2458,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         let registry = self.dispatch_registry.resolver();
         graph.validate(registry, &self.registries)?;
         graph.validate_node_cache_backend(self.node_cache.is_some())?;
+        graph.validate_structured_executor_backend(self.structured_executor.is_some())?;
 
         // --- HITL-03, D-16: `fork`'s edit is merged through the schema's
         // OWN dispatch rules -- an undeclared field is `EngineError::Battlefield`
@@ -2321,6 +2519,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             None,
             self.node_cache.clone(),
             self.vault.clone(),
+            self.structured_executor.clone(),
         )
         .await;
         self.trace_dispatcher.emit(TraceEvent::RunFinished {

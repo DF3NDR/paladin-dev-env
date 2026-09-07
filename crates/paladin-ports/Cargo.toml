@@ -33,5 +33,14 @@ mime_guess = "2"
 # suppression only in the same commit as the matching MIGRATION.md §9.2 row
 # and `.cargo/semver-checks-allowlist.toml` entry (kept set-equal by CI's
 # `semver` job).
+#
+# X-10.6 deliberate-breaking suppression (D-28, MIGRATION.md §9.2, RT-05, Phase 26).
+# `LlmRequest` gained the additive `response_format: Option<ResponseFormat>` field
+# and is marked `#[non_exhaustive]` -- it has no `Default`, so there is no
+# functional-update site to preserve, and only marking it non-exhaustive keeps the
+# *next* field free. Register/remove this suppression only in the same commit as
+# the matching MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml`
+# entry (kept set-equal by CI's `semver` job).
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
+struct_marked_non_exhaustive = "allow"

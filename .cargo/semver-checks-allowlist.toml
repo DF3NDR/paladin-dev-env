@@ -66,3 +66,10 @@ lint = "constructible_struct_adds_field"
 migration_row = "paladin-ai-core | PaladinResult"
 requirement_id = "FT-FR-17"
 justification = "PaladinResult gained the additive served_by: Option<String> field (serving provider from the FT-05 fallback chain, D-26) with #[serde(default, skip_serializing_if)] so legacy JSON is byte-identical; the struct stays constructible and is deliberately NOT #[non_exhaustive] because cross-crate functional-update syntax is disallowed on non_exhaustive structs -- FT-FR-17's premise that Default still works under that marking does not hold -- so only full struct literals break, and every in-tree one was migrated in the same commit."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-ports | LlmRequest"
+requirement_id = "RT-05"
+justification = "LlmRequest has no Default, so no functional-update site exists to preserve; every downstream literal breaks under either X-10.3 option and only marking it #[non_exhaustive] (option a) makes the next field free."

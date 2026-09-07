@@ -52,21 +52,15 @@
 //! ```rust,no_run
 //! use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
 //! use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-//! use uuid::Uuid;
-//! use std::collections::HashMap;
 //!
 //! async fn basic_completion(llm: &dyn LlmPort) -> Result<String, Box<dyn std::error::Error>> {
-//!     let request = LlmRequest {
-//!         id: Uuid::new_v4(),
-//!         model: "gpt-4".to_string(),
-//!         prompt: PromptItem::new(PromptType::User(UserPrompt {
+//!     let request = LlmRequest::new(
+//!         "gpt-4",
+//!         PromptItem::new(PromptType::User(UserPrompt {
 //!             query: "Explain hexagonal architecture".to_string(),
 //!             context: None,
 //!         })).unwrap(),
-//!         attachments: vec![],
-//!         stream: false,
-//!         metadata: HashMap::new(),
-//!     };
+//!     );
 //!
 //!     let response = llm.generate(request).await?;
 //!     Ok(response.content)
@@ -78,9 +72,7 @@
 //! ```rust,no_run
 //! use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
 //! use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-//! use uuid::Uuid;
 //! use futures::StreamExt;
-//! use std::collections::HashMap;
 //!
 //! async fn stream_completion(llm: &dyn LlmPort) -> Result<(), Box<dyn std::error::Error>> {
 //!     // Check if streaming is supported
@@ -90,17 +82,13 @@
 //!         return Ok(());
 //!     }
 //!
-//!     let request = LlmRequest {
-//!         id: Uuid::new_v4(),
-//!         model: "gpt-4".to_string(),
-//!         prompt: PromptItem::new(PromptType::User(UserPrompt {
+//!     let request = LlmRequest::new(
+//!         "gpt-4",
+//!         PromptItem::new(PromptType::User(UserPrompt {
 //!             query: "Write a story".to_string(),
 //!             context: None,
 //!         })).unwrap(),
-//!         attachments: vec![],
-//!         stream: true,
-//!         metadata: HashMap::new(),
-//!     };
+//!     ).with_stream(true);
 //!
 //!     let mut stream = llm.generate_stream(request).await?;
 //!     // Note: Use pin_mut! or tokio::pin! to pin the stream before iterating
@@ -560,6 +548,41 @@ impl LlmError {
     }
 }
 
+/// A structured-output request hint attached to an [`LlmRequest`] (RT-FR-17, D-28).
+///
+/// `ResponseFormat` tells an adapter that the caller wants its completion constrained
+/// to JSON, optionally against a named JSON Schema. It is a **hint**, not a contract:
+/// an adapter with no native structured-output mode -- Anthropic, as of this writing,
+/// see the per-provider table in the `agent-runtime` user guide (plan 26-21) -- ignores
+/// this field harmlessly. Correctness never depends on native support, because the
+/// caller separately appends a schema-conformance instruction block to the prompt
+/// (D-27's belt-and-braces rule): `response_format` is an optimization a supporting
+/// provider can use, never the only mechanism enforcing shape.
+///
+/// # Non-exhaustive (X-10.2, D-28)
+///
+/// Marked `#[non_exhaustive]` so a future variant (e.g. a provider-specific mode) can
+/// be added without a semver-major bump.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ResponseFormat {
+    /// Constrain the completion to a syntactically valid JSON object, with no schema
+    /// attached.
+    JsonObject,
+    /// Constrain the completion to a JSON object conforming to `schema`.
+    JsonSchema {
+        /// A human-readable name for the schema (required by some providers' native
+        /// JSON-schema modes).
+        name: String,
+        /// The JSON Schema the completion must conform to.
+        schema: serde_json::Value,
+        /// Whether the provider should enforce the schema strictly (rejecting
+        /// additional properties) where it supports doing so.
+        strict: bool,
+    },
+}
+
 /// Request structure for LLM generation operations
 ///
 /// Contains all parameters needed to generate a completion from a language model.
@@ -574,6 +597,16 @@ impl LlmError {
 /// - `attachments`: Additional content items (images, documents) for context
 /// - `stream`: Whether to stream the response incrementally
 /// - `metadata`: Custom key-value pairs for tracking, logging, or provider-specific options
+/// - `response_format`: Optional structured-output hint (see [`ResponseFormat`])
+///
+/// # Construction (X-10.3, D-28)
+///
+/// As of v0.10.0 this struct is `#[non_exhaustive]` and gained the additive
+/// `response_format` field. Construct it through [`LlmRequest::new`] plus the
+/// chainable `with_*` builders (`with_attachments`, `with_stream`, `with_metadata`,
+/// `with_response_format`) -- a full struct literal no longer compiles outside this
+/// crate. This is a one-way decision: `LlmRequest` has no `Default`, so there was no
+/// functional-update escape hatch, and the constructor keeps the *next* field free.
 ///
 /// # Examples
 ///
@@ -582,20 +615,14 @@ impl LlmError {
 /// ```rust
 /// use paladin_ports::output::llm_port::LlmRequest;
 /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-/// use uuid::Uuid;
-/// use std::collections::HashMap;
 ///
-/// let request = LlmRequest {
-///     id: Uuid::new_v4(),
-///     model: "gpt-4".to_string(),
-///     prompt: PromptItem::new(PromptType::User(UserPrompt {
+/// let request = LlmRequest::new(
+///     "gpt-4",
+///     PromptItem::new(PromptType::User(UserPrompt {
 ///         query: "Explain Rust ownership".to_string(),
 ///         context: None,
 ///     })).unwrap(),
-///     attachments: vec![],
-///     stream: false,
-///     metadata: HashMap::new(),
-/// };
+/// );
 /// ```
 ///
 /// ## Request with Metadata
@@ -603,7 +630,6 @@ impl LlmError {
 /// ```rust
 /// use paladin_ports::output::llm_port::LlmRequest;
 /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-/// use uuid::Uuid;
 /// use std::collections::HashMap;
 ///
 /// let mut metadata = HashMap::new();
@@ -611,19 +637,16 @@ impl LlmError {
 /// metadata.insert("session_id".to_string(), "sess456".to_string());
 /// metadata.insert("temperature".to_string(), "0.7".to_string());
 ///
-/// let request = LlmRequest {
-///     id: Uuid::new_v4(),
-///     model: "gpt-4".to_string(),
-///     prompt: PromptItem::new(PromptType::User(UserPrompt {
+/// let request = LlmRequest::new(
+///     "gpt-4",
+///     PromptItem::new(PromptType::User(UserPrompt {
 ///         query: "Analyze this data".to_string(),
 ///         context: None,
 ///     })).unwrap(),
-///     attachments: vec![],
-///     stream: false,
-///     metadata,
-/// };
+/// ).with_metadata(metadata);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LlmRequest {
     /// Unique identifier for request tracking and correlation
     pub id: Uuid,
@@ -638,6 +661,142 @@ pub struct LlmRequest {
     /// Custom metadata for tracking, logging, or provider-specific options
     /// Common keys: "temperature", "max_tokens", "top_p", "user_id"
     pub metadata: HashMap<String, String>,
+    /// Optional structured-output hint for this request (see [`ResponseFormat`]).
+    ///
+    /// `None` by default; absent from a deserialized document also resolves to
+    /// `None` (`#[serde(default)]`), so legacy JSON without this field still
+    /// deserializes.
+    #[serde(default)]
+    pub response_format: Option<ResponseFormat>,
+}
+
+impl LlmRequest {
+    /// Construct a new [`LlmRequest`] with sensible defaults for every field except
+    /// `model` and `prompt`.
+    ///
+    /// Produces a fresh [`Uuid`] (different on every call), no attachments,
+    /// `stream: false`, empty `metadata`, and `response_format: None`. Use the
+    /// chainable `with_*` methods to override any default.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmRequest;
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Hello".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt);
+    ///
+    /// assert_eq!(request.model, "gpt-4");
+    /// assert!(request.attachments.is_empty());
+    /// assert!(!request.stream);
+    /// assert!(request.metadata.is_empty());
+    /// assert!(request.response_format.is_none());
+    /// ```
+    pub fn new(model: impl Into<String>, prompt: PromptItem) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            model: model.into(),
+            prompt,
+            attachments: Vec::new(),
+            stream: false,
+            metadata: HashMap::new(),
+            response_format: None,
+        }
+    }
+
+    /// Attach additional content (images, documents) for multimodal models.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmRequest;
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Describe this image".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4-vision", prompt).with_attachments(vec![]);
+    ///
+    /// assert!(request.attachments.is_empty());
+    /// ```
+    pub fn with_attachments(mut self, attachments: Vec<ContentItem>) -> Self {
+        self.attachments = attachments;
+        self
+    }
+
+    /// Enable or disable streaming for this request.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmRequest;
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Write a story".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt).with_stream(true);
+    ///
+    /// assert!(request.stream);
+    /// ```
+    pub fn with_stream(mut self, stream: bool) -> Self {
+        self.stream = stream;
+        self
+    }
+
+    /// Attach custom metadata (e.g. `"temperature"`, `"user_id"`) to this request.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmRequest;
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    /// use std::collections::HashMap;
+    ///
+    /// let mut metadata = HashMap::new();
+    /// metadata.insert("user_id".to_string(), "user123".to_string());
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Hello".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt).with_metadata(metadata);
+    ///
+    /// assert_eq!(request.metadata.get("user_id"), Some(&"user123".to_string()));
+    /// ```
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Request a structured-output mode from a supporting provider (see
+    /// [`ResponseFormat`]).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{LlmRequest, ResponseFormat};
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Return JSON".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt)
+    ///     .with_response_format(ResponseFormat::JsonObject);
+    ///
+    /// assert_eq!(request.response_format, Some(ResponseFormat::JsonObject));
+    /// ```
+    pub fn with_response_format(mut self, response_format: ResponseFormat) -> Self {
+        self.response_format = Some(response_format);
+        self
+    }
 }
 
 /// Response structure for LLM generation operations
@@ -1029,8 +1188,6 @@ impl Default for ProviderCapabilities {
 /// ```rust,no_run
 /// # use paladin_ports::output::llm_port::{LlmPort, LlmRequest, LlmError};
 /// # use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-/// # use uuid::Uuid;
-/// # use std::collections::HashMap;
 /// # async fn example(llm: &dyn LlmPort) -> Result<(), LlmError> {
 /// // Check provider capabilities
 /// let caps = llm.get_capabilities();
@@ -1044,17 +1201,13 @@ impl Default for ProviderCapabilities {
 /// }
 ///
 /// // Generate completion
-/// let request = LlmRequest {
-///     id: Uuid::new_v4(),
-///     model: "gpt-4".to_string(),
-///     prompt: PromptItem::new(PromptType::User(UserPrompt {
+/// let request = LlmRequest::new(
+///     "gpt-4",
+///     PromptItem::new(PromptType::User(UserPrompt {
 ///         query: "Hello, world!".to_string(),
 ///         context: None,
 ///     })).unwrap(),
-///     attachments: vec![],
-///     stream: false,
-///     metadata: HashMap::new(),
-/// };
+/// );
 ///
 /// let response = llm.generate(request).await?;
 /// println!("Response: {}", response.content);
@@ -1110,21 +1263,15 @@ pub trait LlmPort: Send + Sync {
     /// ```rust,no_run
     /// use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
     /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-    /// use uuid::Uuid;
-    /// use std::collections::HashMap;
     ///
     /// async fn generate_text(llm: &dyn LlmPort) -> Result<String, Box<dyn std::error::Error>> {
-    ///     let request = LlmRequest {
-    ///         id: Uuid::new_v4(),
-    ///         model: "gpt-4".to_string(),
-    ///         prompt: PromptItem::new(PromptType::User(UserPrompt {
+    ///     let request = LlmRequest::new(
+    ///         "gpt-4",
+    ///         PromptItem::new(PromptType::User(UserPrompt {
     ///             query: "Write a haiku about Rust".to_string(),
     ///             context: None,
     ///         })).unwrap(),
-    ///         attachments: vec![],
-    ///         stream: false,
-    ///         metadata: HashMap::new(),
-    ///     };
+    ///     );
     ///
     ///     let response = llm.generate(request).await?;
     ///     Ok(response.content)
@@ -1136,21 +1283,15 @@ pub trait LlmPort: Send + Sync {
     /// ```rust,no_run
     /// use paladin_ports::output::llm_port::{LlmPort, LlmRequest, LlmError};
     /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-    /// use uuid::Uuid;
-    /// use std::collections::HashMap;
     ///
     /// async fn generate_with_retry(llm: &dyn LlmPort) -> Result<String, LlmError> {
-    ///     let request = LlmRequest {
-    ///         id: Uuid::new_v4(),
-    ///         model: "gpt-4".to_string(),
-    ///         prompt: PromptItem::new(PromptType::User(UserPrompt {
+    ///     let request = LlmRequest::new(
+    ///         "gpt-4",
+    ///         PromptItem::new(PromptType::User(UserPrompt {
     ///             query: "Explain async Rust".to_string(),
     ///             context: None,
     ///         })).unwrap(),
-    ///         attachments: vec![],
-    ///         stream: false,
-    ///         metadata: HashMap::new(),
-    ///     };
+    ///     );
     ///
     ///     match llm.generate(request).await {
     ///         Ok(response) => Ok(response.content),
@@ -1211,22 +1352,16 @@ pub trait LlmPort: Send + Sync {
     /// ```rust,no_run
     /// use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
     /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-    /// use uuid::Uuid;
     /// use futures::StreamExt;
-    /// use std::collections::HashMap;
     ///
     /// async fn stream_response(llm: &dyn LlmPort) -> Result<String, Box<dyn std::error::Error>> {
-    ///     let request = LlmRequest {
-    ///         id: Uuid::new_v4(),
-    ///         model: "gpt-4".to_string(),
-    ///         prompt: PromptItem::new(PromptType::User(UserPrompt {
+    ///     let request = LlmRequest::new(
+    ///         "gpt-4",
+    ///         PromptItem::new(PromptType::User(UserPrompt {
     ///             query: "Write a story".to_string(),
     ///             context: None,
     ///         })).unwrap(),
-    ///         attachments: vec![],
-    ///         stream: true,
-    ///         metadata: HashMap::new(),
-    ///     };
+    ///     ).with_stream(true);
     ///
     ///     let mut stream = llm.generate_stream(request).await?;
     ///     let mut complete_response = String::new();

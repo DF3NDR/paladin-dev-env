@@ -423,7 +423,7 @@ build-release: ## Build release version
 .PHONY: build-docker
 build-docker: ## Build Docker image
 	@echo "$(CYAN)Building Docker image...$(NC)"
-	@$(DOCKER) build -f docker/Dockerfile -t $(PROJECT_NAME):latest .
+	@$(DOCKER) build -f Dockerfile -t $(PROJECT_NAME):latest .
 
 .PHONY: docker-build-server
 docker-build-server: ## Build the paladin-server HTTP API image (Dockerfile.server)

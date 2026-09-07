@@ -35,6 +35,13 @@ pub mod guardrail;
 pub mod history;
 pub mod limits;
 pub mod resilience;
+/// Compresses an over-long conversation into a compounding Garrison
+/// summary, degrading to trimming rather than ever failing the run
+/// (Doc 05 RT-FR-08/11/12, D-16).
+pub mod summarization;
+/// Recalls long-term Vault memory into a delimited prompt section on the
+/// first loop iteration, best-effort (Doc 05 RT-FR-13…16, D-25, D-41).
+pub mod vault_recall;
 
 pub use chain::{BeforeOutcome, run_after, run_around_tool, run_before};
 pub use context::{
@@ -48,6 +55,8 @@ pub use guardrail::{
 pub use history::HistoryTrimmer;
 pub use limits::{ModelCallLimit, TokenBudget, ToolCallLimit};
 pub use resilience::{ModelFallbackMiddleware, ModelRetryMiddleware};
+pub use summarization::{SUMMARIZATION_DEGRADED_KEY, SummarizationMiddleware};
+pub use vault_recall::VaultRecallMiddleware;
 
 use crate::application::services::paladin::error::PaladinError;
 use crate::core::platform::container::arsenal::ArmamentCall;

@@ -194,6 +194,108 @@ pub struct PaladinExecutionService {
     default_vault_namespace: Option<Namespace>,
 }
 
+/// D-16: the latest-summary-wins effective-history rule.
+///
+/// `GarrisonPort` has no delete-by-id (`garrison_port.rs:380-491`:
+/// `remember`, `recall_recent`, `search`, `forget_all`, `stats`), so an old
+/// summary a `SummarizationMiddleware` (plan 26-15) has already compounded
+/// past is never removed from the store -- it just sits there, older than
+/// the newest summary. This function is how every reader tolerates that:
+/// given a recalled window in chronological order (oldest first, per
+/// [`paladin_ports::output::garrison_port::GarrisonPort::recall_recent`]'s
+/// own contract), it finds the NEWEST entry with `is_summary == true` and
+/// returns that entry plus every RAW entry logically newer than it. With no
+/// summary in the window, the whole window is the effective history,
+/// unchanged.
+///
+/// # Cutoff is by `summarized_through`, not by the summary's own physical
+/// position (a correctness fix over a naive position-based reading)
+///
+/// `GarrisonPort::remember` always APPENDS at the physical end of the store
+/// -- a summary is therefore always physically the newest thing in the
+/// store the moment it is written, even though the raw entries
+/// `SummarizationMiddleware` chose to keep un-folded (`keep_recent`) were
+/// all inserted BEFORE it. A naive rule of "keep everything at a position
+/// after the summary's own index" would incorrectly drop those kept-raw
+/// entries the very next time this function runs, because they sit BEFORE
+/// the summary in insertion order, not after it.
+///
+/// The fix: the summary's own `metadata["summarized_through"]` names the
+/// newest RAW entry it folds. This function finds THAT entry's position
+/// among the window's raw (non-summary) entries and keeps every raw entry
+/// after it -- regardless of where the summary itself physically sits in
+/// the window. Falls back to the summary's own physical position only when
+/// `summarized_through` is absent or unparseable, or names an entry that
+/// aged out of the recalled window (e.g. a hand-built summary in a test, or
+/// one written by a future producer that does not set the key).
+///
+/// Applied by [`PaladinExecutionService::execute_internal`] at the one place
+/// a recalled window becomes a run's history -- so the trimmer, the
+/// summarizer and the renderer all agree on what "the history" is. Exposed
+/// at `pub(crate)` (rather than a private associated function) so
+/// `middleware::summarization`'s tests can build the exact fixture a real
+/// second run would see, without re-deriving this rule.
+///
+/// # Examples
+///
+/// `pub(crate)`, so this illustrative snippet cannot run as a doctest (a
+/// doctest compiles against the crate's PUBLIC API only) -- see
+/// `effective_history_is_the_newest_summary_plus_newer_raw` in this file's
+/// own `#[cfg(test)]` module for the equivalent, actually-run assertion.
+///
+/// ```ignore
+/// use paladin::application::services::paladin::paladin_execution_service::effective_history;
+/// use paladin_core::platform::container::garrison::{ConversationRole, GarrisonEntry};
+///
+/// let history = vec![
+///     GarrisonEntry::new(ConversationRole::User, "old raw, superseded".to_string()),
+///     GarrisonEntry::summary("condensed older turns".to_string()),
+///     GarrisonEntry::new(ConversationRole::User, "newer raw".to_string()),
+/// ];
+/// let effective = effective_history(history);
+/// assert_eq!(effective.len(), 2);
+/// assert!(effective[0].is_summary);
+/// assert_eq!(effective[1].content, "newer raw");
+/// ```
+pub(crate) fn effective_history(history: Vec<GarrisonEntry>) -> Vec<GarrisonEntry> {
+    let Some(summary_index) = history.iter().rposition(|entry| entry.is_summary) else {
+        return history;
+    };
+    let summary = history[summary_index].clone();
+
+    let summarized_through_id = summary
+        .metadata
+        .get("summarized_through")
+        .and_then(|value| value.as_str())
+        .and_then(|id_str| uuid::Uuid::parse_str(id_str).ok());
+
+    let cutoff_index_among_raw = summarized_through_id.and_then(|id| {
+        history
+            .iter()
+            .position(|entry| !entry.is_summary && entry.id == id)
+    });
+
+    let kept_raw: Vec<GarrisonEntry> = match cutoff_index_among_raw {
+        Some(cutoff) => history
+            .iter()
+            .enumerate()
+            .filter(|(index, entry)| *index > cutoff && !entry.is_summary)
+            .map(|(_, entry)| entry.clone())
+            .collect(),
+        None => history
+            .iter()
+            .enumerate()
+            .filter(|(index, entry)| *index > summary_index && !entry.is_summary)
+            .map(|(_, entry)| entry.clone())
+            .collect(),
+    };
+
+    let mut effective = Vec::with_capacity(1 + kept_raw.len());
+    effective.push(summary);
+    effective.extend(kept_raw);
+    effective
+}
+
 impl PaladinExecutionService {
     /// Creates a new Paladin execution service
     ///
@@ -768,24 +870,22 @@ impl PaladinExecutionService {
         scope: &RunScope,
     ) -> Result<PaladinResult, PaladinError> {
         let execution_id = uuid::Uuid::new_v4();
-        // --- D-21: resolved here (before dispatch) so a future arsenal
-        // wiring (vault tools, plan 26-16+) has a single, already-correct
-        // place to read the run's grant from. Unused today beyond logging
-        // and the `confined_vault` contract itself -- this plan wires
-        // resolution and enforcement, not tool registration.
-        let vault_namespace = scope
-            .vault_namespace
-            .as_ref()
-            .or(self.default_vault_namespace.as_ref())
-            .map(std::string::ToString::to_string);
+        // --- D-21/D-25: resolved here (before dispatch) so the run's
+        // `ModelCallContext` (built inside `execute_internal`) carries the
+        // SAME `ConfinedVault` handle `VaultRecallMiddleware` reads --
+        // exactly one resolution point, per `confined_vault`'s own contract.
+        let confined_vault = self.confined_vault(scope);
         info!(
             "Starting scoped Paladin execution: id={}, name={}, input_len={}, vault_namespace={}",
             execution_id,
             paladin.node.name,
             input.len(),
-            vault_namespace.as_deref().unwrap_or("none")
+            confined_vault
+                .as_ref()
+                .map(|v| v.granted().to_string())
+                .unwrap_or_else(|| "none".to_string())
         );
-        self.execute_bounded(paladin, input, execution_id, heartbeat)
+        self.execute_bounded(paladin, input, execution_id, heartbeat, confined_vault)
             .await
     }
 
@@ -799,12 +899,14 @@ impl PaladinExecutionService {
         input: &str,
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
+        confined_vault: Option<ConfinedVault>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let timeout_duration = Duration::from_secs(paladin.node.max_loops.as_u32() as u64 * 60);
 
         // Wrap execution with timeout
-        let execution_future = self.execute_internal(paladin, input, execution_id, heartbeat);
+        let execution_future =
+            self.execute_internal(paladin, input, execution_id, heartbeat, confined_vault);
 
         match timeout(timeout_duration, execution_future).await {
             Ok(result) => {
@@ -983,6 +1085,7 @@ impl PaladinExecutionService {
         input: &str,
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
+        confined_vault: Option<ConfinedVault>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let mut total_tokens = 0u32;
@@ -1079,8 +1182,17 @@ impl PaladinExecutionService {
         let conversation_history = if let Some(garrison) = &self.garrison {
             let recall_limit = self.recall_limit.unwrap_or(20) as usize;
             let history = garrison.recall_recent(recall_limit).await?;
+            let recalled_count = history.len();
+            // D-16: latest-summary-wins is applied HERE, at the one place a
+            // recalled Garrison window becomes a run's history, so the
+            // trimmer, the summarizer and the renderer all read the same
+            // "effective history" -- see `effective_history`'s own doc for
+            // why old summaries are skipped rather than deleted.
+            let history = effective_history(history);
             debug!(
-                "Retrieved {} messages from garrison: execution_id={}",
+                "Retrieved {} messages from garrison (effective history: {} after D-16's \
+                 latest-summary-wins rule): execution_id={}",
+                recalled_count,
                 history.len(),
                 execution_id
             );
@@ -1098,6 +1210,10 @@ impl PaladinExecutionService {
             paladin,
             PromptAssembly::new(effective_system_prompt.clone(), input, "", vec![], None),
         );
+        // D-21/D-25: the run's Vault grant, resolved once by
+        // `execute_scoped` before dispatch, is set once here and read (never
+        // mutated) by `VaultRecallMiddleware` on loop 0.
+        middleware_cx.vault = confined_vault;
 
         // Execute reasoning loop
         for loop_num in 1..=paladin.node.max_loops.as_u32() {
@@ -2916,6 +3032,75 @@ mod tests {
         let alice = Namespace::parse("user/alice").unwrap();
         let scope = RunScope::default().with_vault_namespace(alice);
         assert!(service.confined_vault(&scope).is_none());
+    }
+
+    // --- Plan 26-15, D-16: effective_history (latest-summary-wins) -------
+
+    fn history_entry(content: &str) -> GarrisonEntry {
+        GarrisonEntry::new(ConversationRole::User, content.to_string())
+    }
+
+    /// Test 1: a recalled window containing raw entries, a summary, then
+    /// more raw entries yields an effective history of [that summary] +
+    /// [the raw entries newer than it]; the older raw entries are skipped,
+    /// and nothing is deleted from the source `Vec` (this function is a
+    /// pure transform, not a store mutation).
+    #[test]
+    fn effective_history_is_the_newest_summary_plus_newer_raw() {
+        let history = vec![
+            history_entry("older raw 1"),
+            history_entry("older raw 2"),
+            GarrisonEntry::summary("condensed older turns".to_string()),
+            history_entry("newer raw 1"),
+            history_entry("newer raw 2"),
+        ];
+
+        let effective = effective_history(history);
+
+        let contents: Vec<&str> = effective.iter().map(|e| e.content.as_str()).collect();
+        assert_eq!(
+            contents,
+            vec!["condensed older turns", "newer raw 1", "newer raw 2"]
+        );
+        assert!(effective[0].is_summary);
+        assert!(!effective[1].is_summary);
+        assert!(!effective[2].is_summary);
+    }
+
+    /// With no summary anywhere in the window, the whole window is the
+    /// effective history, unchanged.
+    #[test]
+    fn effective_history_with_no_summary_is_the_whole_window() {
+        let history = vec![history_entry("a"), history_entry("b"), history_entry("c")];
+        let effective = effective_history(history.clone());
+        let original: Vec<&str> = history.iter().map(|e| e.content.as_str()).collect();
+        let after: Vec<&str> = effective.iter().map(|e| e.content.as_str()).collect();
+        assert_eq!(original, after);
+    }
+
+    /// An OLDER stale summary in the window (one `SummarizationMiddleware`
+    /// has already compounded past) is skipped entirely -- only the NEWEST
+    /// summary, plus raw entries newer than it, survives. `GarrisonPort` has
+    /// no delete-by-id, so this stale-summary shape is expected, not a bug.
+    #[test]
+    fn effective_history_skips_a_stale_older_summary() {
+        let history = vec![
+            GarrisonEntry::summary("stale, superseded summary".to_string()),
+            history_entry("raw between the two summaries"),
+            GarrisonEntry::summary("the newest summary".to_string()),
+            history_entry("newest raw"),
+        ];
+
+        let effective = effective_history(history);
+
+        let contents: Vec<&str> = effective.iter().map(|e| e.content.as_str()).collect();
+        assert_eq!(contents, vec!["the newest summary", "newest raw"]);
+    }
+
+    /// EDGE(RT-03/empty): an empty history is a no-op.
+    #[test]
+    fn effective_history_of_an_empty_window_is_empty() {
+        assert!(effective_history(Vec::new()).is_empty());
     }
 
     /// A bare `ModelCallContext` with no `llm_override`/`retry_policy` set

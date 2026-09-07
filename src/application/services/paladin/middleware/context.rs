@@ -27,6 +27,7 @@ use crate::core::platform::container::garrison::{ConversationRole, GarrisonEntry
 use crate::core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::aegis::RetryPolicy;
 use paladin_ports::output::llm_port::{FinishReason, FunctionCall, LlmPort, TokenUsage};
+use paladin_ports::output::vault_confined::ConfinedVault;
 
 /// Where a middleware-pushed [`PromptSection`] renders relative to the
 /// fixed parts of a [`PromptAssembly`] (D-25's "after retrieved RAG context,
@@ -246,6 +247,13 @@ pub struct ModelCallContext<'p> {
     /// A port-shaping retry policy override read once at the same call
     /// site (`ModelRetryMiddleware`, plan 26-10).
     pub retry_policy: Option<RetryPolicy>,
+    /// The confined Vault handle granted to this run, if any (D-21, D-25).
+    /// `None` means this run has no Vault grant at all -- read by
+    /// `VaultRecallMiddleware`, set exactly once by the service (in
+    /// `execute_internal`, right after this context is constructed) from
+    /// `PaladinExecutionService::confined_vault(scope)`, and never mutated
+    /// by a hook thereafter.
+    pub vault: Option<ConfinedVault>,
     typed_state: HashMap<(String, TypeId), Box<dyn Any + Send + Sync>>,
 }
 
@@ -262,6 +270,7 @@ impl<'p> ModelCallContext<'p> {
             scratch: HashMap::new(),
             llm_override: None,
             retry_policy: None,
+            vault: None,
             typed_state: HashMap::new(),
         }
     }

@@ -41,6 +41,7 @@ pub mod transience;
 pub mod trigger;
 pub mod user;
 pub mod user_group;
+pub mod vault;
 pub mod vision;
 pub mod waypoint;
 pub mod workflow;

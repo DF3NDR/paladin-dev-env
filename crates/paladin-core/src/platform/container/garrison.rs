@@ -591,4 +591,60 @@ mod tests {
         let all = history.get_all();
         assert!(all.is_empty());
     }
+
+    // RT-03 / D-17: `GarrisonEntry.is_summary` under the X-10 treatment.
+
+    #[test]
+    fn existing_constructors_default_is_summary_to_false() {
+        let new_entry = GarrisonEntry::new(ConversationRole::User, "hi".to_string());
+        assert!(!new_entry.is_summary);
+
+        let with_metadata_entry = GarrisonEntry::with_metadata(
+            ConversationRole::User,
+            "hi".to_string(),
+            HashMap::new(),
+        );
+        assert!(!with_metadata_entry.is_summary);
+
+        let with_token_count_entry =
+            GarrisonEntry::with_token_count(ConversationRole::User, "hi".to_string(), 5);
+        assert!(!with_token_count_entry.is_summary);
+    }
+
+    #[test]
+    fn summary_constructor_sets_role_and_flag() {
+        let entry = GarrisonEntry::summary("condensed history".to_string());
+        assert_eq!(entry.role, ConversationRole::System);
+        assert!(entry.is_summary);
+        assert_eq!(entry.content, "condensed history");
+    }
+
+    #[test]
+    fn is_summary_defaults_on_deserialize() {
+        // A JSON document written before this change had no `is_summary` key.
+        let legacy_json = r#"{
+            "id": "5c1a1f0a-6b7b-4f8b-9b0e-6f2b8a2f9e11",
+            "role": "user",
+            "content": "legacy entry",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "metadata": {},
+            "token_count": null
+        }"#;
+        let entry: GarrisonEntry = serde_json::from_str(legacy_json).unwrap();
+        assert!(!entry.is_summary);
+    }
+
+    #[test]
+    fn garrison_entry_round_trips_with_the_new_field() {
+        let entry = GarrisonEntry::summary("compressed".to_string());
+        assert!(entry.is_summary);
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: GarrisonEntry = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.is_summary, entry.is_summary);
+        assert_eq!(deserialized.content, entry.content);
+        assert_eq!(deserialized.role, entry.role);
+        assert_eq!(deserialized.id, entry.id);
+    }
 }

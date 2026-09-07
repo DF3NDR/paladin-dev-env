@@ -21,6 +21,8 @@
 //! - **Vault** (`vault` module): Cross-thread namespaced key/value storage.
 //!   - [`vault::InMemoryVault`] — always available, zero-dependency in-process store.
 //!   - `vault::SqliteVault` — persistent SQLite-backed store (requires feature `sqlite`).
+//!   - [`vault::SemanticVault`] — composes a Sanctum + Embedding port; gives `search` a real
+//!     implementation (ungated).
 //!
 //! ## Feature flags
 //!

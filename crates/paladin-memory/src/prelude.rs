@@ -16,6 +16,7 @@ pub use crate::sanctum::{InMemorySanctum, InMemorySanctumConfig};
 
 // Vault
 pub use crate::vault::InMemoryVault;
+pub use crate::vault::SemanticVault;
 #[cfg(feature = "sqlite")]
 pub use crate::vault::SqliteVault;
 

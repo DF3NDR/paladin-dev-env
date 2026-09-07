@@ -13,7 +13,7 @@
 //! shared put/get/delete/list contract -- it is an adapter-specific
 //! capability assertion. `InMemoryVault` and `SqliteVault` call it (neither
 //! has embeddings); `SemanticVault` does not (it asserts `search` actually
-//! works instead).
+//! works instead, via case 11, `search_returns_scored_records_from_the_store`).
 //!
 //! This module is plain (not `#[cfg(test)]`) so it is reachable from every
 //! adapter's own `#[cfg(test)]` module regardless of which crate that
@@ -241,4 +241,44 @@ pub async fn run_all_shared_clauses(port: &dyn VaultPort) {
 /// call sites that want the trait-object form.
 pub fn as_dyn(port: impl VaultPort + 'static) -> Arc<dyn VaultPort> {
     Arc::new(port)
+}
+
+/// Contract case 11 (search-capable adapters only, plan 26-09): called by
+/// `SemanticVault`, NOT by `InMemoryVault`/`SqliteVault`, which report
+/// `Unsupported` instead -- see [`assert_search_unsupported`].
+///
+/// After putting three records under one namespace, `search` returns
+/// `ScoredVaultRecord`s in descending-score order, each carrying the SAME
+/// value `get` would return for that key -- proving the returned record is
+/// the store's authoritative copy, never a value reconstructed from the
+/// vector backend's own payload (D-24).
+pub async fn search_returns_scored_records_from_the_store(port: &dyn VaultPort) {
+    let ns = Namespace::parse("contract-search-real/ns").unwrap();
+    port.put(&ns, "a", json!("first")).await.unwrap();
+    port.put(&ns, "b", json!("second")).await.unwrap();
+    port.put(&ns, "c", json!("third")).await.unwrap();
+
+    let results = port.search(&ns, "anything", 10).await.unwrap();
+    assert!(!results.is_empty(), "expected at least one scored result");
+
+    for pair in results.windows(2) {
+        assert!(
+            pair[0].score() >= pair[1].score(),
+            "scores must be in descending order"
+        );
+    }
+
+    for scored in &results {
+        let fetched = port
+            .get(&ns, scored.record().key())
+            .await
+            .unwrap()
+            .expect("every scored record's key must still exist in the store");
+        assert_eq!(
+            scored.record(),
+            &fetched,
+            "a scored record's value must be the store's authoritative copy, not a value \
+             reconstructed from the vector backend's own payload"
+        );
+    }
 }

@@ -25,6 +25,27 @@ pub(crate) struct CompatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presence_penalty: Option<f32>,
     pub stream: bool,
+    /// `LlmRequest.response_format` on the wire (RT-FR-17, D-28). Omitted
+    /// entirely when the caller sets no hint, keeping the body byte
+    /// -identical to a pre-0.10 request (X-03).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<CompatResponseFormat>,
+}
+
+/// The provider-agnostic `response_format` hint, compiled down to this
+/// engine's own plain JSON-object wire shape (D-28).
+///
+/// Every preset built on [`super::engine::CompatEngine`] — Kimi, Qwen, Grok,
+/// Ollama and the generic OpenAI-compatible preset — speaks the de-facto
+/// chat-completions dialect without the schema-carrying extension OpenAI
+/// itself offers, so a `ResponseFormat::JsonSchema` request degrades to this
+/// same `{"type":"json_object"}` form rather than being omitted
+/// (EDGE(RT-05/wire shape)): correctness never depends on it, because the
+/// caller also appends the schema-conformance instruction block (D-27).
+#[derive(Debug, Serialize)]
+pub(crate) struct CompatResponseFormat {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
 }
 
 /// A single chat message, on both the request and response paths.

@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
     StreamingResponse, TokenUsage,
 };
 
@@ -132,6 +132,25 @@ struct DeepSeekRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     presence_penalty: Option<f32>,
     stream: bool,
+    /// `LlmRequest.response_format` on the wire (RT-FR-17, D-28). Omitted
+    /// entirely when the caller sets no hint, keeping the body byte
+    /// -identical to a pre-0.10 request (X-03).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<DeepSeekResponseFormat>,
+}
+
+/// The provider-agnostic `response_format` hint, compiled down to
+/// DeepSeek's own plain JSON-object wire shape (D-28).
+///
+/// DeepSeek's chat-completions API supports `{"type":"json_object"}`; it has
+/// no schema-carrying native mode, so a `ResponseFormat::JsonSchema` request
+/// degrades to this same shape rather than being omitted
+/// (EDGE(RT-05/wire shape)). Correctness never depends on it — the caller
+/// also appends the schema-conformance instruction block (D-27).
+#[derive(Debug, Serialize)]
+struct DeepSeekResponseFormat {
+    #[serde(rename = "type")]
+    kind: &'static str,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -337,6 +356,16 @@ impl DeepSeekAdapter {
         let messages = self.convert_prompt_to_messages(&request.prompt)?;
         let params = &request.prompt.node.node.parameters;
 
+        // D-28: any `ResponseFormat` variant degrades to DeepSeek's plain
+        // JSON-object form — see `DeepSeekResponseFormat`'s rustdoc.
+        let response_format =
+            request
+                .response_format
+                .as_ref()
+                .map(|_: &ResponseFormat| DeepSeekResponseFormat {
+                    kind: "json_object",
+                });
+
         Ok(DeepSeekRequest {
             model: request.model.clone(),
             messages,
@@ -346,6 +375,7 @@ impl DeepSeekAdapter {
             frequency_penalty: params.frequency_penalty,
             presence_penalty: params.presence_penalty,
             stream: request.stream,
+            response_format,
         })
     }
 
@@ -1373,6 +1403,73 @@ mod tests {
             calls.load(Ordering::SeqCst),
             4,
             "RateLimitExceeded retry behavior must not regress"
+        );
+    }
+
+    // ── Phase 26 (RT-05, D-28): response_format reaches the wire ──────────
+
+    fn build_response_format_request(response_format: Option<ResponseFormat>) -> LlmRequest {
+        use paladin_core::platform::container::prompt::UserPrompt;
+
+        let request = LlmRequest::new(
+            "deepseek-chat",
+            PromptItem::new(PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }))
+            .unwrap(),
+        );
+        match response_format {
+            Some(format) => request.with_response_format(format),
+            None => request,
+        }
+    }
+
+    #[test]
+    fn deepseek_request_carries_json_object_response_format() {
+        let adapter = test_adapter();
+        let request = build_response_format_request(Some(ResponseFormat::JsonObject));
+
+        let api_request = adapter.build_request(&request).unwrap();
+        let body = serde_json::to_value(&api_request).unwrap();
+
+        assert_eq!(
+            body.get("response_format"),
+            Some(&serde_json::json!({"type": "json_object"}))
+        );
+    }
+
+    #[test]
+    fn deepseek_json_schema_degrades_to_json_object_response_format() {
+        let adapter = test_adapter();
+        let request = build_response_format_request(Some(ResponseFormat::JsonSchema {
+            name: "answer".to_string(),
+            schema: serde_json::json!({"type": "object"}),
+            strict: true,
+        }));
+
+        let api_request = adapter.build_request(&request).unwrap();
+        let body = serde_json::to_value(&api_request).unwrap();
+
+        assert_eq!(
+            body.get("response_format"),
+            Some(&serde_json::json!({"type": "json_object"})),
+            "DeepSeek has no schema-carrying native mode -- every ResponseFormat \
+             variant degrades to the plain JSON-object form (D-28)"
+        );
+    }
+
+    #[test]
+    fn deepseek_request_without_response_format_is_unchanged() {
+        let adapter = test_adapter();
+        let request = build_response_format_request(None);
+
+        let api_request = adapter.build_request(&request).unwrap();
+        let body = serde_json::to_value(&api_request).unwrap();
+
+        assert!(
+            body.as_object().unwrap().get("response_format").is_none(),
+            "absent response_format must not appear on the wire, got: {body:?}"
         );
     }
 }

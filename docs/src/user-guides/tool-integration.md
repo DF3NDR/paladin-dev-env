@@ -928,6 +928,20 @@ Ok(ArmamentResult {
 })
 ```
 
+### 8. Model-Level Structured Output (`response_format`)
+
+The structured `ArmamentResult` output above is about the *shape a tool returns*, not the
+shape the *model itself* is asked to produce. To constrain a model's own completion to JSON
+(with an optional JSON Schema), attach a `ResponseFormat` to the request through
+`LlmRequest::with_response_format` — this is a request-level hint, not an Arsenal/tool
+concept, and it is independent of everything else in this guide.
+
+Native support for `response_format` varies by provider: some adapters put it on the wire as
+a real constrained-decoding mode, and at least one ignores it harmlessly because it has no
+native JSON mode. This guide does not duplicate that per-provider breakdown — see the
+per-provider table in the `agent-runtime` user guide for the authoritative list of which
+adapters honor `response_format` natively and which fall back to prompt-only instructions.
+
 ## Troubleshooting
 
 ### Tool Not Being Called

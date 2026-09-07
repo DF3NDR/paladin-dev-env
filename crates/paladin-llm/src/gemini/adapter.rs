@@ -79,7 +79,7 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptRole, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
     StreamingResponse, TokenUsage,
 };
 
@@ -395,6 +395,21 @@ impl GeminiAdapter {
         }
 
         let params = &request.prompt.node.node.parameters;
+        // RT-FR-17, D-28: `responseMimeType` is set for either
+        // `ResponseFormat` variant; `responseSchema` carries the schema
+        // value only for `JsonSchema`. `ResponseFormat` is
+        // `#[non_exhaustive]`, so a future variant this match has not been
+        // taught still gets the plain `application/json` mime type rather
+        // than silently sending no JSON-mode hint at all
+        // (EDGE(RT-05/wire shape)).
+        let (response_mime_type, response_schema) = match &request.response_format {
+            Some(ResponseFormat::JsonSchema { schema, .. }) => {
+                (Some("application/json".to_string()), Some(schema.clone()))
+            }
+            Some(_) => (Some("application/json".to_string()), None),
+            None => (None, None),
+        };
+
         let generation_config = GeminiGenerationConfig {
             temperature: params.temperature,
             max_output_tokens: params.max_tokens,
@@ -402,11 +417,14 @@ impl GeminiAdapter {
             top_k: None,
             stop_sequences: params.stop_sequences.clone(),
             candidate_count: None,
+            response_mime_type,
+            response_schema,
         };
         let generation_config = if generation_config.temperature.is_some()
             || generation_config.max_output_tokens.is_some()
             || generation_config.top_p.is_some()
             || generation_config.stop_sequences.is_some()
+            || generation_config.response_mime_type.is_some()
         {
             Some(generation_config)
         } else {
@@ -994,6 +1012,18 @@ struct GeminiGenerationConfig {
     stop_sequences: Option<Vec<String>>,
     #[serde(rename = "candidateCount", skip_serializing_if = "Option::is_none")]
     candidate_count: Option<u32>,
+    /// `LlmRequest.response_format`'s native Gemini mapping (RT-FR-17,
+    /// D-28): `"application/json"` whenever the caller set any
+    /// `ResponseFormat` variant. Omitted entirely when the caller sets no
+    /// hint, keeping the body byte-identical to a pre-0.10 request (X-03).
+    #[serde(rename = "responseMimeType", skip_serializing_if = "Option::is_none")]
+    response_mime_type: Option<String>,
+    /// `ResponseFormat::JsonSchema`'s schema value, carried verbatim
+    /// (RT-FR-17, D-28) — Gemini's own schema-carrying native JSON mode.
+    /// Absent for `ResponseFormat::JsonObject` (no schema to carry) and
+    /// absent entirely when the caller sets no hint.
+    #[serde(rename = "responseSchema", skip_serializing_if = "Option::is_none")]
+    response_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1383,6 +1413,94 @@ mod tests {
                 "unexpected key in serialized Gemini request: {key}"
             );
         }
+    }
+
+    // ── Phase 26 (RT-05, D-28): response_format reaches the wire ──────────
+
+    #[test]
+    fn gemini_request_sets_response_mime_type_for_json_object() {
+        let adapter = test_adapter("https://example.invalid");
+        let request = build_request(
+            "gemini-3.6-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        )
+        .with_response_format(ResponseFormat::JsonObject);
+
+        let gemini_request = adapter.build_request(&request).unwrap();
+        let json = serde_json::to_value(&gemini_request).unwrap();
+
+        assert_eq!(
+            json["generationConfig"]["responseMimeType"],
+            "application/json"
+        );
+        assert!(
+            json["generationConfig"]
+                .as_object()
+                .unwrap()
+                .get("responseSchema")
+                .is_none(),
+            "JsonObject carries no schema: {json}"
+        );
+    }
+
+    #[test]
+    fn gemini_request_sets_response_schema_for_json_schema() {
+        let adapter = test_adapter("https://example.invalid");
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {"answer": {"type": "string"}}
+        });
+        let request = build_request(
+            "gemini-3.6-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        )
+        .with_response_format(ResponseFormat::JsonSchema {
+            name: "answer_schema".to_string(),
+            schema: schema.clone(),
+            strict: true,
+        });
+
+        let gemini_request = adapter.build_request(&request).unwrap();
+        let json = serde_json::to_value(&gemini_request).unwrap();
+
+        assert_eq!(
+            json["generationConfig"]["responseMimeType"],
+            "application/json"
+        );
+        assert_eq!(json["generationConfig"]["responseSchema"], schema);
+    }
+
+    #[test]
+    fn gemini_request_without_response_format_is_unchanged() {
+        let adapter = test_adapter("https://example.invalid");
+        let request = build_request(
+            "gemini-3.6-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        );
+
+        let gemini_request = adapter.build_request(&request).unwrap();
+        let json = serde_json::to_value(&gemini_request).unwrap();
+        let generation_config = json["generationConfig"]
+            .as_object()
+            .expect("the default prompt parameters already populate generationConfig");
+
+        assert!(
+            !generation_config.contains_key("responseMimeType"),
+            "absent response_format must not add responseMimeType, got: {json}"
+        );
+        assert!(
+            !generation_config.contains_key("responseSchema"),
+            "absent response_format must not add responseSchema, got: {json}"
+        );
     }
 
     #[test]

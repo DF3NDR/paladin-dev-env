@@ -28,11 +28,13 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
-    TokenUsage,
+    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
+    StreamingResponse, TokenUsage,
 };
 
-use super::types::{CompatMessage, CompatModelsResponse, CompatRequest, CompatResponse};
+use super::types::{
+    CompatMessage, CompatModelsResponse, CompatRequest, CompatResponse, CompatResponseFormat,
+};
 use crate::http_status::map_http_status;
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
 
@@ -441,6 +443,11 @@ impl CompatEngine {
     /// `self.config.request_parameters`, never the provider name or base
     /// URL, so the same mechanism serves the next vendor without editing
     /// this method.
+    ///
+    /// This method backs **five presets** sharing this one engine: Kimi,
+    /// Qwen, Grok, Ollama and the generic OpenAI-compatible preset — a
+    /// change here (e.g. the `response_format` mapping below, D-28) is
+    /// shared by all five, not per-vendor.
     fn build_request(&self, request: &LlmRequest) -> Result<CompatRequest, LlmError> {
         let messages = Self::convert_prompt_to_messages(&request.prompt)?;
         let params = &request.prompt.node.node.parameters;
@@ -478,6 +485,21 @@ impl CompatEngine {
             );
         }
 
+        // D-28: every `ResponseFormat` variant degrades to this engine's
+        // plain JSON-object form — these five presets speak the de-facto
+        // chat-completions dialect without OpenAI's schema-carrying
+        // extension. The field is present whenever the caller asked for
+        // JSON (never omitted, EDGE(RT-05/wire shape)); correctness never
+        // depends on it because the caller also appends the
+        // schema-conformance instruction block (D-27).
+        let response_format =
+            request
+                .response_format
+                .as_ref()
+                .map(|_: &ResponseFormat| CompatResponseFormat {
+                    kind: "json_object",
+                });
+
         Ok(CompatRequest {
             model: request.model.clone(),
             messages,
@@ -487,6 +509,7 @@ impl CompatEngine {
             frequency_penalty,
             presence_penalty,
             stream: request.stream,
+            response_format,
         })
     }
 
@@ -1949,5 +1972,58 @@ mod tests {
         let models = engine.available_models().await;
 
         assert_eq!(models, vec!["fallback-model".to_string()]);
+    }
+
+    // ── Phase 26 (RT-05, D-28): response_format reaches the wire ──────────
+    //
+    // These three tests cover all five presets that share this engine
+    // (Kimi, Qwen, Grok, Ollama, the generic OpenAI-compatible preset) with
+    // one set of cases, per the plan's Test 4/Test 5 split.
+
+    #[tokio::test]
+    async fn compat_engine_request_carries_response_format() {
+        let config = test_config_at("https://example.invalid/v1");
+        let request = build_request("test-model").with_response_format(ResponseFormat::JsonObject);
+
+        let (body, _) = generate_and_capture_body(config, request).await;
+
+        assert_eq!(
+            body.get("response_format"),
+            Some(&json!({"type": "json_object"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_engine_json_schema_degrades_to_json_object() {
+        let config = test_config_at("https://example.invalid/v1");
+        let request =
+            build_request("test-model").with_response_format(ResponseFormat::JsonSchema {
+                name: "answer".to_string(),
+                schema: json!({"type": "object"}),
+                strict: true,
+            });
+
+        let (body, _) = generate_and_capture_body(config, request).await;
+
+        assert_eq!(
+            body.get("response_format"),
+            Some(&json!({"type": "json_object"})),
+            "the compat engine degrades every ResponseFormat variant to the \
+             plain JSON-object form (D-28) -- never to an omitted field"
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_engine_request_without_response_format_is_byte_identical_to_today() {
+        let config = test_config_at("https://example.invalid/v1");
+        let request = build_request("test-model");
+
+        let (body, _) = generate_and_capture_body(config, request).await;
+        let obj = body.as_object().expect("body must be a JSON object");
+
+        assert!(
+            !obj.contains_key("response_format"),
+            "absent response_format must not appear on the wire, got: {obj:?}"
+        );
     }
 }

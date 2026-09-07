@@ -1469,6 +1469,124 @@ pub trait LlmPort: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_core::platform::container::prompt::{PromptType, UserPrompt};
+
+    /// D-28 / RT-FR-17: `LlmRequest::new` sets documented defaults for every
+    /// field except `model` and `prompt`.
+    #[test]
+    fn llm_request_new_sets_documented_defaults() {
+        let prompt = PromptItem::new(PromptType::User(UserPrompt {
+            query: "hi".to_string(),
+            context: None,
+        }))
+        .unwrap();
+        let request = LlmRequest::new("gpt-4", prompt);
+
+        assert_eq!(request.model, "gpt-4");
+        assert!(request.attachments.is_empty());
+        assert!(!request.stream);
+        assert!(request.metadata.is_empty());
+        assert!(request.response_format.is_none());
+    }
+
+    /// D-28: two `new` calls with identical arguments produce different ids.
+    #[test]
+    fn llm_request_new_generates_a_fresh_id_each_call() {
+        let prompt_a = PromptItem::new(PromptType::User(UserPrompt {
+            query: "a".to_string(),
+            context: None,
+        }))
+        .unwrap();
+        let prompt_b = PromptItem::new(PromptType::User(UserPrompt {
+            query: "b".to_string(),
+            context: None,
+        }))
+        .unwrap();
+        let request_a = LlmRequest::new("gpt-4", prompt_a);
+        let request_b = LlmRequest::new("gpt-4", prompt_b);
+
+        assert_ne!(request_a.id, request_b.id);
+    }
+
+    /// D-28: chaining the same `with_*` setter twice replaces rather than
+    /// accumulates -- last write wins.
+    #[test]
+    fn builder_methods_chain_and_last_write_wins() {
+        let prompt = PromptItem::new(PromptType::User(UserPrompt {
+            query: "hi".to_string(),
+            context: None,
+        }))
+        .unwrap();
+        let request = LlmRequest::new("gpt-4", prompt)
+            .with_stream(true)
+            .with_response_format(ResponseFormat::JsonObject)
+            .with_stream(false);
+
+        assert!(!request.stream);
+        assert_eq!(request.response_format, Some(ResponseFormat::JsonObject));
+    }
+
+    /// D-28: a document with no `response_format` key deserializes with
+    /// `response_format: None` (`#[serde(default)]`); a json-schema-shaped
+    /// value round-trips unchanged.
+    #[test]
+    fn response_format_round_trips_through_serde_and_defaults_to_none() {
+        let prompt = PromptItem::new(PromptType::User(UserPrompt {
+            query: "hi".to_string(),
+            context: None,
+        }))
+        .unwrap();
+        let request = LlmRequest::new("gpt-4", prompt);
+        let mut json = serde_json::to_value(&request).unwrap();
+        json.as_object_mut().unwrap().remove("response_format");
+        let deserialized: LlmRequest = serde_json::from_value(json).unwrap();
+        assert!(deserialized.response_format.is_none());
+
+        let format = ResponseFormat::JsonSchema {
+            name: "answer".to_string(),
+            schema: serde_json::json!({"type": "object"}),
+            strict: true,
+        };
+        let json = serde_json::to_value(&format).unwrap();
+        let round_tripped: ResponseFormat = serde_json::from_value(json).unwrap();
+        assert_eq!(format, round_tripped);
+    }
+
+    /// D-28: both `ResponseFormat` variants survive a serde round trip with
+    /// equality.
+    #[test]
+    fn response_format_carries_both_variants() {
+        let json_object = ResponseFormat::JsonObject;
+        let json = serde_json::to_value(&json_object).unwrap();
+        let round_tripped: ResponseFormat = serde_json::from_value(json).unwrap();
+        assert_eq!(json_object, round_tripped);
+
+        let json_schema = ResponseFormat::JsonSchema {
+            name: "answer".to_string(),
+            schema: serde_json::json!({"type": "object", "properties": {}}),
+            strict: false,
+        };
+        let json = serde_json::to_value(&json_schema).unwrap();
+        let round_tripped: ResponseFormat = serde_json::from_value(json).unwrap();
+        assert_eq!(json_schema, round_tripped);
+    }
+
+    /// D-28: compile-time guard for the prohibition -- `ProviderCapabilities`
+    /// is constructed here by exhaustive struct literal, so this test stops
+    /// compiling the moment a field is added to the struct.
+    #[test]
+    fn provider_capabilities_gained_no_field() {
+        let _capabilities = ProviderCapabilities {
+            supports_streaming: true,
+            supports_tool_calling: false,
+            supports_function_calling: false,
+            supports_vision: false,
+            supports_embeddings: false,
+            max_context_tokens: None,
+            supports_system_messages: true,
+            temperature_range: None,
+        };
+    }
 
     #[test]
     fn test_provider_capabilities_default() {

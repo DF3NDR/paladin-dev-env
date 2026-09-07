@@ -294,6 +294,21 @@ impl OutputFormatter {
                 self.style("Timeout", OutputStyle::Error),
                 self.style("✗", OutputStyle::Error)
             ),
+            StopReason::CallLimit => format!(
+                "{} {}",
+                self.style("Call Limit Reached", OutputStyle::Warning),
+                self.style("⚠", OutputStyle::Warning)
+            ),
+            StopReason::TokenBudget => format!(
+                "{} {}",
+                self.style("Token Budget Reached", OutputStyle::Warning),
+                self.style("⚠", OutputStyle::Warning)
+            ),
+            _ => format!(
+                "{} {}",
+                self.style("Stopped", OutputStyle::Warning),
+                self.style("⚠", OutputStyle::Warning)
+            ),
         };
         output.push_str(&format!(
             "  {} Status: {}\n",
@@ -496,6 +511,9 @@ impl OutputFormatter {
                     StopReason::StopWord(_) => ("⚠", OutputStyle::Warning),
                     StopReason::MaxLoops => ("⚠", OutputStyle::Warning),
                     StopReason::Timeout => ("✗", OutputStyle::Error),
+                    StopReason::CallLimit => ("⚠", OutputStyle::Warning),
+                    StopReason::TokenBudget => ("⚠", OutputStyle::Warning),
+                    _ => ("⚠", OutputStyle::Warning),
                 };
                 output.push_str(&format!(
                     "   Status: {} {:?}\n",

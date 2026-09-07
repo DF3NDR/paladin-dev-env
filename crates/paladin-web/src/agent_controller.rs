@@ -152,6 +152,9 @@ fn stop_reason_label(reason: &StopReason) -> &'static str {
         StopReason::StopWord(_) => "stop_word",
         StopReason::Completed => "completed",
         StopReason::Timeout => "timeout",
+        StopReason::CallLimit => "call_limit",
+        StopReason::TokenBudget => "token_budget",
+        _ => "unknown",
     }
 }
 
@@ -1655,6 +1658,10 @@ mod tests {
             "stop_word"
         );
         assert_eq!(stop_reason_label(&StopReason::Timeout), "timeout");
+        // D-07: the two v0.10.0 StopReason variants get their own stable,
+        // snake_case labels, not the wildcard's generic string.
+        assert_eq!(stop_reason_label(&StopReason::CallLimit), "call_limit");
+        assert_eq!(stop_reason_label(&StopReason::TokenBudget), "token_budget");
     }
 
     #[test]

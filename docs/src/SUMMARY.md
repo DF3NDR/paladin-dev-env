@@ -23,6 +23,7 @@
 - [Control Flow: Dynamic Routing & Subgraphs](user-guides/control-flow.md)
 - [Parley & Chronicle: Pause, Resume, History and Graceful Shutdown](user-guides/parley-and-chronicle.md)
 - [Aegis: Retry, Timeout, Error Handlers, Model Fallback and Node Caching](user-guides/fault-tolerance.md)
+- [Agent Runtime: Middleware, Context Management, Vault Memory, Structured Output and the Reasoning Agent](user-guides/agent-runtime.md)
 - [Paladin Configuration](user-guides/paladin-configuration.md)
 - [Memory Management](user-guides/memory-management.md)
 - [Tool Integration](user-guides/tool-integration.md)

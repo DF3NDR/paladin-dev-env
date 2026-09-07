@@ -942,6 +942,19 @@ native JSON mode. This guide does not duplicate that per-provider breakdown — 
 per-provider table in the `agent-runtime` user guide for the authoritative list of which
 adapters honor `response_format` natively and which fall back to prompt-only instructions.
 
+## The Tool-Call Protocol and `InProcessArsenal`
+
+The reachability note above is about LLM-*initiated* tool calls; giving an agent a tool it can
+actually invoke through the reasoning loop is what the [Agent Runtime guide](agent-runtime.md)'s
+prompt-level **tool-call protocol** and `InProcessArsenal` add. `InProcessArsenal` is a
+closure-backed `ArsenalPort` — no MCP server or subprocess required — for registering a Rust
+closure directly as an `Armament`, and `ToolCallProtocolMiddleware` is what makes a shipped
+provider (which never populates `LlmResponse.function_call`, per ADR-0042) actually reach that
+tool: it renders the arsenal's catalogue into the prompt and decodes the model's JSON reply back
+into a synthesized tool call. See the Agent Runtime guide's
+[Tool-Call Protocol](agent-runtime.md#the-tool-call-protocol) section for the full envelope and the
+`reasoning_agent` preset, which wires both together in one call.
+
 ## Troubleshooting
 
 ### Tool Not Being Called

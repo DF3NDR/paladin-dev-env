@@ -263,6 +263,21 @@ garrison:
 
 ---
 
+## Summaries (`is_summary`)
+
+A `GarrisonEntry` can carry `is_summary: true`, marking it as a compressed stand-in for older
+history rather than a raw conversation turn — written by the `SummarizationMiddleware` described
+in the [Agent Runtime guide](agent-runtime.md) once a conversation's history exceeds a configured
+token or message threshold. Summaries **compound**: the middleware builds each new summary from the
+newest existing summary plus the raw entries newer than it, so an unbounded conversation converges
+on one summary plus a bounded raw tail rather than growing forever.
+
+`GarrisonPort` has **no delete-by-id method** (`remember`, `recall_recent`, `search`, `forget_all`
+and `stats` are the whole trait), so old summary entries are never removed from the store — this is
+by design, not an oversight. The effective history a consumer should use is computed by finding the
+*newest* entry with `is_summary == true` in a recalled window and taking that entry plus every raw
+entry newer than it; older summaries remain in the store as historical artifacts, latest-wins.
+
 ## Best Practices
 
 - **Always use `SqliteGarrison` in production** — `InMemoryGarrison` loses all history when

@@ -354,7 +354,12 @@ pub struct ToolCallContext {
     pub loop_index: u32,
     /// Stable identifier for the run this call belongs to.
     pub run_id: Uuid,
-    /// A read-only snapshot of the run's scratch at the time this call was
-    /// dispatched.
+    /// A working copy of the run's scratch, seeded from
+    /// [`ModelCallContext::scratch`] at dispatch time. `around_tool`
+    /// implementations may read and write it freely (Doc 05 D-08); the
+    /// service copies it back into the run's own `ModelCallContext::scratch`
+    /// after the `around_tool` chain returns, so a value written on one
+    /// tool/handoff dispatch is visible on the next -- without ever storing
+    /// counter state on the middleware struct itself (D-03).
     pub scratch: HashMap<String, Value>,
 }

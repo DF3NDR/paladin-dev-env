@@ -1057,14 +1057,19 @@ impl PaladinExecutionService {
                     // --- D-04: around_tool wraps the handoff branch too --
                     // a handoff is a tool call the model made.
                     let call = Self::function_call_to_armament_call(&function_call);
-                    let tool_cx = ToolCallContext {
+                    let mut tool_cx = ToolCallContext {
                         call: call.clone(),
                         kind: ToolCallKind::Handoff,
                         loop_index: middleware_cx.loop_index,
                         run_id: execution_id,
                         scratch: middleware_cx.scratch.clone(),
                     };
-                    let flow = run_around_tool(&self.middleware, &tool_cx).await?;
+                    let flow = run_around_tool(&self.middleware, &mut tool_cx).await?;
+                    // D-08: a stateful around_tool hook (e.g. ToolCallLimit)
+                    // may have written to its working copy -- persist it
+                    // back onto the run's own scratch so the next dispatch
+                    // sees it.
+                    middleware_cx.scratch = tool_cx.scratch;
 
                     match flow {
                         ToolFlow::Deny { reason } => {
@@ -1140,14 +1145,18 @@ impl PaladinExecutionService {
                         }
                         Ok(call) => {
                             // --- D-04: around_tool wraps the Arsenal branch.
-                            let tool_cx = ToolCallContext {
+                            let mut tool_cx = ToolCallContext {
                                 call: call.clone(),
                                 kind: ToolCallKind::Armament,
                                 loop_index: middleware_cx.loop_index,
                                 run_id: execution_id,
                                 scratch: middleware_cx.scratch.clone(),
                             };
-                            let flow = run_around_tool(&self.middleware, &tool_cx).await?;
+                            let flow = run_around_tool(&self.middleware, &mut tool_cx).await?;
+                            // D-08: persist a stateful around_tool hook's
+                            // working-copy mutations back onto the run's
+                            // scratch (see the handoff branch above).
+                            middleware_cx.scratch = tool_cx.scratch;
 
                             match flow {
                                 ToolFlow::Deny { reason } => {
@@ -3852,7 +3861,7 @@ mod middleware_wiring_tests {
 
     #[async_trait]
     impl ExecutionMiddleware for RecordingAroundTool {
-        async fn around_tool(&self, cx: &ToolCallContext) -> Result<ToolFlow, PaladinError> {
+        async fn around_tool(&self, cx: &mut ToolCallContext) -> Result<ToolFlow, PaladinError> {
             self.kinds.lock().unwrap().push(cx.kind);
             Ok(ToolFlow::Allow)
         }
@@ -3869,7 +3878,7 @@ mod middleware_wiring_tests {
 
     #[async_trait]
     impl ExecutionMiddleware for DenyingMiddleware {
-        async fn around_tool(&self, _cx: &ToolCallContext) -> Result<ToolFlow, PaladinError> {
+        async fn around_tool(&self, _cx: &mut ToolCallContext) -> Result<ToolFlow, PaladinError> {
             Ok(ToolFlow::Deny {
                 reason: self.reason.to_string(),
             })
@@ -3887,7 +3896,7 @@ mod middleware_wiring_tests {
 
     #[async_trait]
     impl ExecutionMiddleware for RewritingMiddleware {
-        async fn around_tool(&self, cx: &ToolCallContext) -> Result<ToolFlow, PaladinError> {
+        async fn around_tool(&self, cx: &mut ToolCallContext) -> Result<ToolFlow, PaladinError> {
             Ok(ToolFlow::Rewrite(ArmamentCall::new(
                 self.rewritten_name,
                 cx.call.arguments.clone(),

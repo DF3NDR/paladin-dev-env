@@ -29,12 +29,14 @@
 
 pub mod chain;
 pub mod context;
+pub mod limits;
 
 pub use chain::{BeforeOutcome, run_after, run_around_tool, run_before};
 pub use context::{
     LlmResponseView, ModelCallContext, PromptAssembly, PromptSection, SectionPlacement,
     ToolCallContext, ToolCallKind,
 };
+pub use limits::{ModelCallLimit, TokenBudget, ToolCallLimit};
 
 use crate::application::services::paladin::error::PaladinError;
 use crate::core::platform::container::arsenal::ArmamentCall;
@@ -148,7 +150,14 @@ pub trait ExecutionMiddleware: Send + Sync {
 
     /// Runs once per tool/handoff dispatch, wrapping both the Arsenal
     /// branch and the handoff branch of the reasoning loop.
-    async fn around_tool(&self, cx: &ToolCallContext) -> Result<ToolFlow, PaladinError> {
+    ///
+    /// `cx` is `&mut` (Doc 05 D-08): a per-tool-call middleware like
+    /// `ToolCallLimit` reads and writes its counters through
+    /// [`ToolCallContext::scratch`], which the service copies back into
+    /// the run's own [`ModelCallContext::scratch`] after this hook chain
+    /// returns -- so a counter incremented on call N is visible on call
+    /// N+1, still entirely off the middleware struct (D-03).
+    async fn around_tool(&self, cx: &mut ToolCallContext) -> Result<ToolFlow, PaladinError> {
         let _ = cx;
         Ok(ToolFlow::Allow)
     }

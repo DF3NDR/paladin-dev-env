@@ -93,9 +93,13 @@ pub async fn run_after(
 
 /// Run `chain`'s `around_tool` hooks first-to-last over `cx`, returning the
 /// FIRST non-`Allow` flow, or `Allow` if every middleware allowed the call.
+///
+/// `cx` is `&mut` so a stateful middleware (`ToolCallLimit`, D-08) can read
+/// and write `cx.scratch` across the chain; the caller is responsible for
+/// copying it back into the run's `ModelCallContext::scratch` afterward.
 pub async fn run_around_tool(
     chain: &[Arc<dyn ExecutionMiddleware>],
-    cx: &ToolCallContext,
+    cx: &mut ToolCallContext,
 ) -> Result<ToolFlow, PaladinError> {
     for middleware in chain {
         match middleware.around_tool(cx).await? {

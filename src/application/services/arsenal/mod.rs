@@ -5,3 +5,6 @@
 
 pub mod arsenal_execution_service;
 pub mod arsenal_registry_service;
+pub mod composite_arsenal;
+pub mod in_process_arsenal;
+pub mod vault_tools;

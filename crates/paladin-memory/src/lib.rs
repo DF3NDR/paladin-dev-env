@@ -20,12 +20,13 @@
 //!
 //! - **Vault** (`vault` module): Cross-thread namespaced key/value storage.
 //!   - [`vault::InMemoryVault`] — always available, zero-dependency in-process store.
+//!   - `vault::SqliteVault` — persistent SQLite-backed store (requires feature `sqlite`).
 //!
 //! ## Feature flags
 //!
 //! | Feature              | Enables                                          |
 //! |----------------------|--------------------------------------------------|
-//! | `sqlite`             | `SqliteGarrison` (depends on `sqlx`)             |
+//! | `sqlite`             | `SqliteGarrison`, `SqliteVault` (depends on `sqlx`) |
 //! | `qdrant`             | `QdrantSanctumAdapter` (depends on `qdrant-client`) |
 //! | `content-processing` | `TiktokenCounter`, `TokenCounter`, `TokenCounterFactory` (depends on `tiktoken-rs`) |
 //!

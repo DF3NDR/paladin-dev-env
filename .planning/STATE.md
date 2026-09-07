@@ -5,10 +5,10 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 27
 current_phase_name: Platform API
 status: planning
-stopped_at: Phase 26 complete (verification passed 10/10, code-review fixes merged); Phase 27 ready to discuss and plan
-last_updated: "2026-09-07T16:58:45.505Z"
+stopped_at: Phase 26 complete and UAT-closed (135/135 pass, 0 issues; verification re-verified passed 10/10 after close-out commits); Phase 27 ready to discuss and plan
+last_updated: "2026-09-07T22:47:45.000Z"
 last_activity: 2026-09-07
-last_activity_desc: Phase 26 complete, transitioned to Phase 27
+last_activity_desc: Phase 26 UAT complete (gap G-26-135 fixed, two SUMMARY coverage blocks repaired)
 progress:
   total_phases: 6
   completed_phases: 6

@@ -109,6 +109,28 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 26 complete (2026-09-07)** — agent-runtime-enhancements, the v0.10.0 milestone's
+fifth planned phase: the `ExecutionMiddleware` onion chain on `PaladinExecutionService` with
+`AgentRuntimeConfig` (twelve inert-by-default sub-structs, `build_chain`), the limit / guardrail /
+retry-fallback / history-trimmer / summarization / vault-recall built-ins and a `#[non_exhaustive]`
+`StopReason`; the `LlmRequest` builder with native `response_format` across OpenAI / compat /
+Gemini / DeepSeek; `GarrisonEntry.is_summary` with latest-summary-wins effective history; the Vault
+(`VaultPort`, in-memory / SQLite / semantic adapters under one contract suite, embedded sqlx
+migrations, `ConfinedVault` segment-wise namespace confinement in `paladin-ports`, `RunScope` /
+`execute_scoped`, engine Vault grants on every `NodeContext`, `VaultTools` over `InProcessArsenal`);
+first-class structured output (`StructuredExecutorPort` / `StructuredExecutorExt`, `output_schema`
+on engine nodes with fail-closed validation and graph fingerprint `v6`); the shared LLM conformance
+suite (24/24 cells measured, 0 adapter gaps); the tool-error policy (redact-then-bound
+`format_result` / `format_error`, `PaladinError::ArmamentFailed`, FeedToModel / FailRun with per-tool
+override) plus the opt-in prompt-level tool-call protocol; and the `reasoning_agent` preset. 21 plans,
+verification passed 10/10 (re-verified after a code-review fix pass: CR-01, CR-02, WR-01, WR-03 fixed,
+WR-02 documented, IN-01 open advisory), coverage 89.58 % (floor 82 %), semver 11/11 vs 0.9.0, MSRV
+1.88, `.project/current-exports.txt` regenerated (3057 items — closes the Phase 25 api-surface
+concern). Carried concerns: CI's "Check documentation" step fails on any rustdoc warning and the
+workspace carries ~60 pre-existing ones unrelated to Phase 26 (Phase 26's own were removed);
+Docker-gated tiers (Qdrant `SemanticVault`, live Ollama, Postgres/Redis) are CI/UAT-only; no
+`26-SECURITY.md` yet (security enforcement is on — run `/gsd-secure-phase 26` before advancing).
+
 **Phase 25 complete (2026-09-06)** — node-level-fault-tolerance, the v0.10.0 milestone's
 fourth planned phase: the Aegis policy bundle (a `Transience` taxonomy with table-driven
 `transience()` on `PaladinError`/`LlmError`, structured `NodeError`, `BattalionError::Node`,
@@ -626,8 +648,8 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
   graceful shutdown, minimal thread HTTP endpoints (Doc 03)
 - [x] **FT-01 … FT-06** (✓ Phase 25, 2026-09-06) — Transience taxonomy + structured NodeError, Aegis retry/timeout/error
   handlers, model fallback, node caching (Doc 04)
-- [ ] **RT-01 … RT-06** — Middleware chain + built-ins, context management, Vault, structured
-  output, provider-conformance close-out (Doc 05)
+- [x] **RT-01 … RT-07** (✓ Phase 26, 2026-09-07) — Middleware chain + built-ins, context management, Vault,
+  structured output, provider-conformance close-out, reasoning_agent preset (Doc 05)
 - [ ] **PLAT-01 … PLAT-06** — Background runs, worker pool + queue, parley/streaming integration,
   versioned assistants, schedules + webhooks, API cross-cutting + generated-client gate (Doc 06)
 - [ ] **OBS-01 … OBS-04** — Trace event model + sinks, visualization export, eval harness (Doc 07)
@@ -1599,5 +1621,5 @@ requirements, 86 forward requirements across 16 phases, 60 variant entries acros
 69 warnings, 0 locked decisions, 0 blockers, 11 ADR candidates**)*
 
 ---
-*Last updated: 2026-09-06 after Phase 25 completion (v0.10.0 milestone; next: Phase 26
-agent runtime enhancements).*
+*Last updated: 2026-09-07 after Phase 26 completion (v0.10.0 milestone; next: Phase 27
+platform API).*

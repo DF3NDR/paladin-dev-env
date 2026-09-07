@@ -70,11 +70,15 @@ impl ConfinedVault {
     /// method below — the check happens before `self.inner` is touched,
     /// which is the security property Test 2's zero-inner-call assertion
     /// exists to prove.
-    fn check(&self, _ns: &Namespace) -> Result<(), VaultError> {
-        // RED (plan 26-13 Task 1): deliberately wrong -- allows every call
-        // regardless of grant, so the denial tests fail before the real
-        // segment-wise check below replaces this.
-        Ok(())
+    fn check(&self, ns: &Namespace) -> Result<(), VaultError> {
+        if self.granted.is_prefix_of(ns) {
+            Ok(())
+        } else {
+            Err(VaultError::NamespaceDenied {
+                requested: ns.clone(),
+                granted: self.granted.clone(),
+            })
+        }
     }
 }
 
@@ -255,7 +259,11 @@ mod tests {
                 .expect("search on the grant or a descendant succeeds");
         }
 
-        assert_eq!(inner.calls(), 10, "every call for both namespaces reached the inner port");
+        assert_eq!(
+            inner.calls(),
+            10,
+            "every call for both namespaces reached the inner port"
+        );
     }
 
     // --- Test 2: confined_vault_denies_a_sibling_namespace --------------
@@ -269,10 +277,7 @@ mod tests {
             .get(&alice2(), "k")
             .await
             .expect_err("a sibling namespace must be denied");
-        assert!(matches!(
-            err,
-            VaultError::NamespaceDenied { .. }
-        ));
+        assert!(matches!(err, VaultError::NamespaceDenied { .. }));
         assert_eq!(
             inner.calls(),
             0,

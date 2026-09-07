@@ -139,6 +139,57 @@ above carry their own dated status:
 | Qwen (DashScope) | Live-verified 2026-08-23 (plan 17-21 gap closure): a model-list fetch (162 models at the shipped Singapore endpoint) and a `generate()` round trip both succeeded. See the region-scoping note above `qwen:` for the mandatory override outside the Singapore region. |
 | Ollama | Not applicable — self-hosted, no vendor endpoint to verify. Its live exercise is the Docker Tier 2 suite (UAT test 3), passed on a GitHub Actions runner 2026-08-19. |
 
+### Running against a local Ollama server (RT-FR-22)
+
+Ollama is the only provider in the table above that requires no vendor API key (D-12) — it is
+also the only one you can run entirely on your own machine. Two commands get a model serving
+locally:
+
+```sh
+ollama serve                 # starts the local server (default: http://localhost:11434)
+ollama pull llama3           # pulls the model named in the Ollama config block above
+```
+
+Point Paladin at it with the Ollama configuration block already shown above under
+[LLM Provider](#llm-provider) — `base_url` and `default_model` there are exactly what
+`ollama serve`/`ollama pull` produce by default. To override the base URL without editing
+`config.yml` (a different port, a remote host, a container), set `OLLAMA_BASE_URL`; it follows
+the same environment-variable-overrides-file precedence as every other provider on this page.
+
+A minimal `reasoning_agent` preset call against a local Ollama server, once it is running (the
+exact signature per `26-CONTEXT.md` D-35 — `paladin::presets` and `ReasoningAgent` do not exist
+in the tree yet as of this plan; the runnable, doc-tested version of this snippet arrives with
+the `agent-runtime` user guide, plan 26-21):
+
+```rust,ignore
+use paladin::presets::{reasoning_agent, ReasoningAgentOptions};
+
+// `llm` is any Arc<dyn LlmPort> -- for example the adapter built from the Ollama
+// configuration block above (base_url "http://localhost:11434/v1", model "llama3").
+let agent = reasoning_agent(llm, arsenal, ReasoningAgentOptions::default())?;
+let result = agent.run("What is the capital of France?").await?;
+```
+
+**Verifying the adapter against a real Ollama server is an existing suite, not a new one
+(D-32).** `tests/integration/ollama_docker_test.rs` already is the "ignored-by-default
+integration test gated on an env var" RT-FR-22 asks for: it is `required-features`-gated on
+`integration-tests` + `llm-ollama`, every test in it independently probes `OLLAMA_TEST_URL`
+before doing anything else, and it prints a named `SKIP:` reason and returns early — never
+panics or hangs — when the service is unreachable. Run it with:
+
+```sh
+cargo test --test ollama_docker --features integration-tests,llm-ollama
+```
+
+Locally this will almost always print `SKIP: ...` and pass without exercising anything, because
+`OLLAMA_TEST_URL` is unset by default — that is the intended, documented behavior for a plain
+`cargo test`, not a failure. The suite is exercised for real only in CI's `ollama-integration`
+job (`.github/workflows/ci.yml`, the `ollama-integration` job near line 748), which brings up a
+Docker Compose `ollama-test` service, waits for it to report healthy, pulls `qwen2.5:0.5b`, runs
+this exact suite against it, and separately fails the job if any test took the `SKIP:` path — so
+a green run there is proof the live server was actually exercised, not proof-by-absence. **Do
+not add a second Ollama integration test file** — this is the one, and none should be added.
+
 ### A rejected credential now announces itself
 
 Every provider above except Ollama shares one underlying protocol engine

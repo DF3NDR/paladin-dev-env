@@ -51,6 +51,29 @@
 /// Shared configuration types for LLM providers and request behavior.
 #[allow(missing_docs)]
 pub mod config;
+/// Shared LLM adapter conformance suite (RT-06, D-31): one fixed case list,
+/// instantiated once per adapter via [`llm_conformance_suite!`], so every
+/// provider is measured against the same bar rather than its own
+/// hand-written tests. `#[cfg(test)]`-only, gated on any feature that pulls
+/// in `reqwest` (its own in-file `TrivialAdapter` needs an HTTP client) --
+/// `reqwest`'s implicit same-named feature is suppressed here because
+/// `openai`/etc already reference it via `dep:reqwest` (Cargo's namespaced-
+/// features rule), so this lists every feature that declares that edge.
+#[cfg(all(
+    test,
+    any(
+        feature = "openai",
+        feature = "anthropic",
+        feature = "deepseek",
+        feature = "kimi",
+        feature = "qwen",
+        feature = "grok",
+        feature = "ollama",
+        feature = "openai-compatible",
+        feature = "gemini"
+    )
+))]
+mod conformance;
 /// Error types returned by provider adapters.
 #[allow(missing_docs)]
 pub mod error;

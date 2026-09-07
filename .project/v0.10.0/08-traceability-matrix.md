@@ -27,7 +27,7 @@
 | G-19 | Structured output | RT-FR-17…19 | Schema-constrained + repair + engine field write |
 | G-20 | LLM-driven routing / strategy selection | CF-FR-18, 19 | LlmDecision condition + Commander semantic mode |
 | G-21 | Prebuilt agents & tool-error ergonomics | RT-FR-23, 24 | reasoning_agent preset, tool-error feedback |
-| G-22 | Provider breadth | RT-FR-20…22 | OpenAI-compatible generic, Gemini, local recipe |
+| G-22 | Provider breadth | RT-FR-20…22 | OpenAI-compatible generic, Gemini, local recipe — RT-06 conformance measurement below is `pass` on all 24 cells, zero adapter gaps found (Phase 26, plan 26-14) |
 | G-23 | Background runs + task queue | PLAT-FR-01…07 + PLAT §2.1–2.2 | Queue port, worker pool, streaming |
 | G-24 | Cron + webhooks as API | PLAT-FR-13…15 | incl. SSRF guard |
 | G-25 | Versioned assistants | PLAT-FR-08…12 | Immutable versions, freeze-at-submit, WarGraphDoc |
@@ -39,6 +39,61 @@
 | BUG-02 | Silent stranded node (unreachable node, run reports Completed) | ENG-FR-02a; doc 01 acceptance 2a; overview §7 | Reachability-from-entry validation; worker_template / Route targets / `dynamic_target` exemptions; test-first; pre-release fix, no migration entry |
 | BUG-03 | Cycle-bootstrap starvation (non-entry cycle node fed from outside can never take its first turn, run reports Completed) | ENG-FR-06a; overview §7 | Starvation-release fallback pass + validate-time guard + run-end truthful-outcome check; test-first; pre-release fix, no migration entry |
 | BUG-04 | resume rebuilt the Frontier from scratch, losing pre-crash edge resolutions; a pending join across the crash point is dropped and the run reports Completed | ENG-FR-12a; overview §7 | frontier snapshot persisted on the Waypoint, keyed by edge identity, seeded on resume; shared contract-suite round-trip and pre-BUG-04 compatibility cases on all three backends; test-first; pre-release fix, no migration entry |
+
+### G-22 RT-06 conformance measurement (Phase 26, plan 26-14)
+
+`crates/paladin-llm/src/conformance.rs` defines one `ConformanceFixture` trait plus an
+`llm_conformance_suite!` macro producing a fixed 8-case list, instantiated for the three shipped
+v0.8.0 provider paths (`openai_compatible`, `gemini`, `ollama`). The suite was run as a
+**measurement** against each adapter's real `generate()`/`generate_stream()` path (mockito-backed,
+Tier 1) before any adapter code was touched. Result: **24/24 cells `pass`, zero gaps** — every
+case already passed against the shipped adapters, because Phase 25's D-03 `map_http_status` was
+already correctly wired into all three non-2xx branches. No adapter code required a fix; this
+table is therefore the measurement commit's own record, not a pre/post-fix comparison.
+
+| Case | openai_compatible | gemini | ollama |
+|---|---|---|---|
+| generate + usage extraction | pass | pass | pass |
+| streaming assembles in wire order, terminal stop | pass | pass | pass |
+| stream error before the first chunk | pass | pass | pass |
+| stream error after the first chunk (content preserved) | pass | pass | pass |
+| dedicated 401/404/400/402 mappings | pass | pass | pass |
+| transience by value: 408/429/5xx Transient, 403/422 Permanent | pass | pass | pass |
+| credential never appears in a rendered error | pass | pass | pass |
+| redirect not followed with a credential header | pass | pass | pass |
+
+**Scout's expected gaps vs. what was actually found** (falsifiability check, D-31):
+
+- Expected: "no explicit 429/5xx-by-value case on the Ollama path." **Contradicted as a behavior
+  gap, confirmed as a pre-existing test-coverage gap.** `ollama/adapter.rs`'s own hand-written
+  tests never asserted `LlmError::transience()` by value for 429/5xx — but the underlying
+  behavior was already correct (routed through the shared `map_http_status`/`transience()` since
+  Phase 25). The new `transience_by_value` case now closes the coverage gap directly; no adapter
+  code changed.
+- Expected: "no mid-stream-error case on `openai_compatible`." **Same pattern.** The adapter's own
+  test module had one stream test (`:955`, happy path only); the shared engine already surfaced a
+  typed `LlmError` for a malformed trailing frame while preserving already-yielded content. The
+  new `stream_error_after_the_first_chunk` case closes the coverage gap.
+- Expected: "Gemini's 5xx transience asserted only via `map_error` units." **Same pattern.** No
+  wire-level (mockito) test previously exercised a 5xx through `generate()` end-to-end for Gemini;
+  the unit-level `map_error` coverage was correct, and the new end-to-end case confirms the wire
+  path reaches the same result.
+
+Every "expected gap" was a **test-coverage** gap, not a **behavior** gap — RT-06 is verify-then-fix
+per D-31, and the verification found nothing to fix.
+
+**Ollama recipe / no-second-integration-file decision (D-32, RT-FR-22):** the Ollama recipe in
+`docs/src/getting-started/configuration.md` ("Running against a local Ollama server") documents
+`ollama serve`/`ollama pull`, the existing `ollama:` config block, `OLLAMA_BASE_URL`, and the
+exact `cargo test --test ollama_docker --features integration-tests,llm-ollama` command.
+`tests/integration/ollama_docker_test.rs` — already `required-features`-gated on
+`integration-tests` + `llm-ollama`, already probing `OLLAMA_TEST_URL` and skipping with a printed
+reason, already run in CI's `ollama-integration` job (`ci.yml:748`) — **is** RT-FR-22's
+"ignored-by-default integration test gated on an env var." No second Ollama integration test file
+was created (`ls tests/integration/ | grep -c ollama` is `1`), and none should be: the
+verification pass should not go looking for a file that deliberately does not exist. The live
+Ollama tier is CI-only and was not run locally in this plan (Docker unavailable in this
+devcontainer, D-39).
 
 **Verification protocol (for the post-implementation audit):**
 1. For each row, locate the implementing code + the tests named in the PRD's Test Plan; confirm the acceptance criteria of the owning PRD pass in CI.

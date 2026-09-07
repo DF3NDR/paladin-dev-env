@@ -1,16 +1,91 @@
 //! `HistoryTrimmer`: keeps a run's Garrison history within a model's
 //! context window, without ever splitting an entry or failing the run
 //! (Doc 05 RT-FR-08/10/11/12, D-14, D-15).
+//!
+//! # Limit resolution is a fixed three-step order (D-14)
+//!
+//! `config.model_context_limits.get(model)` -> the constructor's own
+//! `llm_port.get_capabilities().max_context_tokens` -> `config.default_context_tokens`.
+//! The resolved value AND which step produced it are logged at debug --
+//! naming the source is how an operator diagnoses "why did my history get
+//! trimmed at 8192" rather than guessing.
+//!
+//! `llm_port` here is the SERVICE's own configured port, read once per
+//! `before_model` call -- never a per-run override
+//! ([`super::ModelCallContext::llm_override`] is set by port-shaping
+//! middleware such as [`super::ModelFallbackMiddleware`] LATER in the
+//! documented assembly order, so it is never visible to this middleware's
+//! own `before_model` in the same iteration).
+//!
+//! # Trimming is `KeepSystemAndRecent` (D-15)
+//!
+//! The system prompt, retrieved context, current input, accumulated output
+//! and any middleware-pushed [`super::PromptSection`] are the assembly's
+//! *fixed parts* and are never touched. History entries are admitted
+//! newest-first while
+//! `counted(fixed) + Σ counted(kept) + reserve_for_response <= limit`; the
+//! first entry (walking from newest to oldest) that would not fit stops
+//! admission entirely -- an entry is kept whole or dropped whole, never
+//! truncated. If the fixed parts alone (plus the reserve) already exceed
+//! the resolved limit, the history is set empty, a warning is logged
+//! naming the resolved limit and its source, and `before_model` still
+//! returns `Continue` -- the run proceeds; a budget that cannot be met is
+//! never a failure (D-15).
+//!
+//! Stability (identical inputs produce an identical kept set) falls
+//! directly out of the algorithm being a pure function of the fixed parts,
+//! the ordered history, the resolved limit and the reserve, over a
+//! deterministic [`TokenCounterPort`] -- not an accident that needs its own
+//! caching or ordering guard.
+//!
+//! A [`crate::core::platform::container::garrison::GarrisonEntry`] with
+//! `is_summary: true` gets NO special treatment here: this middleware owns
+//! size, not summary semantics. `SummarizationMiddleware` (plan 26-15) owns
+//! which entry is the newest summary; the two plans do not both claim the
+//! same rule.
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use log::{debug, warn};
+
+use crate::application::services::paladin::error::PaladinError;
 use crate::config::agent_runtime::HistoryTrimmerConfig;
+use crate::core::platform::container::garrison::GarrisonEntry;
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::token_counter_port::TokenCounterPort;
 
+use super::{ExecutionMiddleware, MiddlewareFlow, ModelCallContext};
+
+/// Which of D-14's three resolution steps produced a limit -- named so the
+/// debug log can say exactly which one, rather than just the number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LimitSource {
+    /// `config.model_context_limits.get(model)` had an entry.
+    ConfigTable,
+    /// The constructor's `llm_port.get_capabilities().max_context_tokens`
+    /// had a value.
+    ProviderCapabilities,
+    /// Neither of the above -- `config.default_context_tokens`.
+    Default,
+}
+
+impl LimitSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            LimitSource::ConfigTable => "model_context_limits config table",
+            LimitSource::ProviderCapabilities => {
+                "provider capabilities (get_capabilities().max_context_tokens)"
+            }
+            LimitSource::Default => "default_context_tokens",
+        }
+    }
+}
+
 /// Keeps a run's conversation history within a model's context window
 /// (`KeepSystemAndRecent`, D-15), resolving the context-token limit through
-/// the documented three-step order (D-14).
+/// the documented three-step order (D-14). See the module docs for the
+/// full contract.
 pub struct HistoryTrimmer {
     config: HistoryTrimmerConfig,
     counter: Arc<dyn TokenCounterPort>,
@@ -33,6 +108,93 @@ impl HistoryTrimmer {
             counter,
             llm_port,
         }
+    }
+
+    /// D-14's three-step resolution order, returning both the resolved
+    /// limit and which step produced it.
+    fn resolve_limit(&self, model: &str) -> (u32, LimitSource) {
+        if let Some(&limit) = self.config.model_context_limits.get(model) {
+            return (limit, LimitSource::ConfigTable);
+        }
+        if let Some(max_context_tokens) = self.llm_port.get_capabilities().max_context_tokens {
+            return (max_context_tokens, LimitSource::ProviderCapabilities);
+        }
+        (self.config.default_context_tokens, LimitSource::Default)
+    }
+
+    /// Sum of `counter.count(_, model)` over every fixed (non-history) part
+    /// of `assembly`: the system prompt, the retrieved context (if any),
+    /// the current input, the accumulated output, and every pushed
+    /// [`super::PromptSection`]'s heading and body.
+    fn count_fixed_parts(&self, assembly: &super::PromptAssembly, model: &str) -> u32 {
+        let mut total = self.counter.count(&assembly.system, model);
+        if let Some(context) = assembly.retrieved_context.as_deref() {
+            total += self.counter.count(context, model);
+        }
+        total += self.counter.count(&assembly.input, model);
+        total += self.counter.count(&assembly.accumulated_output, model);
+        for section in &assembly.sections {
+            total += self.counter.count(&section.heading, model);
+            total += self.counter.count(&section.body, model);
+        }
+        total
+    }
+}
+
+#[async_trait]
+impl ExecutionMiddleware for HistoryTrimmer {
+    async fn before_model(
+        &self,
+        cx: &mut ModelCallContext<'_>,
+    ) -> Result<MiddlewareFlow, PaladinError> {
+        if !self.config.enabled {
+            return Ok(MiddlewareFlow::Continue);
+        }
+
+        let model = cx.paladin().node.model.clone();
+        let (limit, source) = self.resolve_limit(&model);
+        let budget = limit.saturating_sub(self.config.reserve_for_response);
+        debug!(
+            "history_trimmer: resolved context limit {limit} tokens for model '{model}' \
+             (source: {}); reserve_for_response={}, budget for fixed+history={budget}",
+            source.as_str(),
+            self.config.reserve_for_response
+        );
+
+        let fixed_tokens = self.count_fixed_parts(&cx.assembly, &model);
+
+        if fixed_tokens > budget {
+            warn!(
+                "history_trimmer: fixed prompt parts ({fixed_tokens} tokens) already exceed the \
+                 resolved budget ({budget} tokens = limit {limit} minus \
+                 reserve_for_response {}) -- history for this iteration is empty, run proceeds",
+                self.config.reserve_for_response
+            );
+            cx.assembly.history.clear();
+            return Ok(MiddlewareFlow::Continue);
+        }
+
+        let mut remaining = budget - fixed_tokens;
+        let mut kept_newest_first: Vec<GarrisonEntry> = Vec::new();
+        for entry in cx.assembly.history.iter().rev() {
+            let entry_tokens = self.counter.count(&entry.content, &model);
+            if entry_tokens > remaining {
+                // Newest-first admission stops at the first entry that does
+                // not fit -- kept whole or dropped whole, never truncated
+                // (D-15).
+                break;
+            }
+            remaining -= entry_tokens;
+            kept_newest_first.push(entry.clone());
+        }
+        kept_newest_first.reverse();
+        cx.assembly.history = kept_newest_first;
+
+        Ok(MiddlewareFlow::Continue)
+    }
+
+    fn name(&self) -> &str {
+        "history_trimmer"
     }
 }
 

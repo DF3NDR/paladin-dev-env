@@ -82,6 +82,19 @@ table is therefore the measurement commit's own record, not a pre/post-fix compa
 Every "expected gap" was a **test-coverage** gap, not a **behavior** gap — RT-06 is verify-then-fix
 per D-31, and the verification found nothing to fix.
 
+**Ollama recipe / no-second-integration-file decision (D-32, RT-FR-22):** the Ollama recipe in
+`docs/src/getting-started/configuration.md` ("Running against a local Ollama server") documents
+`ollama serve`/`ollama pull`, the existing `ollama:` config block, `OLLAMA_BASE_URL`, and the
+exact `cargo test --test ollama_docker --features integration-tests,llm-ollama` command.
+`tests/integration/ollama_docker_test.rs` — already `required-features`-gated on
+`integration-tests` + `llm-ollama`, already probing `OLLAMA_TEST_URL` and skipping with a printed
+reason, already run in CI's `ollama-integration` job (`ci.yml:748`) — **is** RT-FR-22's
+"ignored-by-default integration test gated on an env var." No second Ollama integration test file
+was created (`ls tests/integration/ | grep -c ollama` is `1`), and none should be: the
+verification pass should not go looking for a file that deliberately does not exist. The live
+Ollama tier is CI-only and was not run locally in this plan (Docker unavailable in this
+devcontainer, D-39).
+
 **Verification protocol (for the post-implementation audit):**
 1. For each row, locate the implementing code + the tests named in the PRD's Test Plan; confirm the acceptance criteria of the owning PRD pass in CI.
 2. Confirm cross-cutting X-01…X-09 per epic (spot-check dependency directions with `cargo tree` / import review; coverage report ≥ 82%; clippy clean).

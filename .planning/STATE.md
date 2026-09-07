@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 26
 current_phase_name: Agent Runtime Enhancements
-status: planning
+status: executing
 stopped_at: Phase 26 context gathered
-last_updated: "2026-09-06T23:48:34.969Z"
+last_updated: "2026-09-07T01:34:09.377Z"
 last_activity: 2026-09-06
 last_activity_desc: Phase 25 complete, transitioned to Phase 26
 progress:
   total_phases: 6
   completed_phases: 5
-  total_plans: 64
+  total_plans: 85
   completed_plans: 64
 ---
 
@@ -53,7 +53,7 @@ names. See MILESTONES.md.
 
 Phase: 26 — Agent Runtime Enhancements
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-06 — Phase 25 complete, transitioned to Phase 26
 
 ## Performance Metrics

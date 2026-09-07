@@ -510,26 +510,67 @@ Plans:
 **Plans**: 21 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 26-01-PLAN.md — Tracer: the `ExecutionMiddleware` chain end-to-end (RT-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 26-02-PLAN.md — `AgentRuntimeConfig`: twelve X-09 sub-structs, inert by default (RT-02)
 - [ ] 26-03-PLAN.md — `LlmRequest` builder + `ResponseFormat` + 37-site migration (RT-05)
 - [ ] 26-04-PLAN.md — Vault core types, `VaultPort`, `InMemoryVault`, contract suite (RT-04)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 26-05-PLAN.md — `StopReason` X-10 treatment + the three limit middlewares (RT-02)
 - [ ] 26-06-PLAN.md — Native `response_format` in OpenAI / compat / Gemini / DeepSeek (RT-05)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 26-07-PLAN.md — `GarrisonEntry.is_summary` + one embedded migrator + `002` (RT-03)
 - [ ] 26-08-PLAN.md — `Guardrail` middleware + `PaladinError::GuardrailTripped` (RT-02)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 26-09-PLAN.md — `SqliteVault` + `003` + `SemanticVault` under the contract suite (RT-04)
 - [ ] 26-10-PLAN.md — Retry/fallback port-shaping middleware + `RetryPredicate::admits` (RT-02)
-- [ ] 26-11-PLAN.md — `TokenCounterPort`, its adapters, and `HistoryTrimmer` (RT-03)
 - [ ] 26-12-PLAN.md — Structured core/ports machinery + the `extract_json` lift (RT-05)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 26-11-PLAN.md — `TokenCounterPort`, its adapters, and `HistoryTrimmer` (RT-03)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 26-13-PLAN.md — `ConfinedVault`, `RunScope`, `execute_scoped`, engine vault wiring (RT-04)
 - [ ] 26-14-PLAN.md — Shared conformance suite, measurement first, Ollama recipe (RT-06)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [ ] 26-15-PLAN.md — `SummarizationMiddleware` + `VaultRecallMiddleware` (RT-03, RT-04)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
 - [ ] 26-16-PLAN.md — `InProcessArsenal`, composite, `VaultTools`, confinement attack test (RT-04)
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
 - [ ] 26-17-PLAN.md — `StructuredExecutorPort` impl + `StructuredExecutorExt` (RT-05)
+
+**Wave 11** *(blocked on Wave 10 completion)*
+
 - [ ] 26-18-PLAN.md — Engine `output_schema`, schema registry, fingerprint `v6` (RT-05)
+
+**Wave 12** *(blocked on Wave 11 completion)*
+
 - [ ] 26-19-PLAN.md — Tool-call protocol, tool-error policy, corrected M-B-03 (RT-07)
+
+**Wave 13** *(blocked on Wave 12 completion)*
+
 - [ ] 26-20-PLAN.md — `reasoning_agent` preset, `build_chain`, the ≤15-line example (RT-07, RT-02)
+
+**Wave 14** *(blocked on Wave 13 completion)*
+
 - [ ] 26-21-PLAN.md — Guide, `MIGRATION.md` sweep, api-surface regen, gate evidence (all)
 
 ### Phase 27: Platform API

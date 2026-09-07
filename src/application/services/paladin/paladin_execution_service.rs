@@ -46,6 +46,8 @@
 //! # }
 //! ```
 
+use crate::application::services::arsenal::composite_arsenal::CompositeArsenalPort;
+use crate::application::services::arsenal::vault_tools::VaultTools;
 use crate::application::services::paladin::error::PaladinError;
 use crate::application::services::paladin::handoff_service::HandoffService;
 use crate::application::services::paladin::middleware::{
@@ -192,6 +194,15 @@ pub struct PaladinExecutionService {
     /// [`PaladinExecutionService::confined_vault`] for the full resolution
     /// order.
     default_vault_namespace: Option<Namespace>,
+
+    /// Whether the built-in `vault_get`/`vault_put` Armaments are opted
+    /// into every run of this service (Doc 05 RT-04, D-22). `false` by
+    /// default -- the PRD requires this to be opt-in, never on by default.
+    /// Installed via [`PaladinExecutionService::enable_vault_tools`]. Has
+    /// no effect on a run that resolves to no Vault grant (see
+    /// [`PaladinExecutionService::confined_vault`]): a run with no grant
+    /// never sees the vault tools listed, regardless of this flag.
+    vault_tools_enabled: bool,
 }
 
 /// D-16: the latest-summary-wins effective-history rule.
@@ -351,6 +362,7 @@ impl PaladinExecutionService {
             recall_limit: None,
             vault: None,
             default_vault_namespace: None,
+            vault_tools_enabled: false,
         }
     }
 
@@ -457,6 +469,79 @@ impl PaladinExecutionService {
             .clone()
             .or_else(|| self.default_vault_namespace.clone())?;
         Some(ConfinedVault::new(vault, namespace))
+    }
+
+    /// Opts every run of this service into the built-in `vault_get`/
+    /// `vault_put` Armaments (Doc 05 RT-04, D-22) -- **off by default**,
+    /// matching the PRD's opt-in requirement (`VaultToolsConfig.enabled` is
+    /// `false` out of the box too; a config-driven caller should call this
+    /// method when that flag is `true`).
+    ///
+    /// When a run resolves to a Vault grant (see
+    /// [`PaladinExecutionService::confined_vault`]), the effective arsenal
+    /// for that run becomes a [`CompositeArsenalPort`] of this service's
+    /// configured arsenal (if any, via [`PaladinExecutionService::new`])
+    /// and a fresh [`VaultTools`] built from that run's own
+    /// [`ConfinedVault`] -- so the tools reach only that run's own granted
+    /// subtree, never another run's. When a run resolves to **no** grant,
+    /// this flag has no effect at all: the vault tools are not listed and
+    /// not reachable for that run, exactly as if this method were never
+    /// called (D-21's "no grant means denied, never root", extended to
+    /// tool visibility itself).
+    ///
+    /// # HTTP-served agents never reach this (ADR-0039)
+    ///
+    /// Agents served through the HTTP service-host topology
+    /// (`crates/paladin-web/src/agent_registry.rs`,
+    /// `src/bin/paladin-server.rs`) carry no Arsenal at all -- ADR-0039
+    /// records this as a permanent property of that topology, not a gap to
+    /// close. Enabling vault tools on a service has no observable effect
+    /// over `/v1/agents/*`: there is no Arsenal for a composite to be
+    /// installed into. This is stated here, not worked around -- no
+    /// HTTP-specific code path is added to give an HTTP-served agent an
+    /// Arsenal it otherwise would not have.
+    ///
+    /// # Returns
+    ///
+    /// Returns self for method chaining.
+    pub fn enable_vault_tools(mut self) -> Self {
+        info!("Enabling built-in vault_get/vault_put Armaments (opt-in, D-22)");
+        self.vault_tools_enabled = true;
+        self
+    }
+
+    /// Resolves the [`ArsenalPort`] a run should actually dispatch tool
+    /// calls through, applying [`PaladinExecutionService::enable_vault_tools`]'s
+    /// opt-in composition on top of this service's configured arsenal.
+    ///
+    /// - Vault tools disabled, or the run has no grant: returns this
+    ///   service's configured arsenal unchanged (`None` if none was
+    ///   configured). A run with no grant sees no vault tools even when
+    ///   [`Self::enable_vault_tools`] was called (D-21).
+    /// - Vault tools enabled AND the run has a grant: returns a
+    ///   [`CompositeArsenalPort`] of the configured arsenal (if any) plus a
+    ///   fresh [`VaultTools`] scoped to that run's own [`ConfinedVault`].
+    fn effective_arsenal(
+        &self,
+        confined_vault: Option<&ConfinedVault>,
+    ) -> Option<Arc<dyn ArsenalPort>> {
+        if !self.vault_tools_enabled {
+            return self.arsenal.clone();
+        }
+
+        let Some(confined) = confined_vault else {
+            // No grant -- the flag has no effect for this run (D-21).
+            return self.arsenal.clone();
+        };
+
+        let vault_tools: Arc<dyn ArsenalPort> = Arc::new(VaultTools::new(confined.clone()));
+        match &self.arsenal {
+            Some(existing) => Some(Arc::new(CompositeArsenalPort::new(vec![
+                existing.clone(),
+                vault_tools,
+            ]))),
+            None => Some(vault_tools),
+        }
     }
 
     /// Sets the memory extraction service for storing important information
@@ -1210,6 +1295,12 @@ impl PaladinExecutionService {
             paladin,
             PromptAssembly::new(effective_system_prompt.clone(), input, "", vec![], None),
         );
+        // D-22: resolved BEFORE `confined_vault` is moved into
+        // `middleware_cx.vault` below, from a clone of the same handle --
+        // so the tool-call branch and `VaultRecallMiddleware` observe the
+        // exact same grant for this run.
+        let effective_arsenal = self.effective_arsenal(confined_vault.as_ref());
+
         // D-21/D-25: the run's Vault grant, resolved once by
         // `execute_scoped` before dispatch, is set once here and read (never
         // mutated) by `VaultRecallMiddleware` on loop 0.
@@ -1440,7 +1531,7 @@ impl PaladinExecutionService {
                             }
                         }
                     }
-                } else if let Some(ref arsenal) = self.arsenal {
+                } else if let Some(ref arsenal) = effective_arsenal {
                     // Regular tool execution (not a handoff)
                     debug!(
                         "Tool call detected: id={}, tool={}, loop={}",
@@ -3032,6 +3123,126 @@ mod tests {
         let alice = Namespace::parse("user/alice").unwrap();
         let scope = RunScope::default().with_vault_namespace(alice);
         assert!(service.confined_vault(&scope).is_none());
+    }
+
+    // --- Plan 26-16, D-22: enable_vault_tools / effective_arsenal ---------
+
+    /// Test 6 (service level): a run with no grant sees no vault tools at
+    /// all, even with `enable_vault_tools()` called -- the flag has no
+    /// effect for a run that resolves to no grant (D-21).
+    #[tokio::test]
+    async fn vault_tools_are_not_listed_without_a_grant() {
+        let vault: Arc<dyn VaultPort> = Arc::new(paladin_memory::vault::InMemoryVault::new());
+        let service = PaladinExecutionService::new(
+            Arc::new(CountingLlmPort::default()),
+            test_circuit_breaker(),
+            None,
+            None,
+        )
+        .with_vault(vault, None)
+        .enable_vault_tools();
+
+        let confined = service.confined_vault(&RunScope::default());
+        assert!(
+            confined.is_none(),
+            "no service default and no scope namespace must resolve to no grant"
+        );
+
+        let effective = service.effective_arsenal(confined.as_ref());
+        assert!(
+            effective.is_none(),
+            "with no grant, the vault tools must not be listed even though enable_vault_tools() was called"
+        );
+    }
+
+    /// Test 7: without `enable_vault_tools()`, the tools are absent even
+    /// when a vault and a grant are both configured.
+    #[tokio::test]
+    async fn vault_tools_are_opt_in() {
+        let vault: Arc<dyn VaultPort> = Arc::new(paladin_memory::vault::InMemoryVault::new());
+        let alice = Namespace::parse("user/alice").unwrap();
+        let service = PaladinExecutionService::new(
+            Arc::new(CountingLlmPort::default()),
+            test_circuit_breaker(),
+            None,
+            None,
+        )
+        .with_vault(vault, Some(alice));
+        // Deliberately NOT calling enable_vault_tools().
+
+        let confined = service
+            .confined_vault(&RunScope::default())
+            .expect("the service default namespace must resolve to a grant");
+
+        let effective = service.effective_arsenal(Some(&confined));
+        assert!(
+            effective.is_none(),
+            "vault tools must be absent without enable_vault_tools(), even with a vault \
+             and a grant both configured"
+        );
+    }
+
+    /// Test 8: with an existing arsenal already configured, enabling vault
+    /// tools produces a composite listing both sets, and the pre-existing
+    /// tool still invokes correctly through the composite.
+    #[tokio::test]
+    async fn enable_vault_tools_composes_with_an_existing_arsenal() {
+        use crate::application::services::arsenal::in_process_arsenal::InProcessArsenal;
+        use crate::core::platform::container::arsenal::Armament;
+
+        let vault: Arc<dyn VaultPort> = Arc::new(paladin_memory::vault::InMemoryVault::new());
+        let alice = Namespace::parse("user/alice").unwrap();
+
+        let existing: Arc<dyn ArsenalPort> = Arc::new(InProcessArsenal::new().with_tool(
+            Armament {
+                name: "web_search".to_string(),
+                description: "Searches the web".to_string(),
+                parameters: serde_json::json!({"type": "object"}),
+                required_params: vec![],
+            },
+            |_args| async move { Ok(serde_json::json!({"results": []})) },
+        ));
+
+        let service = PaladinExecutionService::new(
+            Arc::new(CountingLlmPort::default()),
+            test_circuit_breaker(),
+            None,
+            Some(existing),
+        )
+        .with_vault(vault, Some(alice))
+        .enable_vault_tools();
+
+        let confined = service
+            .confined_vault(&RunScope::default())
+            .expect("the service default namespace must resolve to a grant");
+        let effective = service
+            .effective_arsenal(Some(&confined))
+            .expect("vault tools enabled + a grant must produce a composite arsenal");
+
+        let names: std::collections::HashSet<String> = effective
+            .list_armaments()
+            .await
+            .into_iter()
+            .map(|a| a.name)
+            .collect();
+        assert!(
+            names.contains("web_search"),
+            "the pre-existing tool must still be listed"
+        );
+        assert!(
+            names.contains("vault_get"),
+            "vault_get must be listed once enabled"
+        );
+        assert!(
+            names.contains("vault_put"),
+            "vault_put must be listed once enabled"
+        );
+
+        let result = effective
+            .invoke(ArmamentCall::new("web_search", HashMap::new()))
+            .await
+            .expect("the pre-existing tool must still invoke correctly through the composite");
+        assert_eq!(result.output, Some(serde_json::json!({"results": []})));
     }
 
     // --- Plan 26-15, D-16: effective_history (latest-summary-wins) -------

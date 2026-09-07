@@ -1,5 +1,7 @@
 // ── Sub-modules ────────────────────────────────────────────────────────────────
 #[allow(missing_docs)]
+pub mod agent_runtime;
+#[allow(missing_docs)]
 pub mod agents;
 #[allow(missing_docs)]
 pub mod arsenal;
@@ -37,6 +39,7 @@ pub mod web_server;
 // ── Re-exports ─────────────────────────────────────────────────────────────────
 // Kept for backwards compatibility — consumers can write
 // `use paladin::config::XxxConfig;` without going through a sub-module path.
+pub use crate::config::agent_runtime::AgentRuntimeConfig;
 pub use crate::config::herald::{
     HeraldConfig, JsonHeraldConfig, MarkdownHeraldConfig, TableHeraldConfig,
 };

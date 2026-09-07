@@ -279,6 +279,7 @@ mod tests {
             agents: Vec::new(),
             timeouts: None,
             http: None,
+            agent_runtime: crate::config::AgentRuntimeConfig::default(),
         }
     }
 

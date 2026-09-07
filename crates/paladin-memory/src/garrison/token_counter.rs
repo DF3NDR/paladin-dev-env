@@ -4,6 +4,7 @@
 //! Uses tiktoken for OpenAI models and provides a trait for extensibility.
 
 use paladin_ports::output::garrison_port::GarrisonError;
+use paladin_ports::output::token_counter_port::TokenCounterPort;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use tiktoken_rs::{CoreBPE, get_bpe_from_model};
@@ -125,6 +126,34 @@ impl TokenCounter for TiktokenCounter {
 
     fn model_name(&self) -> &str {
         &self.model_name
+    }
+}
+
+/// `impl TokenCounterPort for TiktokenCounter` (Doc 05 RT-FR-10, D-13).
+///
+/// `count` deliberately does **not** re-resolve `model` through
+/// `get_bpe_from_model` -- the encoding this instance uses was already
+/// resolved, fallibly, at [`TiktokenCounter::new`]. `count` delegates to that
+/// already-loaded encoding regardless of what `model` is passed here, which
+/// is what makes the port method infallible: an unrecognised `model` string
+/// at count-time is never looked up, so it can never produce the
+/// `TokenizationError` [`TiktokenCounter::new`] can.
+impl TokenCounterPort for TiktokenCounter {
+    fn count(&self, text: &str, _model: &str) -> u32 {
+        match self.count_tokens(text) {
+            Ok(count) => count,
+            // `count_tokens` above never returns `Err` in practice (its one
+            // fallible call, `get_bpe_from_model`, already succeeded at
+            // construction) -- this arm exists only so the port's
+            // infallibility contract holds even if that ever changes,
+            // falling back to the same char-based approximation
+            // `HeuristicTokenCounter` uses.
+            Err(_) => (text.chars().count() as u32).div_ceil(4),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "tiktoken"
     }
 }
 

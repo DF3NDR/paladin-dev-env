@@ -16,6 +16,16 @@ use paladin_ports::output::token_counter_port::TokenCounterPort;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HeuristicTokenCounter;
 
+impl TokenCounterPort for HeuristicTokenCounter {
+    fn count(&self, text: &str, _model: &str) -> u32 {
+        (text.chars().count() as u32).div_ceil(4)
+    }
+
+    fn name(&self) -> &str {
+        "heuristic"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -35,7 +45,11 @@ mod tests {
     #[test]
     fn heuristic_rounds_up() {
         let counter = HeuristicTokenCounter;
-        assert_eq!(counter.count("abcde", "any-model"), 2, "5 chars / 4 rounds up to 2");
+        assert_eq!(
+            counter.count("abcde", "any-model"),
+            2,
+            "5 chars / 4 rounds up to 2"
+        );
         assert_eq!(counter.count("", "any-model"), 0);
     }
 

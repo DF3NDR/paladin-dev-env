@@ -88,7 +88,10 @@ COPY benches ./benches
 COPY tests ./tests
 # SQL migrations are embedded in the binary at compile time (D-17,
 # crates/paladin-memory/src/migrations.rs) -- no migrations/ directory to copy.
-COPY config.test.yml ./
+# config.test.yml backs the loader tests; config.example.yml backs
+# config::agent_runtime's example_config_agent_runtime_block_round_trips_to_default,
+# which asserts the documented example cannot drift from AgentRuntimeConfig::default().
+COPY config.test.yml config.example.yml ./
 
 # Pre-build dependencies
 RUN cargo build --tests

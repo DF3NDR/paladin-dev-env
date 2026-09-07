@@ -237,8 +237,8 @@ from scratch rather than trusting the close-out narrative.
 | Requirements audited | 7 (RT-01…RT-07) |
 | Tasks audited | 56 (50 automated, 6 checkpoints) |
 | Distinct test filters extracted and checked | 184 |
-| Gaps found | 9 (7 local + 2 found by CI, see Addendum) |
-| Resolved | 9 |
+| Gaps found | 10 (7 local + 3 found by CI, see Addendum) |
+| Resolved | 10 |
 | Escalated | 0 |
 | Tests MISSING (had to be written) | 0 |
 
@@ -308,6 +308,8 @@ any row's `<automated>` command — 26-21-03 gates on clippy/fmt/security/api-su
 semver. That is the structural lesson: **this phase's Per-Task Map has no row that runs the semver
 gate or builds a Docker image**, so no amount of local re-verification could have caught G8 or G9.
 CI is the only instrument that covers them, and it did so on the first push.
+
+| G10 | `Docker Integration Tests` (second failure, after G9 unblocked the build) | With the image building again, the container's `cargo test` reached the suite and failed `config::agent_runtime::tests::example_config_agent_runtime_block_round_trips_to_default` (722 passed, 1 failed). That test — added by plan 26-02 — reads the tracked repo-root `config.example.yml` to assert the documented example cannot drift from `AgentRuntimeConfig::default()`, but the test stage copied only `config.test.yml`. The phase shipped a test that could never pass in the container, **masked the whole time by G9's build failure in the same phase** | Test stage now copies `config.example.yml` alongside `config.test.yml`, with a comment naming the test that needs it. Verified: the test passes locally, and a static check confirms every non-glob `COPY` source in all four Dockerfiles resolves |
 
 *Known pre-existing, out of scope:* `docker/testserver/Dockerfile:31` and `:63` also `COPY config`,
 a directory absent from the repo. Those lines date to 2025-06-30 and sit in the `production` and

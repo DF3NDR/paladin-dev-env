@@ -104,11 +104,9 @@ impl SqliteGarrison {
 
     /// Initialize the database schema and metadata
     async fn initialize(&self) -> Result<(), GarrisonError> {
-        // Run migrations
-        sqlx::migrate::Migrator::new(std::path::Path::new("./migrations"))
-            .await
-            .map_err(|e| GarrisonError::StorageError(format!("Migration setup failed: {}", e)))?
-            .run(&self.pool)
+        // Run migrations via the crate's one shared, compile-time-embedded
+        // migrator (D-17, D-23) -- no longer relative to the process CWD.
+        crate::migrations::run_migrations(&self.pool)
             .await
             .map_err(|e| GarrisonError::StorageError(format!("Migration failed: {}", e)))?;
 
@@ -288,8 +286,8 @@ impl GarrisonPort for SqliteGarrison {
         sqlx::query(
             r#"
             INSERT INTO garrison_entries
-            (id, paladin_id, role, content, timestamp, token_count, metadata, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            (id, paladin_id, role, content, timestamp, token_count, metadata, is_summary, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
             "#,
         )
         .bind(entry.id.to_string())
@@ -299,6 +297,7 @@ impl GarrisonPort for SqliteGarrison {
         .bind(entry.timestamp.to_rfc3339())
         .bind(entry.token_count.map(|t| t as i64))
         .bind(serde_json::to_string(&entry.metadata).ok())
+        .bind(entry.is_summary)
         .execute(&self.pool)
         .await
         .map_err(|e| GarrisonError::StorageError(format!("Insert failed: {}", e)))?;
@@ -312,7 +311,7 @@ impl GarrisonPort for SqliteGarrison {
     async fn recall_recent(&self, limit: usize) -> Result<Vec<GarrisonEntry>, GarrisonError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, role, content, timestamp, token_count, metadata
+            SELECT id, role, content, timestamp, token_count, metadata, is_summary
             FROM garrison_entries
             WHERE paladin_id = ?
             ORDER BY timestamp DESC
@@ -358,6 +357,7 @@ impl GarrisonPort for SqliteGarrison {
             let metadata = metadata_str
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
+            let is_summary: i64 = row.try_get("is_summary").unwrap_or(0);
 
             let mut entry = GarrisonEntry::new(role, content);
             entry.id = uuid::Uuid::parse_str(&id)
@@ -365,6 +365,7 @@ impl GarrisonPort for SqliteGarrison {
             entry.timestamp = timestamp;
             entry.token_count = token_count.map(|t| t as u32);
             entry.metadata = metadata;
+            entry.is_summary = is_summary != 0;
 
             entries.push(entry);
         }
@@ -382,7 +383,7 @@ impl GarrisonPort for SqliteGarrison {
 
         let rows = sqlx::query(
             r#"
-            SELECT e.id, e.role, e.content, e.timestamp, e.token_count, e.metadata
+            SELECT e.id, e.role, e.content, e.timestamp, e.token_count, e.metadata, e.is_summary
             FROM garrison_entries e
             JOIN garrison_search s ON e.rowid = s.rowid
             WHERE e.paladin_id = ? AND garrison_search MATCH ?
@@ -430,6 +431,7 @@ impl GarrisonPort for SqliteGarrison {
             let metadata = metadata_str
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
+            let is_summary: i64 = row.try_get("is_summary").unwrap_or(0);
 
             let mut entry = GarrisonEntry::new(role, content);
             entry.id = uuid::Uuid::parse_str(&id)
@@ -437,6 +439,7 @@ impl GarrisonPort for SqliteGarrison {
             entry.timestamp = timestamp;
             entry.token_count = token_count.map(|t| t as u32);
             entry.metadata = metadata;
+            entry.is_summary = is_summary != 0;
 
             entries.push(entry);
         }
@@ -644,8 +647,7 @@ mod tests {
             "garrison_entries is missing the is_summary column"
         );
 
-        let default_value: Option<String> =
-            is_summary_column.unwrap().try_get("dflt_value").ok();
+        let default_value: Option<String> = is_summary_column.unwrap().try_get("dflt_value").ok();
         assert_eq!(default_value.as_deref(), Some("0"));
     }
 
@@ -654,20 +656,6 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let temp_file_path = temp_file.path().to_path_buf();
         let url = format!("sqlite://{}", temp_file_path.display());
-
-        // Build a v0.9-shaped database: apply only `001`, exactly the migration a
-        // pre-`is_summary` deployment would have run.
-        let v0_9_migrations_dir = tempfile::tempdir().unwrap();
-        std::fs::copy(
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/migrations/001_create_garrison_tables.sql"
-            ),
-            v0_9_migrations_dir
-                .path()
-                .join("001_create_garrison_tables.sql"),
-        )
-        .unwrap();
 
         let options = SqliteConnectOptions::from_str(&url)
             .unwrap()
@@ -678,12 +666,11 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::migrate::Migrator::new(v0_9_migrations_dir.path())
-            .await
-            .unwrap()
-            .run(&pool)
-            .await
-            .unwrap();
+        // Build a v0.9-shaped database: apply exactly `001`'s raw SQL directly (no
+        // migrator involved, so no `_sqlx_migrations` bookkeeping exists yet) --
+        // exactly the schema a pre-`is_summary` deployment would have had.
+        let v0_9_schema = include_str!("../../migrations/001_create_garrison_tables.sql");
+        sqlx::raw_sql(v0_9_schema).execute(&pool).await.unwrap();
 
         // Insert a pre-existing row the way v0.9 code would have (no `is_summary`
         // column exists yet at this point).
@@ -740,7 +727,10 @@ mod tests {
             .fetch_one(&second.pool)
             .await
             .unwrap();
-        assert_eq!(row.0, 2, "expected exactly one row per migration (001, 002)");
+        assert_eq!(
+            row.0, 2,
+            "expected exactly one row per migration (001, 002)"
+        );
     }
 
     #[tokio::test]

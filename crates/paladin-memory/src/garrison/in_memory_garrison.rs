@@ -360,7 +360,10 @@ mod tests {
             .await
             .unwrap();
         garrison
-            .remember(GarrisonEntry::new(ConversationRole::User, "raw".to_string()))
+            .remember(GarrisonEntry::new(
+                ConversationRole::User,
+                "raw".to_string(),
+            ))
             .await
             .unwrap();
 

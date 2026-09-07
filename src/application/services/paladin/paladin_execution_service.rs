@@ -870,24 +870,22 @@ impl PaladinExecutionService {
         scope: &RunScope,
     ) -> Result<PaladinResult, PaladinError> {
         let execution_id = uuid::Uuid::new_v4();
-        // --- D-21: resolved here (before dispatch) so a future arsenal
-        // wiring (vault tools, plan 26-16+) has a single, already-correct
-        // place to read the run's grant from. Unused today beyond logging
-        // and the `confined_vault` contract itself -- this plan wires
-        // resolution and enforcement, not tool registration.
-        let vault_namespace = scope
-            .vault_namespace
-            .as_ref()
-            .or(self.default_vault_namespace.as_ref())
-            .map(std::string::ToString::to_string);
+        // --- D-21/D-25: resolved here (before dispatch) so the run's
+        // `ModelCallContext` (built inside `execute_internal`) carries the
+        // SAME `ConfinedVault` handle `VaultRecallMiddleware` reads --
+        // exactly one resolution point, per `confined_vault`'s own contract.
+        let confined_vault = self.confined_vault(scope);
         info!(
             "Starting scoped Paladin execution: id={}, name={}, input_len={}, vault_namespace={}",
             execution_id,
             paladin.node.name,
             input.len(),
-            vault_namespace.as_deref().unwrap_or("none")
+            confined_vault
+                .as_ref()
+                .map(|v| v.granted().to_string())
+                .unwrap_or_else(|| "none".to_string())
         );
-        self.execute_bounded(paladin, input, execution_id, heartbeat)
+        self.execute_bounded(paladin, input, execution_id, heartbeat, confined_vault)
             .await
     }
 
@@ -901,12 +899,14 @@ impl PaladinExecutionService {
         input: &str,
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
+        confined_vault: Option<ConfinedVault>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let timeout_duration = Duration::from_secs(paladin.node.max_loops.as_u32() as u64 * 60);
 
         // Wrap execution with timeout
-        let execution_future = self.execute_internal(paladin, input, execution_id, heartbeat);
+        let execution_future =
+            self.execute_internal(paladin, input, execution_id, heartbeat, confined_vault);
 
         match timeout(timeout_duration, execution_future).await {
             Ok(result) => {
@@ -1085,6 +1085,7 @@ impl PaladinExecutionService {
         input: &str,
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
+        confined_vault: Option<ConfinedVault>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let mut total_tokens = 0u32;
@@ -1209,6 +1210,10 @@ impl PaladinExecutionService {
             paladin,
             PromptAssembly::new(effective_system_prompt.clone(), input, "", vec![], None),
         );
+        // D-21/D-25: the run's Vault grant, resolved once by
+        // `execute_scoped` before dispatch, is set once here and read (never
+        // mutated) by `VaultRecallMiddleware` on loop 0.
+        middleware_cx.vault = confined_vault;
 
         // Execute reasoning loop
         for loop_num in 1..=paladin.node.max_loops.as_u32() {

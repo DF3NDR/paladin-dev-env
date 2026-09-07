@@ -78,6 +78,7 @@ pub mod rag_integration_tests;
 pub mod redis_queue_integration_test;
 pub mod scheduler_integration_test;
 pub mod sqlite_garrison_integration_test;
+pub mod structured_engine_node_test;
 pub mod system_log_integration_test;
 pub mod vault_confinement_test;
 #[cfg(all(feature = "vision", feature = "llm-openai", feature = "llm-anthropic"))]

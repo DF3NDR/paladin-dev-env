@@ -4683,6 +4683,61 @@ mod tests {
         }
     }
 
+    /// Test 7 (plan 26-18, D-29, RT-FR-19): a plain `NodeSpec::Paladin`
+    /// node (no `output_schema`) behaves EXACTLY as before -- same
+    /// dispatch (`PaladinPort::execute_scoped`, never the structured
+    /// executor), same raw string written to `output_field`. Run with NO
+    /// structured executor wired at all (`run()`'s own `structured_executor`
+    /// argument is `None`), proving the ordinary path needs none.
+    #[tokio::test]
+    async fn a_node_without_output_schema_is_unchanged() {
+        let raw_field = field("weather");
+        let s = schema(vec![FieldSpec::new(
+            raw_field.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("worker");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin("worker"),
+                InputMapping::new("what is the weather"),
+                raw_field.clone(),
+            ),
+        );
+        graph.add_entry(node_id);
+
+        let recording = Arc::new(RecordingPaladinPort::new());
+        recording.set_output("worker", "just a plain string, not JSON");
+        let port: Arc<dyn PaladinPort> = recording.clone();
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("no-output-schema-unchanged-lib").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&raw_field),
+                    Some(&serde_json::Value::String(
+                        "just a plain string, not JSON".to_string()
+                    )),
+                    "a node with no output_schema must write the raw string verbatim"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            recording.call_count(),
+            1,
+            "dispatched through the ordinary PaladinPort path exactly once, never through a \
+             structured executor (none is even wired)"
+        );
+    }
+
     #[tokio::test]
     async fn structured_directive_goto_routes_the_run() {
         let s = schema(vec![]);

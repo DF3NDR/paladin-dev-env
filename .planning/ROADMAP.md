@@ -532,9 +532,9 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 26-09-PLAN.md — `SqliteVault` + `003` + `SemanticVault` under the contract suite (RT-04)
-- [ ] 26-10-PLAN.md — Retry/fallback port-shaping middleware + `RetryPredicate::admits` (RT-02)
-- [ ] 26-12-PLAN.md — Structured core/ports machinery + the `extract_json` lift (RT-05)
+- [x] 26-09-PLAN.md — `SqliteVault` + `003` + `SemanticVault` under the contract suite (RT-04)
+- [x] 26-10-PLAN.md — Retry/fallback port-shaping middleware + `RetryPredicate::admits` (RT-02)
+- [x] 26-12-PLAN.md — Structured core/ports machinery + the `extract_json` lift (RT-05)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

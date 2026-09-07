@@ -516,9 +516,9 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 26-02-PLAN.md — `AgentRuntimeConfig`: twelve X-09 sub-structs, inert by default (RT-02)
-- [ ] 26-03-PLAN.md — `LlmRequest` builder + `ResponseFormat` + 37-site migration (RT-05)
-- [ ] 26-04-PLAN.md — Vault core types, `VaultPort`, `InMemoryVault`, contract suite (RT-04)
+- [x] 26-02-PLAN.md — `AgentRuntimeConfig`: twelve X-09 sub-structs, inert by default (RT-02)
+- [x] 26-03-PLAN.md — `LlmRequest` builder + `ResponseFormat` + 37-site migration (RT-05)
+- [x] 26-04-PLAN.md — Vault core types, `VaultPort`, `InMemoryVault`, contract suite (RT-04)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

@@ -187,7 +187,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   additive-migrated and §9.2/§9.4-registered — degrading to trimming on summarizer failure,
   never failing the run (RT-FR-08, RT-FR-10…12)
 
-- [x] **RT-04**: Agents get confined cross-session memory: `VaultPort` (put/get/delete/list/
+- [ ] **RT-04**: Agents get confined cross-session memory: `VaultPort` (put/get/delete/list/
   search) with InMemory, SQLite and semantic (Sanctum/Qdrant-composed, `qdrant` feature)
   adapters under a shared contract suite; `vault_get`/`vault_put` Armaments confined to a
   host-granted namespace subtree (`NamespaceDenied` on traversal, attack-tested);
@@ -375,7 +375,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | RT-01 | Phase 26 | Pending |
 | RT-02 | Phase 26 | Pending |
 | RT-03 | Phase 26 | Pending |
-| RT-04 | Phase 26 | Complete |
+| RT-04 | Phase 26 | Pending |
 | RT-05 | Phase 26 | Pending |
 | RT-06 | Phase 26 | Pending |
 | RT-07 | Phase 26 | Pending |

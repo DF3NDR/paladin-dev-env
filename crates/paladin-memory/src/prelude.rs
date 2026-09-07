@@ -30,3 +30,6 @@ pub use crate::config::{
     GarrisonSettings, MemoryExtractionConfig, QdrantSanctumConfig, SanctumAdapterType,
     SanctumConfig,
 };
+
+// Token Counter
+pub use crate::token_counter::HeuristicTokenCounter;

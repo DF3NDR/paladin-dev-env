@@ -300,4 +300,53 @@ mod tests {
         assert!(count_gpt4 > 0);
         assert!(count_gpt35 > 0);
     }
+
+    // ── `impl TokenCounterPort for TiktokenCounter` (RT-03, D-13) ───────────
+
+    use crate::token_counter::HeuristicTokenCounter;
+    use paladin_ports::output::token_counter_port::TokenCounterPort;
+
+    /// Test 5: under the `content-processing` feature, `TiktokenCounter`
+    /// satisfies `TokenCounterPort`, and its exact BPE count for a known
+    /// model differs from the `chars / 4` heuristic for text where the two
+    /// disagree.
+    #[test]
+    fn tiktoken_counter_implements_the_port() {
+        let counter = TiktokenCounter::new("gpt-4").unwrap();
+        let via_port: &dyn TokenCounterPort = &counter;
+        let text = "The quick brown fox jumps over the lazy dog, repeatedly and verbosely.";
+
+        let tiktoken_count = via_port.count(text, "gpt-4");
+        let heuristic_count = HeuristicTokenCounter.count(text, "gpt-4");
+
+        assert!(tiktoken_count > 0);
+        assert_ne!(
+            tiktoken_count, heuristic_count,
+            "BPE and chars/4 must disagree on this text"
+        );
+    }
+
+    /// Test 6: `count` never consults `get_bpe_from_model` again at
+    /// count-time -- it delegates to the encoding this instance already
+    /// loaded at construction, so an unrecognised model string passed to
+    /// `count` (as opposed to `TiktokenCounter::new`) never errors or
+    /// panics; it just returns a number.
+    #[test]
+    fn tiktoken_counter_falls_back_inside_the_adapter_for_an_unknown_model() {
+        let counter = TiktokenCounter::new("gpt-4").unwrap();
+        let via_port: &dyn TokenCounterPort = &counter;
+
+        let count = via_port.count("hello there", "a-model-nobody-has-heard-of");
+        assert!(count > 0);
+    }
+
+    /// Test 7 (shared): `name()` returns a stable string distinct from the
+    /// heuristic's, usable in the trimmer's debug log.
+    #[test]
+    fn tiktoken_name_identifies_the_counter() {
+        let counter = TiktokenCounter::new("gpt-4").unwrap();
+        let via_port: &dyn TokenCounterPort = &counter;
+        assert_eq!(via_port.name(), "tiktoken");
+        assert_ne!(via_port.name(), HeuristicTokenCounter.name());
+    }
 }

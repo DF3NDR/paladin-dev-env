@@ -24,6 +24,13 @@
 //!   - [`vault::SemanticVault`] — composes a Sanctum + Embedding port; gives `search` a real
 //!     implementation (ungated).
 //!
+//! - **Token Counter** (`token_counter` module): `TokenCounterPort` adapters (Doc 05
+//!   RT-FR-10, D-13).
+//!   - [`token_counter::HeuristicTokenCounter`] — always available, `chars / 4` approximation,
+//!     the phase-wide default.
+//!   - `garrison::TiktokenCounter`'s own `impl TokenCounterPort` — exact BPE counting
+//!     (requires feature `content-processing`).
+//!
 //! ## Feature flags
 //!
 //! | Feature              | Enables                                          |
@@ -60,6 +67,12 @@ pub mod sanctum;
 /// Application-layer services for memory extraction and retrieval.
 #[allow(missing_docs)]
 pub mod services;
+/// Ungated `TokenCounterPort` adapters -- `HeuristicTokenCounter`, the
+/// phase-wide default (Doc 05 RT-FR-10, D-13). The exact, BPE-based
+/// alternative is `garrison::TiktokenCounter`'s own `impl TokenCounterPort`,
+/// gated behind the pre-existing `content-processing` feature.
+#[allow(missing_docs)]
+pub mod token_counter;
 /// Vault adapters -- cross-thread namespaced key/value storage (D-18).
 #[allow(missing_docs)]
 pub mod vault;

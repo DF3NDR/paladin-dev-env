@@ -207,6 +207,10 @@ None -- no external service configuration required.
 - `ExecutionMiddleware::around_tool`'s `&mut ToolCallContext` signature is now the seam every later `around_tool` implementor (plan 26-19's `ToolCallProtocolMiddleware`, D-36) builds against from the start, with no further signature churn expected.
 - No blockers for wave 3 sibling plans or wave 4+.
 
+## Self-Check: PASSED
+
+Appended by the orchestrator after the worktree merge (`faf9f956`): the executor's SUMMARY closed without this section. Verified on the merged tree: `src/application/services/paladin/middleware/limits.rs` and the `StopReason` changes in `crates/paladin-core/src/platform/container/execution_result.rs` are present; the three plan commits (`6b414681`, `0a77710b`, `ad8b91c8`) are in `git log`; the post-merge gates — `cargo check --workspace --all-targets --all-features`, the pre-commit hook (fmt + clippy `-D warnings`), `make build`, `make test` (721 facade unit tests) and `cargo test --test lib` (707 integration tests) — all passed.
+
 ---
 *Phase: 26-agent-runtime-enhancements*
 *Completed: 2026-09-07*

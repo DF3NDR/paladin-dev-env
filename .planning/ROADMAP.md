@@ -522,8 +522,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 26-05-PLAN.md — `StopReason` X-10 treatment + the three limit middlewares (RT-02)
-- [ ] 26-06-PLAN.md — Native `response_format` in OpenAI / compat / Gemini / DeepSeek (RT-05)
+- [x] 26-05-PLAN.md — `StopReason` X-10 treatment + the three limit middlewares (RT-02)
+- [x] 26-06-PLAN.md — Native `response_format` in OpenAI / compat / Gemini / DeepSeek (RT-05)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

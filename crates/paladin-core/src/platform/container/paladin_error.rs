@@ -96,6 +96,28 @@ pub enum PaladinError {
     /// Error from the Arsenal tool system
     #[error("Arsenal error: {0}")]
     ArsenalError(#[from] ArsenalError),
+
+    /// A `Guardrail` rule's `Fail` action tripped (D-09, RT-FR-07, T-26-04).
+    ///
+    /// Free under the pre-existing `#[non_exhaustive]` attribute -- no new
+    /// `MIGRATION.md` §9.2 row is created for this variant; the existing
+    /// `PaladinError` row's Change cell is extended instead (D-09, X-06).
+    ///
+    /// `target` names the side that was actually being screened when the
+    /// rule matched -- `"prompt"` or `"response"` (a rule configured for
+    /// `GuardrailTarget::Both` still reports the side that tripped, not the
+    /// literal configuration). `rule` is the operator-configured rule name
+    /// -- not secret material, and the only useful identifier for
+    /// diagnosing a trip; no matched *content* is carried in this variant
+    /// (T-26-31).
+    #[error("Guardrail rule `{rule}` tripped on {target}")]
+    GuardrailTripped {
+        /// The name of the rule that tripped.
+        rule: String,
+        /// Which side of the interaction tripped: `"prompt"` or
+        /// `"response"`.
+        target: String,
+    },
 }
 
 impl PaladinError {
@@ -152,6 +174,10 @@ impl PaladinError {
             PaladinError::StopWordDetected(_) => Transience::Permanent,
             PaladinError::GarrisonRequired => Transience::Permanent,
             PaladinError::MaxRetriesExceeded(_) => Transience::Permanent,
+            // A guardrail trip is a deliberate content-based rejection --
+            // retrying the exact same request reproduces the exact same
+            // match.
+            PaladinError::GuardrailTripped { .. } => Transience::Permanent,
 
             // Unresolvable from a bare string: no typed field distinguishes
             // a transient cause from a permanent one.
@@ -261,6 +287,13 @@ mod tests {
             (PaladinError::MaxRetriesExceeded(3), Permanent),
             (PaladinError::ExecutionError("x".into()), Unknown),
             (PaladinError::LlmError("x".into()), Unknown),
+            (
+                PaladinError::GuardrailTripped {
+                    rule: "x".into(),
+                    target: "prompt".into(),
+                },
+                Permanent,
+            ),
             (
                 PaladinError::LlmFailure {
                     transience: Transient,

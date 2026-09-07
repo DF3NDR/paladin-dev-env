@@ -29,12 +29,17 @@
 
 pub mod chain;
 pub mod context;
+pub mod guardrail;
 pub mod limits;
 
 pub use chain::{BeforeOutcome, run_after, run_around_tool, run_before};
 pub use context::{
     LlmResponseView, ModelCallContext, PromptAssembly, PromptSection, SectionPlacement,
     ToolCallContext, ToolCallKind,
+};
+pub use guardrail::{
+    Guardrail, GuardrailAction, GuardrailBuildError, GuardrailMatcher, GuardrailRule,
+    GuardrailTarget,
 };
 pub use limits::{ModelCallLimit, TokenBudget, ToolCallLimit};
 

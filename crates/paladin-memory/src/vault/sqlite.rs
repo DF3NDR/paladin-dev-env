@@ -177,29 +177,115 @@ impl SqliteVault {
 
 #[async_trait]
 impl VaultPort for SqliteVault {
-    // RED stub (plan 26-09 Task 1, TDD): these four methods do not yet touch
-    // `vault_records` at all -- every shared contract clause that exercises a
-    // real write/read round trip must fail against this stub before the GREEN
-    // commit that follows immediately replaces these bodies with the real
-    // parameter-bound SQL.
-    async fn put(&self, ns: &Namespace, key: &str, value: serde_json::Value) -> Result<(), VaultError> {
-        let _ = (ns, key, value);
+    async fn put(
+        &self,
+        ns: &Namespace,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<(), VaultError> {
+        // Validate the key/value invariants up front, before touching the
+        // database -- reuses the exact checks `VaultRecord::new_with_bound`
+        // performs rather than duplicating them.
+        let record = VaultRecord::new_with_bound(ns.clone(), key, value, self.max_value_bytes)?;
+
+        let value_json =
+            serde_json::to_string(record.value()).map_err(|e| VaultError::Serialization {
+                message: redact_and_bound(&e.to_string()),
+            })?;
+        let now = record.created_at().to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO vault_records (ns, key, value, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?) \
+             ON CONFLICT(ns, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        )
+        .bind(ns.to_string())
+        .bind(key)
+        .bind(value_json)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| VaultError::Storage {
+            message: redact_and_bound(&e.to_string()),
+        })?;
+
         Ok(())
     }
 
     async fn get(&self, ns: &Namespace, key: &str) -> Result<Option<VaultRecord>, VaultError> {
-        let _ = (ns, key);
-        Ok(None)
+        let row = sqlx::query(
+            "SELECT value, created_at, updated_at FROM vault_records WHERE ns = ? AND key = ?",
+        )
+        .bind(ns.to_string())
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| VaultError::Storage {
+            message: redact_and_bound(&e.to_string()),
+        })?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        Ok(Some(self.row_to_record(ns, key, &row)?))
     }
 
     async fn delete(&self, ns: &Namespace, key: &str) -> Result<bool, VaultError> {
-        let _ = (ns, key);
-        Ok(false)
+        let result = sqlx::query("DELETE FROM vault_records WHERE ns = ? AND key = ?")
+            .bind(ns.to_string())
+            .bind(key)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| VaultError::Storage {
+                message: redact_and_bound(&e.to_string()),
+            })?;
+
+        Ok(result.rows_affected() > 0)
     }
 
-    async fn list(&self, ns: &Namespace, prefix: Option<&str>, page: Page) -> Result<Vec<VaultRecord>, VaultError> {
-        let _ = (ns, prefix, page);
-        Ok(vec![])
+    async fn list(
+        &self,
+        ns: &Namespace,
+        prefix: Option<&str>,
+        page: Page,
+    ) -> Result<Vec<VaultRecord>, VaultError> {
+        // The namespace column is always compared with exact equality
+        // (`ns = ?`) -- it is the key prefix, not the namespace, that is
+        // matched with a wildcard below, and only ever with one such match
+        // in this whole file (see Task 1's acceptance criteria). Bound to
+        // an empty-string cursor when `after` is absent: every valid key is
+        // at least one character, so `key > ''` is true for every row,
+        // which is exactly "no cursor" behavior.
+        let ns_str = ns.to_string();
+        let pattern = format!("{}%", prefix.unwrap_or(""));
+        let after = page.after().unwrap_or("").to_string();
+        let limit = i64::from(page.limit());
+
+        let rows = sqlx::query(
+            "SELECT key, value, created_at, updated_at FROM vault_records \
+             WHERE ns = ? AND key LIKE ? AND key > ? \
+             ORDER BY key ASC LIMIT ?",
+        )
+        .bind(&ns_str)
+        .bind(&pattern)
+        .bind(&after)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| VaultError::Storage {
+            message: redact_and_bound(&e.to_string()),
+        })?;
+
+        let mut records = Vec::with_capacity(rows.len());
+        for row in rows {
+            let key: String = row.try_get("key").map_err(|e| VaultError::Storage {
+                message: redact_and_bound(&e.to_string()),
+            })?;
+            records.push(self.row_to_record(ns, &key, &row)?);
+        }
+        Ok(records)
     }
 }
 

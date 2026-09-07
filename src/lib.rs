@@ -197,3 +197,6 @@ pub use core::platform::container::battalion::{BattalionConfig, BattalionError};
 // Arsenal (Tool) Types -- in-process tool execution and composition (D-22)
 pub use application::services::arsenal::composite_arsenal::CompositeArsenalPort;
 pub use application::services::arsenal::in_process_arsenal::InProcessArsenal;
+
+// Structured Output -- the generic, typed extension over StructuredExecutorPort (D-27)
+pub use application::services::paladin::structured::StructuredExecutorExt;

@@ -77,18 +77,22 @@ use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use log::{debug, error, info, warn};
 use paladin_battalion::llm_failure::to_paladin_error;
 use paladin_core::platform::container::run_scope::RunScope;
+use paladin_core::platform::container::structured::render_instruction_block;
 use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::vault::Namespace;
 use paladin_llm::fallback::SERVED_BY_METADATA_KEY;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
-use paladin_ports::output::llm_port::{FunctionCall, LlmPort, LlmRequest};
+use paladin_ports::output::llm_port::{FunctionCall, LlmPort, LlmRequest, ResponseFormat};
 use paladin_ports::output::orchestrator_port::OrchestratorPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::paladin_port::{
     PaladinResult, PaladinStream, PaladinStreamChunk, StopReason,
 };
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
+use paladin_ports::output::structured_executor_port::{
+    Structured, StructuredExecutorPort, StructuredOptions, run_structured,
+};
 use paladin_ports::output::token_counter_port::TokenCounterPort;
 use paladin_ports::output::vault_port::VaultPort;
 #[cfg(feature = "vision")]
@@ -2334,8 +2338,14 @@ impl PaladinExecutionService {
                 node: Node::new(prompt_data, Some(format!("execution-{}", execution_id))),
             };
 
-            // Create LLM request
-            let request = LlmRequest::new(paladin.node.model.clone(), prompt_item);
+            // Create LLM request. `cx.response_format` (RT-05, D-27, D-28) is
+            // set exactly once, by a structured run's `execute_json_schema` --
+            // an ordinary run's context never sets it, so this call is a
+            // no-op for every existing caller (X-03).
+            let mut request = LlmRequest::new(paladin.node.model.clone(), prompt_item);
+            if let Some(response_format) = cx.response_format.clone() {
+                request = request.with_response_format(response_format);
+            }
 
             // Wrap LLM call with circuit breaker (async version). Uses the
             // resolved `llm_port` (D-11's single resolution point), not
@@ -2691,6 +2701,135 @@ impl StreamingExecutorPort for PaladinExecutionService {
         input: &str,
     ) -> Result<PaladinStream, PaladinError> {
         self.execute_stream_inner(paladin, input, None).await
+    }
+}
+
+/// `execute_structured<T>` becomes real (Doc 05 RT-05, RT-FR-17…19, D-26,
+/// D-27): `PaladinExecutionService` implements the object-safe,
+/// JSON-schema-level half of structured output natively.
+///
+/// For **every** model call this drives -- the first attempt and every
+/// repair re-prompt alike -- [`Self::execute_structured_call`] sets both
+/// mechanisms, belt and braces (D-27, D-28):
+///
+/// 1. `LlmRequest.response_format` is set to
+///    [`ResponseFormat::JsonSchema`], so the four wired adapter paths
+///    (plan 26-06: OpenAI, the compat engine, Gemini, DeepSeek) use the
+///    provider's own native constrained-JSON mode; and
+/// 2. [`render_instruction_block`] is appended to the prompt, so a
+///    provider with no native mode at all (Anthropic) -- or one that
+///    deliberately degrades the schema to a plain JSON-object request
+///    (the compat engine, DeepSeek) -- is still constrained by the prompt
+///    itself.
+///
+/// Correctness never depends on the provider's native mode: the prompt-level
+/// instruction is the floor, the native `response_format` hint is the
+/// (optional) improvement.
+///
+/// The bounded repair loop itself is **not** re-implemented here --
+/// [`execute_json_schema`](StructuredExecutorPort::execute_json_schema)
+/// supplies only the `execute_fn` closure
+/// [`run_structured`](paladin_ports::output::structured_executor_port::run_structured)
+/// (plan 26-12) drives; `execute_json_schema_observed` is left to the
+/// trait's own defaulted body (the same D-19 pattern `PaladinPort::
+/// execute_observed`/`execute_scoped` already use elsewhere in this
+/// crate), since this service has no heartbeat plumbing to add for the
+/// structured path.
+///
+/// `PaladinPort` gains nothing here (PRD 05 §2.4's explicit instruction,
+/// X-10.4's stated reason `StructuredExecutorPort` exists at all) -- this
+/// impl block is entirely additive to `PaladinExecutionService`'s own
+/// inherent surface.
+#[async_trait::async_trait]
+impl StructuredExecutorPort for PaladinExecutionService {
+    async fn execute_json_schema(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        schema: &Value,
+        opts: &StructuredOptions,
+    ) -> Result<Structured<Value>, PaladinError> {
+        let execution_id = uuid::Uuid::new_v4();
+        let schema_owned = schema.clone();
+        let response_format = ResponseFormat::JsonSchema {
+            name: "structured_output".to_string(),
+            schema: schema.clone(),
+            strict: true,
+        };
+        let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        let execute_fn = move |current_input: String| {
+            let schema = schema_owned.clone();
+            let response_format = response_format.clone();
+            let call_count = Arc::clone(&call_count);
+            async move {
+                let call_num = call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                // D-27: belt and braces, on EVERY call -- regardless of
+                // whether `current_input` (as built by `run_structured`,
+                // either the first attempt's own instruction-block-appended
+                // input or a later repair re-prompt) already carries schema
+                // text in some form, this call's prompt is guaranteed to
+                // contain `render_instruction_block`'s literal output too.
+                let prompt = format!("{current_input}{}", render_instruction_block(&schema));
+                self.execute_structured_call(
+                    paladin,
+                    &prompt,
+                    execution_id,
+                    call_num,
+                    response_format,
+                )
+                .await
+            }
+        };
+
+        run_structured(execute_fn, input, schema, opts).await
+    }
+}
+
+impl PaladinExecutionService {
+    /// One structured-output model call (RT-05, D-27): builds a scratch
+    /// [`ModelCallContext`] carrying `response_format`, then dispatches
+    /// through the SAME retry/circuit-breaker call site
+    /// ([`Self::execute_with_retry_and_temperature`]) every ordinary
+    /// reasoning-loop iteration uses -- not a second call path.
+    ///
+    /// Deliberately does **not** run the full multi-loop `execute_internal`
+    /// reasoning loop: a structured request is one deterministic model call
+    /// per [`run_structured`](paladin_ports::output::structured_executor_port::run_structured)
+    /// attempt, so `loop_count` on the returned [`PaladinResult`] is
+    /// `call_num` -- the count of model calls made so far in this
+    /// structured run, across every repair attempt -- not the Paladin's own
+    /// `max_loops`.
+    async fn execute_structured_call(
+        &self,
+        paladin: &Paladin,
+        prompt: &str,
+        execution_id: uuid::Uuid,
+        call_num: u32,
+        response_format: ResponseFormat,
+    ) -> Result<PaladinResult, PaladinError> {
+        let assembly = PromptAssembly::new(String::new(), "", "", Vec::new(), None);
+        let mut cx = ModelCallContext::new(execution_id, paladin, assembly);
+        cx.response_format = Some(response_format);
+
+        let response = self
+            .execute_with_retry_and_temperature(
+                paladin,
+                prompt,
+                paladin.node.temperature,
+                execution_id,
+                call_num,
+                &cx,
+            )
+            .await?;
+
+        Ok(PaladinResult {
+            output: response.content,
+            token_count: response.usage.total_tokens,
+            loop_count: call_num,
+            stop_reason: StopReason::Completed,
+            ..Default::default()
+        })
     }
 }
 
@@ -5206,5 +5345,321 @@ mod token_counter_and_recall_limit_tests {
 
         let service = service.with_token_counter(Arc::new(AlwaysOneCounter));
         assert_eq!(service.token_counter().name(), "always-one-test-counter");
+    }
+}
+
+/// RT-05 / D-27: `PaladinExecutionService::execute_json_schema` (belt and
+/// braces -- `response_format` AND the instruction block, on every model
+/// call), the shared `run_structured` driver, and `PaladinPort` unchanged.
+#[cfg(test)]
+mod structured_output_tests {
+    use super::*;
+    use crate::core::base::entity::node::Node;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+    use paladin_core::platform::container::prompt::PromptType;
+    use paladin_llm::mock::MockLlmAdapter;
+
+    fn make_paladin() -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            max_loops: MaxLoops::Fixed(3),
+            ..Default::default()
+        };
+        Node::new(data, None)
+    }
+
+    fn weather_schema() -> Value {
+        serde_json::json!({
+            "type": "object",
+            "required": ["city", "temp_c"],
+            "properties": {
+                "city": {"type": "string"},
+                "temp_c": {"type": "number"}
+            }
+        })
+    }
+
+    fn service_with(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(50, 25, Duration::from_secs(60))),
+            None,
+            None,
+        )
+    }
+
+    fn prompt_text(request: &LlmRequest) -> String {
+        match request.prompt.prompt_type() {
+            PromptType::User(user) => user.query.clone(),
+            PromptType::System(system) => system.instructions.clone(),
+            _ => String::new(),
+        }
+    }
+
+    /// Test 1: a structured run sets `response_format` on the FIRST call
+    /// and on the repair attempt.
+    #[tokio::test]
+    async fn structured_run_sets_response_format_on_every_model_call() {
+        let mock = Arc::new(MockLlmAdapter::new().with_responses(vec![
+            r#"{"city": "Oslo"}"#.to_string(),
+            r#"{"city": "Oslo", "temp_c": 4.5}"#.to_string(),
+        ]));
+        let service = service_with(mock.clone());
+        let paladin = make_paladin();
+
+        let result = service
+            .execute_json_schema(
+                &paladin,
+                "what is the weather in Oslo",
+                &weather_schema(),
+                &StructuredOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.value,
+            serde_json::json!({"city": "Oslo", "temp_c": 4.5})
+        );
+
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 2, "one initial call plus one repair");
+        assert!(
+            requests.iter().all(|r| r.response_format.is_some()),
+            "response_format must be set on EVERY model call, including the repair attempt"
+        );
+    }
+
+    /// Test 2: both prompts (first attempt and repair) contain
+    /// `render_instruction_block`'s literal output -- belt and braces.
+    #[tokio::test]
+    async fn structured_run_also_appends_the_instruction_block() {
+        let mock = Arc::new(MockLlmAdapter::new().with_responses(vec![
+            r#"{"city": "Oslo"}"#.to_string(),
+            r#"{"city": "Oslo", "temp_c": 4.5}"#.to_string(),
+        ]));
+        let service = service_with(mock.clone());
+        let paladin = make_paladin();
+
+        service
+            .execute_json_schema(
+                &paladin,
+                "what is the weather in Oslo",
+                &weather_schema(),
+                &StructuredOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 2);
+        let instruction = render_instruction_block(&weather_schema());
+        for request in &requests {
+            assert!(
+                prompt_text(request).contains(&instruction),
+                "every model call's prompt must contain render_instruction_block's \
+                 literal output: {}",
+                prompt_text(request)
+            );
+        }
+    }
+
+    /// Test 3: a conforming first response returns `Structured { value, raw }`
+    /// with `raw.loop_count` reflecting exactly one call.
+    #[tokio::test]
+    async fn happy_path_returns_a_parsed_value_after_one_call() {
+        let mock =
+            Arc::new(MockLlmAdapter::new().with_response(r#"{"city": "Oslo", "temp_c": 4.5}"#));
+        let service = service_with(mock.clone());
+        let paladin = make_paladin();
+
+        let result = service
+            .execute_json_schema(
+                &paladin,
+                "what is the weather in Oslo",
+                &weather_schema(),
+                &StructuredOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.value,
+            serde_json::json!({"city": "Oslo", "temp_c": 4.5})
+        );
+        assert_eq!(result.raw.loop_count, 1);
+        assert_eq!(mock.requests().len(), 1);
+    }
+
+    /// Test 4: repair succeeds on attempt two; `raw.loop_count` reflects
+    /// BOTH calls.
+    #[tokio::test]
+    async fn repair_succeeds_on_attempt_two() {
+        let mock = Arc::new(MockLlmAdapter::new().with_responses(vec![
+            r#"{"city": "Oslo"}"#.to_string(),
+            r#"{"city":"Oslo","temp_c":4.5}"#.to_string(),
+        ]));
+        let service = service_with(mock.clone());
+        let paladin = make_paladin();
+
+        let result = service
+            .execute_json_schema(
+                &paladin,
+                "what is the weather in Oslo",
+                &weather_schema(),
+                &StructuredOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.value,
+            serde_json::json!({"city": "Oslo", "temp_c": 4.5})
+        );
+        assert_eq!(result.raw.loop_count, 2);
+        assert_eq!(mock.requests().len(), 2);
+    }
+
+    /// Test 5: with `max_repair_attempts: 1` and two non-conforming
+    /// responses, exhaustion returns `StructuredOutputInvalid { attempts: 2,
+    /// raw_output }` where `raw_output` is the SECOND response verbatim.
+    #[tokio::test]
+    async fn exhaustion_preserves_the_raw_output() {
+        let mock = Arc::new(MockLlmAdapter::new().with_responses(vec![
+            r#"{"nope": 1}"#.to_string(),
+            r#"{"nope": 2}"#.to_string(),
+        ]));
+        let service = service_with(mock.clone());
+        let paladin = make_paladin();
+
+        let err = service
+            .execute_json_schema(
+                &paladin,
+                "what is the weather in Oslo",
+                &weather_schema(),
+                &StructuredOptions::new(1),
+            )
+            .await
+            .unwrap_err();
+
+        match err {
+            PaladinError::StructuredOutputInvalid {
+                attempts,
+                raw_output,
+                ..
+            } => {
+                assert_eq!(attempts, 2);
+                assert_eq!(raw_output, r#"{"nope": 2}"#);
+            }
+            other => panic!("expected StructuredOutputInvalid, got {other:?}"),
+        }
+    }
+
+    /// Test 6: a caller using `execute_json_schema_observed` on a service
+    /// that has not overridden it gets the same result as
+    /// `execute_json_schema` (the D-19 defaulted-method pattern).
+    #[tokio::test]
+    async fn the_observed_variant_defaults_to_the_plain_one() {
+        let paladin = make_paladin();
+        let schema = weather_schema();
+
+        let mock1 =
+            Arc::new(MockLlmAdapter::new().with_response(r#"{"city": "Oslo", "temp_c": 4.5}"#));
+        let service1 = service_with(mock1);
+        let plain = service1
+            .execute_json_schema(&paladin, "weather", &schema, &StructuredOptions::default())
+            .await
+            .unwrap();
+
+        let mock2 =
+            Arc::new(MockLlmAdapter::new().with_response(r#"{"city": "Oslo", "temp_c": 4.5}"#));
+        let service2 = service_with(mock2);
+        let heartbeat = HeartbeatHandle::new();
+        let observed = service2
+            .execute_json_schema_observed(
+                &paladin,
+                "weather",
+                &schema,
+                &StructuredOptions::default(),
+                &heartbeat,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(plain.value, observed.value);
+    }
+
+    /// Test 7: a compile-visible assertion that `PaladinPort` has no
+    /// structured method -- a minimal implementor with only the
+    /// pre-existing methods compiles.
+    #[test]
+    fn paladin_port_gained_nothing() {
+        use paladin_ports::output::paladin_port::PaladinPort;
+
+        struct ExecuteOnlyPort;
+
+        #[async_trait::async_trait]
+        impl PaladinPort for ExecuteOnlyPort {
+            async fn execute(
+                &self,
+                _paladin: &Paladin,
+                input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                Ok(PaladinResult {
+                    output: format!("echo:{input}"),
+                    loop_count: 1,
+                    stop_reason: StopReason::Completed,
+                    ..Default::default()
+                })
+            }
+
+            async fn execute_stream(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                unimplemented!("not exercised")
+            }
+
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+        }
+
+        let _port: Arc<dyn PaladinPort> = Arc::new(ExecuteOnlyPort);
+    }
+
+    /// Test 8: a source-level assertion that the facade contains no second
+    /// attempt loop -- `execute_json_schema` supplies only an `execute_fn`
+    /// to the shared `run_structured` driver (paladin-ports).
+    #[test]
+    fn the_repair_loop_is_the_shared_driver() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/application/services/paladin/paladin_execution_service.rs");
+        let source = std::fs::read_to_string(&path).expect("read this file's own source");
+
+        let start = source
+            .find("impl StructuredExecutorPort for PaladinExecutionService")
+            .expect("the StructuredExecutorPort impl block must exist");
+        let from_start = &source[start..];
+        let end = from_start
+            .find("\nimpl PaladinExecutionService {")
+            .expect("the impl block must be followed by the next impl block");
+        let block = &from_start[..end];
+
+        assert_eq!(
+            block.matches("run_structured(").count(),
+            1,
+            "execute_json_schema must call run_structured exactly once, not \
+             re-implement a repair loop"
+        );
+        assert_eq!(
+            block.matches("loop {").count(),
+            0,
+            "the facade's StructuredExecutorPort impl must contain no manual \
+             repair loop -- run_structured (paladin-ports) owns the only \
+             bounded attempt loop"
+        );
     }
 }

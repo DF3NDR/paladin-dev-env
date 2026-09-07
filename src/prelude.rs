@@ -54,4 +54,5 @@ pub use crate::application::services::paladin::middleware::{
     PromptAssembly, PromptSection, ToolCallContext, ToolFlow,
 };
 pub use crate::application::services::paladin::paladin_builder::PaladinBuilder;
+pub use crate::application::services::paladin::structured::StructuredExecutorExt;
 pub use crate::application::services::paladin::vault_confined::ConfinedVault;

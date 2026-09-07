@@ -18,11 +18,11 @@
 | HTTP status → `Transience` mapping (401/404/400/402/408/429/5xx) | INTEGRATE | |
 | credential redaction in every rendered provider error | INTEGRATE | |
 | redirect handling with a credential header (must not follow) | INTEGRATE | |
-| `response_format` — native JSON-object mode (OpenAI, DeepSeek, compat engine: Kimi/Qwen/Grok/Ollama/OpenAI-compatible) | INTEGRATE | |
-| `response_format` — native JSON-**schema** mode (OpenAI `json_schema`, Gemini `responseSchema`) | INTEGRATE | |
+| `response_format` — native JSON-object mode | INTEGRATE | providers: OpenAI, DeepSeek, and the compat engine (Kimi/Qwen/Grok/Ollama/OpenAI-compatible) |
+| `response_format` — native JSON-**schema** mode | INTEGRATE | OpenAI `json_schema`, Gemini `responseSchema` |
 | `response_format` on Anthropic | OPT-OUT | Anthropic exposes no native constrained-JSON mode; the prompt-level instruction block is the mechanism, documented in the guide's per-provider table (D-28) |
-| native wire-level tool calling (`tools` on the request, `function_call`/`tool_calls` on the response) | OPT-OUT | ADR-0042's deferred capability with its trigger unchanged; D-36 adds a **prompt-level** protocol only and must not touch `LlmRequest`'s tool surface or any adapter capability flag |
-| provider token-count endpoints (Anthropic `count_tokens`, Gemini `countTokens`) as `TokenCounterPort` adapters | OPT-OUT | named a Deferred Idea by D-13; the heuristic + existing `tiktoken-rs` counter satisfy RT-FR-10 |
+| native wire-level tool calling (request `tools`, response `tool_calls`) | OPT-OUT | ADR-0042's deferred capability with its trigger unchanged; D-36 adds a **prompt-level** protocol only and must not touch `LlmRequest`'s tool surface or any adapter capability flag |
+| provider token-count endpoints as `TokenCounterPort` adapters | OPT-OUT | Anthropic `count_tokens` / Gemini `countTokens`; named a Deferred Idea by D-13; the heuristic + existing `tiktoken-rs` counter satisfy RT-FR-10 |
 | rate-limit header parsing / request pacing | OPT-OUT | FUT-09, out of this phase's scope per CONTEXT `<domain>` |
 | per-token cost accounting in currency | OPT-OUT | FUT-08 / PRD 05 §5 explicitly out of scope (token counts only) |
 | model listing / capability discovery endpoints | OPT-OUT | not needed — `LlmProviderFactory::create` resolves providers by configured name (D-12); `ProviderCapabilities` is code-declared and D-28 explicitly adds no field to it |

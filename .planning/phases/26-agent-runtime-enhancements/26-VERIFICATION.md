@@ -1,10 +1,16 @@
 ---
 phase: 26-agent-runtime-enhancements
-verified: 2026-09-07T16:20:00Z
+verified: 2026-09-07T16:53:12Z
 status: passed
 score: 10/10 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
+re_verification:
+  previous_status: passed
+  previous_score: 10/10
+  gaps_closed: []
+  gaps_remaining: []
+  regressions: []
 ---
 
 # Phase 26: Agent Runtime Enhancements Verification Report
@@ -14,144 +20,138 @@ confined cross-session memory, first-class structured output, verified provider 
 one-line tool-loop agent preset (`reasoning_agent`) — the Agent Runtime Enhancements of v0.10.0
 (PRD `.project/v0.10.0/05-agent-runtime-enhancements.md`).
 
-**Verified:** 2026-09-07
+**Verified:** 2026-09-07T16:53:12Z
 **Status:** passed
-**Re-verification:** No — initial verification
+**Re-verification:** Yes — after post-verification code-review fix pass (commits `bc2cd4f3`,
+`12c7562e`, `f26647a8`, `45c05fbf`, `cfc664d5`, `d43d462b`, merged at `cf0d1e27` on top of the
+previously-verified `a88ea46e`).
+
+## Re-verification Scope
+
+The prior pass (`a88ea46e`, 2026-09-07T16:20:00Z) verified the phase `passed, 10/10`. Since then a
+code-review fix pass landed 5 findings from `26-REVIEW.md` (`fix_scope: critical+warning`):
+
+| Commit | Finding | Files | Re-checked how |
+|---|---|---|---|
+| `bc2cd4f3` | CR-01 (`format_result`'s `Error:` field bypassed redact-then-bound) + WR-03 (`format_result`'s `Output:` field likewise unsanitized) | `src/infrastructure/adapters/arsenal/tool_result_formatter.rs` | Read full diff; ran `cargo test -p paladin-ai --lib -- tool_result_formatter::` (12/12 pass, incl. both new tests); confirmed `sanitize_tool_text` is the single call site for `format_error` + both `format_result` branches |
+| `12c7562e` | CR-02 (`after_model` `Finish` over a synthetic view lost to the original `before_model` `Finish`) | `src/application/services/paladin/paladin_execution_service.rs` | Read full diff and the surrounding control flow (lines 1370-1445); confirmed `run_after`'s `Option<FinalResult>` (`chain.rs:78-92`) is now threaded through via `.unwrap_or(result)`, mirroring the sibling post-model-call path exactly as `26-REVIEW.md`'s CR-02 finding specifies; ran `cargo test -p paladin-ai --lib -- middleware_wiring_tests::` (14/14 pass, incl. the new `after_model_finish_over_a_synthetic_view_overrides_the_before_model_finish`) and the full `paladin_execution_service::` module (54/54 pass) |
+| `f26647a8` | WR-01 (`key=`/`token=` redaction misfiring on ordinary words) | `crates/paladin-llm/src/redaction.rs` | Read full diff; ran `cargo test -p paladin-llm --all-features --lib -- redaction::` (11/11 pass, incl. the new `redact_secret_patterns_does_not_misfire_on_ordinary_words_ending_in_key_or_token`, which also asserts `api_key=`/`access_token=` still redact) |
+| `45c05fbf` | WR-02 (structured-output path bypasses `ExecutionMiddleware` — documented, not re-architected per the review's own instruction) | `crates/paladin-ports/src/output/structured_executor_port.rs`, `src/application/services/paladin/structured.rs`, `src/application/services/paladin/paladin_execution_service.rs`, `docs/src/user-guides/agent-runtime.md` | Read full diff; traced `execute_json_schema` → `execute_structured_call` (lines 2852-2940) and confirmed neither calls `run_before`/`run_after`/`run_around_tool` — the new rustdoc's claim is accurate; ran `cargo test -p paladin-ports --lib -- structured_executor_port` (8/8 pass), `cargo test -p paladin-ai --doc reasoning_agent` (2/2 pass) |
+| `cfc664d5` | Doc-drift follow-up: `CHANGELOG.md` `### Fixed` entry + `MIGRATION.md` §9.1 M-B-03 amendment | `CHANGELOG.md`, `MIGRATION.md` | Read both diffs; cross-checked each claim against the corresponding code diff (CR-01/WR-03/WR-01 text matches; CR-02 is correctly left out of `MIGRATION.md` since it restores already-documented `run_after` contract behavior — `chain.rs`'s own doc comment already specified the semantics CR-02 now implements — rather than introducing a new user-visible behavior) |
+| `d43d462b` | `26-REVIEW-FIX.md` report | (docs only) | Read; frontmatter (`findings_in_scope: 5`, `fixed: 4`, `status: all_fixed`) matches the 4 behavioral commits + 1 documented (WR-02); IN-01 (JWT false-positive, Info-severity) correctly left unaddressed per the review's own "no action required" recommendation |
+
+Untouched must-haves (RT-02, RT-03, RT-04, RT-06, truths #8/#9, all artifacts and key links not
+listed above) are **carried forward unchanged from the prior verification** — no file backing them
+was touched by these 6 commits (`git diff a88ea46e..HEAD --stat` confirms exactly the 9 files
+listed above changed, none of which back RT-02/03/04/06).
 
 ## Goal Achievement
 
 ### Observable Truths
 
-Derived from ROADMAP success criteria (RT-01..RT-07) and merged with the 21 plans' `must_haves.truths`.
-Each row cites the command run in THIS verification session, not SUMMARY.md narration.
-
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | RT-01: `PaladinExecutionService` has an ordered `ExecutionMiddleware` chain, onion-ordered, stateless middleware with per-run state on context, engine-node parity | ✓ VERIFIED | `src/application/services/paladin/middleware/{mod,chain,context}.rs` exist and compile; `cargo test -p paladin-ai --lib -- chain::` → 4/4 pass incl. `onion_ordering_full_pass_runs_after_in_reverse`, `onion_ordering_finish_from_second_middleware`, `fail_from_before_model_propagates_unchanged_and_is_not_retried`; `empty_chain_renders_byte_identical_prompt` passes; `tests/integration/middleware_under_engine_test.rs` 3/3 pass (`paladin_node_under_engine_runs_the_service_middleware_chain`, `node_interceptor_and_execution_middleware_are_independent_layers`, `engine_needs_no_middleware_registry`) |
-| 2 | RT-02: Built-in middleware ships config-structured (X-09): `ModelCallLimit`, `TokenBudget`, `ToolCallLimit`, `Guardrail`, `ModelRetry`/`ModelFallback` | ✓ VERIFIED | `src/config/agent_runtime.rs` (1992 lines) with 12 sub-structs; `src/application/services/paladin/middleware/{limits,guardrail,resilience}.rs` exist; `cargo test -p paladin-ai --lib -- middleware::` → 85/85 pass incl. `model_call_limit_finishes_at_exactly_max_calls`, `token_budget_keeps_the_crossing_response_and_finishes`, `tool_call_limit_denies_the_call_past_the_budget`, `no_resilience_middleware_keeps_todays_retry_shape`, `fallback_middleware_routes_through_the_fallback_adapter`, `concurrent_runs_keep_independent_limit_counters` |
-| 3 | RT-03: Long conversations fit the context window via `TokenCounterPort` (heuristic default), `HistoryTrimmer`, compounding `SummarizationMiddleware` with self-sufficient degradation | ✓ VERIFIED | `crates/paladin-ports/src/output/token_counter_port.rs`, `crates/paladin-memory/src/token_counter/heuristic.rs`, `src/application/services/paladin/middleware/{history,summarization}.rs` exist; middleware test run above includes `thirty_messages_produce_one_summary_and_ten_raw`, `compounding_builds_the_second_summary_from_the_first`, `summarizer_failure_degrades_to_trimming`, `summarization_never_fails_the_run`, `degradation_does_not_depend_on_chain_order` — all pass |
-| 4 | RT-04: Agents get confined cross-session memory: `VaultPort` (3 adapters), `Namespace` segment-wise confinement, `ConfinedVault`, in-process `vault_get`/`vault_put` tools | ✓ VERIFIED | `cargo test -p paladin-ai-core --lib -- vault::` 20/20 incl. `is_prefix_of_is_segment_wise_not_string_wise`, `namespace_rejects_every_invalid_shape_*` (7 cases); `cargo test -p paladin-ports --lib -- vault_confined::` 8/8 incl. `confined_vault_denies_a_sibling_namespace`, `confined_vault_denies_a_parent_namespace`; `cargo test -p paladin-memory --lib --features sqlite -- vault::` 46/46 incl. `vault_and_garrison_share_one_migrator`, `search_re_filters_by_namespace_even_when_the_backend_does_not`; `tests/integration/vault_confinement_test.rs` 6/6 pass incl. `hostile_tool_call_to_a_sibling_namespace_is_denied`, `hostile_tool_call_to_a_lookalike_sibling_is_denied`, `hostile_tool_call_to_the_parent_is_denied`, `a_traversal_segment_never_constructs`, `concurrent_confined_tool_writes_produce_zero_cross_namespace_records` |
-| 5 | RT-05: Structured output first-class via `execute_structured<T>`, bounded repair loop, engine `output_schema` writing parsed JSON to `output_field` | ✓ VERIFIED | `crates/paladin-core/src/platform/container/structured.rs`, `crates/paladin-ports/src/output/structured_executor_port.rs`, `src/application/services/paladin/structured.rs` exist; `cargo test -p paladin-ai-core --lib -- structured::` pass; `cargo test -p paladin-ai --doc reasoning_agent` 2/2 pass; `tests/integration/structured_engine_node_test.rs` 8/8 pass incl. `structured_node_writes_a_parsed_object_to_output_field`, `repair_happens_inside_the_node`, `exhaustion_becomes_a_node_error_with_unknown_transience`, `registered_schema_by_name_works_end_to_end` |
-| 6 | RT-06: Provider conformance verified against a shared fixed case list (verify-then-fix, not greenfield) | ✓ VERIFIED | `crates/paladin-llm/src/conformance.rs` (654 lines); `cargo test -p paladin-llm --lib --all-features -- conformance` → 33/33 pass = 24 real-adapter cases (3 adapters × 8 cases: usage extraction, streaming order, mid-stream error before/after first chunk, dedicated status mappings, transience-by-value, credential redaction, refused redirect) + 9 meta/macro-correctness tests |
-| 7 | RT-07: `reasoning_agent(llm, arsenal, opts)` one-liner returns a runnable tool-loop agent that completes on a plain answer | ✓ VERIFIED | `src/presets/mod.rs` (373 lines); `crates/doc-examples/src/agent_runtime.rs` anchored example is 13 body lines (≤15, D-35); `tests/integration/reasoning_agent_test.rs` 7/7 pass incl. `reasoning_agent_runs_a_tool_and_answers`, `an_empty_arsenal_still_runs`, `max_tool_calls_is_enforced`, `tool_failure_is_fed_back_by_default`, `the_preset_does_not_enable_vault_tools`; doc test on `reasoning_agent` passes |
-| 8 | Every provider path (OpenAI, compat engine, Gemini, DeepSeek) puts `response_format` on the wire; Anthropic's lack of native mode is pinned by a test, not assumed | ✓ VERIFIED | `cargo test -p paladin-llm --lib` output includes `anthropic_ignores_response_format`-style coverage in the full 165-test `paladin-llm --lib` run (0 failures); `crates/paladin-llm/src/{openai,gemini,deepseek}/adapter.rs`, `compat/engine.rs` modified per SUMMARY and compile clean |
-| 9 | Semver/X-10 discipline: exactly 3 new Phase-26 deliberate-breaking entries (StopReason, LlmRequest, GarrisonEntry), set-equal with MIGRATION.md §9.2 Y rows | ✓ VERIFIED | `.cargo/semver-checks-allowlist.toml` inspected directly — exactly 3 Phase-26 `[[entry]]` blocks (`StopReason`/`enum_marked_non_exhaustive`, `LlmRequest`/`struct_marked_non_exhaustive`, `GarrisonEntry`/`struct_marked_non_exhaustive`), each with a matching MIGRATION.md §9.2 row resolved `Y`; `PaladinError` and `PaladinPort` rows correctly extended without new allowlist entries (Change-cell extension / defaulted method, per plan design) |
-| 10 | Gate evidence green on the verified tree: compiles, lints, full test suite, api-surface unchanged, docs page registered | ✓ VERIFIED | `cargo check --workspace --all-targets --all-features` clean; `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean; `cargo fmt --check` clean (exit 0); `make test` 13/13 binaries green (2059 total lib/bin tests, 0 failed); `cargo test --test lib` → 728 passed, 14 ignored, 0 failed (matches cited gate evidence exactly); `cargo test --test lib --all-features` → 828 passed, 0 failed, 76 ignored; `scripts/extract-public-api.sh` regenerates 3057 items (matches `.project/current-exports.txt`, only timestamp differs); `scripts/check-api-surface.sh .project/current-exports.txt` → "API surface unchanged"; `cargo audit` exit 0; `docs/src/SUMMARY.md:26` registers `agent-runtime.md` after `fault-tolerance.md`; `docs/src/user-guides/agent-runtime.md` carries all 6 required D-38 sections (two-layer contract table, Vault/Garrison/Waypoint table, per-provider response_format table, tool-call protocol, reasoning_agent example, Ollama recipe) |
+| 1 | RT-01: `PaladinExecutionService` has an ordered `ExecutionMiddleware` chain, onion-ordered, stateless middleware with per-run state on context, engine-node parity | ✓ VERIFIED (re-checked) | CR-02 fix directly touches this chain's `BeforeOutcome::Finish` arm. Re-ran `cargo test -p paladin-ai --lib -- chain:: middleware_wiring_tests::` this session: chain tests still 4/4 pass; `middleware_wiring_tests` now 14/14 pass (13 prior + 1 new: `after_model_finish_over_a_synthetic_view_overrides_the_before_model_finish`). Read the fixed code directly (lines 1388-1445): `run_after`'s `Option<FinalResult>` is now honored via `.unwrap_or(result)`, matching `chain::run_after`'s own doc contract and the sibling post-model-call path 60 lines below — the onion-ordering/D-06 guarantee this truth asserts is now correctly implemented on both `Finish` paths, not just one |
+| 2 | RT-02: Built-in middleware ships config-structured (X-09): `ModelCallLimit`, `TokenBudget`, `ToolCallLimit`, `Guardrail`, `ModelRetry`/`ModelFallback` | ✓ VERIFIED (carried forward) | Not touched by any of the 6 commits (`limits.rs`, `guardrail.rs`, `resilience.rs`, `src/config/agent_runtime.rs` all absent from the diff stat). Prior evidence stands: 85/85 middleware unit tests |
+| 3 | RT-03: Long conversations fit the context window via `TokenCounterPort`, `HistoryTrimmer`, compounding `SummarizationMiddleware` with self-sufficient degradation | ✓ VERIFIED (carried forward) | Not touched (`history.rs`, `summarization.rs`, `token_counter_port.rs` absent from diff). Prior evidence stands |
+| 4 | RT-04: Agents get confined cross-session memory: `VaultPort` (3 adapters), `Namespace` segment-wise confinement, `ConfinedVault`, in-process `vault_get`/`vault_put` tools | ✓ VERIFIED (carried forward) | Not touched (`vault.rs`, `vault_confined.rs`, `vault/*` adapters, `vault_tools.rs` absent from diff). Prior evidence stands |
+| 5 | RT-05: Structured output first-class via `execute_structured<T>`, bounded repair loop, engine `output_schema` writing parsed JSON to `output_field` | ✓ VERIFIED (re-checked) | WR-02's documentation addition touches this surface (`structured_executor_port.rs`, `structured.rs`, the `impl StructuredExecutorPort for PaladinExecutionService` block). Behavior is unchanged (documentation-only fix, no re-architecture, per the review's own instruction) — confirmed by reading `execute_json_schema`/`execute_structured_call` (lines 2852-2940): identical logic to the prior verification, still no `self.middleware` call. Re-ran `cargo test -p paladin-ports --lib -- structured_executor_port` (8/8 pass) and `cargo test -p paladin-ai --doc reasoning_agent` (2/2 pass, unaffected). Doc claim in `docs/src/user-guides/agent-runtime.md` ("does not run on this path... Guardrail/VaultRecallMiddleware/ToolCallLimit/TokenBudget/ModelCallLimit... silently inert") verified accurate against the code |
+| 6 | RT-06: Provider conformance verified against a shared fixed case list | ✓ VERIFIED (carried forward) | Not touched (`conformance.rs` absent from diff). Prior evidence stands |
+| 7 | RT-07: `reasoning_agent(llm, arsenal, opts)` one-liner returns a runnable tool-loop agent that completes on a plain answer | ✓ VERIFIED (re-checked) | `reasoning_agent`'s tool-call path renders tool output/errors through `ToolResultFormatter`, which CR-01/WR-03 fixed. Re-ran `cargo test -p paladin-ai --doc reasoning_agent` (2/2 pass) and `cargo test -p paladin-ai --lib -- tool_result_formatter::` (12/12 pass). `src/presets/mod.rs` itself is untouched by the diff — the fix is one layer below, in the shared formatter every tool-loop agent (including `reasoning_agent`) already routes through |
+| 8 | Every provider path (OpenAI, compat engine, Gemini, DeepSeek) puts `response_format` on the wire; Anthropic's lack of native mode is pinned by a test | ✓ VERIFIED (carried forward) | Not touched by these commits (only `redaction.rs` changed in `paladin-llm`, not the adapter files). Prior evidence stands |
+| 9 | Semver/X-10 discipline: exactly 3 new Phase-26 deliberate-breaking entries, set-equal with MIGRATION.md §9.2 Y rows | ✓ VERIFIED (re-checked, no new entries) | `.cargo/semver-checks-allowlist.toml` is absent from the 6-commit diff stat — no new allowlist entries were added by this fix pass (correct: none of the 5 findings touch a semver-relevant public type signature). `MIGRATION.md`'s new content (this session) is confined to a §9.1 M-B-03 amendment paragraph, not a new §9.2 row — consistent with CR-01/WR-01/WR-03 narrowing existing sanitization rather than introducing a new breaking type change. `bash scripts/check-api-surface.sh .project/current-exports.txt` re-run this session: "API surface unchanged" (3057 items), confirming no public API drift from any of the 6 commits |
+| 10 | Gate evidence green on the verified tree: compiles, lints, full test suite, api-surface unchanged, docs page registered | ✓ VERIFIED (re-checked; one non-blocking observation) | Re-ran and confirmed this session: `cargo fmt --check` exit 0; `scripts/check-api-surface.sh` → "API surface unchanged" (3057 items); targeted test suites above all green. Orchestrator-cited (not re-run, per instructions): `cargo check --workspace --all-targets --all-features`, pre-commit hook (fmt+clippy -D warnings), `make test` (13 binaries, facade 735 passed), `cargo test --test lib` (728 passed, 14 ignored), `paladin-llm` redaction 11/11, facade `tool_result_formatter` 12/12. **One observation surfaced independently this session** (not part of the cited gate list, not a roadmap success criterion, not a regression that changes pass/fail): `cargo doc --workspace --no-deps` (the CI `lint`/"Code Quality" job's "Check documentation" step, `.github/workflows/ci.yml:63`, which fails on ANY warning) currently reports 62 warnings workspace-wide. Reading the diff, exactly 2 of those are newly introduced by this fix pass — both `private_intra_doc_links` on the WR-02 doc addition to `impl StructuredExecutorPort for PaladinExecutionService` (`[`Self::execute_structured_call`]` and `[`Self::execute_with_retry_and_temperature`]`, both private methods). This CI job was already broken before this fix pass (≥1 pre-existing occurrence of the same `execute_structured_call` link from the original phase-26 work, plus ~60 unrelated warnings elsewhere in the 119-file-reviewed workspace) — this fix pass makes an already-red job marginally redder, it does not newly break a previously-green gate. See Anti-Patterns section below |
 
 **Score:** 10/10 truths verified (0 present, behavior-unverified)
 
-### Required Artifacts
-
-All 36 key artifacts named across the 21 plans' `must_haves.artifacts` were checked for existence and substance (non-trivial line counts, no stub markers):
+### Required Artifacts (delta only — see prior report for the full 36-artifact table, unchanged)
 
 | Artifact | Expected | Status | Details |
 |----------|----------|--------|---------|
-| `src/application/services/paladin/middleware/{mod,chain,context}.rs` | Middleware trait, chain driver, context types | ✓ VERIFIED | 395/374/426 lines; tests pass |
-| `src/application/services/paladin/middleware/limits.rs` | ModelCallLimit/TokenBudget/ToolCallLimit | ✓ VERIFIED | 785 lines; 13 tests pass |
-| `src/application/services/paladin/middleware/guardrail.rs` | Guardrail rules/regex/predicate | ✓ VERIFIED | 929 lines; construction-time `RegexBuilder::size_limit` confirmed |
-| `src/application/services/paladin/middleware/{history,summarization,vault_recall}.rs` | Context-window + Vault-recall middleware | ✓ VERIFIED | 622/880/678 lines; all tests pass |
-| `src/application/services/paladin/middleware/resilience.rs` | Retry/fallback port-shaping middleware | ✓ VERIFIED | 432 lines; tests pass |
-| `src/application/services/paladin/middleware/tool_protocol.rs` | Tool-call protocol + finish-on-plain-answer | ✓ VERIFIED | 567 lines; tests pass |
-| `src/config/agent_runtime.rs` | AgentRuntimeConfig + 12 sub-structs + `build_chain` | ✓ VERIFIED | 1992 lines |
-| `crates/paladin-core/src/platform/container/vault.rs` | Namespace/VaultRecord/VaultError value types | ✓ VERIFIED | 813 lines; sibling-adjacency doc example present |
-| `crates/paladin-ports/src/output/{vault_port,vault_confined,structured_executor_port,token_counter_port}.rs` | Port traits | ✓ VERIFIED | All present, compile, tested |
-| `crates/paladin-memory/src/vault/{in_memory,sqlite,semantic,contract_tests}.rs` | 3 VaultPort adapters + shared contract suite | ✓ VERIFIED | 200/475/625/284 lines; 46 tests pass under `--features sqlite` |
-| `crates/paladin-memory/src/migrations.rs` + `002_*.sql` + `003_*.sql` | Shared embedded migrator | ✓ VERIFIED | `vault_and_garrison_share_one_migrator` test passes |
-| `crates/paladin-core/src/platform/container/{run_scope,structured}.rs` | RunScope, Structured<T>/SchemaRef/extract_json | ✓ VERIFIED | 120/531 lines; tests pass |
-| `src/application/services/paladin/structured.rs` | StructuredExecutorExt blanket impl | ✓ VERIFIED | 413 lines; doc test passes |
-| `src/application/services/arsenal/{in_process_arsenal,composite_arsenal,vault_tools}.rs` | Executable Arsenal + Vault tools | ✓ VERIFIED | 287/216/514 lines; attack tests pass |
-| `src/presets/mod.rs` + `crates/doc-examples/src/agent_runtime.rs` | `reasoning_agent` preset + anchored example | ✓ VERIFIED | 373/48 lines; anchor is 13 body lines; doc test + integration tests pass |
-| `crates/paladin-llm/src/conformance.rs` | Shared conformance fixture + macro | ✓ VERIFIED | 654 lines; 33/33 tests pass |
-| `tests/integration/{middleware_under_engine,vault_confinement,structured_engine_node,reasoning_agent}_test.rs` | End-to-end integration proofs | ✓ VERIFIED | 294/440/526/188 lines; all 34 tests pass |
-| `docs/src/user-guides/agent-runtime.md` | User guide with 6 required sections | ✓ VERIFIED | 236 lines; registered in SUMMARY.md; all 6 sections present |
+| `src/infrastructure/adapters/arsenal/tool_result_formatter.rs` | Redact-then-bound on every tool-text path | ✓ VERIFIED | New `sanitize_tool_text` helper is the single call site for `format_error` and both `format_result` branches; 12/12 tests pass incl. 2 new |
+| `src/application/services/paladin/paladin_execution_service.rs` | `after_model` `Finish` over the reached prefix wins over the original `before_model` `Finish` | ✓ VERIFIED | `.unwrap_or(result)` threads `run_after`'s `Option<FinalResult>` through; 54/54 module tests pass incl. 1 new |
+| `crates/paladin-llm/src/redaction.rs` | `key=`/`token=` markers require a word boundary | ✓ VERIFIED | `is_word_boundary` check added to `redact_token_after`; 11/11 tests pass incl. 1 new, `api_key=`/`access_token=` still redact |
+| `crates/paladin-ports/src/output/structured_executor_port.rs`, `src/application/services/paladin/structured.rs` | Document (not fix) that the `ExecutionMiddleware` chain is bypassed | ✓ VERIFIED | Rustdoc additions accurately describe the existing (unchanged) code path; 8/8 + 2/2 doc tests pass |
+| `docs/src/user-guides/agent-runtime.md` | New note matching the WR-02 code reality | ✓ VERIFIED | New paragraph under "Structured Output" section names the exact middleware classes that are inert on this path — matches code |
+| `CHANGELOG.md`, `MIGRATION.md` | Doc-drift follow-up describing the review-fix pass | ✓ VERIFIED | `### Fixed` entry (CHANGELOG) and §9.1 M-B-03 amendment (MIGRATION) both read accurately against the corresponding code diffs |
 
-### Key Link Verification
+### Key Link Verification (delta only)
 
 | From | To | Via | Status | Details |
 |------|-----|-----|--------|---------|
-| `PaladinExecutionService::execute_internal` reasoning loop | `chain.before_model`/`after_model`/`around_tool` | onion-ordered hook driver | ✓ WIRED | `empty_chain_renders_byte_identical_prompt` + onion-ordering chain tests pass |
-| `WarEngine` superstep Paladin arm | `PaladinPort::execute_scoped` | same service instance, same chain | ✓ WIRED | `paladin_node_under_engine_runs_the_service_middleware_chain` passes |
-| `RunScope.vault_namespace` | `ConfinedVault { inner, granted }` | `execute_scoped` resolution | ✓ WIRED | `confined_vault_denies_a_sibling_namespace` + `vault_confinement_test.rs` 6/6 pass |
-| `ConfinedVault` | `VaultTools` → `InProcessArsenal` → reasoning loop's Arsenal branch | `enable_vault_tools()`/`effective_arsenal()` | ✓ WIRED | `hostile_tool_call_to_a_sibling_namespace_is_denied` passes with store call-count 0 |
-| `LlmRequest.response_format` | provider adapter build_request | 4 wired paths (OpenAI/compat/Gemini/DeepSeek) | ✓ WIRED | `paladin-llm --lib` 165/165 pass (0 failures across the whole crate, including per-path mockito tests) |
-| `extract_json` (core) | `DirectiveParser`, `run_structured`, `ToolCallProtocolMiddleware` | one extraction rule, three consumers | ✓ WIRED | `structured_directive_and_output_schema_share_extract_json` passes; `a_documented_envelope_synthesizes_a_function_call` passes |
-| `AgentRuntimeConfig::build_chain` | documented fixed assembly order | `reasoning_agent` preset | ✓ WIRED | `reasoning_agent_runs_a_tool_and_answers` and related preset tests pass |
-| `.cargo/semver-checks-allowlist.toml` | MIGRATION.md §9.2 Y rows | set-equality (3 entries each direction) | ✓ WIRED | Manually cross-checked; exact match |
-| `scripts/extract-public-api.sh` | `.project/current-exports.txt` | `scripts/check-api-surface.sh` | ✓ WIRED | Regeneration matches (3057 items); check script reports "API surface unchanged" |
+| `run_after`'s `Option<FinalResult>` (synthetic-view path) | `PaladinResult.stop_reason` / `accumulated_output` | `.unwrap_or(result)` | ✓ WIRED (newly correct) | Was previously discarded (CR-02); now threaded through identically to the sibling post-model-call path |
+| `ToolResultFormatter::format_result` (both branches) | `Self::sanitize_tool_text` | direct call | ✓ WIRED (newly correct) | Was previously only wired on `format_error`'s `Err` path; CR-01/WR-03 extend the same helper to both `format_result` branches |
+| `redact_token_after` | word-boundary check before matching `key=`/`token=` | `is_word_boundary` guard | ✓ WIRED (newly correct) | Confirmed `api_key=`/`access_token=` (underscore-preceded) still redact; ordinary words (`monkey=`, `donkey=`, `turkey=`, `jockey=`) no longer misfire |
+| All other key links from prior report | — | — | ✓ WIRED (carried forward) | Unaffected by this fix pass |
 
 ### Requirements Coverage
 
-| Requirement | Source Plans | Description | Status | Evidence |
-|-------------|-------------|-------------|--------|----------|
-| RT-01 | 26-01 | Ordered `ExecutionMiddleware` chain | ✓ SATISFIED | Truth #1 |
-| RT-02 | 26-02, 26-05, 26-08, 26-10, 26-20 | Built-in config-structured middleware | ✓ SATISFIED | Truth #2 |
-| RT-03 | 26-07, 26-11, 26-15 | Context-window management | ✓ SATISFIED | Truth #3 |
-| RT-04 | 26-04, 26-09, 26-13, 26-15, 26-16 | Confined cross-session Vault memory | ✓ SATISFIED | Truth #4 |
-| RT-05 | 26-03, 26-06, 26-12, 26-17, 26-18 | First-class structured output | ✓ SATISFIED | Truth #5 |
-| RT-06 | 26-14 | Provider conformance close-out | ✓ SATISFIED | Truth #6 |
-| RT-07 | 26-19, 26-20 | `reasoning_agent` one-liner preset | ✓ SATISFIED | Truth #7 |
-
-REQUIREMENTS.md rows for RT-01..RT-07 are still marked `Pending`/unchecked (lines 170-211, 375-381)
-— per the phase brief, this is expected: the orchestrator flips these at phase close and is not a
-verification gap. No orphaned requirements found: every RT-ID declared in REQUIREMENTS.md §Phase 26
-is claimed by at least one plan's `requirements:` frontmatter (cross-referenced above).
+Unchanged from prior report — RT-01 through RT-07 all `✓ SATISFIED`. REQUIREMENTS.md rows are still
+correctly `Pending` (verified this session: lines 375, 379, 381 for RT-01/RT-05/RT-07 read
+`Pending`) — the orchestrator flips these at phase close, not a verification gap.
 
 ### Anti-Patterns Found
 
-Scanned all 29 core phase-created/modified files (middleware/, config/agent_runtime.rs, vault.rs,
-structured.rs, arsenal helpers, presets, conformance.rs, doc-examples) for `TBD`/`FIXME`/`XXX`,
-`TODO`/`HACK`/`PLACEHOLDER`, "not yet implemented", empty-return stubs. Zero blocking matches. Two
-incidental substring hits were both rustdoc prose, not debt markers:
-- `structured_executor_port.rs:83` — comment `"The default is correct, not a placeholder (X-10.4)"` (explicitly the opposite of a stub)
-- `conformance.rs:319` — comment referencing Ollama's literal credential string `"ollama"` as a `placeholder`, part of the D-12 design rationale, not an implementation gap
+Scanned the 9 files changed by this fix pass for `TBD`/`FIXME`/`XXX`, `TODO`/`HACK`/`PLACEHOLDER`,
+stub patterns. Zero matches.
 
-No 🛑 blockers, no ⚠️ warnings.
+**ℹ️ Info (not a blocker, not a new regression to pass/fail status):** the WR-02 documentation
+addition to `paladin_execution_service.rs` introduces 2 new `rustdoc::private_intra_doc_links`
+warnings (`[`Self::execute_structured_call`]` and `[`Self::execute_with_retry_and_temperature`]`,
+both genuinely private methods referenced from a doc comment on a public trait impl). `cargo doc
+--workspace --no-deps` — the exact command CI's required "Code Quality" job runs at
+`.github/workflows/ci.yml:63`, gated on zero warnings — currently reports 62 warnings across the
+workspace, most pre-existing and unrelated to phase 26 (this job was already red before this fix
+pass: at least 1 occurrence of the same `execute_structured_call` link existed in the original
+phase-26 doc comment at `a88ea46e`). This is not one of the roadmap's RT-01..RT-07 success criteria,
+was not part of the prior verification's gate-evidence list, and does not change any test result —
+recorded for completeness per the "confirm no docs drift" instruction, since it is a mechanical
+rendering defect in the very rustdoc prose this fix pass added, not a content-accuracy problem
+(the prose itself is correct, per the truth #5 check above). No 🛑 blockers, no ⚠️ warnings.
 
-### Behavioral Spot-Checks / Test Execution Summary
+### Behavioral Spot-Checks (this session)
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| Workspace compiles with all targets/features | `cargo check --workspace --all-targets --all-features` | Finished, 0 errors | ✓ PASS |
-| Lints clean | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Finished, 0 warnings | ✓ PASS |
+| `ToolResultFormatter` redact-then-bound on all 3 text paths | `cargo test -p paladin-ai --lib -- tool_result_formatter::` | 12 passed, 0 failed | ✓ PASS |
+| `key=`/`token=` word-boundary fix | `cargo test -p paladin-llm --all-features --lib -- redaction::` | 11 passed, 0 failed | ✓ PASS |
+| CR-02 `after_model` Finish precedence | `cargo test -p paladin-ai --lib -- middleware_wiring_tests::` | 14 passed, 0 failed | ✓ PASS |
+| Full `paladin_execution_service` module regression | `cargo test -p paladin-ai --lib -- paladin_execution_service::` | 54 passed, 0 failed | ✓ PASS |
+| Structured executor port unaffected | `cargo test -p paladin-ports --lib -- structured_executor_port` | 8 passed, 0 failed | ✓ PASS |
+| `reasoning_agent` doc examples unaffected | `cargo test -p paladin-ai --doc reasoning_agent` | 2 passed, 0 failed | ✓ PASS |
 | Formatting clean | `cargo fmt --check` | exit 0 | ✓ PASS |
-| Middleware unit tests | `cargo test -p paladin-ai --lib -- middleware::` | 85 passed, 0 failed | ✓ PASS |
-| Chain onion-ordering tests | `cargo test -p paladin-ai --lib -- chain::` | 4 passed, 0 failed | ✓ PASS |
-| Golden equivalence test | `cargo test -p paladin-ai --lib -- empty_chain_renders_byte_identical_prompt` | 1 passed | ✓ PASS |
-| Core vault/run_scope/structured tests | `cargo test -p paladin-ai-core --lib -- vault:: run_scope:: structured::` | 26 passed, 0 failed | ✓ PASS |
-| ConfinedVault tests | `cargo test -p paladin-ports --lib -- vault_confined::` | 8 passed, 0 failed | ✓ PASS |
-| Memory vault adapters (3-way contract) | `cargo test -p paladin-memory --lib --features sqlite -- vault::` | 46 passed, 0 failed | ✓ PASS |
-| Vault confinement attack tests (E2E) | `cargo test --test lib --all-features -- vault_confinement` | 6 passed, 0 failed | ✓ PASS |
-| Structured/reasoning-agent/middleware-engine E2E | `cargo test --test lib --all-features -- structured_engine_node reasoning_agent middleware_under_engine` | 18 passed, 0 failed | ✓ PASS |
-| Conformance suite | `cargo test -p paladin-llm --lib --all-features -- conformance` | 33 passed, 0 failed | ✓ PASS |
-| Doc-examples crate compiles | `cargo check -p paladin-doc-examples` | Finished, 0 errors | ✓ PASS |
-| `reasoning_agent` doc tests | `cargo test -p paladin-ai --doc reasoning_agent` | 2 passed, 0 failed | ✓ PASS |
-| Full `make test` (13 binaries) | `make test` | 0 failed across all 13 unit/bin test binaries | ✓ PASS |
-| Full integration binary | `cargo test --test lib` | 728 passed, 0 failed, 14 ignored (matches cited gate evidence exactly) | ✓ PASS |
-| Full integration binary, all features | `cargo test --test lib --all-features` | 828 passed, 0 failed, 76 ignored | ✓ PASS |
 | API surface unchanged | `scripts/check-api-surface.sh .project/current-exports.txt` | "API surface unchanged" (3057 items) | ✓ PASS |
-| Dependency audit | `cargo audit` | exit 0 (10 pre-existing allowlisted warnings, no new advisories) | ✓ PASS |
+| Planning docs untouched by fix pass | `git diff a88ea46e..HEAD -- .planning/STATE.md .planning/ROADMAP.md .planning/REQUIREMENTS.md` | empty diff | ✓ PASS |
+| Doc-build warning gate (informational — see Anti-Patterns) | `cargo doc --workspace --no-deps` | 62 warnings (60 pre-existing + 2 new from WR-02 prose) | ℹ️ INFO, not a pass/fail gate for this phase |
+
+Not re-run this session (cited from orchestrator, per instructions): `cargo check --workspace
+--all-targets --all-features`, pre-commit hook (fmt+clippy -D warnings), `make test`, `cargo test
+--test lib`, `cargo audit`, MSRV/semver/coverage release gates (all cited green on `cf0d1e27`).
 
 ### Human Verification Required
 
-None. All truths resolved to VERIFIED with executable evidence gathered in this verification
-session. The two Docker/live-service tiers named in 26-VALIDATION.md's "Manual-Only Verifications"
-table (Qdrant-backed `SemanticVault` search, live Ollama conformance) are correctly *not* claimed as
-locally passed anywhere in the plans/summaries — they are explicitly routed to CI (`ollama-integration`
-job) and UAT, which matches the environment constraint (no Docker in this devcontainer) and does not
-block phase verification.
+None.
 
 ### Gaps Summary
 
-None. Every must-have truth across all 21 plans traces to an artifact that exists, is substantive
-(no stub markers), is wired into the execution path it claims to extend, and is proven by a passing
-test executed directly in this verification session (not merely cited from SUMMARY.md). The
-semver/X-10 register is internally consistent (3 allowlist entries, 3 matching MIGRATION.md Y rows).
-The regenerated API surface export matches the committed file byte-for-byte except for the
-timestamp, closing the carried Phase 25 concern. `cargo check`, `clippy -D warnings`, `cargo fmt
---check`, `make test`, the full integration binary (both with and without `--all-features`), and
-`cargo audit` are all green on the current tree.
+None. All 5 code-review findings (CR-01, CR-02, WR-01, WR-02, WR-03) are correctly applied,
+each verified directly against the diff and a targeted passing test in this session — not merely
+cited from `26-REVIEW-FIX.md`'s narration. CR-02's control-flow fix now honors `run_after`'s
+documented contract identically on both the synthetic-view (`before_model`-early-finish) and
+real-response-view (`after`-model-call) paths. CR-01/WR-03's redact-then-bound coverage now spans
+every tool-text embedding point in `ToolResultFormatter`, not just the `Err` path. WR-01's
+word-boundary fix removes the `monkey=`/`donkey=`/`turkey=`/`jockey=` false-positive class without
+weakening real `key=`/`token=` detection. WR-02 is correctly left as documentation-only (per the
+review's own instruction not to re-architect), and the new rustdoc/user-guide prose is verified
+accurate against the unchanged code. `CHANGELOG.md`/`MIGRATION.md` amendments accurately describe
+the behavioral deltas; `MIGRATION.md` correctly omits a §9.2 row for CR-02 since it restores
+already-documented `run_after` semantics rather than introducing new user-visible behavior. No
+must-have from the prior 10/10 report regressed. The single new observation (2 additional
+`rustdoc::private_intra_doc_links` warnings from the WR-02 prose, layered onto an already-broken
+CI doc-build gate) is recorded as non-blocking information, not a gap, since it does not affect any
+roadmap success criterion, test result, or the prior gate-evidence baseline.
 
 ---
 
-_Verified: 2026-09-07T16:20:00Z_
+_Verified: 2026-09-07T16:53:12Z_
 _Verifier: Claude (gsd-verifier)_

@@ -1402,13 +1402,21 @@ impl PaladinExecutionService {
                         finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
                         function_call: None,
                     };
-                    run_after(
+                    // CR-02 (26-REVIEW.md): if a middleware in the reached
+                    // prefix itself requests a `Finish` from `after_model`,
+                    // that hook's own `FinalResult` (output AND
+                    // stop_reason) wins over the original `before_model`
+                    // `Finish`'s result -- mirroring the sibling
+                    // post-model-call path below, which threads
+                    // `final_result.stop_reason` through unconditionally.
+                    let effective_result = run_after(
                         &self.middleware,
                         &mut middleware_cx,
                         &mut synthetic_view,
                         reached,
                     )
-                    .await?;
+                    .await?
+                    .unwrap_or(result);
                     accumulated_output = synthetic_view.content;
 
                     if let Some(garrison) = &self.garrison {
@@ -1428,7 +1436,7 @@ impl PaladinExecutionService {
                         token_count: total_tokens,
                         execution_time_ms: start_time.elapsed().as_millis() as u64,
                         loop_count: loop_num,
-                        stop_reason: result.stop_reason,
+                        stop_reason: effective_result.stop_reason,
                         plan: task_plan,
                         handoff_history,
                         served_by,
@@ -4852,8 +4860,8 @@ mod tests {
 mod middleware_wiring_tests {
     use super::*;
     use crate::application::services::paladin::middleware::{
-        ExecutionMiddleware, LlmResponseView, MiddlewareFlow, ModelCallContext, PromptSection,
-        SectionPlacement, ToolCallContext, ToolCallKind, ToolFlow,
+        ExecutionMiddleware, FinalResult, LlmResponseView, MiddlewareFlow, ModelCallContext,
+        PromptSection, SectionPlacement, ToolCallContext, ToolCallKind, ToolFlow,
     };
     use crate::core::base::entity::node::Node;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
@@ -5038,6 +5046,54 @@ mod middleware_wiring_tests {
         }
     }
 
+    /// Finishes the run from `before_model` with a fixed `FinalResult`,
+    /// mirroring a real `ModelCallLimit` finishing early (CR-02, 26-REVIEW.md).
+    struct FinishBeforeMiddleware;
+
+    #[async_trait]
+    impl ExecutionMiddleware for FinishBeforeMiddleware {
+        async fn before_model(
+            &self,
+            _cx: &mut ModelCallContext<'_>,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            Ok(MiddlewareFlow::Finish(FinalResult::new(
+                "before-finish-output",
+                StopReason::CallLimit,
+            )))
+        }
+
+        fn name(&self) -> &str {
+            "finish-before"
+        }
+    }
+
+    /// Finishes the run from `after_model` with a fixed `FinalResult`,
+    /// mirroring a real `Guardrail` rule with `on_match: Finish` (CR-02,
+    /// 26-REVIEW.md). Like `Guardrail::apply_to_field`, it mutates
+    /// `resp.content` in place -- the service's `after_model` call site
+    /// reads the final output from `resp.content`, not `FinalResult::output`
+    /// (see `guardrail.rs`'s own `apply_to_field` doc comment).
+    struct FinishAfterMiddleware;
+
+    #[async_trait]
+    impl ExecutionMiddleware for FinishAfterMiddleware {
+        async fn after_model(
+            &self,
+            _cx: &mut ModelCallContext<'_>,
+            resp: &mut LlmResponseView,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            resp.content = "after-finish-output".to_string();
+            Ok(MiddlewareFlow::Finish(FinalResult::new(
+                "after-finish-output",
+                StopReason::Completed,
+            )))
+        }
+
+        fn name(&self) -> &str {
+            "finish-after"
+        }
+    }
+
     /// D-02's locked invariant: with no middleware attached, the rendered
     /// prompt, the `LlmPort` call count and the returned `PaladinResult` are
     /// byte-identical to a run with no chain -- the golden equivalence
@@ -5082,6 +5138,28 @@ mod middleware_wiring_tests {
                 "R.after(1)".to_string(),
             ]
         );
+    }
+
+    /// CR-02 (26-REVIEW.md): when an earlier-index middleware's
+    /// `before_model` finishes the run early, `run_after` still runs
+    /// `after_model` over the reached prefix (D-06) -- and if one of THOSE
+    /// hooks itself requests a `Finish`, that hook's own `FinalResult`
+    /// (output AND stop_reason) must win over the original `before_model`
+    /// `Finish`'s result, mirroring the sibling post-model-call path just
+    /// below in the source.
+    #[tokio::test]
+    async fn after_model_finish_over_a_synthetic_view_overrides_the_before_model_finish() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("unused"));
+        let service = make_service(llm).with_middleware_chain(vec![
+            Arc::new(FinishAfterMiddleware),
+            Arc::new(FinishBeforeMiddleware),
+        ]);
+        let paladin = make_paladin(3);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(result.output, "after-finish-output");
+        assert_eq!(result.stop_reason, StopReason::Completed);
     }
 
     /// `around_tool` fires for BOTH the Arsenal branch and the handoff

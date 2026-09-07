@@ -120,6 +120,13 @@ http = "1"
 reqwest_mcp = { package = "reqwest", version = "0.13", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# D-26 (RT-05, plan 26-12): direct facade dependency for `execute_structured<T>`'s
+# schema derivation (`schemars::schema_for!`), landing in plan 26-17. Pinned to
+# the same minor version already resolved via `rmcp 2.1.0` in `Cargo.lock`
+# (1.2.1), so this adds ZERO new packages to the dependency graph -- confirmed
+# by `cargo tree -i schemars` showing exactly two versions (0.9.0 via
+# serde_with, 1.2.1 via both rmcp and this direct edge). No cargo feature added.
+schemars = "1.2"
 
 tokio = { workspace = true }
 tokio-util = "0.7"

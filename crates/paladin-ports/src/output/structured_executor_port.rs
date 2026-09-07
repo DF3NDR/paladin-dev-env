@@ -38,7 +38,9 @@ use paladin_core::platform::container::execution_result::PaladinResult;
 use paladin_core::platform::container::heartbeat::HeartbeatHandle;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
-use paladin_core::platform::container::structured::{extract_json, render_instruction_block};
+use paladin_core::platform::container::structured::{
+    extract_json, render_instruction_block, shape_check,
+};
 
 // Re-exported so a consumer of this port needs one `use` for the whole
 // structured-output surface (D-26).
@@ -102,7 +104,12 @@ pub trait StructuredExecutorPort: Send + Sync {
 /// explicitly-labelled section -- the same delimited-section discipline the
 /// phase uses for recalled Vault content and fed-back tool errors (D-41).
 /// Written once, here, rather than at each call site.
-fn repair_prompt(original_input: &str, schema: &Value, error: &str, offending_output: &str) -> String {
+fn repair_prompt(
+    original_input: &str,
+    schema: &Value,
+    error: &str,
+    offending_output: &str,
+) -> String {
     let pretty_schema = serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
     format!(
         "{original_input}\n\n\
@@ -162,26 +169,27 @@ where
         attempts += 1;
         let raw = execute_fn(current_input.clone()).await?;
 
-        // --- Task 2 (RED): shape_check is not yet called here -- any
-        // output that merely PARSES as JSON is (incorrectly) accepted,
-        // regardless of whether it conforms to `schema`. Pinned failing by
-        // `repair_succeeds_on_attempt_two`,
-        // `exhaustion_returns_the_typed_error_with_raw_preserved`, and
-        // `a_shape_failure_repairs_like_a_parse_failure`.
-        match extract_json(&raw.output) {
-            Some(value) => {
+        let outcome = match extract_json(&raw.output) {
+            Some(value) => match shape_check(&value, schema) {
+                Ok(()) => Ok(value),
+                Err(shape_err) => Err(shape_err.to_string()),
+            },
+            None => Err("output did not contain a parseable JSON value".to_string()),
+        };
+
+        match outcome {
+            Ok(value) => {
                 return Ok(Structured { value, raw });
             }
-            None => {
-                let parse_error = "output did not contain a parseable JSON value".to_string();
+            Err(error) => {
                 if attempts > opts.max_repair_attempts {
                     return Err(PaladinError::StructuredOutputInvalid {
                         attempts,
-                        last_error: parse_error,
+                        last_error: error,
                         raw_output: raw.output,
                     });
                 }
-                current_input = repair_prompt(input, schema, &parse_error, &raw.output);
+                current_input = repair_prompt(input, schema, &error, &raw.output);
             }
         }
     }
@@ -224,13 +232,21 @@ mod tests {
             }
         };
 
-        run_structured(execute_fn, "original input", &schema(), &StructuredOptions::default())
-            .await
-            .unwrap();
+        run_structured(
+            execute_fn,
+            "original input",
+            &schema(),
+            &StructuredOptions::default(),
+        )
+        .await
+        .unwrap();
 
         let seen = seen_input.lock().unwrap().clone();
         assert!(seen.starts_with("original input"));
-        assert_eq!(seen, format!("original input{}", render_instruction_block(&schema())));
+        assert_eq!(
+            seen,
+            format!("original input{}", render_instruction_block(&schema()))
+        );
     }
 
     // --- Task 2, Test 2 ---
@@ -245,9 +261,14 @@ mod tests {
             async move { Ok(ok_result(r#"{"name": "Alice"}"#)) }
         };
 
-        let result = run_structured(execute_fn, "input", &schema(), &StructuredOptions::default())
-            .await
-            .unwrap();
+        let result = run_structured(
+            execute_fn,
+            "input",
+            &schema(),
+            &StructuredOptions::default(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.value, serde_json::json!({"name": "Alice"}));
         assert_eq!(call_count.load(Ordering::SeqCst), 1);

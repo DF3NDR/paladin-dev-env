@@ -626,6 +626,23 @@ pub type PaladinStream = mpsc::Receiver<Result<PaladinStreamChunk, PaladinError>
 /// 4. **Timeout Configuration**: Set reasonable timeouts (30-300s) based on task complexity
 /// 5. **Prompt Optimization**: Keep system prompts concise to reduce token usage
 /// 6. **LLM Provider Choice**: Use faster models (GPT-4o-mini, DeepSeek) for simpler tasks
+///
+/// # `ExecutionMiddleware` applies automatically through this port (Phase 26, D-05)
+///
+/// When a `WarEngine` dispatches a `NodeSpec::Paladin` node, it calls
+/// [`PaladinPort::execute_observed`] on whatever implementor it was
+/// constructed with. The facade's `PaladinExecutionService` (its
+/// `PaladinPort` implementor) carries its own ordered
+/// `ExecutionMiddleware` chain (`paladin::application::services::paladin::middleware`)
+/// and applies that chain unchanged on every call this trait's methods
+/// receive -- inside the node's own execution, once per model call and once
+/// per tool/handoff dispatch. **The engine holds no middleware registry of
+/// its own**: there is exactly one `Arc<dyn PaladinPort>` per `WarEngine`,
+/// and whatever middleware that port's own execution service carries is
+/// what every Paladin node dispatched through it observes. This is the
+/// other half of the two-layer contract `paladin-battalion`'s
+/// `NodeInterceptor` documents: the interceptor brackets the whole node
+/// once per Aegis attempt; the middleware chain sits inside it.
 #[async_trait]
 pub trait PaladinPort: Send + Sync {
     /// Execute a Paladin with the given input

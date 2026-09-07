@@ -7,8 +7,9 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use futures::stream;
+use paladin_core::platform::container::prompt::PromptType;
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
+    FinishReason, FunctionCall, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
     StreamingResponse, TokenUsage,
 };
 use std::collections::HashMap;
@@ -16,10 +17,33 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
 
-/// A single mocked response entry — either a success string or an error.
+/// A single mocked response entry — a success string, a tool-call request, or
+/// an error.
 #[derive(Debug, Clone)]
 enum MockEntry {
     Success(String),
+    ToolCall { name: String, arguments: String },
+    Error(LlmError),
+}
+
+/// One scripted entry for [`MockLlmAdapter::with_script`] (Phase 26 D-01/D-02:
+/// the `ExecutionMiddleware` chain's `around_tool`/handoff tests need a mock
+/// that can emit a [`FunctionCall`], which [`MockLlmAdapter::with_responses`]
+/// cannot express).
+#[derive(Debug, Clone)]
+pub enum MockScriptEntry {
+    /// A plain text success response.
+    Text(String),
+    /// A success response carrying a [`FunctionCall`] (`finish_reason` is
+    /// [`FinishReason::FunctionCall`]).
+    ToolCall {
+        /// The tool/function name the mocked model "calls".
+        name: String,
+        /// The JSON-encoded arguments string, exactly as a real provider
+        /// would return it in [`FunctionCall::arguments`].
+        arguments: String,
+    },
+    /// An error response.
     Error(LlmError),
 }
 
@@ -36,6 +60,10 @@ struct MockState {
     provider_name: &'static str,
     stream_script: Option<Vec<Result<String, LlmError>>>,
     model_query_error: Option<LlmError>,
+    /// Every request `generate`/`generate_stream` has received, in call
+    /// order (Phase 26 D-02: the golden equivalence test inspects the exact
+    /// rendered prompt bytes a real run produced).
+    requests: Vec<LlmRequest>,
 }
 
 impl Default for MockState {
@@ -55,6 +83,7 @@ impl Default for MockState {
             provider_name: "MockLLM",
             stream_script: None,
             model_query_error: None,
+            requests: Vec::new(),
         }
     }
 }
@@ -191,6 +220,66 @@ impl MockLlmAdapter {
         self
     }
 
+    /// Script a sequence of [`MockScriptEntry`] values, returned in order
+    /// (cycling when exhausted, same as [`MockLlmAdapter::with_responses`]).
+    ///
+    /// Unlike `with_responses`, a script can include [`MockScriptEntry::ToolCall`]
+    /// entries so a test can drive the [`FunctionCall`]-triggered branches of a
+    /// consumer's reasoning loop (handoff detection, Arsenal invocation).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
+    ///
+    /// let adapter = MockLlmAdapter::new().with_script(vec![
+    ///     MockScriptEntry::ToolCall {
+    ///         name: "web_search".to_string(),
+    ///         arguments: r#"{"query":"rust"}"#.to_string(),
+    ///     },
+    ///     MockScriptEntry::Text("done".to_string()),
+    /// ]);
+    /// ```
+    pub fn with_script(self, entries: Vec<MockScriptEntry>) -> Self {
+        let mut state = self.state.lock().unwrap();
+        state.responses = entries
+            .into_iter()
+            .map(|entry| match entry {
+                MockScriptEntry::Text(text) => MockEntry::Success(text),
+                MockScriptEntry::ToolCall { name, arguments } => {
+                    MockEntry::ToolCall { name, arguments }
+                }
+                MockScriptEntry::Error(error) => MockEntry::Error(error),
+            })
+            .collect();
+        state.response_index = 0;
+        drop(state);
+        self
+    }
+
+    /// Every request [`LlmPort::generate`] or [`LlmPort::generate_stream`]
+    /// has received so far, in call order.
+    pub fn requests(&self) -> Vec<LlmRequest> {
+        self.state.lock().unwrap().requests.clone()
+    }
+
+    /// The most recent request received, if any.
+    pub fn last_request(&self) -> Option<LlmRequest> {
+        self.state.lock().unwrap().requests.last().cloned()
+    }
+
+    /// The rendered prompt text of the most recent request, extracted from
+    /// its [`PromptType`] (`User.query` or `System.instructions`; any other
+    /// variant yields an empty string).
+    pub fn last_prompt(&self) -> Option<String> {
+        self.last_request()
+            .map(|request| match request.prompt.prompt_type() {
+                PromptType::User(user) => user.query.clone(),
+                PromptType::System(system) => system.instructions.clone(),
+                _ => String::new(),
+            })
+    }
+
     /// Return the number of times [`LlmPort::generate`] or a scripted
     /// [`LlmPort::generate_stream`] has been called.
     pub fn call_count(&self) -> usize {
@@ -202,11 +291,12 @@ impl MockLlmAdapter {
         self.call_count()
     }
 
-    /// Reset the call counter and response index to zero.
+    /// Reset the call counter, response index and recorded requests.
     pub fn reset(&self) {
         let mut state = self.state.lock().unwrap();
         state.call_count = 0;
         state.response_index = 0;
+        state.requests.clear();
     }
 
     /// Return `true` if the adapter was called at least once.
@@ -227,6 +317,7 @@ impl LlmPort for MockLlmAdapter {
         let (response_entry, delay, token_usage, finish_reason) = {
             let mut state = self.state.lock().unwrap();
             state.call_count += 1;
+            state.requests.push(request.clone());
             let index = state.response_index;
             let entry = state
                 .responses
@@ -260,6 +351,17 @@ impl LlmPort for MockLlmAdapter {
                 metadata: HashMap::new(),
                 function_call: None,
             }),
+            MockEntry::ToolCall { name, arguments } => Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model.clone(),
+                content: format!("Calling tool: {}", name),
+                finish_reason: FinishReason::FunctionCall,
+                usage: token_usage,
+                created_at: Utc::now(),
+                metadata: HashMap::new(),
+                function_call: Some(FunctionCall { name, arguments }),
+            }),
         }
     }
 
@@ -273,6 +375,7 @@ impl LlmPort for MockLlmAdapter {
             let script = state.stream_script.clone();
             if script.is_some() {
                 state.call_count += 1;
+                state.requests.push(request.clone());
             }
             script
         };

@@ -14,6 +14,9 @@ pub use crate::garrison::{TiktokenCounter, TokenCounter, TokenCounterFactory};
 pub use crate::sanctum::QdrantSanctumAdapter;
 pub use crate::sanctum::{InMemorySanctum, InMemorySanctumConfig};
 
+// Vault
+pub use crate::vault::InMemoryVault;
+
 // Services
 pub use crate::services::{
     MemoryExtractionService, MemoryExtractionStrategy, RagConfig, RagRetrievalService,

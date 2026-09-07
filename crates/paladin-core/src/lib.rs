@@ -29,3 +29,7 @@ pub mod platform;
 // re-export it here, under any name, from this module.
 pub use platform::container::aegis::Aegis;
 pub use platform::container::transience::Transience;
+// `Page` is deliberately NOT re-exported here (D-09): the name is too
+// generic to glob-import safely, unlike `Namespace`/`VaultRecord`/
+// `VaultError`, which carry no ambiguity with any other type in this crate.
+pub use platform::container::vault::{Namespace, VaultError, VaultRecord};

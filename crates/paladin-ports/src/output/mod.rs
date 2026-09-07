@@ -34,6 +34,8 @@ pub mod streaming_executor_port;
 pub mod trace_sink_port;
 /// User persistence repository port.
 pub mod user_repository_port;
+/// Vault (cross-thread namespaced key/value memory) port (Doc 05 RT-FR-13…16, D-18/D-19).
+pub mod vault_port;
 /// Waypoint (superstep checkpoint) persistence port.
 pub mod waypoint_port;
 /// Workflow persistence repository port.

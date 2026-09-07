@@ -18,6 +18,9 @@
 //!   - [`services::MemoryExtractionService`] — extracts and persists memories from conversations.
 //!   - [`services::RagRetrievalService`] — retrieves context for RAG pipelines.
 //!
+//! - **Vault** (`vault` module): Cross-thread namespaced key/value storage.
+//!   - [`vault::InMemoryVault`] — always available, zero-dependency in-process store.
+//!
 //! ## Feature flags
 //!
 //! | Feature              | Enables                                          |
@@ -49,3 +52,6 @@ pub mod sanctum;
 /// Application-layer services for memory extraction and retrieval.
 #[allow(missing_docs)]
 pub mod services;
+/// Vault adapters -- cross-thread namespaced key/value storage (D-18).
+#[allow(missing_docs)]
+pub mod vault;

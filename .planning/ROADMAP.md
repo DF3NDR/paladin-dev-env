@@ -547,7 +547,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 26-15-PLAN.md — `SummarizationMiddleware` + `VaultRecallMiddleware` (RT-03, RT-04)
+- [x] 26-15-PLAN.md — `SummarizationMiddleware` + `VaultRecallMiddleware` (RT-03, RT-04)
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

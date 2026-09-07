@@ -527,8 +527,8 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 26-07-PLAN.md — `GarrisonEntry.is_summary` + one embedded migrator + `002` (RT-03)
-- [ ] 26-08-PLAN.md — `Guardrail` middleware + `PaladinError::GuardrailTripped` (RT-02)
+- [x] 26-07-PLAN.md — `GarrisonEntry.is_summary` + one embedded migrator + `002` (RT-03)
+- [x] 26-08-PLAN.md — `Guardrail` middleware + `PaladinError::GuardrailTripped` (RT-02)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

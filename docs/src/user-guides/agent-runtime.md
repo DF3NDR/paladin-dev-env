@@ -149,6 +149,15 @@ its `output_field` through the same driver; a node declaring `output_schema` on 
 `with_structured_executor` (or naming an unregistered `Registered` schema) is a typed
 `EngineError` at graph validation, before any node runs.
 
+**The `ExecutionMiddleware` chain does not run on this path** (WR-02, `26-REVIEW.md`):
+`execute_structured`/`execute_json_schema` dispatch directly, bypassing `run_before`/`run_after`/
+`run_around_tool` entirely, so `Guardrail`, `VaultRecallMiddleware`, `ToolCallLimit`,
+`TokenBudget`/`ModelCallLimit`, and any custom middleware installed on the same
+`PaladinExecutionService` are silently inert for a structured-output call — this is intentional
+(the bounded repair loop is not the multi-loop reasoning loop `before_model`/`after_model` model),
+but it means a Guardrail rule or a token budget installed for `execute()` gives no protection on
+`execute_structured()`/`execute_json_schema()`.
+
 ## Native `response_format` by Provider
 
 | Provider | Native mode | Wire shape |

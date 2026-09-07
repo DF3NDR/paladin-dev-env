@@ -63,12 +63,24 @@ pub fn bounded_excerpt(body: &str, budget: usize) -> String {
 }
 
 /// Replace the token that follows every occurrence of `marker` with
-/// [`CREDENTIAL_PLACEHOLDER`].
+/// [`CREDENTIAL_PLACEHOLDER`], but only when `marker` starts at a word
+/// boundary.
 ///
 /// The token is taken to run until the first whitespace or JSON delimiter.
 /// `marker` must be ASCII so the byte offsets returned by `find` are always
 /// character boundaries; every slice is nonetheless taken through the
 /// checked `get` API so this function has no panicking path.
+///
+/// **Word-boundary guard (WR-01, `26-REVIEW.md`):** `marker` only counts as
+/// a real occurrence when it is at the start of `body`/`rest` or the
+/// character immediately before it is not alphanumeric. Without this, the
+/// `key=`/`token=` markers [`redact_secret_patterns`] passes through this
+/// function match inside any ordinary word ending in those letters and
+/// directly followed by `=` -- `"monkey=5"`, `"donkey=3"`, `"turkey=roast"`,
+/// `"jockey=true"` would otherwise all be misredacted. An underscore is
+/// intentionally NOT a boundary-breaking character, so `api_key=...` /
+/// `access_token=...` (the common real-world spellings) are still
+/// redacted.
 fn redact_token_after(body: &str, marker: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut rest = body;
@@ -85,15 +97,28 @@ fn redact_token_after(body: &str, marker: &str) -> String {
 
         out.push_str(head);
 
-        let end = tail
-            .find(|c: char| c.is_whitespace() || matches!(c, '"' | ',' | '}' | ']' | '\\'))
-            .unwrap_or(tail.len());
+        let is_word_boundary = rest[..idx]
+            .chars()
+            .next_back()
+            .map(|c| !c.is_alphanumeric())
+            .unwrap_or(true);
 
-        if end > 0 {
-            out.push_str(CREDENTIAL_PLACEHOLDER);
+        if is_word_boundary {
+            let end = tail
+                .find(|c: char| c.is_whitespace() || matches!(c, '"' | ',' | '}' | ']' | '\\'))
+                .unwrap_or(tail.len());
+
+            if end > 0 {
+                out.push_str(CREDENTIAL_PLACEHOLDER);
+            }
+
+            rest = tail.get(end..).unwrap_or("");
+        } else {
+            // `marker` is the tail of a longer word (e.g. `monkey=`) --
+            // not a real marker occurrence. Leave the following text
+            // untouched and keep scanning past it.
+            rest = tail;
         }
-
-        rest = tail.get(end..).unwrap_or("");
     }
 
     out.push_str(rest);
@@ -360,6 +385,37 @@ mod tests {
 
         let benign = "the quick brown fox jumps over the lazy dog";
         assert_eq!(redact_secret_patterns(benign), benign);
+    }
+
+    #[test]
+    fn redact_secret_patterns_does_not_misfire_on_ordinary_words_ending_in_key_or_token() {
+        // WR-01 (26-REVIEW.md): `key=`/`token=` must only match as a whole
+        // query-parameter-shaped marker (preceded by a non-alphanumeric,
+        // non-underscore boundary or start-of-string), not as the tail of
+        // an ordinary word like `monkey=`/`donkey=`/`turkey=`/`jockey=`
+        // immediately followed by `=`.
+        for benign in [
+            r#"{"monkey=5}"#.to_string(),
+            "donkey=3".to_string(),
+            "turkey=roast".to_string(),
+            "jockey=true".to_string(),
+        ] {
+            assert_eq!(
+                redact_secret_patterns(&benign),
+                benign,
+                "benign word wrongly redacted: {benign}"
+            );
+        }
+
+        // A real query parameter directly after one of these words must
+        // still be redacted -- the fix must not blanket-disable the marker.
+        let real_after_benign = "monkey says hi; api_key=abcdefghijklmnop0123456789";
+        let redacted = redact_secret_patterns(real_after_benign);
+        assert!(
+            !redacted.contains("abcdefghijklmnop0123456789"),
+            "got {redacted}"
+        );
+        assert!(redacted.contains(CREDENTIAL_PLACEHOLDER), "got {redacted}");
     }
 
     #[test]

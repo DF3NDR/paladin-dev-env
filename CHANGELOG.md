@@ -253,6 +253,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `key=`/`token=` values, JWT-shaped triples) before being bounded — see
   [`MIGRATION.md` §9.1, M-B-03](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes).
 
+### Fixed
+
+- **`ToolResultFormatter` now redacts-then-bounds every tool text path, not just the `Err` path
+  (26-REVIEW.md CR-01/WR-03).** The redact-then-bound control RT-07 introduced for a tool's
+  `ArsenalError`/handoff failure text (`format_error`) was not applied to `format_result`'s
+  `ArmamentResult { success: false, .. }` business-failure `Error:` field, nor to its successful
+  `Output:` field — both embedded tool-supplied text raw. A shared `sanitize_tool_text` helper now
+  covers all three: `format_error`, `format_result`'s `Error:` field, and `format_result`'s
+  `Output:` field.
+- **`key=`/`token=` redaction no longer misfires on ordinary words (26-REVIEW.md WR-01).** The
+  pattern matched any word ending in `key`/`token` directly followed by `=` (`monkey=5`,
+  `donkey=3`, `turkey=roast`, `jockey=true`), corrupting benign tool-error text fed back to the
+  model. A word-boundary check (non-alphanumeric or start-of-string immediately before the marker)
+  now excludes these while still catching `api_key=`/`access_token=`.
+- **A later `after_model` `Finish` no longer lost to an earlier `before_model` `Finish`
+  (26-REVIEW.md CR-02).** When a middleware finished the run early from `before_model`, the reached
+  prefix's `after_model` pass still ran (per the onion-chain contract), but its own `Finish` result
+  was discarded — the run always reported the *original* `before_model` `Finish`'s `stop_reason`,
+  even if a later `after_model` hook (e.g. a `Guardrail` rule) requested a different one. The
+  `after_model` pass's own `FinalResult` now wins when present, mirroring the already-correct
+  sibling post-model-call path.
+
 ## [0.9.0] - 2026-09-01
 
 **First stable release since 0.5.1 (2026-06-04), and the first cut by the rebuilt release

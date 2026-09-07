@@ -181,7 +181,9 @@ impl ToolResultFormatter {
 
             if let Some(ref result_output) = result.output {
                 output.push_str("Output:\n");
-                output.push_str(&self.format_output_value(result_output));
+                output.push_str(&Self::sanitize_tool_text(
+                    &self.format_output_value(result_output),
+                ));
                 output.push('\n');
             }
         } else {
@@ -189,7 +191,7 @@ impl ToolResultFormatter {
             output.push_str(&format!("{}Result: FAILED\n", error_icon));
 
             if let Some(ref error) = result.error {
-                output.push_str(&format!("Error: {}\n", error));
+                output.push_str(&format!("Error: {}\n", Self::sanitize_tool_text(error)));
             }
         }
 
@@ -243,18 +245,36 @@ impl ToolResultFormatter {
     pub fn format_error(&self, call: &ArmamentCall, reason: &str) -> String {
         let tool_icon = if self.use_emoji { "🔧 " } else { "" };
 
-        // T-26-03: redact-then-bound, never the reverse -- bounding first
-        // can slice a secret across the truncation boundary and leak the
-        // surviving tail.
-        let redacted = paladin_llm::redaction::redact_secret_patterns(reason);
-        let sanitized = paladin_llm::redaction::bounded_excerpt(
-            &redacted,
-            paladin_llm::redaction::RESPONSE_EXCERPT_CHAR_BUDGET,
-        );
+        let sanitized = Self::sanitize_tool_text(reason);
 
         format!(
             "{tool_icon}Tool Execution: {}\nResult: FAILED\nError: {}\nYou may retry with corrected arguments or proceed without it.\n",
             call.tool_name, sanitized
+        )
+    }
+
+    /// Redact-then-bound any tool-supplied text before it is embedded into
+    /// the model-facing text and Garrison (CR-01/WR-03, `26-REVIEW.md`).
+    ///
+    /// This is the ONE sanitization point for tool text this module uses --
+    /// [`Self::format_error`] (the `ArsenalError`/handoff `Err` path) and
+    /// [`Self::format_result`]'s SUCCESS `Output:` field and FAILED `Error:`
+    /// field (the `ArmamentResult` business success/failure path) all call
+    /// this, so there is exactly one place tool text is sanitized rather
+    /// than independently-drifting inline calls.
+    ///
+    /// [`redact_secret_patterns`] runs BEFORE [`bounded_excerpt`] --
+    /// redact, then bound, never the reverse. Bounding first can slice a
+    /// secret across the truncation boundary and leak the surviving tail
+    /// (`.github/instructions/security.instructions.md`, T-26-03).
+    ///
+    /// [`redact_secret_patterns`]: paladin_llm::redaction::redact_secret_patterns
+    /// [`bounded_excerpt`]: paladin_llm::redaction::bounded_excerpt
+    fn sanitize_tool_text(text: &str) -> String {
+        let redacted = paladin_llm::redaction::redact_secret_patterns(text);
+        paladin_llm::redaction::bounded_excerpt(
+            &redacted,
+            paladin_llm::redaction::RESPONSE_EXCERPT_CHAR_BUDGET,
         )
     }
 
@@ -472,6 +492,50 @@ mod tests {
         assert!(formatted.contains("Output:"));
         assert!(formatted.contains("Found 10 results"));
         assert!(formatted.contains("Execution Time: 250ms"));
+    }
+
+    #[test]
+    fn format_result_redacts_a_secret_in_the_business_failure_error_before_bounding() {
+        // CR-01 (26-REVIEW.md): an `ArmamentResult::failure` (a business
+        // failure returned as `Ok(..)`, not an `ArsenalError`) must be
+        // redact-then-bound identically to `format_error`'s `Err` path --
+        // this is the path `handle_tool_call` actually calls for every
+        // `ArmamentResult`, success or failure.
+        let formatter = ToolResultFormatter::new();
+        let call_id = Uuid::new_v4();
+        let call = ArmamentCall::new("fetch_report", HashMap::new());
+        let result = ArmamentResult::failure(
+            call_id,
+            "upstream rejected: Authorization: Bearer sk-live-abcdef0123456789",
+            50,
+        );
+
+        let formatted = formatter.format_result(&call, &result);
+
+        assert!(!formatted.contains("abcdef0123456789"), "got {formatted}");
+        assert!(formatted.contains("[REDACTED]"), "got {formatted}");
+    }
+
+    #[test]
+    fn format_result_redacts_a_secret_in_the_success_output_before_bounding() {
+        // WR-03 (26-REVIEW.md): a successful `ArmamentResult.output` (e.g. a
+        // tool that echoes an upstream response body verbatim) must also be
+        // redacted -- only the error path was ever a redaction target
+        // before this fix, but a credential-shaped string in tool output is
+        // an equally-applicable leak surface.
+        let formatter = ToolResultFormatter::new();
+        let call_id = Uuid::new_v4();
+        let call = ArmamentCall::new("web_search", HashMap::new());
+        let result = ArmamentResult::success(
+            call_id,
+            Value::String("page body: Authorization: Bearer sk-live-abcdef0123456789".to_string()),
+            200,
+        );
+
+        let formatted = formatter.format_result(&call, &result);
+
+        assert!(!formatted.contains("abcdef0123456789"), "got {formatted}");
+        assert!(formatted.contains("[REDACTED]"), "got {formatted}");
     }
 
     #[test]

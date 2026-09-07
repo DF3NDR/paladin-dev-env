@@ -61,6 +61,23 @@ pub use paladin_core::platform::container::structured::{SchemaRef, Structured, S
 ///
 /// fn takes_dyn(_: Arc<dyn StructuredExecutorPort>) {}
 /// ```
+///
+/// # This surface does not run the `ExecutionMiddleware` chain (WR-02, `26-REVIEW.md`)
+///
+/// An implementor that ALSO carries an `ExecutionMiddleware` chain for its
+/// `execute()`/reasoning-loop surface (e.g.
+/// `PaladinExecutionService::with_middleware`) is not required to -- and the
+/// in-tree implementation does not -- run that chain's `before_model`/
+/// `after_model`/`around_tool` hooks here. `Guardrail` (prompt/response
+/// screening), `VaultRecallMiddleware`, `ToolCallLimit`,
+/// `TokenBudget`/`ModelCallLimit`, and any custom middleware are silently
+/// inert for every call through this trait. This is a deliberate scope cut
+/// (the bounded repair loop this trait drives is not the multi-loop
+/// reasoning loop the chain hooks into), not an oversight -- but it means a
+/// safety policy installed for `execute()` gives NO protection on
+/// `execute_json_schema()`/`execute_structured()`. A caller that needs a
+/// content policy enforced on structured output must apply it itself (e.g.
+/// screen the returned `Structured<Value>`/`T` before use).
 #[async_trait]
 pub trait StructuredExecutorPort: Send + Sync {
     /// Execute `paladin` against `schema`, applying [`run_structured`]'s

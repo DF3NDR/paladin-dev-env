@@ -213,8 +213,9 @@ mod tests {
     /// real override sources (fallback, retry policy) end-to-end through
     /// the ONE real call site
     /// (`execute_with_retry_and_temperature`); the structural half of this
-    /// invariant ("there is exactly one accessor") is the acceptance
-    /// criterion `grep -rc 'fn effective_llm'` == 1.
+    /// invariant ("there is exactly one accessor") is a grep-based
+    /// acceptance criterion on the accessor's own defining line, in
+    /// `context.rs`.
     #[test]
     fn model_call_port_is_resolved_at_exactly_one_point() {
         let paladin = make_paladin(1);

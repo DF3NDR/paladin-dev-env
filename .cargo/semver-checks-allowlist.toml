@@ -80,3 +80,10 @@ lint = "enum_marked_non_exhaustive"
 migration_row = "paladin-ai-core | StopReason"
 requirement_id = "RT-02"
 justification = "StopReason gained CallLimit and TokenBudget (ModelCallLimit and TokenBudget middleware, D-08) and is marked #[non_exhaustive] so a future budget-triggered stop reason can be added without a semver-major bump. The X-10.2 exception overview section 3 names for this exact enum is deliberately declined: nothing in the tree or in examples/ relies on exhaustive matching over StopReason, and one mechanism across PaladinError/LlmError/BattalionError/StopReason beats a bespoke exception (D-07). Every in-tree exhaustive match gained a wildcard arm in the same commit."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-ai-core | GarrisonEntry"
+requirement_id = "RT-03"
+justification = "GarrisonEntry gained a persisted is_summary: bool field (RT-FR-12, D-17) marking a Garrison entry as a compressed stand-in for older history; #[serde(default)] keeps every pre-existing JSON/SQLite row reading is_summary == false, and #[non_exhaustive] plus the four constructors (new/with_metadata/with_token_count/summary) make the next field free without breaking downstream struct literals."

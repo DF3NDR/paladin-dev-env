@@ -37,7 +37,23 @@ pub enum ConversationRole {
 ///
 /// Represents one message or interaction in the conversation history.
 /// Each entry is immutable once created and can be serialized for persistence.
+///
+/// # X-10 release note (v0.10.0, RT-03/RT-FR-12, D-17)
+///
+/// This struct gained the persisted [`is_summary`](Self::is_summary) field and is now marked
+/// `#[non_exhaustive]`: construction always goes through one of the four constructors
+/// ([`new`](Self::new), [`with_metadata`](Self::with_metadata),
+/// [`with_token_count`](Self::with_token_count), [`summary`](Self::summary)) rather than a
+/// struct literal, so a future field can be added without a semver-major bump.
+/// `is_summary` defaults to `false` via `#[serde(default)]`, so a JSON document or SQLite row
+/// written before this change deserializes unchanged.
+///
+/// Semantically, `is_summary == true` marks this entry as a compressed stand-in for older
+/// history: the newest such entry in a recalled window, plus every raw entry newer than it, is
+/// the *effective history* (D-16) — the trimmer, the summarizer, and the assembly all read this
+/// same definition, so they never disagree about which entries are "current".
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GarrisonEntry {
     /// Unique identifier for this entry
     pub id: Uuid,
@@ -51,6 +67,13 @@ pub struct GarrisonEntry {
     pub metadata: HashMap<String, Value>,
     /// Optional token count for this entry's content
     pub token_count: Option<u32>,
+    /// Whether this entry is a compressed stand-in for older history (D-16, D-17).
+    ///
+    /// Defaults to `false` on deserialization (`#[serde(default)]`) so entries persisted
+    /// before v0.10.0 read back unchanged. Set this only via [`GarrisonEntry::summary`] —
+    /// never construct it by hand on an otherwise-raw entry.
+    #[serde(default)]
+    pub is_summary: bool,
 }
 
 impl GarrisonEntry {
@@ -80,6 +103,7 @@ impl GarrisonEntry {
             timestamp: Utc::now(),
             metadata: HashMap::new(),
             token_count: None,
+            is_summary: false,
         }
     }
 
@@ -96,6 +120,7 @@ impl GarrisonEntry {
             timestamp: Utc::now(),
             metadata,
             token_count: None,
+            is_summary: false,
         }
     }
 
@@ -108,6 +133,37 @@ impl GarrisonEntry {
             timestamp: Utc::now(),
             metadata: HashMap::new(),
             token_count: Some(token_count),
+            is_summary: false,
+        }
+    }
+
+    /// Creates a summary entry — a compressed stand-in for older history (D-16, D-17).
+    ///
+    /// The entry is stamped [`ConversationRole::System`] with
+    /// [`is_summary`](Self::is_summary) set to `true`. The caller (the summarization
+    /// middleware, per D-16) is responsible for recording which entries this summary
+    /// replaces — typically via `metadata["summarized_through"]` — this constructor
+    /// deliberately does not set that key so ownership of its shape and meaning stays
+    /// with the summarizer, not the domain entity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::garrison::{ConversationRole, GarrisonEntry};
+    ///
+    /// let entry = GarrisonEntry::summary("Earlier turns condensed for brevity.".to_string());
+    /// assert_eq!(entry.role, ConversationRole::System);
+    /// assert!(entry.is_summary);
+    /// ```
+    pub fn summary(content: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            role: ConversationRole::System,
+            content: content.into(),
+            timestamp: Utc::now(),
+            metadata: HashMap::new(),
+            token_count: None,
+            is_summary: true,
         }
     }
 
@@ -590,5 +646,58 @@ mod tests {
 
         let all = history.get_all();
         assert!(all.is_empty());
+    }
+
+    // RT-03 / D-17: `GarrisonEntry.is_summary` under the X-10 treatment.
+
+    #[test]
+    fn existing_constructors_default_is_summary_to_false() {
+        let new_entry = GarrisonEntry::new(ConversationRole::User, "hi".to_string());
+        assert!(!new_entry.is_summary);
+
+        let with_metadata_entry =
+            GarrisonEntry::with_metadata(ConversationRole::User, "hi".to_string(), HashMap::new());
+        assert!(!with_metadata_entry.is_summary);
+
+        let with_token_count_entry =
+            GarrisonEntry::with_token_count(ConversationRole::User, "hi".to_string(), 5);
+        assert!(!with_token_count_entry.is_summary);
+    }
+
+    #[test]
+    fn summary_constructor_sets_role_and_flag() {
+        let entry = GarrisonEntry::summary("condensed history".to_string());
+        assert_eq!(entry.role, ConversationRole::System);
+        assert!(entry.is_summary);
+        assert_eq!(entry.content, "condensed history");
+    }
+
+    #[test]
+    fn is_summary_defaults_on_deserialize() {
+        // A JSON document written before this change had no `is_summary` key.
+        let legacy_json = r#"{
+            "id": "5c1a1f0a-6b7b-4f8b-9b0e-6f2b8a2f9e11",
+            "role": "user",
+            "content": "legacy entry",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "metadata": {},
+            "token_count": null
+        }"#;
+        let entry: GarrisonEntry = serde_json::from_str(legacy_json).unwrap();
+        assert!(!entry.is_summary);
+    }
+
+    #[test]
+    fn garrison_entry_round_trips_with_the_new_field() {
+        let entry = GarrisonEntry::summary("compressed".to_string());
+        assert!(entry.is_summary);
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: GarrisonEntry = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.is_summary, entry.is_summary);
+        assert_eq!(deserialized.content, entry.content);
+        assert_eq!(deserialized.role, entry.role);
+        assert_eq!(deserialized.id, entry.id);
     }
 }

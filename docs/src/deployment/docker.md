@@ -135,7 +135,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY crates ./crates
 COPY benches ./benches
-COPY migrations ./migrations
+# SQL migrations are embedded in the binary at compile time -- no migrations/
+# directory to copy, and no manual migration step is required at container
+# startup.
 
 RUN cargo build --release --workspace --bin paladin --features cli
 RUN strip target/release/paladin
@@ -149,7 +151,6 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/paladin /usr/local/bin/paladin
-COPY --from=builder /app/migrations /app/migrations
 
 # Non-root user (uid/gid 65532)
 RUN groupadd -g 65532 paladin && \

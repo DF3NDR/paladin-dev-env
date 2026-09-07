@@ -55,6 +55,13 @@ rand = { workspace = true }
 # marking it would break every `..Default::default()` construction site
 # downstream. Only full struct literals break; the in-tree ones were migrated
 # in the same commit that added the field.
+#
+# RT-03 / RT-FR-12 (D-17, Phase 26 plan 26-07): `GarrisonEntry` gained the
+# persisted `is_summary: bool` field (`#[serde(default)]`) and is marked
+# `#[non_exhaustive]` -- it has no `Default`, so there is no functional-update
+# site to preserve, and construction goes through `new`/`with_metadata`/
+# `with_token_count`/`summary` rather than a struct literal.
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
 constructible_struct_adds_field = "allow"
+struct_marked_non_exhaustive = "allow"

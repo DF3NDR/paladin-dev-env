@@ -157,3 +157,205 @@ pub trait ExecutionMiddleware: Send + Sync {
     /// and in logs. No default -- every middleware must name itself.
     fn name(&self) -> &str;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+    use crate::core::base::entity::node::Node;
+    use crate::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData};
+    use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
+    use paladin_llm::mock::MockLlmAdapter;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
+
+    fn make_paladin(max_loops: u32) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            max_loops: MaxLoops::Fixed(max_loops),
+            ..Default::default()
+        };
+        Node::new(data, None)
+    }
+
+    /// Counts `before_model` calls and records the `loop_index` sequence
+    /// observed under each distinct `run_id` -- proving per-run isolation
+    /// falls out of D-03's "state lives on the context" decision with NO
+    /// factory trait: this middleware is a single `Arc` shared by every
+    /// concurrent run in `concurrent_runs_keep_independent_context_state`,
+    /// and it keeps no run-keyed state of its own beyond this test's own
+    /// observation log (a real built-in would use `cx.scratch` instead).
+    struct CountingMiddleware {
+        observed_by_run: Mutex<HashMap<uuid::Uuid, Vec<u32>>>,
+        total_calls: AtomicU32,
+    }
+
+    #[async_trait::async_trait]
+    impl ExecutionMiddleware for CountingMiddleware {
+        async fn before_model(
+            &self,
+            cx: &mut ModelCallContext<'_>,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            self.total_calls.fetch_add(1, Ordering::SeqCst);
+            self.observed_by_run
+                .lock()
+                .unwrap()
+                .entry(cx.run_id)
+                .or_default()
+                .push(cx.loop_index);
+            Ok(MiddlewareFlow::Continue)
+        }
+
+        fn name(&self) -> &str {
+            "counting"
+        }
+    }
+
+    /// RT-FR-02's contract and this phase's first X-05 stress obligation:
+    /// ten concurrent runs through ONE `PaladinExecutionService` instance,
+    /// carrying one `CountingMiddleware` `Arc` shared by all ten, each keep
+    /// exactly their own `loop_index` sequence and the total `LlmPort` call
+    /// count is exactly 30 -- never "at least".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_runs_keep_independent_context_state() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("ack"));
+        let middleware = Arc::new(CountingMiddleware {
+            observed_by_run: Mutex::new(HashMap::new()),
+            total_calls: AtomicU32::new(0),
+        });
+        let service = Arc::new(
+            PaladinExecutionService::new(
+                llm.clone(),
+                Arc::new(CircuitBreaker::new(50, 25, Duration::from_secs(60))),
+                None,
+                None,
+            )
+            .with_middleware(middleware.clone() as Arc<dyn ExecutionMiddleware>),
+        );
+        let paladin = Arc::new(make_paladin(3));
+
+        let handles = (0..10).map(|_| {
+            let service = service.clone();
+            let paladin = paladin.clone();
+            tokio::spawn(async move { service.execute(&paladin, "hi").await })
+        });
+
+        let results =
+            tokio::time::timeout(Duration::from_secs(10), futures::future::join_all(handles))
+                .await
+                .expect("all ten concurrent runs must complete within the 10s guard");
+
+        for result in results {
+            result
+                .expect("run task must not panic")
+                .expect("run must succeed");
+        }
+
+        assert_eq!(
+            llm.call_count(),
+            30,
+            "10 runs x 3 loop iterations each == 30 LlmPort calls"
+        );
+        assert_eq!(middleware.total_calls.load(Ordering::SeqCst), 30);
+
+        let observed = middleware.observed_by_run.lock().unwrap();
+        assert_eq!(observed.len(), 10, "ten distinct run_ids");
+        for sequence in observed.values() {
+            assert_eq!(
+                *sequence,
+                vec![0, 1, 2],
+                "each run must observe loop_index 0,1,2 exactly, with no cross-run leakage"
+            );
+        }
+    }
+
+    /// Increments a scratch counter each `before_model` and records the
+    /// value it saw at the START of every run (its first iteration).
+    struct ScratchStartRecorder {
+        starts: Mutex<Vec<i64>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ExecutionMiddleware for ScratchStartRecorder {
+        async fn before_model(
+            &self,
+            cx: &mut ModelCallContext<'_>,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            let current = cx
+                .scratch
+                .get("count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            if cx.loop_index == 0 {
+                self.starts.lock().unwrap().push(current);
+            }
+            cx.scratch
+                .insert("count".to_string(), serde_json::json!(current + 1));
+            Ok(MiddlewareFlow::Continue)
+        }
+
+        fn name(&self) -> &str {
+            "scratch-start-recorder"
+        }
+    }
+
+    /// Two sequential runs through ONE service instance observe the SAME
+    /// starting scratch value -- the second run does not inherit the
+    /// first's scratch (D-03: scratch lives on a fresh `ModelCallContext`
+    /// per `execute_internal` call, not on the stateless middleware).
+    #[tokio::test]
+    async fn sequential_runs_do_not_leak_scratch() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("ack"));
+        let middleware = Arc::new(ScratchStartRecorder {
+            starts: Mutex::new(Vec::new()),
+        });
+        let service = PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+        .with_middleware(middleware.clone() as Arc<dyn ExecutionMiddleware>);
+        let paladin = make_paladin(2);
+
+        service.execute(&paladin, "hi").await.unwrap();
+        service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(
+            *middleware.starts.lock().unwrap(),
+            vec![0, 0],
+            "the second run must start from the same scratch value as the first"
+        );
+    }
+
+    /// Two middleware with different `name()` values storing the same `T`
+    /// see independent values; one middleware storing two different `T`s
+    /// sees both, independently.
+    #[tokio::test]
+    async fn typed_state_is_keyed_by_middleware_name_and_type() {
+        #[derive(Default)]
+        struct CounterA(i32);
+        #[derive(Default)]
+        struct CounterB(i32);
+
+        let paladin = make_paladin(1);
+        let assembly = PromptAssembly::new("system", "input", "", vec![], None);
+        let mut cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
+
+        cx.state_mut::<CounterA>("mw-a").0 = 1;
+        cx.state_mut::<CounterA>("mw-b").0 = 2;
+        assert_eq!(cx.state::<CounterA>("mw-a").0, 1);
+        assert_eq!(cx.state::<CounterA>("mw-b").0, 2);
+
+        cx.state_mut::<CounterB>("mw-a").0 = 42;
+        assert_eq!(
+            cx.state::<CounterA>("mw-a").0,
+            1,
+            "a different T under the same middleware name stays independent"
+        );
+        assert_eq!(cx.state::<CounterB>("mw-a").0, 42);
+    }
+}

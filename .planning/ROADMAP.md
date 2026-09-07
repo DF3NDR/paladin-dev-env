@@ -567,7 +567,7 @@ Plans:
 
 **Wave 13** *(blocked on Wave 12 completion)*
 
-- [ ] 26-20-PLAN.md — `reasoning_agent` preset, `build_chain`, the ≤15-line example (RT-07, RT-02)
+- [x] 26-20-PLAN.md — `reasoning_agent` preset, `build_chain`, the ≤15-line example (RT-07, RT-02)
 
 **Wave 14** *(blocked on Wave 13 completion)*
 

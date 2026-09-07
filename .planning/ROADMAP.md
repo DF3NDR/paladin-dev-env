@@ -551,7 +551,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 26-16-PLAN.md — `InProcessArsenal`, composite, `VaultTools`, confinement attack test (RT-04)
+- [x] 26-16-PLAN.md — `InProcessArsenal`, composite, `VaultTools`, confinement attack test (RT-04)
 
 **Wave 10** *(blocked on Wave 9 completion)*
 

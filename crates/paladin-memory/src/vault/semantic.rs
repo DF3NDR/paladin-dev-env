@@ -149,13 +149,51 @@ fn map_sanctum_error(err: SanctumError) -> VaultError {
 
 #[async_trait]
 impl VaultPort for SemanticVault {
-    // RED stub (plan 26-09 Task 2, TDD): put/delete never touch the Sanctum
-    // half and search returns nothing at all -- the tests that exercise
-    // composition, re-filtering and deterministic ids must fail here before
-    // the GREEN commit that follows immediately replaces these bodies with
-    // the real composition.
-    async fn put(&self, ns: &Namespace, key: &str, value: serde_json::Value) -> Result<(), VaultError> {
-        self.store.put(ns, key, value).await
+    async fn put(
+        &self,
+        ns: &Namespace,
+        key: &str,
+        value: serde_json::Value,
+    ) -> Result<(), VaultError> {
+        // Embed BEFORE writing anything, so a failing embedder leaves both
+        // halves untouched rather than a store row with no matching Sanctum
+        // entry (Test 6: embedding_failure_surfaces_as_a_typed_error_not_a_panic).
+        let text = value.to_string();
+        let embedding = self
+            .embedder
+            .embed_text(&text)
+            .await
+            .map_err(map_embedding_error)?;
+
+        self.store.put(ns, key, value).await?;
+
+        let id = deterministic_entry_id(ns, key);
+        let mut metadata = HashMap::new();
+        metadata.insert(KEY_METADATA_FIELD.to_string(), json!(key));
+
+        // `paladin_id` carries the Vault namespace (see the module doc); the
+        // ID is overwritten immediately after `build()` because `MemoryBuilder`
+        // always assigns a fresh random id.
+        let mut memory = MemoryBuilder::new(ns.to_string(), text)
+            .memory_type(MemoryType::Semantic)
+            .metadata(metadata)
+            .build()
+            .map_err(|e| VaultError::Storage {
+                message: redact_and_bound(&e),
+            })?;
+        memory.id = id;
+
+        let entry =
+            SanctumEntry::new(memory, embedding.vector).map_err(|e| VaultError::Storage {
+                message: redact_and_bound(&e),
+            })?;
+
+        // `store` upserts by id (both InMemorySanctum's HashMap insert and a
+        // Qdrant point upsert are keyed by id), so calling `store` again on
+        // the same deterministic id updates in place rather than duplicating.
+        self.sanctum.store(entry).await.map_err(map_sanctum_error)?;
+
+        Ok(())
     }
 
     async fn get(&self, ns: &Namespace, key: &str) -> Result<Option<VaultRecord>, VaultError> {
@@ -163,16 +201,82 @@ impl VaultPort for SemanticVault {
     }
 
     async fn delete(&self, ns: &Namespace, key: &str) -> Result<bool, VaultError> {
-        self.store.delete(ns, key).await
+        let deleted = self.store.delete(ns, key).await?;
+
+        let id = deterministic_entry_id(ns, key);
+        match self.sanctum.delete(&id.to_string()).await {
+            Ok(_) | Err(SanctumError::NotFound(_)) => {}
+            Err(e) => return Err(map_sanctum_error(e)),
+        }
+
+        Ok(deleted)
     }
 
-    async fn list(&self, ns: &Namespace, prefix: Option<&str>, page: Page) -> Result<Vec<VaultRecord>, VaultError> {
+    async fn list(
+        &self,
+        ns: &Namespace,
+        prefix: Option<&str>,
+        page: Page,
+    ) -> Result<Vec<VaultRecord>, VaultError> {
         self.store.list(ns, prefix, page).await
     }
 
-    async fn search(&self, ns: &Namespace, query: &str, limit: u32) -> Result<Vec<ScoredVaultRecord>, VaultError> {
-        let _ = (ns, query, limit);
-        Ok(vec![])
+    async fn search(
+        &self,
+        ns: &Namespace,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<ScoredVaultRecord>, VaultError> {
+        let embedding = self
+            .embedder
+            .embed_text(query)
+            .await
+            .map_err(map_embedding_error)?;
+
+        // The backend filter is a best-effort performance hint for the
+        // common exact-namespace case; it is never trusted for correctness
+        // -- every hit is re-checked below regardless of whether the
+        // backend honoured this filter at all.
+        let sanctum_query = SanctumQuery::new(embedding.vector, limit as usize)
+            .filter(SanctumFilter::new().paladin_id(ns.to_string()));
+        let hits = self
+            .sanctum
+            .search(sanctum_query)
+            .await
+            .map_err(map_sanctum_error)?;
+
+        let mut scored = Vec::with_capacity(hits.len());
+        for hit in hits {
+            let Ok(hit_ns) = Namespace::parse(&hit.entry.memory.paladin_id) else {
+                continue;
+            };
+
+            // The confinement invariant is re-established here, in our own
+            // code, and never depends on whatever filter (if any) the
+            // backend actually honoured (D-24, D-41).
+            if !ns.is_prefix_of(&hit_ns) {
+                continue;
+            }
+
+            let Some(key) = hit
+                .entry
+                .memory
+                .metadata
+                .get(KEY_METADATA_FIELD)
+                .and_then(|v| v.as_str())
+            else {
+                continue;
+            };
+
+            // The authoritative value always comes from `store`, never
+            // reconstructed from the vector payload -- a stale or truncated
+            // embedding-side copy must never leak into a caller-facing result.
+            if let Some(record) = self.store.get(&hit_ns, key).await? {
+                scored.push(ScoredVaultRecord::new(record, hit.score));
+            }
+        }
+
+        Ok(scored)
     }
 }
 

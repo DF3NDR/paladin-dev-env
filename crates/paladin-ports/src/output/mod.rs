@@ -32,6 +32,8 @@ pub mod streaming_executor_port;
 /// Structured output executor port: the bounded JSON-schema repair loop
 /// (Doc 05 RT-FR-17…19, D-26, D-27).
 pub mod structured_executor_port;
+/// Synchronous, infallible token-counting port (Doc 05 RT-FR-10, D-13).
+pub mod token_counter_port;
 /// Trace event stream port (ENG-FR-21): standardized execution
 /// observability the superstep engine emits, with no consumer yet.
 pub mod trace_sink_port;

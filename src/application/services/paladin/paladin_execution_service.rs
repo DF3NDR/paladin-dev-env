@@ -84,6 +84,7 @@ use paladin_ports::output::paladin_port::{
     PaladinResult, PaladinStream, PaladinStreamChunk, StopReason,
 };
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
+use paladin_ports::output::token_counter_port::TokenCounterPort;
 #[cfg(feature = "vision")]
 use paladin_ports::output::vision_port::VisionPort;
 use serde_json::Value;
@@ -158,6 +159,23 @@ pub struct PaladinExecutionService {
     /// dispatch. Empty by default -- an empty chain reproduces today's
     /// prompt bytes, port call count and `PaladinResult` exactly (D-02).
     middleware: Vec<Arc<dyn ExecutionMiddleware>>,
+
+    /// Synchronous, infallible token-counting port (Doc 05 RT-FR-10, D-13).
+    /// Defaults to `HeuristicTokenCounter`. Budget-shaped built-ins
+    /// (`HistoryTrimmer`, and a future `SummarizationMiddleware`) consume
+    /// this port rather than each constructing or hard-coding their own,
+    /// so a caller assembling the middleware chain reads it from here
+    /// (`token_counter()`) instead of duplicating the choice.
+    token_counter: Arc<dyn TokenCounterPort>,
+
+    /// Overrides the hard-coded `recall_recent(20)` call once a
+    /// `HistoryTrimmer` middleware is installed (D-14). `None` (the
+    /// default) keeps today's behavior byte-for-byte; a caller that
+    /// installs `HistoryTrimmer` via `with_middleware` is responsible for
+    /// also calling `with_recall_limit(config.recall_limit)` so the two
+    /// stay consistent (X-03: recall_limit is opt-in, exactly like
+    /// installing the trimmer itself).
+    recall_limit: Option<u32>,
 }
 
 impl PaladinExecutionService {
@@ -211,6 +229,8 @@ impl PaladinExecutionService {
             handoff_service: None,
             orchestrator_port: None,
             middleware: Vec::new(),
+            token_counter: Arc::new(paladin_memory::token_counter::HeuristicTokenCounter),
+            recall_limit: None,
         }
     }
 
@@ -457,6 +477,54 @@ impl PaladinExecutionService {
             chain.len()
         );
         self.middleware = chain;
+        self
+    }
+
+    /// Sets the token-counting port budget-shaped built-ins consume
+    /// (Doc 05 RT-FR-10, D-13). Defaults to `HeuristicTokenCounter` -- a
+    /// caller assembling a `HistoryTrimmer` (or a future
+    /// `SummarizationMiddleware`) reads this service's counter via
+    /// [`Self::token_counter`] rather than constructing its own, so every
+    /// budget feature this phase adds shares the ONE counting path.
+    ///
+    /// # Arguments
+    ///
+    /// * `counter` - The token-counting adapter to use
+    ///
+    /// # Returns
+    ///
+    /// Returns self for method chaining
+    pub fn with_token_counter(mut self, counter: Arc<dyn TokenCounterPort>) -> Self {
+        info!(
+            "Setting PaladinExecutionService token counter: {}",
+            counter.name()
+        );
+        self.token_counter = counter;
+        self
+    }
+
+    /// Returns the configured `TokenCounterPort` (defaults to
+    /// `HeuristicTokenCounter`).
+    pub fn token_counter(&self) -> &Arc<dyn TokenCounterPort> {
+        &self.token_counter
+    }
+
+    /// Overrides the hard-coded `recall_recent(20)` call with `limit`
+    /// (D-14). Install this alongside a `HistoryTrimmer` middleware
+    /// carrying the same `HistoryTrimmerConfig.recall_limit` value -- with
+    /// no call to this method the service recalls 20 entries exactly as it
+    /// does today (X-03).
+    ///
+    /// # Arguments
+    ///
+    /// * `limit` - The number of recent Garrison entries to recall
+    ///
+    /// # Returns
+    ///
+    /// Returns self for method chaining
+    pub fn with_recall_limit(mut self, limit: u32) -> Self {
+        info!("Setting PaladinExecutionService Garrison recall_limit: {limit}");
+        self.recall_limit = Some(limit);
         self
     }
 
@@ -877,9 +945,13 @@ impl PaladinExecutionService {
             );
         }
 
-        // Retrieve conversation history if garrison is available
+        // Retrieve conversation history if garrison is available. D-14:
+        // `recall_limit` replaces the hard-coded 20 only once a caller has
+        // installed it (alongside a `HistoryTrimmer`); with no override this
+        // is byte-for-byte today's behavior (X-03).
         let conversation_history = if let Some(garrison) = &self.garrison {
-            let history = garrison.recall_recent(20).await?;
+            let recall_limit = self.recall_limit.unwrap_or(20) as usize;
+            let history = garrison.recall_recent(recall_limit).await?;
             debug!(
                 "Retrieved {} messages from garrison: execution_id={}",
                 history.len(),
@@ -4265,5 +4337,155 @@ mod middleware_wiring_tests {
             "cumulative_tokens after iteration 2 must equal both responses' total_tokens summed \
              (30 each, the MockLlmAdapter default)"
         );
+    }
+}
+
+/// Phase 26 Plan 11 (RT-03, D-13, D-14): `PaladinExecutionService`'s own
+/// `TokenCounterPort` field and its `recall_limit` guard -- the pieces
+/// `HistoryTrimmer` needs from the service, wired independently of the
+/// middleware itself (D-14, X-03: `recall_limit` only takes effect once a
+/// caller explicitly installs it, mirroring how installing `HistoryTrimmer`
+/// itself is opt-in).
+#[cfg(test)]
+mod token_counter_and_recall_limit_tests {
+    use super::*;
+    use crate::application::services::paladin::middleware::{
+        ExecutionMiddleware, MiddlewareFlow, ModelCallContext,
+    };
+    use crate::core::base::entity::node::Node;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use async_trait::async_trait;
+    use paladin_core::platform::container::garrison::GarrisonConfig;
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_memory::garrison::InMemoryGarrison;
+    use paladin_ports::output::token_counter_port::TokenCounterPort;
+    use std::sync::Mutex;
+
+    fn make_paladin(max_loops: u32) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            max_loops: MaxLoops::Fixed(max_loops),
+            ..Default::default()
+        };
+        Node::new(data, None)
+    }
+
+    /// Records `cx.assembly.history.len()` observed on the FIRST loop
+    /// iteration of each run.
+    struct HistoryLenRecorder {
+        observed: Mutex<Vec<usize>>,
+    }
+
+    #[async_trait]
+    impl ExecutionMiddleware for HistoryLenRecorder {
+        async fn before_model(
+            &self,
+            cx: &mut ModelCallContext<'_>,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            self.observed
+                .lock()
+                .unwrap()
+                .push(cx.assembly.history.len());
+            Ok(MiddlewareFlow::Continue)
+        }
+
+        fn name(&self) -> &str {
+            "history-len-recorder"
+        }
+    }
+
+    async fn seed_garrison(n: usize) -> Arc<dyn GarrisonPort> {
+        let garrison: Arc<dyn GarrisonPort> =
+            Arc::new(InMemoryGarrison::new(GarrisonConfig::default()));
+        for i in 0..n {
+            garrison
+                .remember(GarrisonEntry::new(
+                    ConversationRole::User,
+                    format!("seed-{i}"),
+                ))
+                .await
+                .unwrap();
+        }
+        garrison
+    }
+
+    /// Test 11: with no `recall_limit` set, the service recalls 20 entries
+    /// exactly as it does today; with one set (as if a `HistoryTrimmer` had
+    /// been installed alongside it), it recalls that many instead.
+    #[tokio::test]
+    async fn recall_limit_applies_only_when_the_trimmer_is_installed() {
+        let garrison = seed_garrison(25).await;
+        let recorder = Arc::new(HistoryLenRecorder {
+            observed: Mutex::new(Vec::new()),
+        });
+        let llm = Arc::new(MockLlmAdapter::new().with_response("ack"));
+        let service = PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(50, 25, Duration::from_secs(60))),
+            Some(garrison),
+            None,
+        )
+        .with_middleware(recorder.clone());
+
+        service.execute(&make_paladin(1), "hi").await.unwrap();
+
+        assert_eq!(
+            recorder.observed.lock().unwrap()[0],
+            20,
+            "no recall_limit set -- today's hard-coded 20"
+        );
+
+        let garrison2 = seed_garrison(25).await;
+        let recorder2 = Arc::new(HistoryLenRecorder {
+            observed: Mutex::new(Vec::new()),
+        });
+        let llm2 = Arc::new(MockLlmAdapter::new().with_response("ack"));
+        let service2 = PaladinExecutionService::new(
+            llm2,
+            Arc::new(CircuitBreaker::new(50, 25, Duration::from_secs(60))),
+            Some(garrison2),
+            None,
+        )
+        .with_recall_limit(5)
+        .with_middleware(recorder2.clone());
+
+        service2.execute(&make_paladin(1), "hi").await.unwrap();
+
+        assert_eq!(
+            recorder2.observed.lock().unwrap()[0],
+            5,
+            "recall_limit installed -- honoured instead of the hard-coded 20"
+        );
+    }
+
+    /// A counter test double distinct from `HeuristicTokenCounter`, so an
+    /// override is provably distinguishable from the default.
+    struct AlwaysOneCounter;
+
+    impl TokenCounterPort for AlwaysOneCounter {
+        fn count(&self, _text: &str, _model: &str) -> u32 {
+            1
+        }
+
+        fn name(&self) -> &str {
+            "always-one-test-counter"
+        }
+    }
+
+    /// `token_counter()` defaults to `HeuristicTokenCounter`;
+    /// `with_token_counter` overrides it.
+    #[test]
+    fn token_counter_defaults_to_heuristic_and_with_token_counter_overrides_it() {
+        let llm = Arc::new(MockLlmAdapter::new());
+        let service = PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        );
+        assert_eq!(service.token_counter().name(), "heuristic");
+
+        let service = service.with_token_counter(Arc::new(AlwaysOneCounter));
+        assert_eq!(service.token_counter().name(), "always-one-test-counter");
     }
 }

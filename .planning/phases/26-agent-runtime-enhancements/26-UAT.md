@@ -3,7 +3,7 @@ status: complete
 phase: 26-agent-runtime-enhancements
 source: [26-01-SUMMARY.md, 26-02-SUMMARY.md, 26-03-SUMMARY.md, 26-04-SUMMARY.md, 26-05-SUMMARY.md, 26-06-SUMMARY.md, 26-07-SUMMARY.md, 26-08-SUMMARY.md, 26-09-SUMMARY.md, 26-10-SUMMARY.md, 26-11-SUMMARY.md, 26-12-SUMMARY.md, 26-13-SUMMARY.md, 26-14-SUMMARY.md, 26-15-SUMMARY.md, 26-16-SUMMARY.md, 26-17-SUMMARY.md, 26-18-SUMMARY.md, 26-19-SUMMARY.md, 26-20-SUMMARY.md, 26-21-SUMMARY.md]
 started: 2026-09-07T20:28:49Z
-updated: 2026-09-07T22:27:17Z
+updated: 2026-09-07T22:37:11Z
 ---
 
 ## Current Test
@@ -817,21 +817,24 @@ coverage_id: D4
 
 ### 135. make build-docker uses a nonexistent Dockerfile path
 expected: `make build-docker` builds the Paladin image from the repo-root Dockerfile.
-result: issue
+result: pass
 reported: "make build-docker -> ERROR: failed to build: failed to solve: failed to read dockerfile: open Dockerfile: no such file or directory (Makefile:426)"
 severity: major
 source: discovered-during-uat
+resolution: "Makefile:426 now passes -f Dockerfile (repo root). Fixed directly during UAT; root cause was diagnosed with direct evidence so no gap-closure plan was needed."
 
 ## Summary
 
 total: 135
-passed: 134
-issues: 1
+passed: 135
+issues: 0
 pending: 0
 skipped: 0
 blocked: 0
 
 ## Coverage Block Defects
+
+**RESOLVED 2026-09-07:** both blocks corrected -- 26-17 D2 `kind: doc` -> `kind: other`; 26-18's D8 flag was present but indented 2 spaces (parsed as a sibling key, not an entry field), re-indented to 4 and the flag added to D1-D7. Both summaries now classify `all_auto_covered: true` with 0 errors.
 
 <!-- Malformed `coverage:` entries surfaced by `uat classify-coverage`. Per the fail-safe rule these entries
      are presented as human checkpoints rather than dropped, even though their cited verifications record `status: pass`. -->
@@ -886,7 +889,7 @@ blocked: 0
 
 - gap_id: G-26-135
   truth: "`make build-docker` builds the Paladin image from the repo-root Dockerfile"
-  status: failed
+  status: resolved
   reason: "User reported on host: make build-docker -> failed to read dockerfile: open Dockerfile: no such file or directory"
   severity: major
   test: 135
@@ -896,4 +899,6 @@ blocked: 0
       issue: "line 426: `-f docker/Dockerfile` should be `-f Dockerfile`"
   missing:
     - "Point build-docker at the repo-root Dockerfile"
+  resolved_by: "direct fix during UAT (Makefile:426)"
+  resolved_at: 2026-09-07
   debug_session: ""

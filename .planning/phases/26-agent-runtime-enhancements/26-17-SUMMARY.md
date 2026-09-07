@@ -69,7 +69,7 @@ coverage:
       - kind: unit
         ref: "src/application/services/paladin/structured.rs#tests (7 tests: derive_based_happy_path, schema_is_derived_from_the_type, serde_deserialization_is_the_typed_validation, the_extension_works_through_a_dyn_port, concurrent_structured_runs_are_independent [multi_thread, 30s timeout guard], two_identical_runs_produce_the_same_value_and_attempt_count, exactly_two_schemars_versions_remain)"
         status: pass
-      - kind: doc
+      - kind: other
         ref: "cargo test -p paladin-ai --doc execute_structured -- StructuredExecutorExt::execute_structured's rustdoc example (no_run, compile-checked)"
         status: pass
       - kind: other

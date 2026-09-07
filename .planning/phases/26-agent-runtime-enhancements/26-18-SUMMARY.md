@@ -57,6 +57,7 @@ coverage:
       - kind: unit
         ref: "crates/paladin-battalion/src/engine/graph.rs#node_spec_paladin_constructor_is_preserved"
         status: pass
+    human_judgment: false
   - id: D2
     description: "Four distinct fail-closed EngineError variants (StructuredExecutorMissing, UnregisteredOutputSchema, OutputSchemaWithStructuredDirective, OutputSchemaFieldNotJson) fire at validation, before any node runs, each listing every offender"
     requirement: "RT-05"
@@ -73,6 +74,7 @@ coverage:
       - kind: unit
         ref: "crates/paladin-battalion/src/engine/graph.rs#output_field_must_accept_json"
         status: pass
+    human_judgment: false
   - id: D3
     description: "TypedSchema<T>::new(schema) implements StructuredSchema by serde_json::from_value::<T> -- full typed validation, not the partial object-safe shape check"
     requirement: "RT-05"
@@ -80,6 +82,7 @@ coverage:
       - kind: unit
         ref: "crates/paladin-battalion/src/engine/graph.rs#typed_schema_validates_by_deserialization"
         status: pass
+    human_judgment: false
   - id: D4
     description: "output_schema enters WarGraph::fingerprint() sorted and length-prefixed; GRAPH_FINGERPRINT_VERSION bumps v5 -> v6 with the golden re-pinned and the EngineLimits exclusion intact"
     requirement: "RT-05"
@@ -96,6 +99,7 @@ coverage:
       - kind: unit
         ref: "crates/paladin-battalion/src/engine/graph.rs#engine_limits_are_still_excluded_from_the_hash"
         status: pass
+    human_judgment: false
   - id: D5
     description: "A Paladin node with output_schema dispatches through the structured executor and writes the PARSED JSON VALUE to output_field; a downstream node reads it as structure end-to-end through a real two-node WarGraph"
     requirement: "RT-05"
@@ -109,6 +113,7 @@ coverage:
       - kind: integration
         ref: "tests/integration/structured_engine_node_test.rs#registered_schema_by_name_works_end_to_end"
         status: pass
+    human_judgment: false
   - id: D6
     description: "Repair happens inside the node (one node-execution, two model calls); exhaustion becomes a NodeError with Paladin{kind: StructuredOutputInvalid} and Unknown transience, writing nothing; a TransientAndUnknown Aegis may still retry the whole node"
     requirement: "RT-05"
@@ -122,6 +127,7 @@ coverage:
       - kind: integration
         ref: "tests/integration/structured_engine_node_test.rs#a_transient_and_unknown_aegis_may_still_retry_the_node"
         status: pass
+    human_judgment: false
   - id: D7
     description: "A node without output_schema is unchanged -- same PaladinPort dispatch, same raw string written -- verified both at the engine-unit level (no structured executor wired at all) and end-to-end (a structured executor IS wired but ignored)"
     requirement: "RT-05"
@@ -132,6 +138,7 @@ coverage:
       - kind: integration
         ref: "tests/integration/structured_engine_node_test.rs#a_node_without_output_schema_is_unchanged"
         status: pass
+    human_judgment: false
   - id: D8
     description: "StructuredDirective and output_schema share the same extract_json extraction machinery -- no second envelope-extraction implementation in the engine"
     requirement: "RT-05"
@@ -139,8 +146,7 @@ coverage:
       - kind: other
         ref: "tests/integration/structured_engine_node_test.rs#structured_directive_and_output_schema_share_extract_json (source-level assertion) plus grep -rc 'fn extract_envelope' crates/paladin-battalion/src == 0"
         status: pass
-  human_judgment: false
-
+    human_judgment: false
 duration: ~2h
 completed: 2026-09-07
 status: complete

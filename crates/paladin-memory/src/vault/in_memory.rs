@@ -109,32 +109,21 @@ impl VaultPort for InMemoryVault {
         prefix: Option<&str>,
         page: Page,
     ) -> Result<Vec<VaultRecord>, VaultError> {
-        // RED (deliberate, temporary): matches every namespace whose joined
-        // form STARTS WITH `ns`'s joined form, wrongly pulling in
-        // descendant namespaces (e.g. `contract-scope/a/b` when listing
-        // `contract-scope/a`). Confirmed failing against
-        // `list_returns_only_this_namespace_ordered_by_key` before being
-        // replaced with an exact-namespace lookup in the GREEN commit.
-        let ns_prefix = ns.to_string();
         let entries = self.entries.read().await;
-        let mut records: Vec<VaultRecord> = entries
-            .iter()
-            .filter(|(candidate_ns, _)| candidate_ns.starts_with(&ns_prefix))
-            .flat_map(|(_, namespace_map)| namespace_map.values())
-            .filter(|record| prefix.is_none_or(|p| record.key().starts_with(p)))
-            .cloned()
-            .collect();
-        records.sort_by(|a, b| a.key().cmp(b.key()));
+        let Some(namespace_map) = entries.get(&ns.to_string()) else {
+            return Ok(vec![]);
+        };
 
-        let after_cursor = page.after().map(str::to_string);
-        let records: Vec<VaultRecord> = records
-            .into_iter()
-            .skip_while(|record| {
-                after_cursor
-                    .as_deref()
-                    .is_some_and(|after| record.key() <= after)
-            })
+        let filtered = namespace_map
+            .iter()
+            .filter(|(key, _)| prefix.is_none_or(|p| key.starts_with(p)))
+            // Skip up to and including the opaque `after` cursor -- the
+            // last key returned by the previous page.
+            .skip_while(|(key, _)| page.after().is_some_and(|after| key.as_str() <= after));
+
+        let records: Vec<VaultRecord> = filtered
             .take(page.limit() as usize)
+            .map(|(_, record)| record.clone())
             .collect();
 
         Ok(records)

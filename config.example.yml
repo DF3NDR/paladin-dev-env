@@ -171,6 +171,62 @@ http:
   docs:
     enabled: true
 
+# Agent runtime execution middleware configuration (X-09, D-10). Every field below
+# is written out explicitly and is IDENTICAL to what AgentRuntimeConfig::default()
+# produces — the whole `agent_runtime:` section may be OMITTED ENTIRELY with no
+# behavior change: a v0.9 config.yml with no `agent_runtime:` key boots v0.10
+# identically. None of the twelve built-in middlewares below is wired unless you
+# flip its own `enabled: true` (or, for `tool_errors`, change its `mode`).
+agent_runtime:
+  model_call_limit:
+    enabled: false
+    max_calls: 10
+  token_budget:
+    enabled: false
+    max_tokens: 100000
+  tool_call_limit:
+    enabled: false
+    max_calls: 20
+    per_tool: {}
+  guardrail:
+    enabled: false
+    rules: []
+    pattern_size_limit_bytes: 65536
+  history_trimmer:
+    enabled: false
+    reserve_for_response: 1024
+    default_context_tokens: 8192
+    model_context_limits: {}
+    recall_limit: 20
+  summarization:
+    enabled: false
+    threshold_tokens: null
+    threshold_messages: 30
+    keep_recent: 10
+    summarizer_model: null
+  vault_recall:
+    enabled: false
+    top_k: 5
+    score_floor: 0.0
+  model_retry:
+    enabled: false
+    max_attempts: 3
+    initial_interval_ms: 500
+    backoff_factor: 2.0
+    max_interval_ms: 60000
+    jitter: true
+    retry_on: transient_only
+  model_fallback:
+    enabled: false
+    providers: []
+  tool_errors:
+    mode: feed_to_model
+    per_tool: {}
+  structured:
+    max_repair_attempts: 1
+  vault_tools:
+    enabled: false
+
 # Agents served behind the HTTP API. Each becomes resident at /v1/agents/<id>:
 #   POST /v1/agents/<id>/execute          — buffered run
 #   POST /v1/agents/<id>/execute/stream   — token streaming (SSE)

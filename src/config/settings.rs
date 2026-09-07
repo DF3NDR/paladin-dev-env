@@ -1,6 +1,7 @@
 //! Top-level application [`Settings`] struct and all per-domain
 //! `get_*_config()` accessor methods.
 
+use crate::config::agent_runtime::AgentRuntimeConfig;
 use crate::config::env_utils::EnvOverridable;
 #[cfg(feature = "s3-storage")]
 use crate::infrastructure::adapters::file_storage::minio::MinioConfig;
@@ -56,6 +57,12 @@ pub struct Settings {
     /// Cross-cutting HTTP layer config for the service host (CORS, body limit, rate limit).
     #[serde(default)]
     pub http: Option<WebHttpConfig>,
+    /// Agent runtime execution middleware configuration (X-09, D-10). Every
+    /// section defaults to inert, so an absent `agent_runtime:` key
+    /// resolves to [`AgentRuntimeConfig::default()`] and boots with
+    /// identical behavior to a v0.9 configuration.
+    #[serde(default)]
+    pub agent_runtime: AgentRuntimeConfig,
 }
 
 impl Settings {
@@ -71,6 +78,15 @@ impl Settings {
         }
 
         builder.build()?.try_deserialize()
+    }
+
+    /// Validates this configuration's own cross-cutting invariants.
+    ///
+    /// Currently validates [`AgentRuntimeConfig`] only (X-09); other
+    /// domain configs perform their own validation through their
+    /// individual `get_*_config()` accessors.
+    pub fn validate(&self) -> Result<(), String> {
+        self.agent_runtime.validate()
     }
 
     /// Load settings from a file at the given path.
@@ -351,6 +367,7 @@ impl Default for Settings {
             agents: Vec::new(),
             timeouts: Some(AgentTimeoutsConfig::default()),
             http: Some(WebHttpConfig::default()),
+            agent_runtime: AgentRuntimeConfig::default(),
         }
     }
 }

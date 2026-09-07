@@ -555,7 +555,7 @@ Plans:
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
-- [ ] 26-17-PLAN.md — `StructuredExecutorPort` impl + `StructuredExecutorExt` (RT-05)
+- [x] 26-17-PLAN.md — `StructuredExecutorPort` impl + `StructuredExecutorExt` (RT-05)
 
 **Wave 11** *(blocked on Wave 10 completion)*
 

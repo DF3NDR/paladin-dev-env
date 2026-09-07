@@ -108,14 +108,7 @@ impl MemoryExtractionService {
         }))
         .map_err(|e| SanctumError::StorageError(format!("Failed to create prompt: {}", e)))?;
 
-        let request = LlmRequest {
-            id: uuid::Uuid::new_v4(),
-            model: "gpt-4".to_string(),
-            prompt: prompt_item,
-            attachments: Vec::new(),
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("gpt-4", prompt_item);
 
         let response = match self.llm.generate(request).await {
             Ok(resp) => resp.content,

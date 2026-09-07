@@ -6,9 +6,8 @@ use crate::core::platform::container::prompt::{
 use log::{debug, info};
 use paladin_battalion::llm_failure::to_paladin_error;
 use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
-use uuid::Uuid;
 
 /// Task types for adaptive temperature selection
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,10 +137,9 @@ impl TemperatureService {
         let prompt = self.build_detection_prompt(agent_description, task_context);
 
         // Build LLM request
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: "gpt-4".to_string(), // Use consistent model for classification
-            prompt: PromptItem {
+        let request = LlmRequest::new(
+            "gpt-4", // Use consistent model for classification
+            PromptItem {
                 node: Node::new(
                     PromptData {
                         prompt_type: PromptType::User(UserPrompt {
@@ -167,10 +165,7 @@ impl TemperatureService {
                     Some("temperature_detection".to_string()),
                 ),
             },
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        );
 
         let response = self
             .llm_port
@@ -306,7 +301,9 @@ mod tests {
         FinishReason, LlmError, LlmPort, LlmResponse, ProviderCapabilities, StreamingResponse,
         TokenUsage,
     };
+    use std::collections::HashMap;
     use std::sync::Mutex;
+    use uuid::Uuid;
 
     /// Mock LLM port for testing
     struct MockLlmPort {

@@ -331,9 +331,7 @@ mod tests {
     use crate::mock::MockLlmAdapter;
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
     use paladin_ports::output::trace_sink_port::TraceSinkError;
-    use std::collections::HashMap;
     use std::time::Duration;
-    use uuid::Uuid;
 
     /// A [`TraceSink`] that records every event it receives, in order.
     #[derive(Default)]
@@ -376,14 +374,7 @@ mod tests {
             context: None,
         }))
         .unwrap();
-        LlmRequest {
-            id: Uuid::new_v4(),
-            model: "mock-model".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        }
+        LlmRequest::new("mock-model", prompt)
     }
 
     fn transient(provider: &str, status: u16) -> LlmError {

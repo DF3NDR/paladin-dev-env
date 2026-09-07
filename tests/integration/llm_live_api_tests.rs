@@ -111,14 +111,7 @@ fn create_test_prompt(content: &str) -> PromptItem {
 
 /// Create a test LLM request
 fn create_test_request(prompt: PromptItem, model: &str) -> LlmRequest {
-    LlmRequest {
-        id: prompt.uuid(),
-        model: model.to_string(),
-        prompt,
-        attachments: Vec::new(),
-        stream: false,
-        metadata: std::collections::HashMap::new(),
-    }
+    LlmRequest::new(model, prompt)
 }
 
 // ============================================================================

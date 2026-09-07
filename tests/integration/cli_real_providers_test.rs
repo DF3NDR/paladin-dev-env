@@ -16,7 +16,6 @@ mod provider_tests {
     use paladin::application::cli::config::loader::load_paladin_config;
     use paladin::core::platform::container::prompt::{PromptItem, PromptType, SystemPrompt};
     use paladin_ports::output::llm_port::LlmRequest;
-    use std::collections::HashMap;
     use std::env;
     use std::fs;
     use tempfile::TempDir;
@@ -39,14 +38,7 @@ mod provider_tests {
 
     /// Helper to create a test request
     fn create_test_request(prompt: PromptItem, model: &str) -> LlmRequest {
-        LlmRequest {
-            id: prompt.uuid(),
-            model: model.to_string(),
-            prompt,
-            attachments: Vec::new(),
-            stream: false,
-            metadata: HashMap::new(),
-        }
+        LlmRequest::new(model, prompt)
     }
 
     // =========================================================================

@@ -4,7 +4,6 @@
 //! Supports both manual strategy selection and Auto mode with rule-based heuristics.
 
 use log::{debug, info, warn};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
@@ -1107,14 +1106,7 @@ impl Commander {
             Err(_) => return self.fall_back_to_heuristic(input, "prompt construction failed"),
         };
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: model.to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new(model.to_string(), prompt);
 
         let response = match llm.generate(request).await {
             Ok(response) => response,

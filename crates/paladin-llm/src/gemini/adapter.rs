@@ -1261,14 +1261,7 @@ mod tests {
     }
 
     fn build_request(model: &str, prompt_type: PromptType) -> LlmRequest {
-        LlmRequest {
-            id: Uuid::new_v4(),
-            model: model.to_string(),
-            prompt: PromptItem::new(prompt_type).unwrap(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        }
+        LlmRequest::new(model, PromptItem::new(prompt_type).unwrap())
     }
 
     // ── GeminiConfig::from_parts / from_env defaulting ──

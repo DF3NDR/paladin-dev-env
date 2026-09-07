@@ -1329,18 +1329,14 @@ mod tests {
     }
 
     fn build_request(model: &str) -> LlmRequest {
-        LlmRequest {
-            id: Uuid::new_v4(),
-            model: model.to_string(),
-            prompt: PromptItem::new(PromptType::User(UserPrompt {
+        LlmRequest::new(
+            model,
+            PromptItem::new(PromptType::User(UserPrompt {
                 query: "Hello".to_string(),
                 context: None,
             }))
             .unwrap(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        }
+        )
     }
 
     // Not `start_paused = true`: this test exercises real network round

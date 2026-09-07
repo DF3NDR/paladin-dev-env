@@ -39,14 +39,12 @@
 //! model's raw response body -- an evaluator failure names only this
 //! evaluator and a short, fixed failure class (see [`llm_error_class`]).
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 use paladin_ports::output::llm_port::{LlmError, LlmPort, LlmRequest};
-use uuid::Uuid;
 
 use crate::edge_evaluator::{EdgeConditionEvaluator, EdgeContext, EdgeEvaluatorError};
 use crate::engine::InputMapping;
@@ -254,14 +252,7 @@ impl LlmDecisionEvaluator {
         }))
         .map_err(|e| self.evaluation_error(format!("prompt construction failed: {e}")))?;
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: self.model.clone(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new(self.model.clone(), prompt);
 
         let response = self
             .llm

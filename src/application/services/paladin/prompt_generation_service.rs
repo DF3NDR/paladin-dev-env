@@ -39,7 +39,6 @@ use log::{debug, info};
 use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use uuid::Uuid;
 
 /// Service for LLM-based system prompt generation
 ///
@@ -144,14 +143,7 @@ impl PromptGenerationService {
             stop_sequences: None,
         });
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: model.to_string(),
-            prompt: prompt_item,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new(model.to_string(), prompt_item);
 
         let response = self
             .llm_port
@@ -232,6 +224,7 @@ mod tests {
     use paladin_ports::output::llm_port::{
         FinishReason, LlmError, LlmResponse, ProviderCapabilities, TokenUsage,
     };
+    use uuid::Uuid;
 
     /// Mock LLM port for testing
     struct MockLlmPort {

@@ -563,7 +563,7 @@ Plans:
 
 **Wave 12** *(blocked on Wave 11 completion)*
 
-- [ ] 26-19-PLAN.md — Tool-call protocol, tool-error policy, corrected M-B-03 (RT-07)
+- [x] 26-19-PLAN.md — Tool-call protocol, tool-error policy, corrected M-B-03 (RT-07)
 
 **Wave 13** *(blocked on Wave 12 completion)*
 

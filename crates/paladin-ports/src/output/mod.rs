@@ -39,6 +39,12 @@ pub mod token_counter_port;
 pub mod trace_sink_port;
 /// User persistence repository port.
 pub mod user_repository_port;
+/// `ConfinedVault` -- the Vault's namespace-confinement enforcement point
+/// (Doc 05 RT-04, D-20/D-21). Lives beside `vault_port` (not in the facade
+/// crate) so both the facade's `PaladinExecutionService` and
+/// `paladin-battalion`'s `WarEngine`/`NodeContext` can hold one without
+/// either depending on the other.
+pub mod vault_confined;
 /// Vault (cross-thread namespaced key/value memory) port (Doc 05 RT-FR-13…16, D-18/D-19).
 pub mod vault_port;
 /// Waypoint (superstep checkpoint) persistence port.

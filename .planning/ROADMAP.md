@@ -512,7 +512,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 26-01-PLAN.md — Tracer: the `ExecutionMiddleware` chain end-to-end (RT-01)
+- [x] 26-01-PLAN.md — Tracer: the `ExecutionMiddleware` chain end-to-end (RT-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

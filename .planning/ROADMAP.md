@@ -199,7 +199,7 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 - [x] **Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs** - Directive-based routing, Muster dynamic fan-out, nested Battalion subgraphs, LLM-evaluated routing, and the BUG-01 fail-closed fix (completed 2026-09-04)
 - [x] **Phase 24: Pause/Resume, History & Graceful Shutdown** - Indefinite Parley pauses, typed resume validation, an inspectable/forkable Chronicle, graceful shutdown, and Thread endpoints over HTTP (completed 2026-09-05)
 - [x] **Phase 25: Node-Level Fault Tolerance** - Typed error transience, per-node Aegis retry, wall/idle timeouts, typed compensation handlers, provider fallback, and node result caching (completed 2026-09-06)
-- [ ] **Phase 26: Agent Runtime Enhancements** - Execution middleware chain, context-window management, cross-session Vault memory, structured output, provider conformance close-out, and a one-line reasoning agent
+- [x] **Phase 26: Agent Runtime Enhancements** - Execution middleware chain, context-window management, cross-session Vault memory, structured output, provider conformance close-out, and a one-line reasoning agent (completed 2026-09-07)
 - [ ] **Phase 27: Platform API** - Durable background runs on a worker pool, Parley/streaming integration, versioned assistants, and API-managed schedules/webhooks
 - [ ] **Phase 28: Observability & Tooling** - Machine-consumable trace stream, OTel/log/SSE consumers, graph/run visualization, and the paladin-eval regression harness
 - [ ] **Phase 29: Program Gates & Release** - Complete MIGRATION.md, proven backward compatibility, the program acceptance audit, and a releasable v0.10.0
@@ -642,7 +642,7 @@ Plans:
 | 23. Control Flow — Dynamic Routing, Fan-Out & Subgraphs | v0.10.0 | 12/12 | Complete    | 2026-09-04 |
 | 24. Pause/Resume, History & Graceful Shutdown | v0.10.0 | 14/14 | Complete    | 2026-09-05 |
 | 25. Node-Level Fault Tolerance | v0.10.0 | 14/14 | Complete    | 2026-09-06 |
-| 26. Agent Runtime Enhancements | v0.10.0 | 0/0 | Not started | - |
+| 26. Agent Runtime Enhancements | v0.10.0 | 21/21 | Complete    | 2026-09-07 |
 | 27. Platform API | v0.10.0 | 0/0 | Not started | - |
 | 28. Observability & Tooling | v0.10.0 | 0/0 | Not started | - |
 | 29. Program Gates & Release | v0.10.0 | 0/0 | Not started | - |

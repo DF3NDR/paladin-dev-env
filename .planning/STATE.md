@@ -2,33 +2,33 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 26
-current_phase_name: Agent Runtime Enhancements
-status: executing
-stopped_at: Phase 26 context gathered
-last_updated: "2026-09-07T01:37:12.259Z"
+current_phase: 27
+current_phase_name: Platform API
+status: planning
+stopped_at: Phase 26 complete (verification passed 10/10, code-review fixes merged); Phase 27 ready to discuss and plan
+last_updated: "2026-09-07T16:58:45.505Z"
 last_activity: 2026-09-07
-last_activity_desc: Phase 26 execution started
+last_activity_desc: Phase 26 complete, transitioned to Phase 27
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 85
-  completed_plans: 64
+  completed_plans: 85
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-06 after Phase 25)
+See: .planning/PROJECT.md (updated 2026-09-07 after Phase 26)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 26 — Agent Runtime Enhancements
+**Current focus:** Phase 27 — Platform API
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
-**Progress:** [██████░░░░] v0.10.0 — 5 of 9 phases complete (22, 22.1, 23, 24, 25); 64/64 planned plans executed (Phase 26 not yet planned)
+**Progress:** [███████░░░] v0.10.0 — 6 of 9 phases complete (22, 22.1, 23, 24, 25, 26); 85/85 planned plans executed (Phase 27 not yet planned)
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -51,16 +51,16 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 26 (Agent Runtime Enhancements) — EXECUTING
-Plan: 1 of 21
-Status: Executing Phase 26
-Last activity: 2026-09-07 — Phase 26 execution started
+Phase: 27 — Platform API
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-07 — Phase 26 complete, transitioned to Phase 27
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 251
+- Total plans completed: 272
 - Average duration: —
 - Total execution time: —
 
@@ -92,6 +92,7 @@ Last activity: 2026-09-07 — Phase 26 execution started
 | 23 | 12 | - | - |
 | 24 | 14 | - | - |
 | 25 | 14 | - | - |
+| 26 | 21 | - | - |
 
 *Updated after each plan completion*
 
@@ -358,6 +359,8 @@ Entering them here would fabricate authority the corpus does not contain.
 None yet.
 
 ### Blockers/Concerns
+
+**Phase 26 close (2026-09-07): no blockers.** 21 plans in 14 waves (two executors in flight at most; per-executor worktree merges), verification `passed` 10/10 and re-verified after the code-review fix pass (`26-REVIEW.md`: CR-01 unredacted `ArmamentResult` text, CR-02 dropped after_model Finish, WR-01 `key=` false positives, WR-02 structured path bypasses middleware [documented], WR-03 unredacted tool output — all closed in `26-REVIEW-FIX.md`; IN-01 JWT heuristic false positive left open, advisory). Release gates recorded in `26-21-SUMMARY.md`: coverage 89.58 %, semver 11/11, MSRV 1.88, `make security`, api-surface regenerated (3057). Carried concerns: (1) CI "Check documentation" fails on ~60 pre-existing rustdoc warnings (none from Phase 26 after `93f22cce`); (2) Docker tiers CI/UAT-only; (3) `26-SECURITY.md` not yet written — `/gsd-secure-phase 26` is the next step. Learnings folded into `~/.claude/projects/-workspace/memory/gsd-run-mechanics-paladin.md`.
 
 **Phase 25 close (2026-09-06): no blockers.** UAT 76/76 passed (`25-UAT.md`: 72 deliverables
 auto-passed from SUMMARY coverage blocks, 4 human checkpoints; the CI-only Redis node-cache and
@@ -842,14 +845,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 26 context gathered
+**Stopped at:** Phase 26 complete (2026-09-07) — 21/21 plans merged, verification passed 10/10 (re-verified after the code-review fix pass), `26-REVIEW.md` 6 findings → 5 fixed/documented in `26-REVIEW-FIX.md`, IN-01 open (advisory). Next: `/gsd-secure-phase 26`, then `/gsd-discuss-phase 27`.
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
 Last session: 2026-09-06T23:48:34.927Z
-Resume file: .planning/phases/26-agent-runtime-enhancements/26-CONTEXT.md
+Resume file: .planning/phases/26-agent-runtime-enhancements/26-VERIFICATION.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**
@@ -882,7 +885,7 @@ What run 5 produced:
   was rewritten so the file reads as one roadmap rather than five appended fragments. All 16
   `### Phase N:` headers verified present and matching the 16 summary checklist entries.
 
-Resume file: .planning/phases/02-functional-gap-closure/02-CONTEXT.md
+Resume file: .planning/phases/26-agent-runtime-enhancements/26-VERIFICATION.md
 
 **Next ingest run: none. There is no run 6.** All 263 documents in `.project/` are covered — 199
 classified plus 64 task lists measured deterministically. Every shipped subsystem in the workspace
@@ -910,4 +913,5 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
-- `/gsd-discuss-phase 26` — gather context for Phase 26 (no CONTEXT.md exists yet), then `/gsd-plan-phase 26`
+- `/gsd-secure-phase 26` — security enforcement is on and no `26-SECURITY.md` exists yet (D-41 posture evidence is in `26-21-SUMMARY.md`)
+- `/gsd-discuss-phase 27` — gather context for Phase 27 Platform API (no CONTEXT.md exists yet), then `/gsd-plan-phase 27`

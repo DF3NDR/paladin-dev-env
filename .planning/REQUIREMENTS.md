@@ -167,34 +167,34 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
 
 ### Agent Runtime Enhancements (Doc 05, epic `RT`)
 
-- [ ] **RT-01**: `PaladinExecutionService` gains an ordered `ExecutionMiddleware` chain
+- [x] **RT-01**: `PaladinExecutionService` gains an ordered `ExecutionMiddleware` chain
   (before/after model, around tool) with onion ordering and short-circuit semantics
   (order-asserted by test), per-run state isolation under concurrency, and the same chain
   applying when a Paladin runs as an engine node — with the NodeInterceptor-vs-middleware
   two-layer distinction documented (RT-FR-01…03)
 
-- [ ] **RT-02**: Built-in middleware ships, each config-structured per X-09: `ModelCallLimit` and
+- [x] **RT-02**: Built-in middleware ships, each config-structured per X-09: `ModelCallLimit` and
   `TokenBudget` finishing with new `StopReason::CallLimit`/`TokenBudget` variants (X-10 decision
   applied to both in the same change and registered in §9.2), `ToolCallLimit` denying without
   failing the run, `Guardrail` prompt/response screens with Fail/Redact/Finish actions, and
   retry/fallback middleware that delegates to the FT-05 implementations without duplicating
   logic (RT-FR-04…07, RT-FR-09)
 
-- [ ] **RT-03**: Long conversations fit the context window: `TokenCounterPort` (heuristic default,
+- [x] **RT-03**: Long conversations fit the context window: `TokenCounterPort` (heuristic default,
   provider adapters where possible; no inline heuristics), a stable never-splits-a-message
   `HistoryTrimmer`, and compounding `SummarizationMiddleware` persisting summaries to Garrison
   flagged `is_summary: true` — the Garrison entry field `#[serde(default)]`, the SQLite column
   additive-migrated and §9.2/§9.4-registered — degrading to trimming on summarizer failure,
   never failing the run (RT-FR-08, RT-FR-10…12)
 
-- [ ] **RT-04**: Agents get confined cross-session memory: `VaultPort` (put/get/delete/list/
+- [x] **RT-04**: Agents get confined cross-session memory: `VaultPort` (put/get/delete/list/
   search) with InMemory, SQLite and semantic (Sanctum/Qdrant-composed, `qdrant` feature)
   adapters under a shared contract suite; `vault_get`/`vault_put` Armaments confined to a
   host-granted namespace subtree (`NamespaceDenied` on traversal, attack-tested);
   `NodeContext::vault()`; opt-in `VaultRecallMiddleware` injecting top-k results — and the
   Garrison/Waypoint/Vault three-way distinction documented (RT-FR-13…16)
 
-- [ ] **RT-05**: Structured output is first-class: `execute_structured<T>` on a new
+- [x] **RT-05**: Structured output is first-class: `execute_structured<T>` on a new
   `StructuredExecutorPort` (not `PaladinPort`), schemars-generated schema in the application
   layer (MSRV-verified per X-11), native provider JSON modes via an additive `response_format`
   request field (X-10.3 handled and registered), a bounded repair loop with typed
@@ -202,13 +202,13 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   `output_schema` writing parsed JSON to their `output_field` — reused by `StructuredDirective`
   (RT-FR-17…19)
 
-- [ ] **RT-06**: Provider conformance close-out (verify-then-fix, not greenfield — see scope-time
+- [x] **RT-06**: Provider conformance close-out (verify-then-fix, not greenfield — see scope-time
   conflict record): the shipped v0.8.0 OpenAI-compatible, Gemini and Ollama paths are measured
   against PRD 05's bar — shared conformance suite across adapters, FT-01 transience-correct
   429/5xx mapping, mock-server streaming coverage, documented Ollama recipe with an env-gated
   integration test — and only measured gaps are closed (RT-FR-20…22)
 
-- [ ] **RT-07**: A tool-loop agent is a one-liner: `reasoning_agent(llm, tools, opts)` preset with
+- [x] **RT-07**: A tool-loop agent is a one-liner: `reasoning_agent(llm, tools, opts)` preset with
   a ≤15-line doc-tested example, and tool failures fed back into the model context by default
   (sanitized; `tool_error_mode: FeedToModel | FailRun` with per-tool override) — the chosen
   default and rationale recorded as `MIGRATION.md` M-B-03 (RT-FR-23, RT-FR-24)
@@ -372,13 +372,13 @@ Which phases cover which requirements. Populated during roadmap creation.
 | FT-04 | Phase 25 | Complete |
 | FT-05 | Phase 25 | Complete |
 | FT-06 | Phase 25 | Complete |
-| RT-01 | Phase 26 | Pending |
-| RT-02 | Phase 26 | Pending |
-| RT-03 | Phase 26 | Pending |
-| RT-04 | Phase 26 | Pending |
-| RT-05 | Phase 26 | Pending |
-| RT-06 | Phase 26 | Pending |
-| RT-07 | Phase 26 | Pending |
+| RT-01 | Phase 26 | Complete |
+| RT-02 | Phase 26 | Complete |
+| RT-03 | Phase 26 | Complete |
+| RT-04 | Phase 26 | Complete |
+| RT-05 | Phase 26 | Complete |
+| RT-06 | Phase 26 | Complete |
+| RT-07 | Phase 26 | Complete |
 | PLAT-01 | Phase 27 | Pending |
 | PLAT-02 | Phase 27 | Pending |
 | PLAT-03 | Phase 27 | Pending |

@@ -397,9 +397,10 @@ mod tests {
             .fetch_one(&second.pool)
             .await
             .unwrap();
+        let expected = crate::migrations::MIGRATOR.iter().count() as i64;
         assert_eq!(
-            row.0, 3,
-            "expected exactly one row per migration (001, 002, 003)"
+            row.0, expected,
+            "expected exactly one _sqlx_migrations row per embedded migration ({expected}), never a duplicate from the second construction"
         );
     }
 

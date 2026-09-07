@@ -53,6 +53,14 @@ use paladin_ports::output::structured_executor_port::{
 /// (including `?Sized`, so it works through `Arc<dyn StructuredExecutorPort>`
 /// as well as a concrete, `Sized` type) providing the generic, typed
 /// structured-output call.
+///
+/// **Does not run the `ExecutionMiddleware` chain** (WR-02, `26-REVIEW.md`):
+/// this trait's `execute_structured`/`execute_structured_observed` delegate
+/// straight to [`StructuredExecutorPort::execute_json_schema`], which for
+/// `PaladinExecutionService` bypasses `before_model`/`after_model`/
+/// `around_tool` entirely. See
+/// [`StructuredExecutorPort`]'s own rustdoc section on this for the full
+/// explanation and the caller-side mitigation.
 #[async_trait::async_trait]
 pub trait StructuredExecutorExt: StructuredExecutorPort {
     /// Execute `paladin` against a schema derived from `D`, returning `D`

@@ -2830,6 +2830,23 @@ impl StreamingExecutorPort for PaladinExecutionService {
 /// X-10.4's stated reason `StructuredExecutorPort` exists at all) -- this
 /// impl block is entirely additive to `PaladinExecutionService`'s own
 /// inherent surface.
+///
+/// # This impl does not run `self.middleware` (WR-02, `26-REVIEW.md`)
+///
+/// [`Self::execute_structured_call`] builds its own scratch
+/// `ModelCallContext` and dispatches straight through
+/// [`Self::execute_with_retry_and_temperature`] -- never through
+/// `run_before`/`run_after`/`run_around_tool` (`middleware::chain`). Any
+/// `ExecutionMiddleware` installed via [`Self::with_middleware`]/
+/// [`Self::with_middleware_chain`] (`Guardrail`, `VaultRecallMiddleware`,
+/// `ToolCallLimit`, `TokenBudget`/`ModelCallLimit`, or a custom
+/// implementor) is silently inert on this entire trait impl. This is
+/// deliberate -- the bounded repair loop is not the multi-loop reasoning
+/// loop the chain hooks into -- but a deployment relying on `Guardrail`/
+/// `TokenBudget` for its safety policy gets NO protection on
+/// `execute_json_schema()`/`execute_structured()`, with no error or
+/// warning raised. See [`StructuredExecutorPort`]'s own rustdoc for the
+/// full explanation.
 #[async_trait::async_trait]
 impl StructuredExecutorPort for PaladinExecutionService {
     async fn execute_json_schema(

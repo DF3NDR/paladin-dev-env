@@ -201,13 +201,10 @@ impl Namespace {
     /// # Ok::<(), paladin_core::platform::container::vault::VaultError>(())
     /// ```
     pub fn is_prefix_of(&self, other: &Namespace) -> bool {
-        // RED (deliberate, temporary): a naive string-prefix check on the
-        // joined Display form -- exactly the anti-pattern this primitive
-        // exists to forbid. Confirmed failing against
-        // `is_prefix_of_is_segment_wise_not_string_wise`'s sibling-namespace
-        // assertion; replaced with the real segment-wise comparison in the
-        // GREEN commit.
-        other.to_string().starts_with(&self.to_string())
+        if self.0.len() > other.0.len() {
+            return false;
+        }
+        self.0.iter().zip(other.0.iter()).all(|(a, b)| a == b)
     }
 }
 

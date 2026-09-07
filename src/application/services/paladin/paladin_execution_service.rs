@@ -349,16 +349,11 @@ impl PaladinExecutionService {
     /// installed via `with_vault`, regardless of what `scope` carries --
     /// there is nothing to confine access to.
     pub fn confined_vault(&self, scope: &RunScope) -> Option<ConfinedVault> {
-        // RED (plan 26-13 Task 2): deliberately wrong -- falls back to a
-        // "root" namespace instead of ending resolution at `None`, so
-        // `no_grant_means_denied_not_root` fails before the real
-        // never-default-to-root resolution below replaces this.
         let vault = self.vault.clone()?;
         let namespace = scope
             .vault_namespace
             .clone()
-            .or_else(|| self.default_vault_namespace.clone())
-            .unwrap_or_else(|| Namespace::new(vec!["root"]).expect("valid namespace"));
+            .or_else(|| self.default_vault_namespace.clone())?;
         Some(ConfinedVault::new(vault, namespace))
     }
 

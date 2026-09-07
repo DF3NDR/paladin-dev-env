@@ -73,3 +73,10 @@ lint = "struct_marked_non_exhaustive"
 migration_row = "paladin-ports | LlmRequest"
 requirement_id = "RT-05"
 justification = "LlmRequest has no Default, so no functional-update site exists to preserve; every downstream literal breaks under either X-10.3 option and only marking it #[non_exhaustive] (option a) makes the next field free."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_marked_non_exhaustive"
+migration_row = "paladin-ai-core | StopReason"
+requirement_id = "RT-02"
+justification = "StopReason gained CallLimit and TokenBudget (ModelCallLimit and TokenBudget middleware, D-08) and is marked #[non_exhaustive] so a future budget-triggered stop reason can be added without a semver-major bump. The X-10.2 exception overview section 3 names for this exact enum is deliberately declined: nothing in the tree or in examples/ relies on exhaustive matching over StopReason, and one mechanism across PaladinError/LlmError/BattalionError/StopReason beats a bespoke exception (D-07). Every in-tree exhaustive match gained a wildcard arm in the same commit."

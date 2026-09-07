@@ -122,9 +122,20 @@ pub fn extract_json(output: &str) -> Option<Value> {
         return Some(value);
     }
 
-    // --- Task 1 (RED): the fenced-block half of the D-11 rule is not yet
-    // implemented -- pinned failing by `extract_json_takes_the_first_fenced_json_block`.
-    None
+    let block = first_fenced_json_block(output)?;
+    serde_json::from_str::<Value>(block.trim()).ok()
+}
+
+/// The content of the FIRST ` ```json ... ``` ` fenced block in `output`, if
+/// any (D-11's "first fenced block" rule, lifted verbatim from
+/// `directive_parser.rs`'s former private helper of the same name).
+fn first_fenced_json_block(output: &str) -> Option<&str> {
+    const FENCE_OPEN: &str = "```json";
+    const FENCE_CLOSE: &str = "```";
+    let start = output.find(FENCE_OPEN)? + FENCE_OPEN.len();
+    let rest = &output[start..];
+    let end = rest.find(FENCE_CLOSE)?;
+    Some(&rest[..end])
 }
 
 /// Enforces a **documented subset** of JSON Schema against `value` (D-26,
@@ -194,23 +205,20 @@ fn shape_check_at(path: &str, value: &Value, schema: &Value) -> Result<(), Shape
                 return Ok(());
             }
         }
-        return Err(ShapeError::at(
-            path,
-            "value matches no member of `anyOf`",
-        ));
+        return Err(ShapeError::at(path, "value matches no member of `anyOf`"));
     }
 
     if let Some(type_name) = schema_obj.get("type").and_then(Value::as_str) {
         check_type(path, value, type_name)?;
     }
 
-    if let Some(enum_values) = schema_obj.get("enum").and_then(Value::as_array) {
-        if !enum_values.contains(value) {
-            return Err(ShapeError::at(
-                path,
-                "value is not one of the schema's `enum` values",
-            ));
-        }
+    if let Some(enum_values) = schema_obj.get("enum").and_then(Value::as_array)
+        && !enum_values.contains(value)
+    {
+        return Err(ShapeError::at(
+            path,
+            "value is not one of the schema's `enum` values",
+        ));
     }
 
     if let Value::Object(map) = value {
@@ -266,9 +274,7 @@ fn check_type(path: &str, value: &Value, type_name: &str) -> Result<(), ShapeErr
         "string" => value.is_string(),
         "number" => value.is_number(),
         "integer" => {
-            value.is_i64()
-                || value.is_u64()
-                || value.as_f64().is_some_and(|f| f.fract() == 0.0)
+            value.is_i64() || value.is_u64() || value.as_f64().is_some_and(|f| f.fract() == 0.0)
         }
         "boolean" => value.is_boolean(),
         "null" => value.is_null(),

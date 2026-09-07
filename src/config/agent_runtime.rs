@@ -66,8 +66,17 @@ use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::aegis::{RetryPolicy, RetryPredicate};
 use paladin_llm::provider_factory::LlmProviderFactory;
+use paladin_ports::output::arsenal_port::ArsenalPort;
+use paladin_ports::output::garrison_port::GarrisonPort;
 use paladin_ports::output::llm_port::LlmPort;
+use paladin_ports::output::token_counter_port::TokenCounterPort;
+use paladin_ports::output::vault_port::VaultPort;
 
+use crate::application::services::paladin::middleware::{
+    ExecutionMiddleware, Guardrail, HistoryTrimmer, ModelCallLimit, ModelFallbackMiddleware,
+    ModelRetryMiddleware, SummarizationMiddleware, TokenBudget, ToolCallLimit,
+    VaultRecallMiddleware,
+};
 use crate::config::env_utils::{EnvOverridable, read_env};
 
 /// The single X-09 config home for every built-in execution middleware
@@ -192,6 +201,238 @@ impl EnvOverridable for AgentRuntimeConfig {
         self.tool_errors.apply_env_overrides();
         self.structured.apply_env_overrides();
         self.vault_tools.apply_env_overrides();
+    }
+}
+
+// ── build_chain: the configuration path (plan 26-20, D-10) ─────────────────
+
+/// The dependencies [`AgentRuntimeConfig::build_chain`] needs to construct
+/// the sections a caller has enabled -- "a caller supplies only what their
+/// enabled sections need" (D-10). Every field defaults to the inert /
+/// today's-behavior value, mirroring [`AgentRuntimeConfig::default`]'s own
+/// contract: [`AgentRuntimeDeps::default()`] plus a fully-disabled
+/// `AgentRuntimeConfig` builds an empty chain, never an error.
+///
+/// # Deviation from the plan's literal dependency list (Rule 2)
+///
+/// The plan's own action text names four dependencies: the
+/// [`LlmProviderFactory`], a token counter, an optional vault, and an
+/// optional arsenal. Two more are structurally required and are added here,
+/// mirroring the identical, already-precedented deviations in plans 26-11
+/// and 26-15 (`HistoryTrimmer::new` and `SummarizationMiddleware::new` both
+/// needed a `service_llm_port: Arc<dyn LlmPort>` beyond their own plans'
+/// literal constructor text, and `SummarizationMiddleware::new` also needed
+/// a `garrison: Arc<dyn GarrisonPort>`):
+///
+/// - [`Self::llm_port`] -- [`HistoryTrimmer::new`] and
+///   [`SummarizationMiddleware::new`] both require the service's own
+///   [`LlmPort`] (D-14's "the service port's `get_capabilities()`", D-16's
+///   "defaults to the service port"); nothing else in this struct names
+///   which port that is.
+/// - [`Self::garrison`] -- [`SummarizationMiddleware::new`] requires a
+///   [`GarrisonPort`] to `remember()` the resulting summary (D-16); no
+///   other field carries one.
+///
+/// [`Self::vault`]'s presence is likewise not consumed to CONSTRUCT
+/// [`VaultRecallMiddleware`] (its `new` takes only a [`VaultRecallConfig`]
+/// -- the middleware reads a run's actual grant from
+/// [`crate::application::services::paladin::middleware::ModelCallContext::vault`]
+/// at runtime, installed at the SERVICE level via
+/// [`crate::application::services::paladin::paladin_execution_service::PaladinExecutionService::with_vault`]).
+/// Its presence here is instead a `build_chain`-time acknowledgement that
+/// the vault is actually wired: enabling `vault_recall` while `deps.vault`
+/// is `None` is caught as [`AgentRuntimeConfigError::BuildFailed`] rather
+/// than silently installing a middleware that can only ever be a no-op for
+/// every run on that service (T-26-64).
+pub struct AgentRuntimeDeps {
+    /// Resolves [`ModelFallbackConfig::providers`] names into ports (D-12).
+    pub llm_provider_factory: LlmProviderFactory,
+    /// Feeds [`HistoryTrimmer`]/[`SummarizationMiddleware`]'s token
+    /// counting (D-13). Defaults to
+    /// [`paladin_memory::token_counter::HeuristicTokenCounter`] -- the
+    /// same ungated default [`crate::application::services::paladin::paladin_execution_service::PaladinExecutionService`]
+    /// itself uses.
+    pub token_counter: Arc<dyn TokenCounterPort>,
+    /// The service's own [`LlmPort`] -- see the deviation note above.
+    /// Required by `history_trimmer` and `summarization`; `None` while
+    /// either is enabled is a typed error, not a silent skip.
+    pub llm_port: Option<Arc<dyn LlmPort>>,
+    /// Where [`SummarizationMiddleware`] remembers its resulting summary
+    /// (D-16). Required by `summarization`; see the deviation note above.
+    pub garrison: Option<Arc<dyn GarrisonPort>>,
+    /// A distinct summarizer port/model, if different from
+    /// [`Self::llm_port`] (D-16's "defaults to the service port" clause).
+    pub summarizer_override: Option<Arc<dyn LlmPort>>,
+    /// The Vault store `vault_recall` needs WIRED (not constructed from --
+    /// see the deviation note above) for its installed middleware to ever
+    /// do anything.
+    pub vault: Option<Arc<dyn VaultPort>>,
+    /// An executable arsenal, reserved for a future config-driven section.
+    /// Not consumed by any built-in `build_chain` assembles today -- the
+    /// tool-call protocol middleware (D-36) is dependency-injected by a
+    /// preset like [`crate::presets::reasoning_agent`], not config-driven,
+    /// since it has no [`AgentRuntimeConfig`] sub-struct of its own.
+    pub arsenal: Option<Arc<dyn ArsenalPort>>,
+}
+
+impl Default for AgentRuntimeDeps {
+    fn default() -> Self {
+        Self {
+            llm_provider_factory: LlmProviderFactory,
+            token_counter: Arc::new(paladin_memory::token_counter::HeuristicTokenCounter),
+            llm_port: None,
+            garrison: None,
+            summarizer_override: None,
+            vault: None,
+            arsenal: None,
+        }
+    }
+}
+
+impl AgentRuntimeConfig {
+    /// Assembles every ENABLED section into one ordered middleware chain,
+    /// in the documented fixed order this struct's own module docs record:
+    /// limits → guardrail → trimmer/summarizer → recall → resilience (D-10).
+    ///
+    /// The tool-call protocol middleware's documented "protocol" position
+    /// (D-36) is intentionally not constructed here: it has no
+    /// `AgentRuntimeConfig` sub-struct (nothing to enable), and installing
+    /// it requires an executable arsenal a preset like
+    /// [`crate::presets::reasoning_agent`] already has in hand -- see that
+    /// function for the tool-loop middleware set it installs directly.
+    ///
+    /// A disabled section is never constructed, not even to validate it --
+    /// a `guardrail` with an invalid pattern but `enabled: false` never
+    /// reaches [`Guardrail::new`] at all.
+    ///
+    /// # Errors
+    ///
+    /// Collects **every** construction problem into one
+    /// [`AgentRuntimeConfigError::BuildFailed`] rather than stopping at the
+    /// first (T-26-64): an invalid guardrail pattern, one or more
+    /// unresolvable `model_fallback` provider names, and a section enabled
+    /// without the [`AgentRuntimeDeps`] dependency it needs can all be
+    /// reported in the same call.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::config::agent_runtime::{AgentRuntimeConfig, AgentRuntimeDeps};
+    ///
+    /// let chain = AgentRuntimeConfig::default()
+    ///     .build_chain(&AgentRuntimeDeps::default())
+    ///     .expect("a fully-disabled config never fails to build");
+    /// assert!(chain.is_empty());
+    /// ```
+    pub fn build_chain(
+        &self,
+        deps: &AgentRuntimeDeps,
+    ) -> Result<Vec<Arc<dyn ExecutionMiddleware>>, AgentRuntimeConfigError> {
+        let mut chain: Vec<Arc<dyn ExecutionMiddleware>> = Vec::new();
+        let mut problems: Vec<String> = Vec::new();
+
+        // ── limits ───────────────────────────────────────────────────────
+        // Short-circuit before anything expensive runs.
+        if self.model_call_limit.enabled {
+            chain.push(Arc::new(ModelCallLimit::new(self.model_call_limit.clone())));
+        }
+        if self.token_budget.enabled {
+            chain.push(Arc::new(TokenBudget::new(self.token_budget.clone())));
+        }
+        if self.tool_call_limit.enabled {
+            chain.push(Arc::new(ToolCallLimit::new(self.tool_call_limit.clone())));
+        }
+
+        // ── guardrail ────────────────────────────────────────────────────
+        // Screens what the trimmer/summarizer then reshape.
+        if self.guardrail.enabled {
+            match Guardrail::new(self.guardrail.clone()) {
+                Ok(guardrail) => chain.push(Arc::new(guardrail)),
+                Err(e) => problems.push(format!("agent_runtime.guardrail: {e}")),
+            }
+        }
+
+        // ── trimmer/summarizer ───────────────────────────────────────────
+        // One position: summarization (which embeds its own trimmer as a
+        // degradation fallback, plan 26-15) takes precedence over a
+        // standalone trimmer when both are enabled.
+        if self.summarization.enabled {
+            match (&deps.llm_port, &deps.garrison) {
+                (Some(llm_port), Some(garrison)) => {
+                    chain.push(Arc::new(SummarizationMiddleware::new(
+                        self.summarization.clone(),
+                        self.history_trimmer.clone(),
+                        deps.token_counter.clone(),
+                        llm_port.clone(),
+                        deps.summarizer_override.clone(),
+                        garrison.clone(),
+                    )));
+                }
+                (None, None) => {
+                    problems.push("agent_runtime.summarization requires deps.llm_port".to_string());
+                    problems.push("agent_runtime.summarization requires deps.garrison".to_string());
+                }
+                (None, Some(_)) => {
+                    problems.push("agent_runtime.summarization requires deps.llm_port".to_string())
+                }
+                (Some(_), None) => {
+                    problems.push("agent_runtime.summarization requires deps.garrison".to_string())
+                }
+            }
+        } else if self.history_trimmer.enabled {
+            match &deps.llm_port {
+                Some(llm_port) => chain.push(Arc::new(HistoryTrimmer::new(
+                    self.history_trimmer.clone(),
+                    deps.token_counter.clone(),
+                    llm_port.clone(),
+                ))),
+                None => problems
+                    .push("agent_runtime.history_trimmer requires deps.llm_port".to_string()),
+            }
+        }
+
+        // ── recall ───────────────────────────────────────────────────────
+        // Adds its section once the history is settled.
+        if self.vault_recall.enabled {
+            if deps.vault.is_some() {
+                chain.push(Arc::new(VaultRecallMiddleware::new(
+                    self.vault_recall.clone(),
+                )));
+            } else {
+                problems.push("agent_runtime.vault_recall requires deps.vault".to_string());
+            }
+        }
+
+        // ── resilience ───────────────────────────────────────────────────
+        // Shapes the port and must sit closest to the call: retry, then
+        // fallback, reusing ModelFallbackConfig::resolve_chain rather than
+        // resolving provider names a second time.
+        if self.model_retry.enabled {
+            let policy: RetryPolicy = (&self.model_retry).into();
+            chain.push(Arc::new(ModelRetryMiddleware::new(policy)));
+        }
+        if self.model_fallback.enabled {
+            match self
+                .model_fallback
+                .resolve_chain(&deps.llm_provider_factory)
+            {
+                Ok(providers) => match ModelFallbackMiddleware::new(providers) {
+                    Ok(middleware) => chain.push(Arc::new(middleware)),
+                    Err(e) => problems.push(format!("agent_runtime.model_fallback: {e}")),
+                },
+                Err(AgentRuntimeConfigError::UnresolvedProviders(unresolved)) => {
+                    for provider in unresolved {
+                        problems.push(format!("agent_runtime.model_fallback: {provider}"));
+                    }
+                }
+                Err(other) => problems.push(format!("agent_runtime.model_fallback: {other}")),
+            }
+        }
+
+        if !problems.is_empty() {
+            return Err(AgentRuntimeConfigError::BuildFailed(problems));
+        }
+        Ok(chain)
     }
 }
 
@@ -884,8 +1125,16 @@ impl fmt::Display for UnresolvedProvider {
     }
 }
 
-/// Errors from [`ModelFallbackConfig::resolve_chain`] (D-12).
+/// Errors from [`ModelFallbackConfig::resolve_chain`] and
+/// [`AgentRuntimeConfig::build_chain`] (D-12, T-26-64).
+///
+/// `#[non_exhaustive]`: [`AgentRuntimeConfig::build_chain`] added
+/// [`Self::BuildFailed`] beside the pre-existing
+/// [`Self::UnresolvedProviders`] (plan 26-10) -- a downstream `match` must
+/// carry a wildcard arm rather than assume this is (and stays) a
+/// single-variant enum.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum AgentRuntimeConfigError {
     /// One or more configured provider names could not be resolved.
     /// Collects EVERY offending name rather than stopping at the first, so
@@ -895,6 +1144,19 @@ pub enum AgentRuntimeConfigError {
         .0.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
     )]
     UnresolvedProviders(Vec<UnresolvedProvider>),
+
+    /// One or more sections [`AgentRuntimeConfig::build_chain`] tried to
+    /// assemble failed to construct -- an invalid guardrail pattern, an
+    /// unresolvable fallback provider, or a section enabled without the
+    /// [`AgentRuntimeDeps`] dependency it needs. Collects EVERY problem
+    /// rather than stopping at the first (T-26-64): an operator fixing a
+    /// config wants the whole list in one pass, not one failure at a time.
+    #[error(
+        "agent_runtime.build_chain: {} configuration problem(s):\n{}",
+        .0.len(),
+        .0.iter().map(|p| format!("- {p}")).collect::<Vec<_>>().join("\n")
+    )]
+    BuildFailed(Vec<String>),
 }
 
 impl ModelFallbackConfig {
@@ -1374,7 +1636,9 @@ mod tests {
             Ok(_) => panic!("two bogus provider names must not resolve"),
         };
 
-        let AgentRuntimeConfigError::UnresolvedProviders(problems) = &err;
+        let AgentRuntimeConfigError::UnresolvedProviders(problems) = &err else {
+            panic!("expected UnresolvedProviders, got {err:?}");
+        };
         assert_eq!(problems.len(), 2);
         assert!(matches!(
             &problems[0],
@@ -1411,7 +1675,9 @@ mod tests {
             Ok(_) => panic!("ollama must not resolve when its feature is not compiled in"),
         };
 
-        let AgentRuntimeConfigError::UnresolvedProviders(problems) = &err;
+        let AgentRuntimeConfigError::UnresolvedProviders(problems) = &err else {
+            panic!("expected UnresolvedProviders, got {err:?}");
+        };
         assert_eq!(
             problems,
             &vec![UnresolvedProvider::NotCompiled {
@@ -1473,5 +1739,254 @@ mod tests {
     fn model_retry_config_maps_to_retry_policy_defaults() {
         let converted: RetryPolicy = (&ModelRetryConfig::default()).into();
         assert_eq!(converted, RetryPolicy::default());
+    }
+
+    // ── AgentRuntimeConfig::build_chain (plan 26-20, D-10) ──────────────
+
+    fn mock_llm_port() -> Arc<dyn LlmPort> {
+        Arc::new(paladin_llm::mock::MockLlmAdapter::new().with_response("ack"))
+    }
+
+    fn in_memory_garrison() -> Arc<dyn GarrisonPort> {
+        Arc::new(
+            paladin_memory::garrison::in_memory_garrison::InMemoryGarrison::new(
+                paladin_core::platform::container::garrison::GarrisonConfig::default(),
+            ),
+        )
+    }
+
+    fn in_memory_vault() -> Arc<dyn VaultPort> {
+        Arc::new(paladin_memory::vault::InMemoryVault::new())
+    }
+
+    fn full_deps() -> AgentRuntimeDeps {
+        AgentRuntimeDeps {
+            llm_port: Some(mock_llm_port()),
+            garrison: Some(in_memory_garrison()),
+            vault: Some(in_memory_vault()),
+            ..AgentRuntimeDeps::default()
+        }
+    }
+
+    /// Test 1: a fully-disabled config assembles no middleware -- the
+    /// inertness guarantee proven at the assembly point, not only at the
+    /// config point (`default_agent_runtime_config_is_inert` proves the
+    /// latter).
+    #[test]
+    fn build_chain_on_a_default_config_returns_an_empty_chain() {
+        let config = AgentRuntimeConfig::default();
+        let chain = config
+            .build_chain(&AgentRuntimeDeps::default())
+            .expect("a fully-disabled config never fails to build");
+        assert!(chain.is_empty());
+    }
+
+    /// Test 2: with three dependency-free sections enabled, exactly three
+    /// middlewares are returned -- no extra, no missing.
+    #[test]
+    fn build_chain_assembles_only_enabled_sections() {
+        let config = AgentRuntimeConfig {
+            model_call_limit: ModelCallLimitConfig {
+                enabled: true,
+                max_calls: 10,
+            },
+            guardrail: GuardrailConfig {
+                enabled: true,
+                ..GuardrailConfig::default()
+            },
+            model_retry: ModelRetryConfig {
+                enabled: true,
+                ..ModelRetryConfig::default()
+            },
+            ..AgentRuntimeConfig::default()
+        };
+        let chain = config
+            .build_chain(&AgentRuntimeDeps::default())
+            .expect("three dependency-free sections must build");
+        assert_eq!(chain.len(), 3);
+    }
+
+    /// Test 3: with every config-driven section enabled (and every
+    /// dependency supplied), the returned sequence of `name()` values
+    /// equals the documented fixed order by EXACT comparison -- limits
+    /// (three), guardrail, trimmer/summarizer (one slot: summarization
+    /// wins when both are enabled), recall, resilience (two). The
+    /// documented order's "protocol" position has no `AgentRuntimeConfig`
+    /// sub-struct (D-36) and is therefore not part of `build_chain`'s own
+    /// output -- see `build_chain`'s rustdoc.
+    #[test]
+    fn build_chain_uses_the_documented_fixed_order() {
+        let config = AgentRuntimeConfig {
+            model_call_limit: ModelCallLimitConfig {
+                enabled: true,
+                max_calls: 10,
+            },
+            token_budget: TokenBudgetConfig {
+                enabled: true,
+                max_tokens: 1000,
+            },
+            tool_call_limit: ToolCallLimitConfig {
+                enabled: true,
+                ..ToolCallLimitConfig::default()
+            },
+            guardrail: GuardrailConfig {
+                enabled: true,
+                ..GuardrailConfig::default()
+            },
+            summarization: SummarizationConfig {
+                enabled: true,
+                ..SummarizationConfig::default()
+            },
+            vault_recall: VaultRecallConfig {
+                enabled: true,
+                ..VaultRecallConfig::default()
+            },
+            model_retry: ModelRetryConfig {
+                enabled: true,
+                ..ModelRetryConfig::default()
+            },
+            model_fallback: ModelFallbackConfig {
+                enabled: true,
+                providers: vec!["openai".to_string()],
+            },
+            ..AgentRuntimeConfig::default()
+        };
+
+        unsafe {
+            env::set_var("OPENAI_API_KEY", "sk-test-key-for-build-chain-order");
+        }
+        let chain = config.build_chain(&full_deps());
+        unsafe {
+            env::remove_var("OPENAI_API_KEY");
+        }
+        let chain = chain.expect("every section here is fully supplied");
+
+        let names: Vec<&str> = chain.iter().map(|m| m.name()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "model_call_limit",
+                "token_budget",
+                "tool_call_limit",
+                "guardrail",
+                "summarization",
+                "vault_recall",
+                "model_retry",
+                "model_fallback",
+            ]
+        );
+    }
+
+    /// Test 4: an invalid guardrail regex AND two unknown fallback
+    /// providers together produce ONE error naming all three problems --
+    /// never just the first (T-26-64).
+    #[test]
+    fn build_chain_reports_every_configuration_failure_at_once() {
+        let config = AgentRuntimeConfig {
+            guardrail: GuardrailConfig {
+                enabled: true,
+                rules: vec![GuardrailRuleConfig {
+                    name: "bad".to_string(),
+                    target: GuardrailTarget::Prompt,
+                    pattern: "(unclosed".to_string(),
+                    on_match: GuardrailOnMatch::Fail,
+                }],
+                ..GuardrailConfig::default()
+            },
+            model_fallback: ModelFallbackConfig {
+                enabled: true,
+                providers: vec![
+                    "totally-bogus-one".to_string(),
+                    "totally-bogus-two".to_string(),
+                ],
+            },
+            ..AgentRuntimeConfig::default()
+        };
+
+        let err = match config.build_chain(&AgentRuntimeDeps::default()) {
+            Err(e) => e,
+            Ok(_) => panic!("an invalid guardrail and two bogus providers must not build"),
+        };
+        let AgentRuntimeConfigError::BuildFailed(problems) = &err else {
+            panic!("expected BuildFailed, got {err:?}");
+        };
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        let message = err.to_string();
+        assert!(message.contains("guardrail"), "{message}");
+        assert!(message.contains("totally-bogus-one"), "{message}");
+        assert!(message.contains("totally-bogus-two"), "{message}");
+    }
+
+    /// Test 5: enabling `vault_recall` without `deps.vault`, or
+    /// `summarization` without `deps.garrison`, is a typed error naming the
+    /// missing dependency -- never a silently-skipped section.
+    #[test]
+    fn build_chain_requires_the_dependency_a_section_needs() {
+        let vault_recall_only = AgentRuntimeConfig {
+            vault_recall: VaultRecallConfig {
+                enabled: true,
+                ..VaultRecallConfig::default()
+            },
+            ..AgentRuntimeConfig::default()
+        };
+        let err = match vault_recall_only.build_chain(&AgentRuntimeDeps::default()) {
+            Err(e) => e,
+            Ok(_) => panic!("vault_recall without a vault must not silently build"),
+        };
+        let AgentRuntimeConfigError::BuildFailed(problems) = &err else {
+            panic!("expected BuildFailed, got {err:?}");
+        };
+        assert!(
+            problems.iter().any(|p| p.contains("vault_recall")),
+            "{problems:?}"
+        );
+
+        let summarization_only = AgentRuntimeConfig {
+            summarization: SummarizationConfig {
+                enabled: true,
+                ..SummarizationConfig::default()
+            },
+            ..AgentRuntimeConfig::default()
+        };
+        // Supply an llm_port but deliberately withhold garrison.
+        let deps = AgentRuntimeDeps {
+            llm_port: Some(mock_llm_port()),
+            ..AgentRuntimeDeps::default()
+        };
+        let err = match summarization_only.build_chain(&deps) {
+            Err(e) => e,
+            Ok(_) => panic!("summarization without a garrison must not silently build"),
+        };
+        let AgentRuntimeConfigError::BuildFailed(problems) = &err else {
+            panic!("expected BuildFailed, got {err:?}");
+        };
+        assert!(
+            problems.iter().any(|p| p.contains("summarization")),
+            "{problems:?}"
+        );
+    }
+
+    /// Test 6: a section with an invalid pattern but `enabled: false` does
+    /// not fail `build_chain` -- a disabled section is never constructed,
+    /// not even to validate it.
+    #[test]
+    fn a_disabled_section_is_never_constructed() {
+        let config = AgentRuntimeConfig {
+            guardrail: GuardrailConfig {
+                enabled: false,
+                rules: vec![GuardrailRuleConfig {
+                    name: "bad".to_string(),
+                    target: GuardrailTarget::Prompt,
+                    pattern: "(unclosed".to_string(),
+                    on_match: GuardrailOnMatch::Fail,
+                }],
+                ..GuardrailConfig::default()
+            },
+            ..AgentRuntimeConfig::default()
+        };
+        let chain = config
+            .build_chain(&AgentRuntimeDeps::default())
+            .expect("a disabled section, however invalid, must never fail build_chain");
+        assert!(chain.is_empty());
     }
 }

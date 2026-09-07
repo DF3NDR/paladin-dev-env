@@ -542,8 +542,8 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 26-13-PLAN.md — `ConfinedVault`, `RunScope`, `execute_scoped`, engine vault wiring (RT-04)
-- [ ] 26-14-PLAN.md — Shared conformance suite, measurement first, Ollama recipe (RT-06)
+- [x] 26-13-PLAN.md — `ConfinedVault`, `RunScope`, `execute_scoped`, engine vault wiring (RT-04)
+- [x] 26-14-PLAN.md — Shared conformance suite, measurement first, Ollama recipe (RT-06)
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

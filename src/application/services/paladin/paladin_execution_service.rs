@@ -48,6 +48,10 @@
 
 use crate::application::services::paladin::error::PaladinError;
 use crate::application::services::paladin::handoff_service::HandoffService;
+use crate::application::services::paladin::middleware::{
+    BeforeOutcome, ExecutionMiddleware, LlmResponseView, ModelCallContext, PromptAssembly,
+    ToolCallContext, ToolCallKind, ToolFlow, run_after, run_around_tool, run_before,
+};
 use crate::application::services::paladin::planning_service::PlanningService;
 use crate::application::services::paladin::prompt_generation_service::PromptGenerationService;
 use crate::application::services::sanctum::memory_extraction_service::{
@@ -147,6 +151,13 @@ pub struct PaladinExecutionService {
     /// Optional Agent → Orchestrator bridge port for scheduling jobs, queuing
     /// items, firing events, and sending notifications from agent execution.
     orchestrator_port: Option<Arc<dyn OrchestratorPort>>,
+
+    /// Ordered `ExecutionMiddleware` chain (Doc 05 RT-01, D-01…D-06): fires
+    /// `before_model`/`after_model` around every model call of the
+    /// reasoning loop and `around_tool` around every Arsenal and handoff
+    /// dispatch. Empty by default -- an empty chain reproduces today's
+    /// prompt bytes, port call count and `PaladinResult` exactly (D-02).
+    middleware: Vec<Arc<dyn ExecutionMiddleware>>,
 }
 
 impl PaladinExecutionService {
@@ -199,6 +210,7 @@ impl PaladinExecutionService {
             prompt_generation_service: None,
             handoff_service: None,
             orchestrator_port: None,
+            middleware: Vec::new(),
         }
     }
 
@@ -403,6 +415,48 @@ impl PaladinExecutionService {
     pub fn with_handoff_service(mut self, service: Arc<HandoffService>) -> Self {
         info!("Attaching handoff service to PaladinExecutionService (Layer 3)");
         self.handoff_service = Some(service);
+        self
+    }
+
+    /// Appends `middleware` to the end of the `ExecutionMiddleware` chain
+    /// (Doc 05 RT-01, D-06).
+    ///
+    /// Middleware run in attachment order for `before_model`/`around_tool`
+    /// and in reverse order for `after_model` (the onion shape: the first
+    /// middleware to see the request is the last to see the response).
+    ///
+    /// # Arguments
+    ///
+    /// * `middleware` - The middleware to append
+    ///
+    /// # Returns
+    ///
+    /// Returns self for method chaining
+    pub fn with_middleware(mut self, middleware: Arc<dyn ExecutionMiddleware>) -> Self {
+        info!(
+            "Attaching execution middleware to PaladinExecutionService: {}",
+            middleware.name()
+        );
+        self.middleware.push(middleware);
+        self
+    }
+
+    /// Replaces the whole `ExecutionMiddleware` chain with `chain` (Doc 05
+    /// RT-01, D-06).
+    ///
+    /// # Arguments
+    ///
+    /// * `chain` - The middleware chain to install, in attachment order
+    ///
+    /// # Returns
+    ///
+    /// Returns self for method chaining
+    pub fn with_middleware_chain(mut self, chain: Vec<Arc<dyn ExecutionMiddleware>>) -> Self {
+        info!(
+            "Replacing PaladinExecutionService middleware chain: {} middleware",
+            chain.len()
+        );
+        self.middleware = chain;
         self
     }
 
@@ -836,6 +890,16 @@ impl PaladinExecutionService {
             vec![]
         };
 
+        // The ExecutionMiddleware chain's per-run context (Doc 05 D-03):
+        // constructed once for the whole run so `scratch` and the typed
+        // state bag live across every loop iteration. The assembly is
+        // replaced every iteration below.
+        let mut middleware_cx = ModelCallContext::new(
+            execution_id,
+            paladin,
+            PromptAssembly::new(effective_system_prompt.clone(), input, "", vec![], None),
+        );
+
         // Execute reasoning loop
         for loop_num in 1..=paladin.node.max_loops.as_u32() {
             debug!(
@@ -848,15 +912,71 @@ impl PaladinExecutionService {
             // =======================================================================
             let effective_temperature = self.apply_layer2_dynamic_temperature(paladin, loop_num);
 
-            // Build prompt for this iteration with conversation history and RAG context
-            // Use effective_system_prompt from Layer 1 (generated or original)
-            let prompt = self.build_prompt_with_custom_system(
-                effective_system_prompt,
+            // Build the prompt assembly for this iteration with conversation
+            // history and RAG context (D-02). Use effective_system_prompt
+            // from Layer 1 (generated or original).
+            middleware_cx.assembly = PromptAssembly::new(
+                effective_system_prompt.clone(),
                 input,
-                &accumulated_output,
-                &conversation_history,
-                retrieved_context.as_deref(),
+                accumulated_output.as_str(),
+                conversation_history.clone(),
+                retrieved_context.clone(),
             );
+            middleware_cx.loop_index = loop_num - 1;
+
+            // --- D-04: before_model fires once per iteration, after the
+            // assembly is built and before the model call.
+            let before_outcome = run_before(&self.middleware, &mut middleware_cx).await?;
+            let reached = match before_outcome {
+                BeforeOutcome::Continue { reached } => reached,
+                BeforeOutcome::Finish { result, reached } => {
+                    // A middleware finished the run before any model call
+                    // this iteration -- still run `after_model` over the
+                    // reached prefix (D-06), on a synthetic response view
+                    // built from the FinalResult, then return without
+                    // calling the LLM.
+                    let mut synthetic_view = LlmResponseView {
+                        content: result.output.clone(),
+                        usage: paladin_core::platform::container::token_usage::TokenUsage::default(
+                        ),
+                        finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
+                        function_call: None,
+                    };
+                    run_after(
+                        &self.middleware,
+                        &mut middleware_cx,
+                        &mut synthetic_view,
+                        reached,
+                    )
+                    .await?;
+                    accumulated_output = synthetic_view.content;
+
+                    if let Some(garrison) = &self.garrison {
+                        let assistant_entry = GarrisonEntry::new(
+                            ConversationRole::Assistant,
+                            accumulated_output.clone(),
+                        );
+                        garrison.remember(assistant_entry).await?;
+                    }
+                    if self.should_extract_memories(MemoryExtractionStrategy::OnCompletion) {
+                        _extraction_triggered = true;
+                        self.extract_memories_async(paladin, &conversation_history, execution_id);
+                    }
+
+                    return Ok(PaladinResult {
+                        output: accumulated_output,
+                        token_count: total_tokens,
+                        execution_time_ms: start_time.elapsed().as_millis() as u64,
+                        loop_count: loop_num,
+                        stop_reason: result.stop_reason,
+                        plan: task_plan,
+                        handoff_history,
+                        served_by,
+                    });
+                }
+            };
+
+            let prompt = middleware_cx.assembly.render();
 
             // Execute with retry and circuit breaker (using effective temperature)
             let response = self
@@ -874,49 +994,129 @@ impl PaladinExecutionService {
                 heartbeat.beat();
             }
 
-            // Update accumulated output and token count
-            accumulated_output = response.content.clone();
+            // Update accumulated token count -- BEFORE after_model, so a
+            // built-in like TokenBudget reads the run's true running sum
+            // (D-08).
             total_tokens += response.usage.total_tokens;
+            middleware_cx.cumulative_tokens = total_tokens;
             if let Some(provider) = response.metadata.get(SERVED_BY_METADATA_KEY) {
                 served_by = Some(provider.clone());
             }
+
+            // --- D-04: after_model fires on the FINAL response for this
+            // iteration -- after the service's own buffered retry and
+            // circuit breaker, never per attempt.
+            let mut response_view = LlmResponseView::from_response(&response);
+            if let Some(final_result) = run_after(
+                &self.middleware,
+                &mut middleware_cx,
+                &mut response_view,
+                reached,
+            )
+            .await?
+            {
+                accumulated_output = response_view.content;
+
+                if let Some(garrison) = &self.garrison {
+                    let assistant_entry =
+                        GarrisonEntry::new(ConversationRole::Assistant, accumulated_output.clone());
+                    garrison.remember(assistant_entry).await?;
+                }
+                if self.should_extract_memories(MemoryExtractionStrategy::OnCompletion) {
+                    _extraction_triggered = true;
+                    self.extract_memories_async(paladin, &conversation_history, execution_id);
+                }
+
+                return Ok(PaladinResult {
+                    output: accumulated_output,
+                    token_count: total_tokens,
+                    execution_time_ms: start_time.elapsed().as_millis() as u64,
+                    loop_count: loop_num,
+                    stop_reason: final_result.stop_reason,
+                    plan: task_plan,
+                    handoff_history,
+                    served_by,
+                });
+            }
+
+            accumulated_output = response_view.content;
 
             // =======================================================================
             // LAYER 3: Handoff Detection & Execution (Optional, Post-LLM)
             // =======================================================================
 
             // Check for tool calls and execute them if arsenal is available
-            if let Some(ref function_call) = response.function_call {
+            if let Some(function_call) = response_view.function_call.clone() {
                 // Check if this is a handoff tool call (Layer 3)
-                if self.is_handoff_tool_call(function_call) {
+                if self.is_handoff_tool_call(&function_call) {
                     info!(
                         "Handoff tool call detected: id={}, tool={}, loop={}",
                         execution_id, function_call.name, loop_num
                     );
 
-                    // Execute handoff via HandoffService with retry logic
-                    match self
-                        .execute_handoff(function_call, paladin, execution_id, &mut handoff_history)
-                        .await
-                    {
-                        Ok(handoff_result) => {
-                            accumulated_output.push_str("\n\n");
-                            accumulated_output.push_str(&handoff_result);
+                    // --- D-04: around_tool wraps the handoff branch too --
+                    // a handoff is a tool call the model made.
+                    let call = Self::function_call_to_armament_call(&function_call);
+                    let tool_cx = ToolCallContext {
+                        call: call.clone(),
+                        kind: ToolCallKind::Handoff,
+                        loop_index: middleware_cx.loop_index,
+                        run_id: execution_id,
+                        scratch: middleware_cx.scratch.clone(),
+                    };
+                    let flow = run_around_tool(&self.middleware, &tool_cx).await?;
 
-                            // Store handoff result in garrison if available
-                            if let Some(garrison) = &self.garrison {
-                                let tool_entry =
-                                    GarrisonEntry::new(ConversationRole::Tool, handoff_result);
-                                garrison.remember(tool_entry).await?;
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Handoff execution failed: id={}, error={}", execution_id, e);
+                    match flow {
+                        ToolFlow::Deny { reason } => {
                             let error_message = format!(
                                 "\n\n🤝 Handoff Execution: {}\nResult: FAILED\nError: {}\n",
-                                function_call.name, e
+                                function_call.name, reason
                             );
                             accumulated_output.push_str(&error_message);
+                        }
+                        _ => {
+                            let effective_call = match flow {
+                                ToolFlow::Rewrite(rewritten) => rewritten,
+                                _ => call,
+                            };
+                            let effective_function_call =
+                                Self::armament_call_to_function_call(&effective_call);
+
+                            // Execute handoff via HandoffService with retry logic
+                            match self
+                                .execute_handoff(
+                                    &effective_function_call,
+                                    paladin,
+                                    execution_id,
+                                    &mut handoff_history,
+                                )
+                                .await
+                            {
+                                Ok(handoff_result) => {
+                                    accumulated_output.push_str("\n\n");
+                                    accumulated_output.push_str(&handoff_result);
+
+                                    // Store handoff result in garrison if available
+                                    if let Some(garrison) = &self.garrison {
+                                        let tool_entry = GarrisonEntry::new(
+                                            ConversationRole::Tool,
+                                            handoff_result,
+                                        );
+                                        garrison.remember(tool_entry).await?;
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Handoff execution failed: id={}, error={}",
+                                        execution_id, e
+                                    );
+                                    let error_message = format!(
+                                        "\n\n🤝 Handoff Execution: {}\nResult: FAILED\nError: {}\n",
+                                        effective_function_call.name, e
+                                    );
+                                    accumulated_output.push_str(&error_message);
+                                }
+                            }
                         }
                     }
                 } else if let Some(ref arsenal) = self.arsenal {
@@ -926,44 +1126,91 @@ impl PaladinExecutionService {
                         execution_id, function_call.name, loop_num
                     );
 
-                    let tool_outcome = self
-                        .handle_tool_call(function_call, arsenal.as_ref(), execution_id)
-                        .await;
-                    // --- FT-FR-09, D-19: an Armament invocation resolved
-                    // (succeeded OR failed -- either way the node made
-                    // observable progress, not a stall).
-                    if let Some(heartbeat) = heartbeat {
-                        heartbeat.beat();
-                    }
-
-                    match tool_outcome {
-                        Ok(formatted_result) => {
-                            debug!(
-                                "Tool execution succeeded: id={}, tool={}",
-                                execution_id, function_call.name
-                            );
-                            // Inject tool result into accumulated output for next iteration
-                            accumulated_output.push_str("\n\n");
-                            accumulated_output.push_str(&formatted_result);
-
-                            // Store tool result in garrison if available
-                            if let Some(garrison) = &self.garrison {
-                                let tool_entry =
-                                    GarrisonEntry::new(ConversationRole::Tool, formatted_result);
-                                garrison.remember(tool_entry).await?;
-                            }
-                        }
+                    match Self::parse_armament_call(&function_call) {
                         Err(e) => {
                             warn!(
                                 "Tool execution failed: id={}, tool={}, error={}",
                                 execution_id, function_call.name, e
                             );
-                            // Inject error message for LLM to see and potentially recover
                             let error_message = format!(
                                 "\n\n🔧 Tool Execution: {}\nResult: FAILED\nError: {}\n",
                                 function_call.name, e
                             );
                             accumulated_output.push_str(&error_message);
+                        }
+                        Ok(call) => {
+                            // --- D-04: around_tool wraps the Arsenal branch.
+                            let tool_cx = ToolCallContext {
+                                call: call.clone(),
+                                kind: ToolCallKind::Armament,
+                                loop_index: middleware_cx.loop_index,
+                                run_id: execution_id,
+                                scratch: middleware_cx.scratch.clone(),
+                            };
+                            let flow = run_around_tool(&self.middleware, &tool_cx).await?;
+
+                            match flow {
+                                ToolFlow::Deny { reason } => {
+                                    let error_message = format!(
+                                        "\n\n🔧 Tool Execution: {}\nResult: FAILED\nError: {}\n",
+                                        function_call.name, reason
+                                    );
+                                    accumulated_output.push_str(&error_message);
+                                }
+                                _ => {
+                                    let effective_call = match flow {
+                                        ToolFlow::Rewrite(rewritten) => rewritten,
+                                        _ => call,
+                                    };
+
+                                    let tool_outcome = self
+                                        .handle_tool_call(
+                                            effective_call.clone(),
+                                            arsenal.as_ref(),
+                                            execution_id,
+                                        )
+                                        .await;
+                                    // --- FT-FR-09, D-19: an Armament invocation resolved
+                                    // (succeeded OR failed -- either way the node made
+                                    // observable progress, not a stall).
+                                    if let Some(heartbeat) = heartbeat {
+                                        heartbeat.beat();
+                                    }
+
+                                    match tool_outcome {
+                                        Ok(formatted_result) => {
+                                            debug!(
+                                                "Tool execution succeeded: id={}, tool={}",
+                                                execution_id, effective_call.tool_name
+                                            );
+                                            // Inject tool result into accumulated output for next iteration
+                                            accumulated_output.push_str("\n\n");
+                                            accumulated_output.push_str(&formatted_result);
+
+                                            // Store tool result in garrison if available
+                                            if let Some(garrison) = &self.garrison {
+                                                let tool_entry = GarrisonEntry::new(
+                                                    ConversationRole::Tool,
+                                                    formatted_result,
+                                                );
+                                                garrison.remember(tool_entry).await?;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!(
+                                                "Tool execution failed: id={}, tool={}, error={}",
+                                                execution_id, effective_call.tool_name, e
+                                            );
+                                            // Inject error message for LLM to see and potentially recover
+                                            let error_message = format!(
+                                                "\n\n🔧 Tool Execution: {}\nResult: FAILED\nError: {}\n",
+                                                effective_call.tool_name, e
+                                            );
+                                            accumulated_output.push_str(&error_message);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {
@@ -1097,61 +1344,13 @@ impl PaladinExecutionService {
         prompt
     }
 
-    /// Builds the prompt for an LLM call with custom system prompt
-    ///
-    /// This variant supports Layer 1 (prompt generation) by accepting a custom
-    /// system prompt parameter instead of using paladin.node.system_prompt.
-    ///
-    /// # Arguments
-    ///
-    /// * `system_prompt` - The system prompt to use (generated or original)
-    /// * `input` - User input for this execution
-    /// * `accumulated_output` - Output accumulated from previous loops
-    /// * `conversation_history` - Recent conversation from Garrison
-    /// * `rag_context` - Optional RAG context from Sanctum
-    fn build_prompt_with_custom_system(
-        &self,
-        system_prompt: &str,
-        input: &str,
-        accumulated_output: &str,
-        conversation_history: &[GarrisonEntry],
-        rag_context: Option<&str>,
-    ) -> String {
-        let mut prompt = format!("{}\n\n", system_prompt);
-
-        // Inject RAG context if available
-        if let Some(context) = rag_context
-            && !context.is_empty()
-        {
-            prompt.push_str("## Relevant Context from Memory\n");
-            prompt.push_str(context);
-            prompt.push_str("\n\n");
-        }
-
-        // Add conversation history if available
-        if !conversation_history.is_empty() {
-            prompt.push_str("Previous conversation:\n");
-            for entry in conversation_history.iter().rev().take(10).rev() {
-                // Most recent 10 entries
-                let role_str = match entry.role {
-                    ConversationRole::System => "System",
-                    ConversationRole::User => "User",
-                    ConversationRole::Assistant => "Assistant",
-                    ConversationRole::Tool => "Tool",
-                };
-                prompt.push_str(&format!("{}: {}\n", role_str, entry.content));
-            }
-            prompt.push('\n');
-        }
-
-        prompt.push_str(&format!("User: {}\n", input));
-
-        if !accumulated_output.is_empty() {
-            prompt.push_str(&format!("Previous output: {}\n", accumulated_output));
-        }
-
-        prompt
-    }
+    // `build_prompt_with_custom_system` (the Layer-1-aware prompt builder
+    // the reasoning loop used to call directly) is replaced by
+    // `middleware::PromptAssembly::new` + `PromptAssembly::render` (D-02):
+    // the loop now builds a `PromptAssembly` from exactly the same inputs,
+    // runs the `before_model` chain over it, and renders it through the
+    // same code path this method used to contain directly. `render()`'s
+    // own doc test pins the byte-identical output.
 
     /// Checks if Sanctum (RAG) is configured and ready
     fn check_sanctum_configured(&self) -> bool {
@@ -1924,23 +2123,10 @@ impl PaladinExecutionService {
     /// Formatted tool result as a string, or error if tool execution fails
     async fn handle_tool_call(
         &self,
-        function_call: &FunctionCall,
+        call: ArmamentCall,
         arsenal: &dyn ArsenalPort,
         execution_id: uuid::Uuid,
     ) -> Result<String, ArsenalError> {
-        // Parse function call arguments
-        let arguments: HashMap<String, Value> = serde_json::from_str(&function_call.arguments)
-            .map_err(|e| {
-                error!(
-                    "Failed to parse function call arguments: id={}, error={}",
-                    execution_id, e
-                );
-                ArsenalError::InvalidArguments(format!("Failed to parse arguments JSON: {}", e))
-            })?;
-
-        // Create armament call
-        let call = ArmamentCall::new(&function_call.name, arguments);
-
         debug!(
             "Invoking tool: id={}, tool={}, call_id={}",
             execution_id, call.tool_name, call.call_id
@@ -1958,6 +2144,46 @@ impl PaladinExecutionService {
         let formatted = self.formatter.format_result(&call, &result);
 
         Ok(formatted)
+    }
+
+    /// Parse a [`FunctionCall`]'s JSON arguments into an [`ArmamentCall`]
+    /// for Arsenal dispatch (Doc 05 D-04: the `around_tool` hook needs a
+    /// concrete `ArmamentCall` before dispatch, so this parse -- previously
+    /// inline in `handle_tool_call` -- now happens before the hook fires).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ArsenalError::InvalidArguments` if `function_call.arguments`
+    /// is not valid JSON -- exactly the error `handle_tool_call` used to
+    /// surface, at exactly the same point (before any Arsenal dispatch).
+    fn parse_armament_call(function_call: &FunctionCall) -> Result<ArmamentCall, ArsenalError> {
+        let arguments: HashMap<String, Value> = serde_json::from_str(&function_call.arguments)
+            .map_err(|e| {
+                ArsenalError::InvalidArguments(format!("Failed to parse arguments JSON: {}", e))
+            })?;
+        Ok(ArmamentCall::new(&function_call.name, arguments))
+    }
+
+    /// Build an [`ArmamentCall`] representing a handoff tool call, for the
+    /// `around_tool` hook (Doc 05 D-04: a handoff is a tool call the model
+    /// made). Malformed JSON silently defaults to an empty argument map --
+    /// the same fallback `execute_handoff`'s own parsing already applies,
+    /// so this introduces no new failure mode on the handoff path.
+    fn function_call_to_armament_call(function_call: &FunctionCall) -> ArmamentCall {
+        let arguments: HashMap<String, Value> =
+            serde_json::from_str(&function_call.arguments).unwrap_or_default();
+        ArmamentCall::new(&function_call.name, arguments)
+    }
+
+    /// The inverse of [`Self::function_call_to_armament_call`]: rebuild a
+    /// [`FunctionCall`] from a (possibly `ToolFlow::Rewrite`-replaced)
+    /// [`ArmamentCall`] so `execute_handoff` (which takes a `FunctionCall`)
+    /// can dispatch it.
+    fn armament_call_to_function_call(call: &ArmamentCall) -> FunctionCall {
+        FunctionCall {
+            name: call.tool_name.clone(),
+            arguments: serde_json::to_string(&call.arguments).unwrap_or_default(),
+        }
     }
 }
 
@@ -1983,6 +2209,16 @@ impl PaladinExecutorPort for PaladinExecutionService {
 /// over an `mpsc` channel. A provider that does not support streaming surfaces an error
 /// up front (before any chunk). Dropping the returned receiver (client disconnect or a
 /// timeout) cancels the producer task on its next send.
+///
+/// # `ExecutionMiddleware` coverage (Doc 05 D-04)
+///
+/// This path runs `before_model` exactly once (there is one model call and
+/// no tool loop) so a middleware can still observe/mutate the prompt
+/// assembly before it renders. **`after_model` and `around_tool` are never
+/// invoked here** — there is no discrete final response to hand
+/// `after_model` (the provider streams deltas, not one `LlmResponse`) and
+/// no tool-call loop for `around_tool` to wrap. Response-screening
+/// middleware over a stream is a deferred idea.
 #[async_trait::async_trait]
 impl StreamingExecutorPort for PaladinExecutionService {
     async fn execute_stream(
@@ -2048,8 +2284,33 @@ impl PaladinExecutionService {
         input: &str,
         heartbeat: Option<HeartbeatHandle>,
     ) -> Result<PaladinStream, PaladinError> {
-        // Compose the prompt (mirrors the buffered no-history path).
-        let prompt = format!("{}\n\nUser: {}\n", paladin.node.system_prompt, input);
+        // --- D-04: before_model fires exactly once on this path (no loop,
+        // no tool dispatch); after_model/around_tool are never invoked
+        // here (see the `execute_stream` rustdoc). An assembly built from
+        // exactly the no-history inputs renders byte-identically to the
+        // old hardcoded `format!("{}\n\nUser: {}\n", ..)` (D-02).
+        let run_id = uuid::Uuid::new_v4();
+        let assembly =
+            PromptAssembly::new(paladin.node.system_prompt.clone(), input, "", vec![], None);
+        let mut middleware_cx = ModelCallContext::new(run_id, paladin, assembly);
+        let before_outcome = run_before(&self.middleware, &mut middleware_cx).await?;
+
+        let prompt = match before_outcome {
+            BeforeOutcome::Continue { .. } => middleware_cx.assembly.render(),
+            BeforeOutcome::Finish { result, .. } => {
+                // No model call at all: emit the finished output as the
+                // sole, final chunk.
+                let (tx, rx) = mpsc::channel::<Result<PaladinStreamChunk, PaladinError>>(1);
+                let _ = tx
+                    .send(Ok(PaladinStreamChunk {
+                        text: result.output,
+                        is_final: true,
+                        metadata: None,
+                    }))
+                    .await;
+                return Ok(rx);
+            }
+        };
 
         let prompt_data = PromptData {
             prompt_type: PromptType::User(UserPrompt {
@@ -3481,5 +3742,441 @@ mod tests {
         assert_eq!(paladin_result.token_count, 150);
         assert_eq!(paladin_result.loop_count, 1);
         assert_eq!(paladin_result.stop_reason, StopReason::Completed);
+    }
+}
+
+/// Phase 26 Plan 01 (RT-01, D-01…D-06): the `ExecutionMiddleware` chain's
+/// end-to-end wiring into the reasoning loop, proven against a real
+/// [`paladin_llm::mock::MockLlmAdapter`] rather than the hand-rolled
+/// `LlmPort` doubles `mod tests` uses.
+#[cfg(test)]
+mod middleware_wiring_tests {
+    use super::*;
+    use crate::application::services::paladin::middleware::{
+        ExecutionMiddleware, LlmResponseView, MiddlewareFlow, ModelCallContext, PromptSection,
+        SectionPlacement, ToolCallContext, ToolCallKind, ToolFlow,
+    };
+    use crate::core::base::entity::node::Node;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use async_trait::async_trait;
+    use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
+    use std::sync::Mutex;
+
+    fn make_paladin(max_loops: u32) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "You are a helpful assistant".to_string(),
+            max_loops: MaxLoops::Fixed(max_loops),
+            ..Default::default()
+        };
+        Node::new(data, Some("TestPaladin".to_string()))
+    }
+
+    fn make_service(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+    }
+
+    fn make_service_with_arsenal(
+        llm: Arc<MockLlmAdapter>,
+        arsenal: Arc<dyn ArsenalPort>,
+    ) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            Some(arsenal),
+        )
+    }
+
+    /// An `ArsenalPort` that records every call it receives and always
+    /// succeeds.
+    #[derive(Default)]
+    struct RecordingArsenal {
+        calls: Mutex<Vec<ArmamentCall>>,
+    }
+
+    #[async_trait]
+    impl ArsenalPort for RecordingArsenal {
+        async fn list_armaments(&self) -> Vec<crate::core::platform::container::arsenal::Armament> {
+            Vec::new()
+        }
+
+        async fn invoke(
+            &self,
+            call: ArmamentCall,
+        ) -> Result<crate::core::platform::container::arsenal::ArmamentResult, ArsenalError>
+        {
+            self.calls.lock().unwrap().push(call.clone());
+            Ok(
+                crate::core::platform::container::arsenal::ArmamentResult::success(
+                    call.call_id,
+                    serde_json::json!("ok"),
+                    0,
+                ),
+            )
+        }
+
+        fn validate_call(&self, _call: &ArmamentCall) -> Result<(), ArsenalError> {
+            Ok(())
+        }
+    }
+
+    /// Records `"{name}.before({loop_index})"` / `"{name}.after({loop_index})"`.
+    struct RecordingMiddleware {
+        name: &'static str,
+        log: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl ExecutionMiddleware for RecordingMiddleware {
+        async fn before_model(
+            &self,
+            cx: &mut ModelCallContext<'_>,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("{}.before({})", self.name, cx.loop_index));
+            Ok(MiddlewareFlow::Continue)
+        }
+
+        async fn after_model(
+            &self,
+            cx: &mut ModelCallContext<'_>,
+            _resp: &mut LlmResponseView,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("{}.after({})", self.name, cx.loop_index));
+            Ok(MiddlewareFlow::Continue)
+        }
+
+        fn name(&self) -> &str {
+            self.name
+        }
+    }
+
+    /// Records every `ToolCallContext::kind` it observes and allows the
+    /// call through unchanged.
+    struct RecordingAroundTool {
+        kinds: Arc<Mutex<Vec<ToolCallKind>>>,
+    }
+
+    #[async_trait]
+    impl ExecutionMiddleware for RecordingAroundTool {
+        async fn around_tool(&self, cx: &ToolCallContext) -> Result<ToolFlow, PaladinError> {
+            self.kinds.lock().unwrap().push(cx.kind);
+            Ok(ToolFlow::Allow)
+        }
+
+        fn name(&self) -> &str {
+            "recording-around-tool"
+        }
+    }
+
+    /// Denies every tool call with a fixed reason.
+    struct DenyingMiddleware {
+        reason: &'static str,
+    }
+
+    #[async_trait]
+    impl ExecutionMiddleware for DenyingMiddleware {
+        async fn around_tool(&self, _cx: &ToolCallContext) -> Result<ToolFlow, PaladinError> {
+            Ok(ToolFlow::Deny {
+                reason: self.reason.to_string(),
+            })
+        }
+
+        fn name(&self) -> &str {
+            "denying"
+        }
+    }
+
+    /// Rewrites every tool call to a fixed `ArmamentCall`.
+    struct RewritingMiddleware {
+        rewritten_name: &'static str,
+    }
+
+    #[async_trait]
+    impl ExecutionMiddleware for RewritingMiddleware {
+        async fn around_tool(&self, cx: &ToolCallContext) -> Result<ToolFlow, PaladinError> {
+            Ok(ToolFlow::Rewrite(ArmamentCall::new(
+                self.rewritten_name,
+                cx.call.arguments.clone(),
+            )))
+        }
+
+        fn name(&self) -> &str {
+            "rewriting"
+        }
+    }
+
+    /// Pushes a fixed `PromptSection` into the assembly on every
+    /// `before_model`.
+    struct SectionPushingMiddleware;
+
+    #[async_trait]
+    impl ExecutionMiddleware for SectionPushingMiddleware {
+        async fn before_model(
+            &self,
+            cx: &mut ModelCallContext<'_>,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            cx.assembly.push_section(PromptSection::new(
+                "Injected Section",
+                "injected body text",
+                SectionPlacement::End,
+            ));
+            Ok(MiddlewareFlow::Continue)
+        }
+
+        fn name(&self) -> &str {
+            "section-pushing"
+        }
+    }
+
+    /// D-02's locked invariant: with no middleware attached, the rendered
+    /// prompt, the `LlmPort` call count and the returned `PaladinResult` are
+    /// byte-identical to a run with no chain -- the golden equivalence
+    /// baseline every other test in this module is measured against.
+    #[tokio::test]
+    async fn empty_chain_renders_byte_identical_prompt() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("hello"));
+        let service = make_service(llm.clone());
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        let expected_prompt = "You are a helpful assistant\n\nUser: hi\n";
+        assert_eq!(llm.last_prompt().unwrap(), expected_prompt);
+        assert_eq!(llm.call_count(), 1);
+        assert_eq!(result.output, "hello");
+        assert_eq!(result.stop_reason, StopReason::MaxLoops);
+        assert_eq!(result.loop_count, 1);
+    }
+
+    /// `before_model`/`after_model` fire once per loop iteration, in strict
+    /// alternation -- never two `before`s in a row and never a hook per
+    /// buffered retry attempt.
+    #[tokio::test]
+    async fn recording_middleware_observes_before_model_then_after_model_per_iteration() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("ack"));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let service = make_service(llm).with_middleware(Arc::new(RecordingMiddleware {
+            name: "R",
+            log: log.clone(),
+        }));
+        let paladin = make_paladin(2);
+
+        service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                "R.before(0)".to_string(),
+                "R.after(0)".to_string(),
+                "R.before(1)".to_string(),
+                "R.after(1)".to_string(),
+            ]
+        );
+    }
+
+    /// `around_tool` fires for BOTH the Arsenal branch and the handoff
+    /// branch, in dispatch order, with the correct `ToolCallKind` each time.
+    #[tokio::test]
+    async fn around_tool_fires_for_both_arsenal_and_handoff_dispatch() {
+        let llm = Arc::new(MockLlmAdapter::new().with_script(vec![
+            MockScriptEntry::ToolCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            },
+            MockScriptEntry::ToolCall {
+                name: "handoff_to_specialist".to_string(),
+                arguments: r#"{"specialist_name":"x","task_description":"y"}"#.to_string(),
+            },
+        ]));
+        let arsenal = Arc::new(RecordingArsenal::default());
+        let kinds = Arc::new(Mutex::new(Vec::new()));
+        let service = make_service_with_arsenal(llm, arsenal.clone() as Arc<dyn ArsenalPort>)
+            .with_middleware(Arc::new(RecordingAroundTool {
+                kinds: kinds.clone(),
+            }));
+        let paladin = make_paladin(2);
+
+        service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(
+            *kinds.lock().unwrap(),
+            vec![ToolCallKind::Armament, ToolCallKind::Handoff]
+        );
+        assert_eq!(arsenal.calls.lock().unwrap().len(), 1);
+    }
+
+    /// `ToolFlow::Deny` injects `reason` exactly where the existing
+    /// tool-error arm writes to, the Arsenal is never invoked, and the run
+    /// continues.
+    #[tokio::test]
+    async fn tool_flow_deny_injects_the_reason_where_a_tool_error_is_injected_today() {
+        let llm = Arc::new(
+            MockLlmAdapter::new().with_script(vec![MockScriptEntry::ToolCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            }]),
+        );
+        let arsenal = Arc::new(RecordingArsenal::default());
+        let service = make_service_with_arsenal(llm, arsenal.clone() as Arc<dyn ArsenalPort>)
+            .with_middleware(Arc::new(DenyingMiddleware {
+                reason: "denied for test",
+            }));
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(arsenal.calls.lock().unwrap().len(), 0);
+        assert!(
+            result.output.contains(
+                "\n\n🔧 Tool Execution: lookup\nResult: FAILED\nError: denied for test\n"
+            ),
+            "unexpected output: {}",
+            result.output
+        );
+    }
+
+    /// `ToolFlow::Rewrite` causes the Arsenal to receive the rewritten
+    /// `ArmamentCall`, not the model's original.
+    #[tokio::test]
+    async fn tool_flow_rewrite_replaces_the_call_before_dispatch() {
+        let llm = Arc::new(
+            MockLlmAdapter::new().with_script(vec![MockScriptEntry::ToolCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            }]),
+        );
+        let arsenal = Arc::new(RecordingArsenal::default());
+        let service = make_service_with_arsenal(llm, arsenal.clone() as Arc<dyn ArsenalPort>)
+            .with_middleware(Arc::new(RewritingMiddleware {
+                rewritten_name: "rewritten_tool",
+            }));
+        let paladin = make_paladin(1);
+
+        service.execute(&paladin, "hi").await.unwrap();
+
+        let calls = arsenal.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "rewritten_tool");
+    }
+
+    /// A middleware that pushes a `PromptSection` in `before_model` causes
+    /// that section's text to appear in the rendered prompt the mock
+    /// received.
+    #[tokio::test]
+    async fn middleware_mutates_the_assembly_and_the_mutation_reaches_the_rendered_prompt() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("ack"));
+        let service = make_service(llm.clone()).with_middleware(Arc::new(SectionPushingMiddleware));
+        let paladin = make_paladin(1);
+
+        service.execute(&paladin, "hi").await.unwrap();
+
+        let prompt = llm.last_prompt().unwrap();
+        assert!(
+            prompt.contains("## Injected Section\ninjected body text\n"),
+            "prompt did not contain the pushed section: {prompt}"
+        );
+    }
+
+    /// `execute_stream` runs `before_model` exactly once and never
+    /// `after_model`/`around_tool`.
+    #[tokio::test]
+    async fn streaming_path_runs_before_model_only() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("streamed"));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let service = make_service(llm).with_middleware(Arc::new(RecordingMiddleware {
+            name: "S",
+            log: log.clone(),
+        }));
+        let paladin = make_paladin(1);
+
+        let mut stream = service.execute_stream(&paladin, "hi").await.unwrap();
+        while let Some(chunk) = stream.recv().await {
+            if chunk.unwrap().is_final {
+                break;
+            }
+        }
+
+        let recorded = log.lock().unwrap();
+        let before_count = recorded.iter().filter(|s| s.contains(".before")).count();
+        let after_count = recorded.iter().filter(|s| s.contains(".after")).count();
+        assert_eq!(before_count, 1, "expected exactly one before_model");
+        assert_eq!(after_count, 0, "expected zero after_model calls");
+    }
+
+    /// Across a two-iteration run, `loop_index` is `0, 1`, `run_id` is
+    /// stable across both calls, and `cumulative_tokens` after the second
+    /// iteration equals the sum of both responses' `total_tokens`.
+    #[tokio::test]
+    async fn context_carries_run_id_loop_index_and_cumulative_tokens() {
+        struct ContextObserver {
+            loop_indices: Arc<Mutex<Vec<u32>>>,
+            run_ids: Arc<Mutex<Vec<uuid::Uuid>>>,
+            cumulative_after: Arc<Mutex<Vec<u32>>>,
+        }
+
+        #[async_trait]
+        impl ExecutionMiddleware for ContextObserver {
+            async fn before_model(
+                &self,
+                cx: &mut ModelCallContext<'_>,
+            ) -> Result<MiddlewareFlow, PaladinError> {
+                self.loop_indices.lock().unwrap().push(cx.loop_index);
+                self.run_ids.lock().unwrap().push(cx.run_id);
+                Ok(MiddlewareFlow::Continue)
+            }
+
+            async fn after_model(
+                &self,
+                cx: &mut ModelCallContext<'_>,
+                _resp: &mut LlmResponseView,
+            ) -> Result<MiddlewareFlow, PaladinError> {
+                self.cumulative_after
+                    .lock()
+                    .unwrap()
+                    .push(cx.cumulative_tokens);
+                Ok(MiddlewareFlow::Continue)
+            }
+
+            fn name(&self) -> &str {
+                "context-observer"
+            }
+        }
+
+        let llm = Arc::new(MockLlmAdapter::new().with_response("ack"));
+        let loop_indices = Arc::new(Mutex::new(Vec::new()));
+        let run_ids = Arc::new(Mutex::new(Vec::new()));
+        let cumulative_after = Arc::new(Mutex::new(Vec::new()));
+        let service = make_service(llm).with_middleware(Arc::new(ContextObserver {
+            loop_indices: loop_indices.clone(),
+            run_ids: run_ids.clone(),
+            cumulative_after: cumulative_after.clone(),
+        }));
+        let paladin = make_paladin(2);
+
+        service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(*loop_indices.lock().unwrap(), vec![0, 1]);
+        let ids = run_ids.lock().unwrap();
+        assert_eq!(ids[0], ids[1], "run_id must be stable across iterations");
+
+        let cumulative = cumulative_after.lock().unwrap();
+        assert_eq!(cumulative.len(), 2);
+        assert_eq!(
+            cumulative[1],
+            cumulative[0] + 30,
+            "cumulative_tokens after iteration 2 must equal both responses' total_tokens summed \
+             (30 each, the MockLlmAdapter default)"
+        );
     }
 }

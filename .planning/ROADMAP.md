@@ -571,7 +571,7 @@ Plans:
 
 **Wave 14** *(blocked on Wave 13 completion)*
 
-- [ ] 26-21-PLAN.md — Guide, `MIGRATION.md` sweep, api-surface regen, gate evidence (all)
+- [x] 26-21-PLAN.md — Guide, `MIGRATION.md` sweep, api-surface regen, gate evidence (all)
 
 ### Phase 27: Platform API
 

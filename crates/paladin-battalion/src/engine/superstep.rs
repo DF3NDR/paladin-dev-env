@@ -2183,11 +2183,9 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 parley_response: parley_responses_this_round.get(node_id).cloned(),
                 attempt: 0,
                 heartbeat: HeartbeatHandle::new(),
-                // RED (plan 26-13 Task 3): deliberately wrong -- always
-                // `None`, ignoring the engine's own configured grant, so
-                // the vault-wiring tests fail before the real
-                // `vault.clone()` below replaces this.
-                vault: None,
+                // --- RT-04, D-21: the SAME grant for every node of this
+                // run -- `None` when the engine has no Vault store wired.
+                vault: vault.clone(),
             };
             let nid = node_id.clone();
             // --- D-09, D-10, D-14: this node's resolved Aegis (its own

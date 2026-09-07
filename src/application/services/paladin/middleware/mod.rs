@@ -31,6 +31,7 @@ pub mod chain;
 pub mod context;
 pub mod guardrail;
 pub mod limits;
+pub mod resilience;
 
 pub use chain::{BeforeOutcome, run_after, run_around_tool, run_before};
 pub use context::{
@@ -42,6 +43,7 @@ pub use guardrail::{
     GuardrailTarget,
 };
 pub use limits::{ModelCallLimit, TokenBudget, ToolCallLimit};
+pub use resilience::{ModelFallbackMiddleware, ModelRetryMiddleware};
 
 use crate::application::services::paladin::error::PaladinError;
 use crate::core::platform::container::arsenal::ArmamentCall;

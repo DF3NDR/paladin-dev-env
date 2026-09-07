@@ -271,6 +271,49 @@ impl<'p> ModelCallContext<'p> {
         self.paladin
     }
 
+    /// The effective [`LlmPort`] for this model call (Doc 05
+    /// assumption-delta decision, plan 26-10, D-11).
+    ///
+    /// Before Phase 26's retry/fallback middleware, a run had exactly one
+    /// port: the service's own. This accessor is the ONE place that
+    /// resolution happens now: `llm_override` if a port-shaping middleware
+    /// (`ModelFallbackMiddleware`) set one in `before_model`, otherwise
+    /// `service_default` -- seeded here as the default *source*, not sitting
+    /// on the far side of an `else` branch. It is read exactly once, at the
+    /// single model-call site
+    /// (`PaladinExecutionService::execute_with_retry_and_temperature`); no
+    /// other call site chooses a port. A future source of port choice (e.g.
+    /// Phase 27's `RunScope`-derived selection) adds a new default source
+    /// here, not a second resolution branch elsewhere -- see
+    /// `model_call_port_is_resolved_at_exactly_one_point`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin::application::services::paladin::middleware::{ModelCallContext, PromptAssembly};
+    /// use paladin_llm::mock::MockLlmAdapter;
+    /// use paladin_ports::output::llm_port::LlmPort;
+    /// # use paladin::core::base::entity::node::Node;
+    /// # use paladin::core::platform::container::paladin::PaladinData;
+    ///
+    /// let paladin = Node::new(PaladinData::default(), None);
+    /// let assembly = PromptAssembly::new("system", "input", "", vec![], None);
+    /// let cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
+    /// let service_default: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new());
+    ///
+    /// // With no override, the service default is returned.
+    /// assert_eq!(
+    ///     cx.effective_llm(&service_default).get_provider_name(),
+    ///     service_default.get_provider_name()
+    /// );
+    /// ```
+    pub fn effective_llm(&self, service_default: &Arc<dyn LlmPort>) -> Arc<dyn LlmPort> {
+        self.llm_override
+            .clone()
+            .unwrap_or_else(|| Arc::clone(service_default))
+    }
+
     /// Read (or default-construct) a middleware's typed per-run state,
     /// keyed by `middleware_name` and `T`'s `TypeId` -- two middleware with
     /// different names never collide, and one middleware storing two

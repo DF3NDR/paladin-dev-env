@@ -23,9 +23,8 @@ use std::time::Duration;
 use rand::Rng;
 use tokio_util::sync::CancellationToken;
 
-use paladin_core::platform::container::aegis::{RetryPolicy, RetryPredicate};
+use paladin_core::platform::container::aegis::RetryPolicy;
 use paladin_core::platform::container::node_error::NodeError;
-use paladin_core::platform::container::transience::Transience;
 
 /// The delay before attempt `attempt` (`attempt >= 2`; the delay before
 /// attempt 1 is always zero -- there is no wait before the FIRST attempt).
@@ -94,32 +93,27 @@ pub async fn wait_backoff(delay: Duration, token: &Option<CancellationToken>) ->
 /// Whether `policy.retry_on` retries an error at `err.transience`.
 ///
 /// `attempt` is accepted for a stable signature (a future `Custom`
-/// predicate evaluator, plan 25-03, will need it) but unused by either
-/// built-in arm today.
+/// predicate evaluator, plan 25-03, will need it) but unused today.
 ///
-/// - `RetryPredicate::TransientOnly` retries only `Transience::Transient`.
-/// - `RetryPredicate::TransientAndUnknown` retries `Transience::Transient`
-///   or `Transience::Unknown`.
-/// - `RetryPredicate::Custom(_)` always returns `false` here -- resolving a
-///   registered custom predicate is plan 25-03's `RetryPredicateRegistry`.
+/// Delegates entirely to
+/// [`RetryPredicate::admits`](paladin_core::platform::container::aegis::RetryPredicate::admits)
+/// (Phase 26 D-11): the transience-to-boolean decision has exactly one
+/// home, in `paladin-core`'s `aegis` module, and this function is one of
+/// its two callers (the other is
+/// `paladin::application::services::paladin::middleware::resilience`'s
+/// `ModelRetryMiddleware`, plan 26-10). `RetryPredicate` being
+/// `#[non_exhaustive]` (D-09) is handled inside `admits` itself, so this
+/// call site needs no wildcard arm of its own.
 pub fn should_retry(policy: &RetryPolicy, err: &NodeError, _attempt: u32) -> bool {
-    match &policy.retry_on {
-        RetryPredicate::TransientOnly => err.transience == Transience::Transient,
-        RetryPredicate::TransientAndUnknown => {
-            matches!(err.transience, Transience::Transient | Transience::Unknown)
-        }
-        RetryPredicate::Custom(_) => false,
-        // `RetryPredicate` is `#[non_exhaustive]` (D-09): a future variant
-        // must not silently retry -- fail closed, matching
-        // `RetryPredicate::Custom`'s own "not resolved by this plan" stance.
-        _ => false,
-    }
+    policy.retry_on.admits(err.transience)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_core::platform::container::aegis::RetryPredicate;
     use paladin_core::platform::container::node_error::NodeErrorSource;
+    use paladin_core::platform::container::transience::Transience;
     use paladin_core::platform::container::waypoint::NodeId;
 
     fn policy(jitter: bool) -> RetryPolicy {

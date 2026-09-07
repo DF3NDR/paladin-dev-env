@@ -20,6 +20,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::platform::container::battlefield::{FieldName, StateDelta};
+use crate::platform::container::transience::Transience;
 use crate::platform::container::waypoint::NodeId;
 
 /// The whole per-node fault-tolerance policy (D-09): every field is
@@ -150,6 +151,49 @@ pub enum RetryPredicate {
     /// plan's `should_retry` -- always evaluates to "do not retry" until
     /// then.
     Custom(String),
+}
+
+impl RetryPredicate {
+    /// Whether this predicate retries a failure classified `transience`
+    /// (Doc 04 D-15; Phase 26 D-11).
+    ///
+    /// This is the **single home** of the transience-to-boolean decision:
+    /// `paladin_battalion::engine::retry::should_retry` and
+    /// `paladin::application::services::paladin::middleware::resilience`'s
+    /// `ModelRetryMiddleware` (plan 26-10) are its two callers, and neither
+    /// re-implements the table below.
+    ///
+    /// | | `Transient` | `Permanent` | `Unknown` |
+    /// |---|---|---|---|
+    /// | `TransientOnly` | `true` | `false` | `false` |
+    /// | `TransientAndUnknown` | `true` | `false` | `true` |
+    /// | `Custom(_)` | `false` | `false` | `false` |
+    ///
+    /// `Custom(_)` always answers `false` here -- resolving a registered
+    /// custom predicate is the engine's own
+    /// `RetryPredicateRegistry` (`paladin_battalion::engine::registries`),
+    /// and this pure function deliberately does not attempt it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::aegis::RetryPredicate;
+    /// use paladin_core::platform::container::transience::Transience;
+    ///
+    /// assert!(RetryPredicate::TransientOnly.admits(Transience::Transient));
+    /// assert!(!RetryPredicate::TransientOnly.admits(Transience::Unknown));
+    /// assert!(RetryPredicate::TransientAndUnknown.admits(Transience::Unknown));
+    /// assert!(!RetryPredicate::Custom("my-predicate".to_string()).admits(Transience::Transient));
+    /// ```
+    pub fn admits(&self, transience: Transience) -> bool {
+        match self {
+            RetryPredicate::TransientOnly => transience == Transience::Transient,
+            RetryPredicate::TransientAndUnknown => {
+                matches!(transience, Transience::Transient | Transience::Unknown)
+            }
+            RetryPredicate::Custom(_) => false,
+        }
+    }
 }
 
 /// Per-ATTEMPT run/idle timeout policy (Doc 04 FT-FR-08, FT-FR-09; D-18,
@@ -298,6 +342,26 @@ mod tests {
     #[test]
     fn no_retry_policy_validates() {
         assert!(Aegis::default().validate().is_ok());
+    }
+
+    /// Task 1, Test 1 (plan 26-10): `RetryPredicate::admits` is pure and
+    /// matches the documented three-arm table for all nine
+    /// predicate/transience combinations -- `Custom(_)` is never resolved
+    /// here (the registry's job), so it always answers `false`.
+    #[test]
+    fn admits_is_pure_and_matches_the_documented_table() {
+        assert!(RetryPredicate::TransientOnly.admits(Transience::Transient));
+        assert!(!RetryPredicate::TransientOnly.admits(Transience::Unknown));
+        assert!(!RetryPredicate::TransientOnly.admits(Transience::Permanent));
+
+        assert!(RetryPredicate::TransientAndUnknown.admits(Transience::Transient));
+        assert!(RetryPredicate::TransientAndUnknown.admits(Transience::Unknown));
+        assert!(!RetryPredicate::TransientAndUnknown.admits(Transience::Permanent));
+
+        let custom = RetryPredicate::Custom("my-predicate".to_string());
+        assert!(!custom.admits(Transience::Transient));
+        assert!(!custom.admits(Transience::Unknown));
+        assert!(!custom.admits(Transience::Permanent));
     }
 
     #[test]

@@ -986,6 +986,7 @@ impl PaladinExecutionService {
                     effective_temperature,
                     execution_id,
                     loop_num,
+                    &middleware_cx,
                 )
                 .await?;
 
@@ -1824,7 +1825,18 @@ impl PaladinExecutionService {
     /// This variant supports Layer 2 (dynamic temperature) by accepting a temperature
     /// parameter instead of using paladin.node.temperature.
     ///
-    /// Implements exponential backoff: 100ms, 200ms, 400ms, etc.
+    /// With no retry policy set on `cx`, implements today's exponential
+    /// backoff unchanged: 100ms, 200ms, 400ms, etc. (D-11, X-03).
+    ///
+    /// # The single port/policy resolution point (D-11, assumption-delta)
+    ///
+    /// This is the ONE site in the service that resolves which
+    /// [`paladin_ports::output::llm_port::LlmPort`] a model call reaches
+    /// and which retry policy governs it: `cx.effective_llm(&self.llm_port)`
+    /// (the override, if `ModelFallbackMiddleware` set one, else the
+    /// service's own port, seeded as the default) and `cx.retry_policy`
+    /// (set by `ModelRetryMiddleware`, else `None` -- today's shape). No
+    /// other call site in this service chooses a port or a retry policy.
     ///
     /// # Arguments
     ///
@@ -1833,6 +1845,8 @@ impl PaladinExecutionService {
     /// * `temperature` - The temperature value to use for this call
     /// * `execution_id` - Unique ID for this execution (for logging)
     /// * `loop_num` - Current loop iteration number
+    /// * `cx` - The run's `ModelCallContext`, read (never mutated) for its
+    ///   `llm_override` and `retry_policy` (D-11)
     ///
     /// # Returns
     ///
@@ -1845,7 +1859,9 @@ impl PaladinExecutionService {
     /// - The failure is [`Transience::Permanent`](paladin_core::platform::container::transience::Transience::Permanent)
     ///   (e.g. a rejected credential or a malformed prompt) -- returned
     ///   immediately on the attempt that first observes it, never retried
-    ///   (WR-02, `25-REVIEW.md`)
+    ///   (WR-02, `25-REVIEW.md`), whether or not a retry policy is active
+    /// - An active retry policy's `RetryPredicate::admits` declines this
+    ///   failure's transience (D-11) -- returned immediately, unretried
     /// - All retry attempts are exhausted
     /// - LLM call fails with a non-retryable error
     async fn execute_with_retry_and_temperature(
@@ -1855,9 +1871,23 @@ impl PaladinExecutionService {
         temperature: f32,
         execution_id: uuid::Uuid,
         loop_num: u32,
+        cx: &ModelCallContext<'_>,
     ) -> Result<paladin_ports::output::llm_port::LlmResponse, PaladinError> {
+        // D-11 / the assumption-delta promote (see `ModelCallContext::effective_llm`'s
+        // rustdoc): the effective port for THIS call is resolved here,
+        // exactly once. The service's own `llm_port` is the seeded default;
+        // `cx.llm_override` (set by `ModelFallbackMiddleware::before_model`)
+        // is the override.
+        let llm_port = cx.effective_llm(&self.llm_port);
+        // D-11: a `ModelRetryMiddleware`-supplied policy drives attempts,
+        // delays and the retry predicate below; with `None` the loop keeps
+        // today's shape byte-for-byte (X-03).
+        let retry_policy = cx.retry_policy.clone();
         let mut attempt = 0;
-        let max_attempts = paladin.node.max_loops.as_u32().min(10); // Cap retries at 10
+        let max_attempts = retry_policy
+            .as_ref()
+            .map(|policy| policy.max_attempts)
+            .unwrap_or_else(|| paladin.node.max_loops.as_u32().min(10)); // Cap retries at 10 with no policy
 
         loop {
             attempt += 1;
@@ -1901,12 +1931,14 @@ impl PaladinExecutionService {
             // Create LLM request
             let request = LlmRequest::new(paladin.node.model.clone(), prompt_item);
 
-            // Wrap LLM call with circuit breaker (async version)
-            let llm_port = Arc::clone(&self.llm_port);
+            // Wrap LLM call with circuit breaker (async version). Uses the
+            // resolved `llm_port` (D-11's single resolution point), not
+            // `self.llm_port` directly.
+            let port = Arc::clone(&llm_port);
             let result = self
                 .circuit_breaker
                 .call_async(async move {
-                    match llm_port.generate(request).await {
+                    match port.generate(request).await {
                         Ok(response) => Ok(response),
                         Err(e) => Err(to_paladin_error(&e)),
                     }
@@ -1929,13 +1961,13 @@ impl PaladinExecutionService {
                     );
                     return Err(PaladinError::CircuitBreakerOpen);
                 }
-                // WR-02 (`25-REVIEW.md`): a `Permanent` failure (e.g. a
+                // WR-02 (`25-REVIEW.md`), D-11: a `Permanent` failure (e.g. a
                 // rejected credential or a malformed prompt) needs operator
                 // intervention, not a retry -- the identical request would
-                // fail identically on every subsequent attempt. Checked
-                // BEFORE the `attempt >= max_attempts` arm so it fails fast
-                // on the FIRST attempt rather than burning the full retry
-                // budget (up to 10 attempts, exponential backoff) first.
+                // fail identically on every subsequent attempt, whether or
+                // not a retry policy is active. Checked BEFORE any
+                // policy/attempt-budget arm so it fails fast on the FIRST
+                // attempt rather than burning the full retry budget first.
                 // Returns the underlying typed error (usually
                 // `PaladinError::LlmFailure`) rather than
                 // `MaxRetriesExceeded`, so the operator sees the real
@@ -1951,6 +1983,25 @@ impl PaladinExecutionService {
                     );
                     return Err(e);
                 }
+                // D-11: with an active retry policy, `RetryPredicate::admits`
+                // -- the SAME pure function
+                // `paladin_battalion::engine::retry::should_retry` calls --
+                // decides whether this transience is retried at all. With no
+                // policy this arm never matches (`unwrap_or(false)`), so
+                // every non-Permanent failure remains retryable, exactly as
+                // today.
+                Err(e)
+                    if retry_policy
+                        .as_ref()
+                        .map(|policy| !policy.retry_on.admits(e.transience()))
+                        .unwrap_or(false) =>
+                {
+                    warn!(
+                        "LLM call failed with a policy-declined transience, not retrying: id={}, loop={}, attempt={}, error={}",
+                        execution_id, loop_num, attempt, e
+                    );
+                    return Err(e);
+                }
                 Err(_e) if attempt >= max_attempts => {
                     // Exhausted retries
                     error!(
@@ -1960,13 +2011,25 @@ impl PaladinExecutionService {
                     return Err(PaladinError::MaxRetriesExceeded(attempt));
                 }
                 Err(e) => {
-                    // Retry with exponential backoff
-                    let backoff_ms = 100 * 2u64.pow(attempt - 1); // 100ms, 200ms, 400ms, ...
+                    // D-11: the delay before the NEXT attempt comes from
+                    // `paladin_battalion::engine::retry::backoff_delay` when
+                    // a policy is active; with none, today's
+                    // `100ms * 2^(attempt-1)` shape is unchanged (X-03).
+                    let backoff = match &retry_policy {
+                        Some(policy) => {
+                            paladin_battalion::engine::retry::backoff_delay(policy, attempt + 1)
+                        }
+                        None => Duration::from_millis(100 * 2u64.pow(attempt - 1)), // 100ms, 200ms, 400ms, ...
+                    };
                     warn!(
                         "LLM call failed, retrying: id={}, loop={}, attempt={}, backoff_ms={}, error={}",
-                        execution_id, loop_num, attempt, backoff_ms, e
+                        execution_id,
+                        loop_num,
+                        attempt,
+                        backoff.as_millis(),
+                        e
                     );
-                    sleep(Duration::from_millis(backoff_ms)).await;
+                    sleep(backoff).await;
                 }
             }
         }
@@ -2460,6 +2523,17 @@ mod tests {
         Node::new(data, Some("TestPaladin".to_string()))
     }
 
+    /// A bare `ModelCallContext` with no `llm_override`/`retry_policy` set
+    /// -- the D-11 "no resilience middleware" shape, for tests that call
+    /// `execute_with_retry_and_temperature` directly.
+    fn bare_cx(paladin: &Paladin) -> ModelCallContext<'_> {
+        ModelCallContext::new(
+            Uuid::new_v4(),
+            paladin,
+            PromptAssembly::new("system", "input", "", vec![], None),
+        )
+    }
+
     // --- Plan 25-09, D-19: the three beat points ------------------------
 
     /// An `LlmPort` whose `generate` always requests the `lookup` tool (so
@@ -2824,7 +2898,14 @@ mod tests {
         let trips_after_one = Arc::new(CircuitBreaker::new(1, 1, Duration::from_secs(60)));
         let (port, service) = failing_service(provider_503, FailAt::Open, trips_after_one);
         let result = service
-            .execute_with_retry_and_temperature(&paladin, "hello", 0.5, Uuid::new_v4(), 1)
+            .execute_with_retry_and_temperature(
+                &paladin,
+                "hello",
+                0.5,
+                Uuid::new_v4(),
+                1,
+                &bare_cx(&paladin),
+            )
             .await;
         assert!(
             matches!(result, Err(PaladinError::CircuitBreakerOpen)),
@@ -2870,7 +2951,14 @@ mod tests {
         // Site: execute_with_retry_and_temperature.
         let (port, service) = failing_service(auth_failure, FailAt::Open, default_breaker());
         let result = service
-            .execute_with_retry_and_temperature(&paladin, "hello", 0.5, Uuid::new_v4(), 1)
+            .execute_with_retry_and_temperature(
+                &paladin,
+                "hello",
+                0.5,
+                Uuid::new_v4(),
+                1,
+                &bare_cx(&paladin),
+            )
             .await;
         match result {
             Err(PaladinError::LlmFailure { transience, .. }) => {
@@ -2921,7 +3009,14 @@ mod tests {
         for make in [provider_503, processing_error] {
             let (port, service) = failing_service(make, FailAt::Open, default_breaker());
             let result = service
-                .execute_with_retry_and_temperature(&paladin, "hello", 0.5, Uuid::new_v4(), 1)
+                .execute_with_retry_and_temperature(
+                    &paladin,
+                    "hello",
+                    0.5,
+                    Uuid::new_v4(),
+                    1,
+                    &bare_cx(&paladin),
+                )
                 .await;
             assert!(
                 matches!(result, Err(PaladinError::MaxRetriesExceeded(2))),

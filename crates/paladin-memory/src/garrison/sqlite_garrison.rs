@@ -618,6 +618,164 @@ mod tests {
         assert!(stats.entry_count <= 3);
     }
 
+    // RT-03 / D-17: one embedded migrator, the `002` column migration, and the
+    // Garrison entry's `is_summary` round trip.
+
+    #[tokio::test]
+    async fn fresh_sqlite_garrison_has_the_is_summary_column() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let config = GarrisonConfig::default();
+        let garrison = SqliteGarrison::connect(temp_file.path(), config, "test-paladin")
+            .await
+            .unwrap();
+
+        let rows = sqlx::query("PRAGMA table_info(garrison_entries)")
+            .fetch_all(&garrison.pool)
+            .await
+            .unwrap();
+
+        let is_summary_column = rows.iter().find(|row| {
+            row.try_get::<String, _>("name")
+                .map(|n| n == "is_summary")
+                .unwrap_or(false)
+        });
+        assert!(
+            is_summary_column.is_some(),
+            "garrison_entries is missing the is_summary column"
+        );
+
+        let default_value: Option<String> =
+            is_summary_column.unwrap().try_get("dflt_value").ok();
+        assert_eq!(default_value.as_deref(), Some("0"));
+    }
+
+    #[tokio::test]
+    async fn existing_v0_9_database_migrates_forward() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let temp_file_path = temp_file.path().to_path_buf();
+        let url = format!("sqlite://{}", temp_file_path.display());
+
+        // Build a v0.9-shaped database: apply only `001`, exactly the migration a
+        // pre-`is_summary` deployment would have run.
+        let v0_9_migrations_dir = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/migrations/001_create_garrison_tables.sql"
+            ),
+            v0_9_migrations_dir
+                .path()
+                .join("001_create_garrison_tables.sql"),
+        )
+        .unwrap();
+
+        let options = SqliteConnectOptions::from_str(&url)
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+
+        sqlx::migrate::Migrator::new(v0_9_migrations_dir.path())
+            .await
+            .unwrap()
+            .run(&pool)
+            .await
+            .unwrap();
+
+        // Insert a pre-existing row the way v0.9 code would have (no `is_summary`
+        // column exists yet at this point).
+        sqlx::query(
+            r#"
+            INSERT INTO garrison_entries
+            (id, paladin_id, role, content, timestamp, token_count, metadata, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            "#,
+        )
+        .bind("11111111-1111-1111-1111-111111111111")
+        .bind("test-paladin")
+        .bind("user")
+        .bind("pre-existing v0.9 row")
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(Option::<i64>::None)
+        .bind(Option::<String>::None)
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+
+        // Construct SqliteGarrison against the SAME file: `002` must apply and the
+        // pre-existing row must survive with `is_summary == false`.
+        let config = GarrisonConfig::default();
+        let garrison = SqliteGarrison::connect(&temp_file_path, config, "test-paladin")
+            .await
+            .unwrap();
+
+        let entries = garrison.recall_recent(10).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "pre-existing v0.9 row");
+        assert!(
+            !entries[0].is_summary,
+            "pre-existing row must read is_summary == false"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_garrison_constructs_twice_idempotently() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let config = GarrisonConfig::default();
+
+        let first = SqliteGarrison::connect(temp_file.path(), config.clone(), "test-paladin")
+            .await
+            .unwrap();
+        drop(first);
+
+        let second = SqliteGarrison::connect(temp_file.path(), config, "test-paladin")
+            .await
+            .unwrap();
+
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(&second.pool)
+            .await
+            .unwrap();
+        assert_eq!(row.0, 2, "expected exactly one row per migration (001, 002)");
+    }
+
+    #[tokio::test]
+    async fn is_summary_round_trips_through_sqlite() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let config = GarrisonConfig::default();
+        let garrison = SqliteGarrison::connect(temp_file.path(), config, "test-paladin")
+            .await
+            .unwrap();
+
+        garrison
+            .remember(GarrisonEntry::summary("condensed history".to_string()))
+            .await
+            .unwrap();
+        garrison
+            .remember(GarrisonEntry::new(
+                ConversationRole::User,
+                "raw entry".to_string(),
+            ))
+            .await
+            .unwrap();
+
+        let entries = garrison.recall_recent(10).await.unwrap();
+        assert_eq!(entries.len(), 2);
+
+        let summary_entry = entries
+            .iter()
+            .find(|e| e.content == "condensed history")
+            .unwrap();
+        assert!(summary_entry.is_summary);
+
+        let raw_entry = entries.iter().find(|e| e.content == "raw entry").unwrap();
+        assert!(!raw_entry.is_summary);
+    }
+
     #[tokio::test]
     async fn test_sqlite_forget_all() {
         let temp_file = NamedTempFile::new().unwrap();

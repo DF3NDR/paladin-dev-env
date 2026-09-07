@@ -43,6 +43,11 @@ pub mod config;
 /// Garrison adapters and supporting utilities.
 #[allow(missing_docs)]
 pub mod garrison;
+/// The crate's one shared, compile-time-embedded SQL migrator (requires feature
+/// `sqlite`; D-17, D-23). Not part of the public API -- `SqliteGarrison` and (plan
+/// 26-09) `SqliteVault` are the only callers.
+#[cfg(feature = "sqlite")]
+mod migrations;
 /// Convenience re-exports for commonly used memory types.
 #[allow(missing_docs)]
 pub mod prelude;

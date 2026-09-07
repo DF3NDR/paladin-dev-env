@@ -140,6 +140,18 @@
   `tool_errors.per_tool`) to fail the run instead of feeding the error back —
   `PaladinExecutionService::with_tool_error_config`, service-level configuration only
   (`PaladinConfig` is untouched, D-10).
+
+  **Post-plan review fix (26-REVIEW.md CR-01/WR-03/WR-01):** the sanitization above was, at
+  first cut, wired into only the `ArsenalError`/handoff `Err` path (`format_error`). A
+  code-review fix pass widened it to the `ArmamentResult { success: false, .. }` business-failure
+  `Error:` field and the successful `Output:` field too (`format_result`, `ToolResultFormatter`) —
+  both previously embedded tool-supplied text raw, and the FAILED-business-result path is
+  arguably the more likely one for a tool to surface an upstream response body through, since it
+  is the tool author's own designed error-reporting mechanism. The same pass also tightened the
+  `key=`/`token=` marker to require a word boundary, so an ordinary word like `monkey=5` embedded
+  in a tool's JSON output is no longer misredacted. No further action is required to keep today's
+  behavior — this only narrows what gets sanitized (adds sanitization where none existed, and
+  removes a false-positive class), it does not change the `tool_error_mode` policy itself.
 - M-B-04: no worked example owed — this phase (ENG-08) both introduces the behavior and documents it in full above.
 
 **Note on Phase 25 (Node-Level Fault Tolerance — epic `FT`), D-30: no behavioral change; no row is added above.** Every Aegis capability — per-node retry, per-attempt `run_timeout`/`idle_timeout`, `Route`/`Absorb`/`Custom` error handlers, node result caching — is **opt-in per node** through `WarGraph::set_aegis`/`with_default_aegis` (code, not configuration; §9.5), and a v0.9 graph declares none, so an upgraded deployment's workflows execute identically: one attempt per node, no per-attempt bound, a node failure fails the run with the same `node execution error: {message}` display line as before, and nothing is served from a cache (`node_without_aegis_behaves_exactly_as_before`, `pre_aegis_and_limit_failures_carry_none`, `the_display_line_on_a_failed_waypoint_is_unchanged`). The one run-level knob this phase makes real, `EngineConfig.run_timeout_secs` (§9.5), keeps its `None` default, so no run gains a budget it did not configure. `FallbackLlmAdapter` is a new adapter a caller constructs explicitly — no existing provider adapter's behavior changes, and the shared `map_http_status` mapping (25-05) changes only which *typed* `LlmError` variant a non-2xx status becomes (`ProviderError { status }` instead of `ProcessingError(String)`), never whether an adapter's own retry loop retries it. The legacy `FormationExecutionService`/`PhalanxExecutionService`/`CampaignExecutionService`/`Commander` paths and the legacy Battalion `RetryPolicy`/`ErrorStrategy`/timeout services are untouched (X-03). Two accepted, documented caveats that are *not* behavioral changes for a v0.9 graph but matter once a node opts in: an `idle_timeout` on a node whose `PaladinPort` keeps the default `execute_observed` degrades to a per-attempt wall clock (D-19), and a hanging `EdgeConditionEvaluator` remains outside every timeout (R-23-01, still accepted — per-attempt timeouts wrap node execution, not edge evaluation).

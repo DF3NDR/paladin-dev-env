@@ -10,7 +10,7 @@ use futures::stream;
 use paladin_core::platform::container::prompt::PromptType;
 use paladin_ports::output::llm_port::{
     FinishReason, FunctionCall, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
-    StreamingResponse, TokenUsage,
+    ResponseFormat, StreamingResponse, TokenUsage,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -278,6 +278,21 @@ impl MockLlmAdapter {
                 PromptType::System(system) => system.instructions.clone(),
                 _ => String::new(),
             })
+    }
+
+    /// The `response_format` of the most recent request, if any (RT-05,
+    /// D-28).
+    ///
+    /// The narrowest possible accessor over [`last_request`](Self::last_request)'s
+    /// already-recorded [`LlmRequest`] (Phase 26 D-02 added full-request
+    /// recording; this reads one field off it) — nothing else about the
+    /// mock's recording, scripting or `call_count` behaviour changes. Plan
+    /// 26-17's structured-output tests use this to assert
+    /// `PaladinExecutionService` sets `response_format` for every model
+    /// call of a structured run.
+    pub fn last_response_format(&self) -> Option<ResponseFormat> {
+        self.last_request()
+            .and_then(|request| request.response_format)
     }
 
     /// Return the number of times [`LlmPort::generate`] or a scripted
@@ -627,5 +642,68 @@ mod tests {
         assert_eq!(adapter.call_count(), 0);
         adapter.generate(make_request()).await.unwrap();
         assert_eq!(adapter.call_count(), 1);
+    }
+
+    // ── Phase 26 (RT-05, D-28): the mock records response_format ──────────
+
+    #[tokio::test]
+    async fn mock_records_the_response_format_it_received() {
+        let adapter = MockLlmAdapter::new();
+        assert_eq!(adapter.last_response_format(), None);
+
+        let request = make_request().with_response_format(ResponseFormat::JsonObject);
+        adapter.generate(request).await.unwrap();
+
+        assert_eq!(
+            adapter.last_response_format(),
+            Some(ResponseFormat::JsonObject)
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_behaviour_is_otherwise_unchanged() {
+        // Pins that the response_format accessor is strictly additive:
+        // with_responses, with_error, with_error_then_response,
+        // with_stream_items and call_count all behave exactly as before
+        // (D-28: "unchanged except recording response_format").
+        let cycling =
+            MockLlmAdapter::new().with_responses(vec!["First".to_string(), "Second".to_string()]);
+        assert_eq!(
+            cycling.generate(make_request()).await.unwrap().content,
+            "First"
+        );
+        assert_eq!(
+            cycling.generate(make_request()).await.unwrap().content,
+            "Second"
+        );
+        assert_eq!(
+            cycling.generate(make_request()).await.unwrap().content,
+            "First"
+        );
+        assert_eq!(cycling.call_count(), 3);
+
+        let erroring = MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded);
+        assert!(matches!(
+            erroring.generate(make_request()).await,
+            Err(LlmError::RateLimitExceeded)
+        ));
+
+        let recovering =
+            MockLlmAdapter::new().with_error_then_response(LlmError::RateLimitExceeded, "ok");
+        assert!(recovering.generate(make_request()).await.is_err());
+        assert_eq!(
+            recovering.generate(make_request()).await.unwrap().content,
+            "ok"
+        );
+
+        let streaming =
+            MockLlmAdapter::new().with_stream_items(vec![Ok("a".to_string()), Ok("b".to_string())]);
+        let mut stream = Box::into_pin(streaming.generate_stream(make_request()).await.unwrap());
+        let mut deltas = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            deltas.push(item.unwrap().delta);
+        }
+        assert_eq!(deltas, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(streaming.call_count(), 1);
     }
 }

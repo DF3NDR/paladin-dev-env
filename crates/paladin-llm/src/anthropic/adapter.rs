@@ -1295,4 +1295,75 @@ stake, so an attacker donating to himself alone is a strict loss.";
             "a usage-cap error must not be retried — it will not clear on backoff"
         );
     }
+
+    // ── Phase 26 (RT-05, D-28): the documented no-native-mode path ─────────
+
+    /// Anthropic has no native structured-output mode (D-28): `ClaudeRequest`
+    /// has no `response_format` field at all, so a caller-supplied
+    /// [`paladin_ports::output::llm_port::ResponseFormat`] is ignored
+    /// harmlessly by construction — there is no code path that could even
+    /// read it. This test pins that as an executable fact rather than an
+    /// assumption: building and sending a `response_format`-carrying
+    /// request produces a wire body with no JSON-mode field and the call
+    /// still succeeds, exactly like a request with the field unset.
+    #[tokio::test]
+    async fn anthropic_ignores_response_format() {
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_ports::output::llm_port::ResponseFormat;
+        use std::sync::Mutex as StdMutex;
+
+        let mut server = Server::new_async().await;
+        let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+
+        server
+            .mock("POST", "/messages")
+            .with_status(200)
+            .with_body_from_request(move |req| {
+                let body_text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                *captured_clone.lock().unwrap() = Some(body_text);
+                TEXT_ONLY_OPUS_4_8_JSON.as_bytes().to_vec()
+            })
+            .create_async()
+            .await;
+
+        let config = AnthropicConfig::new(
+            "sk-ant-test123".to_string(),
+            server.url(),
+            "claude-opus-4-8".to_string(),
+            4096,
+        );
+        let adapter =
+            AnthropicAdapter::new(config).expect("test config must build a valid adapter");
+
+        let request = LlmRequest::new(
+            "claude-opus-4-8",
+            PromptItem::new(PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }))
+            .unwrap(),
+        )
+        .with_response_format(ResponseFormat::JsonObject);
+
+        let result = adapter.generate(request).await;
+        assert!(
+            result.is_ok(),
+            "a response_format-carrying request must still succeed: {result:?}"
+        );
+
+        let body_text = captured
+            .lock()
+            .unwrap()
+            .take()
+            .expect("mock must have been called exactly once");
+        let body: serde_json::Value =
+            serde_json::from_str(&body_text).expect("captured body must be valid JSON");
+        assert!(
+            body.as_object().unwrap().get("response_format").is_none(),
+            "Anthropic has no native JSON mode -- response_format must not \
+             appear on the wire, got: {body_text}"
+        );
+    }
 }

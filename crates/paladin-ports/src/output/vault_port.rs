@@ -190,12 +190,10 @@ pub trait VaultPort: Send + Sync {
         query: &str,
         limit: u32,
     ) -> Result<Vec<ScoredVaultRecord>, VaultError> {
-        // RED (deliberate, temporary): returns an empty success instead of
-        // the correct Unsupported default, confirmed failing against
-        // `search_defaults_to_unsupported` before being replaced with the
-        // real default in the GREEN commit.
         let _ = (ns, query, limit);
-        Ok(vec![])
+        Err(VaultError::Unsupported {
+            operation: "search",
+        })
     }
 }
 

@@ -20,6 +20,7 @@ use paladin_core::platform::container::directive::{Directive, MusterContext};
 use paladin_core::platform::container::node_error::NodeErrorSource;
 use paladin_core::platform::container::parley::ParleyResponse;
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
+use paladin_ports::output::vault_confined::ConfinedVault;
 
 use crate::engine::heartbeat::HeartbeatHandle;
 
@@ -86,6 +87,21 @@ pub struct NodeContext {
     /// merged into the Battlefield and never part of a context's identity
     /// (any two handles compare equal).
     pub heartbeat: HeartbeatHandle,
+    /// This run's confined Vault handle (Doc 05 RT-04, D-21), if the
+    /// `WarEngine` was configured with [`crate::engine::WarEngine::with_vault`].
+    /// `None` when the engine has no Vault store wired -- a node then has
+    /// no handle at all, never one silently granted the root namespace.
+    /// `NodeContext`'s `PartialEq` compares this field by its granted
+    /// namespace ([`ConfinedVault`]'s own `PartialEq`), not by which `Arc`
+    /// it happens to wrap.
+    ///
+    /// Not part of any persisted Waypoint/Battlefield payload -- it is a
+    /// live handle, never serialized -- so `BATTLEFIELD_SCHEMA_VERSION`
+    /// does NOT bump for this field (this is the answer D-21 leaves open as
+    /// Claude's Discretion; evidence: neither `Battlefield` nor `Waypoint`
+    /// derives from or serializes `NodeContext`, and this field carries no
+    /// `serde` derive at all).
+    pub vault: Option<ConfinedVault>,
 }
 
 impl NodeContext {
@@ -106,6 +122,16 @@ impl NodeContext {
     /// bound degrades to a per-attempt wall clock (D-19).
     pub fn heartbeat(&self) {
         self.heartbeat.beat();
+    }
+
+    /// This execution's confined Vault handle (Doc 05 RT-04, D-21), or
+    /// `None` when the engine has no Vault store wired via
+    /// [`crate::engine::WarEngine::with_vault`]. A `StateNode` reads or
+    /// writes memory within its granted subtree through this handle; a
+    /// `None` here means there is nothing to fall back to -- never a
+    /// root-granted handle.
+    pub fn vault(&self) -> Option<&ConfinedVault> {
+        self.vault.as_ref()
     }
 
     /// This execution's Muster task payload (CF-FR-10), or `None` outside a
@@ -150,6 +176,8 @@ pub trait StateNode: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
     use crate::engine::heartbeat::HeartbeatHandle;
 
     fn ctx(heartbeat: HeartbeatHandle) -> NodeContext {
@@ -161,6 +189,7 @@ mod tests {
             parley_response: None,
             attempt: 1,
             heartbeat,
+            vault: None,
         }
     }
 
@@ -186,5 +215,87 @@ mod tests {
             format!("{a:?}").contains("HeartbeatHandle"),
             "Debug renders an opaque placeholder for the handle"
         );
+    }
+
+    /// A no-op `VaultPort` used only to construct `ConfinedVault` handles
+    /// for the equality test below -- never actually called.
+    struct NoopVault;
+
+    #[async_trait]
+    impl paladin_ports::output::vault_port::VaultPort for NoopVault {
+        async fn put(
+            &self,
+            _ns: &paladin_ports::output::vault_port::Namespace,
+            _key: &str,
+            _value: serde_json::Value,
+        ) -> Result<(), paladin_ports::output::vault_port::VaultError> {
+            unreachable!("not exercised")
+        }
+
+        async fn get(
+            &self,
+            _ns: &paladin_ports::output::vault_port::Namespace,
+            _key: &str,
+        ) -> Result<
+            Option<paladin_ports::output::vault_port::VaultRecord>,
+            paladin_ports::output::vault_port::VaultError,
+        > {
+            unreachable!("not exercised")
+        }
+
+        async fn delete(
+            &self,
+            _ns: &paladin_ports::output::vault_port::Namespace,
+            _key: &str,
+        ) -> Result<bool, paladin_ports::output::vault_port::VaultError> {
+            unreachable!("not exercised")
+        }
+
+        async fn list(
+            &self,
+            _ns: &paladin_ports::output::vault_port::Namespace,
+            _prefix: Option<&str>,
+            _page: paladin_ports::output::vault_port::Page,
+        ) -> Result<
+            Vec<paladin_ports::output::vault_port::VaultRecord>,
+            paladin_ports::output::vault_port::VaultError,
+        > {
+            unreachable!("not exercised")
+        }
+    }
+
+    /// Test 5 (plan 26-13, D-21): two `NodeContext`s differing only in
+    /// their vault handle's granted namespace are unequal; two with the
+    /// same grant are equal -- `ConfinedVault`'s own `PartialEq` (by
+    /// granted namespace, Task 1) is what `NodeContext`'s derived
+    /// `PartialEq` rides on for this field.
+    #[test]
+    fn node_context_equality_compares_the_grant() {
+        use paladin_ports::output::vault_port::Namespace;
+
+        let alice = Namespace::parse("user/alice").unwrap();
+        let bob = Namespace::parse("user/bob").unwrap();
+
+        let mut a = ctx(HeartbeatHandle::new());
+        a.vault = Some(ConfinedVault::new(Arc::new(NoopVault), alice.clone()));
+
+        let mut b = ctx(HeartbeatHandle::new());
+        b.vault = Some(ConfinedVault::new(Arc::new(NoopVault), alice));
+
+        let mut c = ctx(HeartbeatHandle::new());
+        c.vault = Some(ConfinedVault::new(Arc::new(NoopVault), bob));
+
+        assert_eq!(
+            a, b,
+            "two handles granted the same namespace make their contexts equal"
+        );
+        assert_ne!(
+            a, c,
+            "two handles granted different namespaces make their contexts unequal"
+        );
+
+        let mut none_vault = ctx(HeartbeatHandle::new());
+        none_vault.vault = None;
+        assert_ne!(a, none_vault, "a grant and no grant are never equal");
     }
 }

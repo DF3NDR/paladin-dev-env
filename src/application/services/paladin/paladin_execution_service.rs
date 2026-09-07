@@ -54,6 +54,7 @@ use crate::application::services::paladin::middleware::{
 };
 use crate::application::services::paladin::planning_service::PlanningService;
 use crate::application::services::paladin::prompt_generation_service::PromptGenerationService;
+use crate::application::services::paladin::vault_confined::ConfinedVault;
 use crate::application::services::sanctum::memory_extraction_service::{
     MemoryExtractionService, MemoryExtractionStrategy,
 };
@@ -73,7 +74,9 @@ use crate::infrastructure::adapters::arsenal::tool_result_formatter::ToolResultF
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use log::{debug, error, info, warn};
 use paladin_battalion::llm_failure::to_paladin_error;
+use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::transience::Transience;
+use paladin_core::platform::container::vault::Namespace;
 use paladin_llm::fallback::SERVED_BY_METADATA_KEY;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
@@ -85,6 +88,7 @@ use paladin_ports::output::paladin_port::{
 };
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
 use paladin_ports::output::token_counter_port::TokenCounterPort;
+use paladin_ports::output::vault_port::VaultPort;
 #[cfg(feature = "vision")]
 use paladin_ports::output::vision_port::VisionPort;
 use serde_json::Value;
@@ -176,6 +180,18 @@ pub struct PaladinExecutionService {
     /// stay consistent (X-03: recall_limit is opt-in, exactly like
     /// installing the trimmer itself).
     recall_limit: Option<u32>,
+
+    /// The Vault store this service confines runs into, if any (Doc 05
+    /// RT-04, D-21). Installed via [`PaladinExecutionService::with_vault`].
+    /// `None` by default -- a service with no vault store confines no run,
+    /// no matter what a `RunScope` carries.
+    vault: Option<Arc<dyn VaultPort>>,
+
+    /// The default Vault grant applied when a run's own [`RunScope`]
+    /// carries none (D-21). `None` by default. See
+    /// [`PaladinExecutionService::confined_vault`] for the full resolution
+    /// order.
+    default_vault_namespace: Option<Namespace>,
 }
 
 impl PaladinExecutionService {
@@ -231,6 +247,8 @@ impl PaladinExecutionService {
             middleware: Vec::new(),
             token_counter: Arc::new(paladin_memory::token_counter::HeuristicTokenCounter),
             recall_limit: None,
+            vault: None,
+            default_vault_namespace: None,
         }
     }
 
@@ -271,6 +289,72 @@ impl PaladinExecutionService {
         info!("Attaching RAG retrieval service to PaladinExecutionService");
         self.rag_retrieval_service = Some(service);
         self
+    }
+
+    /// Installs `vault` as this service's Vault store, with `default_namespace`
+    /// as the grant applied when a run's own [`RunScope`] carries none (Doc
+    /// 05 RT-04, D-21).
+    ///
+    /// # Arguments
+    ///
+    /// * `vault` - The Vault backend every confined run's calls ultimately
+    ///   reach, once a grant admits them.
+    /// * `default_namespace` - The namespace granted to a run whose
+    ///   `RunScope::vault_namespace` is `None`. `None` here means this
+    ///   service has no default grant of its own -- a run with neither a
+    ///   scope namespace nor a service default gets **no grant at all**
+    ///   (see [`PaladinExecutionService::confined_vault`]).
+    ///
+    /// # Returns
+    ///
+    /// Returns self for method chaining.
+    pub fn with_vault(
+        mut self,
+        vault: Arc<dyn VaultPort>,
+        default_namespace: Option<Namespace>,
+    ) -> Self {
+        info!(
+            "Attaching Vault store to PaladinExecutionService (default namespace: {})",
+            default_namespace
+                .as_ref()
+                .map(|ns| ns.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        );
+        self.vault = Some(vault);
+        self.default_vault_namespace = default_namespace;
+        self
+    }
+
+    /// Resolves the [`ConfinedVault`] a run under `scope` should observe
+    /// (Doc 05 RT-04, D-21), in a fixed order:
+    ///
+    /// 1. `scope.vault_namespace`, if set.
+    /// 2. Else this service's own [`PaladinExecutionService::with_vault`]
+    ///    default namespace, if set.
+    /// 3. Else **no grant at all** -- returns `None`.
+    ///
+    /// # No grant means denied, never root
+    ///
+    /// When neither the scope nor the service default names a namespace,
+    /// this method returns `None` rather than falling back to some
+    /// "root"-like namespace. A `None` here means the run has no Vault
+    /// handle whatsoever: no `ConfinedVault` is ever constructed, so no
+    /// call can reach the store, and (once a later plan wires vault tools)
+    /// no vault tool is even listed for the run. A bug that instead
+    /// defaulted to a root namespace here would silently hand every agent
+    /// the whole store -- this method's contract exists specifically to
+    /// rule that out.
+    ///
+    /// This method also returns `None` when no Vault store was ever
+    /// installed via `with_vault`, regardless of what `scope` carries --
+    /// there is nothing to confine access to.
+    pub fn confined_vault(&self, scope: &RunScope) -> Option<ConfinedVault> {
+        let vault = self.vault.clone()?;
+        let namespace = scope
+            .vault_namespace
+            .clone()
+            .or_else(|| self.default_vault_namespace.clone())?;
+        Some(ConfinedVault::new(vault, namespace))
     }
 
     /// Sets the memory extraction service for storing important information
@@ -598,15 +682,7 @@ impl PaladinExecutionService {
         paladin: &Paladin,
         input: &str,
     ) -> Result<PaladinResult, PaladinError> {
-        let execution_id = uuid::Uuid::new_v4();
-        info!(
-            "Starting Paladin execution: id={}, name={}, input_len={}",
-            execution_id,
-            paladin.node.name,
-            input.len()
-        );
-
-        self.execute_bounded(paladin, input, execution_id, None)
+        self.execute_scoped(paladin, input, None, &RunScope::default())
             .await
     }
 
@@ -652,20 +728,71 @@ impl PaladinExecutionService {
         input: &str,
         heartbeat: &HeartbeatHandle,
     ) -> Result<PaladinResult, PaladinError> {
-        let execution_id = uuid::Uuid::new_v4();
-        info!(
-            "Starting observed Paladin execution: id={}, name={}, input_len={}",
-            execution_id,
-            paladin.node.name,
-            input.len()
-        );
-        self.execute_bounded(paladin, input, execution_id, Some(heartbeat))
+        self.execute_scoped(paladin, input, Some(heartbeat), &RunScope::default())
             .await
     }
 
-    /// The shared body of `execute` and `execute_observed`: the same
-    /// per-execution timeout wrapper around [`Self::execute_internal`],
-    /// differing only in whether a heartbeat is threaded through.
+    /// Execute a Paladin under a host-issued [`RunScope`] (Doc 05 RT-04,
+    /// D-21) -- the real entry point `execute` and `execute_observed` both
+    /// are, each with `RunScope::default()` (one implementation, three
+    /// doors).
+    ///
+    /// Runs EXACTLY the path [`PaladinExecutionService::execute`] runs --
+    /// same reasoning loop, same timeout wrapper -- resolving `scope`'s
+    /// Vault grant via [`PaladinExecutionService::confined_vault`] before
+    /// dispatching. `heartbeat` is `Some` only on the observed path,
+    /// exactly like [`Self::execute_bounded`]'s own contract.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+    /// # use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
+    /// # use paladin_core::platform::container::run_scope::RunScope;
+    /// # use paladin_ports::output::llm_port::LlmPort;
+    /// # use std::sync::Arc;
+    /// # async fn example(llm_port: Arc<dyn LlmPort>, service: PaladinExecutionService) -> Result<(), Box<dyn std::error::Error>> {
+    /// # let paladin = PaladinBuilder::new(llm_port).system_prompt("test").build().await?;
+    /// let result = service
+    ///     .execute_scoped(&paladin, "Summarise", None, &RunScope::default())
+    ///     .await?;
+    /// println!("{}", result.output);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn execute_scoped(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        heartbeat: Option<&HeartbeatHandle>,
+        scope: &RunScope,
+    ) -> Result<PaladinResult, PaladinError> {
+        let execution_id = uuid::Uuid::new_v4();
+        // --- D-21: resolved here (before dispatch) so a future arsenal
+        // wiring (vault tools, plan 26-16+) has a single, already-correct
+        // place to read the run's grant from. Unused today beyond logging
+        // and the `confined_vault` contract itself -- this plan wires
+        // resolution and enforcement, not tool registration.
+        let vault_namespace = scope
+            .vault_namespace
+            .as_ref()
+            .or(self.default_vault_namespace.as_ref())
+            .map(std::string::ToString::to_string);
+        info!(
+            "Starting scoped Paladin execution: id={}, name={}, input_len={}, vault_namespace={}",
+            execution_id,
+            paladin.node.name,
+            input.len(),
+            vault_namespace.as_deref().unwrap_or("none")
+        );
+        self.execute_bounded(paladin, input, execution_id, heartbeat)
+            .await
+    }
+
+    /// The shared body of `execute`, `execute_observed` and `execute_scoped`:
+    /// the same per-execution timeout wrapper around
+    /// [`Self::execute_internal`], differing only in whether a heartbeat is
+    /// threaded through.
     async fn execute_bounded(
         &self,
         paladin: &Paladin,
@@ -2593,6 +2720,202 @@ mod tests {
         };
 
         Node::new(data, Some("TestPaladin".to_string()))
+    }
+
+    // --- Plan 26-13, D-21: RunScope / execute_scoped / with_vault --------
+
+    fn test_circuit_breaker() -> Arc<CircuitBreaker> {
+        Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60)))
+    }
+
+    /// An `LlmPort` that counts `generate` calls and always answers a
+    /// plain, non-tool-calling completion.
+    #[derive(Default)]
+    struct CountingLlmPort {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CountingLlmPort {
+        fn call_count(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for CountingLlmPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model,
+                content: "the answer".to_string(),
+                finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
+                usage: crate::core::platform::container::token_usage::TokenUsage::new(1, 1),
+                created_at: chrono::Utc::now(),
+                metadata: HashMap::new(),
+                function_call: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            unimplemented!("not exercised")
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "Counting"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// Test 2: a run through `execute` produces a `PaladinResult` equal to
+    /// the same run through `execute_scoped(.., &RunScope::default())`, and
+    /// both make the same number of port calls.
+    #[tokio::test]
+    async fn execute_is_execute_scoped_with_default_scope() {
+        let llm = Arc::new(CountingLlmPort::default());
+        let service = PaladinExecutionService::new(llm.clone(), test_circuit_breaker(), None, None);
+        let paladin = create_test_paladin();
+
+        let direct = service
+            .execute(&paladin, "hello")
+            .await
+            .expect("execute succeeds");
+        let calls_after_direct = llm.call_count();
+
+        let scoped = service
+            .execute_scoped(&paladin, "hello", None, &RunScope::default())
+            .await
+            .expect("execute_scoped succeeds");
+        let calls_after_scoped = llm.call_count() - calls_after_direct;
+
+        assert_eq!(scoped.output, direct.output);
+        assert_eq!(scoped.loop_count, direct.loop_count);
+        assert_eq!(scoped.stop_reason, direct.stop_reason);
+        assert_eq!(
+            calls_after_scoped, calls_after_direct,
+            "execute and execute_scoped(default) must make the same number of port calls"
+        );
+    }
+
+    /// Test 3: with `with_vault(vault, None)` and a scope carrying
+    /// `["user","alice"]`, the run's confined vault has that grant.
+    #[tokio::test]
+    async fn scope_namespace_becomes_the_run_grant() {
+        let vault: Arc<dyn VaultPort> = Arc::new(paladin_memory::vault::InMemoryVault::new());
+        let service = PaladinExecutionService::new(
+            Arc::new(CountingLlmPort::default()),
+            test_circuit_breaker(),
+            None,
+            None,
+        )
+        .with_vault(vault, None);
+
+        let alice = Namespace::parse("user/alice").unwrap();
+        let scope = RunScope::default().with_vault_namespace(alice.clone());
+
+        let confined = service
+            .confined_vault(&scope)
+            .expect("a scope namespace must produce a grant");
+        assert_eq!(confined.granted(), &alice);
+    }
+
+    /// Test 4: with `with_vault(vault, Some(["team"]))` and
+    /// `RunScope::default()`, the run's grant is `["team"]`.
+    #[tokio::test]
+    async fn service_default_namespace_applies_when_the_scope_has_none() {
+        let vault: Arc<dyn VaultPort> = Arc::new(paladin_memory::vault::InMemoryVault::new());
+        let team = Namespace::parse("team").unwrap();
+        let service = PaladinExecutionService::new(
+            Arc::new(CountingLlmPort::default()),
+            test_circuit_breaker(),
+            None,
+            None,
+        )
+        .with_vault(vault, Some(team.clone()));
+
+        let confined = service
+            .confined_vault(&RunScope::default())
+            .expect("the service default namespace must apply when the scope has none");
+        assert_eq!(confined.granted(), &team);
+    }
+
+    /// A scope namespace takes precedence over the service's own default
+    /// (D-21's resolution order: scope first, service default second).
+    #[tokio::test]
+    async fn scope_namespace_overrides_the_service_default() {
+        let vault: Arc<dyn VaultPort> = Arc::new(paladin_memory::vault::InMemoryVault::new());
+        let team = Namespace::parse("team").unwrap();
+        let alice = Namespace::parse("user/alice").unwrap();
+        let service = PaladinExecutionService::new(
+            Arc::new(CountingLlmPort::default()),
+            test_circuit_breaker(),
+            None,
+            None,
+        )
+        .with_vault(vault, Some(team));
+
+        let scope = RunScope::default().with_vault_namespace(alice.clone());
+        let confined = service
+            .confined_vault(&scope)
+            .expect("a scope namespace must produce a grant");
+        assert_eq!(confined.granted(), &alice);
+    }
+
+    /// Test 5: with `with_vault(vault, None)` and `RunScope::default()`,
+    /// the run has NO grant: `confined_vault` returns `None` -- never a
+    /// handle silently granted the root namespace. This is the explicit
+    /// denial: with no `ConfinedVault` constructed at all, no vault call
+    /// can ever reach the store for this run.
+    #[tokio::test]
+    async fn no_grant_means_denied_not_root() {
+        let vault: Arc<dyn VaultPort> = Arc::new(paladin_memory::vault::InMemoryVault::new());
+        let service = PaladinExecutionService::new(
+            Arc::new(CountingLlmPort::default()),
+            test_circuit_breaker(),
+            None,
+            None,
+        )
+        .with_vault(vault, None);
+
+        let confined = service.confined_vault(&RunScope::default());
+        assert!(
+            confined.is_none(),
+            "a run with no grant must have NO ConfinedVault at all -- never one \
+             silently granted the root namespace"
+        );
+    }
+
+    /// A service with no Vault store confines nothing, regardless of what
+    /// the scope carries.
+    #[tokio::test]
+    async fn no_vault_store_means_no_confined_vault_regardless_of_scope() {
+        let service = PaladinExecutionService::new(
+            Arc::new(CountingLlmPort::default()),
+            test_circuit_breaker(),
+            None,
+            None,
+        );
+        let alice = Namespace::parse("user/alice").unwrap();
+        let scope = RunScope::default().with_vault_namespace(alice);
+        assert!(service.confined_vault(&scope).is_none());
     }
 
     /// A bare `ModelCallContext` with no `llm_override`/`retry_policy` set

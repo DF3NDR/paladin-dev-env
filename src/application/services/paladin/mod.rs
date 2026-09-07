@@ -11,3 +11,4 @@ pub mod paladin_execution_service;
 pub mod planning_service;
 pub mod prompt_generation_service;
 pub mod temperature_service;
+pub mod vault_confined;

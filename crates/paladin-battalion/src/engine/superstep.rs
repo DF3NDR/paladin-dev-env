@@ -52,6 +52,7 @@ use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::{
     ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
+use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeExecutionRecord,
@@ -61,6 +62,7 @@ use paladin_core::platform::container::waypoint::{
 use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::trace_sink_port::TraceEvent;
+use paladin_ports::output::vault_confined::ConfinedVault;
 use paladin_ports::output::waypoint_port::WaypointPort;
 
 use crate::edge_evaluator::EdgeEvaluatorRegistry;
@@ -124,6 +126,11 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     /// like every other engine resource, so a child graph's own
     /// `CachePolicy` nodes are served by the same backend the parent's are.
     node_cache: Option<Arc<dyn NodeCachePort>>,
+    /// THIS engine's confined Vault handle (RT-04, D-21; plan 26-13) --
+    /// inherited by a nested `NodeSpec::Battalion` child run wholesale,
+    /// like every other engine resource, so a child graph's own nodes
+    /// receive the SAME grant the parent's do.
+    vault: Option<ConfinedVault>,
 }
 
 /// One dispatched node's resolved cache binding (Doc 04 FT-FR-18, D-29;
@@ -934,16 +941,33 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         );
                     }
                 };
-                // --- FT-FR-09, D-19: ALWAYS `execute_observed`, never
-                // `execute` directly, passing this attempt's own handle --
-                // a port that overrides the defaulted method beats it on
-                // every LLM completion / stream chunk / Armament call, and
-                // each beat resets this node's `idle_timeout` timer. The
-                // trait's default delegates to `execute` and beats nothing,
-                // so a non-observing port's `idle_timeout` degrades to a
-                // per-attempt wall clock rather than to no bound at all.
+                // --- FT-FR-09, D-19: ALWAYS `execute_scoped`, never
+                // `execute`/`execute_observed` directly, passing this
+                // attempt's own handle -- a port that overrides the
+                // defaulted `execute_observed` beats it on every LLM
+                // completion / stream chunk / Armament call, and each beat
+                // resets this node's `idle_timeout` timer. The trait's
+                // default `execute_observed` delegates to `execute` and
+                // beats nothing, so a non-observing port's `idle_timeout`
+                // degrades to a per-attempt wall clock rather than to no
+                // bound at all.
+                //
+                // --- RT-04, D-21: the `RunScope` carries this run's own
+                // Vault grant (`ctx.vault`'s granted namespace, if any) so
+                // a port that overrides `execute_scoped` can act on it. The
+                // trait's default `execute_scoped` delegates to
+                // `execute_observed` and ignores the scope entirely, so a
+                // non-scoped port's behavior is completely unchanged by
+                // this call switching from `execute_observed`.
+                let scope = ctx
+                    .vault
+                    .as_ref()
+                    .map(|confined| {
+                        RunScope::default().with_vault_namespace(confined.granted().clone())
+                    })
+                    .unwrap_or_default();
                 match paladin_port
-                    .execute_observed(&paladin, &rendered, &ctx.heartbeat)
+                    .execute_scoped(&paladin, &rendered, &ctx.heartbeat, &scope)
                     .await
                 {
                     Ok(result) => {
@@ -1222,6 +1246,9 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     // --- FT-FR-18, D-29: the child run serves its own
                     // `CachePolicy` nodes from the SAME backend.
                     resources.node_cache.clone(),
+                    // --- RT-04, D-21: the child run's nodes receive the
+                    // SAME Vault grant the parent's do.
+                    resources.vault.clone(),
                 ));
                 let outcome = child_fut.await;
 
@@ -1513,6 +1540,11 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     // `WarGraph::validate_node_cache_backend` has then already rejected
     // any `CachePolicy` in the graph).
     node_cache: Option<Arc<dyn NodeCachePort>>,
+    // --- RT-04, D-21 (plan 26-13): the engine's confined Vault handle, if
+    // any -- like `node_cache`, a real, always-present engine setting every
+    // top-level caller forwards (`None` when `WarEngine::with_vault` was
+    // never called).
+    vault: Option<ConfinedVault>,
 ) -> Result<RunOutcome, EngineError> {
     // --- CF-FR-15, D-20: a top-level call through this public entry point
     // (`WarEngine::start`/`resume_with_options`, and every existing test
@@ -1564,6 +1596,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         // dispatch ever passes `Some` here.
         None,
         node_cache,
+        vault,
     )
     .await
 }
@@ -1654,6 +1687,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // any; a nested `NodeSpec::Battalion` child run inherits the SAME
     // backend via `ChildEngineResources::node_cache`.
     node_cache: Option<Arc<dyn NodeCachePort>>,
+    // --- RT-04, D-21 (plan 26-13): this engine's confined Vault handle, if
+    // any -- granted to every `NodeContext` this run builds, and inherited
+    // wholesale by a nested `NodeSpec::Battalion` child run via
+    // `ChildEngineResources::vault`, like every other engine resource.
+    vault: Option<ConfinedVault>,
 ) -> Result<RunOutcome, EngineError> {
     // --- FT-FR-20, D-28: the graph fingerprint every cache key composed in
     // this run starts with -- computed ONCE per run (never per dispatch),
@@ -1696,6 +1734,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 fork_of,
                 shutdown_grace,
                 node_cache: node_cache.clone(),
+                vault: vault.clone(),
             })
         });
 
@@ -2144,6 +2183,9 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 parley_response: parley_responses_this_round.get(node_id).cloned(),
                 attempt: 0,
                 heartbeat: HeartbeatHandle::new(),
+                // --- RT-04, D-21: the SAME grant for every node of this
+                // run -- `None` when the engine has no Vault store wired.
+                vault: vault.clone(),
             };
             let nid = node_id.clone();
             // --- D-09, D-10, D-14: this node's resolved Aegis (its own
@@ -4258,6 +4300,7 @@ mod tests {
             None,
             default_shutdown_grace(),
             None,
+            None,
         )
         .await
         .unwrap()
@@ -4297,6 +4340,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
         )
         .await
@@ -4343,6 +4387,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
         )
         .await
@@ -5081,6 +5126,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
         )
         .await
@@ -6543,6 +6589,7 @@ mod tests {
             None,
             default_shutdown_grace(),
             None,
+            None,
         )
         .await;
 
@@ -6594,6 +6641,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
         )
         .await
@@ -7178,6 +7226,7 @@ mod tests {
             None,
             default_shutdown_grace(),
             None,
+            None,
         )
         .await;
 
@@ -7212,6 +7261,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
         )
         .await
@@ -7273,6 +7323,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
         )
         .await
@@ -8776,6 +8827,7 @@ mod tests {
             Some(Arc::clone(store)),
             default_shutdown_grace(),
             None,
+            None,
         )
         .await
     }
@@ -10176,6 +10228,7 @@ mod tests {
             None,
             shutdown_grace,
             None,
+            None,
         )
         .await
         .unwrap()
@@ -10218,6 +10271,7 @@ mod tests {
             &None,
             None,
             shutdown_grace,
+            None,
             None,
         )
         .await
@@ -10820,10 +10874,13 @@ mod tests {
         );
     }
 
-    /// D-19: the engine dispatches EVERY `NodeSpec::Paladin` node through
-    /// `PaladinPort::execute_observed`, never `execute` directly -- a port
-    /// that overrides the defaulted method sees exactly one observed call
-    /// and zero direct calls.
+    /// D-19, D-21 (plan 26-13): the engine dispatches EVERY `NodeSpec::Paladin`
+    /// node through `PaladinPort::execute_scoped`, never `execute` directly.
+    /// `ObservedCallRecordingPort` overrides `execute_observed`, not
+    /// `execute_scoped`, so this still proves the chain: `execute_scoped`'s
+    /// default body delegates to `execute_observed`, which the port
+    /// overrides and records -- exactly one observed call and zero direct
+    /// calls.
     #[tokio::test]
     async fn the_engine_always_calls_execute_observed() {
         let out = field("out");
@@ -11642,6 +11699,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
         )
         .await

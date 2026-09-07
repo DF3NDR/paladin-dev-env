@@ -91,12 +91,15 @@ use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
+use paladin_core::platform::container::vault::Namespace;
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, ThreadId, WaypointId, WaypointStatus,
 };
 use paladin_ports::output::node_cache_port::NodeCachePort;
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink};
+use paladin_ports::output::vault_confined::ConfinedVault;
+use paladin_ports::output::vault_port::VaultPort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 
 pub use bridges::{CAMPAIGN_FAN_IN_SEPARATOR, campaign_node_ids, dedicated_output_field};
@@ -1284,6 +1287,16 @@ pub struct WarEngine<W: WaypointPort> {
     /// running uncached. Forwarded wholesale into every
     /// `NodeSpec::Battalion` child run, like every other engine resource.
     node_cache: Option<Arc<dyn NodeCachePort>>,
+    /// This engine's confined Vault handle (Doc 05 RT-04, D-21), wired via
+    /// [`WarEngine::with_vault`]. `None` by default: an engine with no
+    /// Vault store gives every node's `NodeContext::vault()` `None`, never
+    /// a handle silently granted the root namespace. When `Some`, the SAME
+    /// grant is given to every node of every run on this engine --
+    /// including a `NodeSpec::Battalion` child run, like every other engine
+    /// resource -- cross-thread memory is the point; a per-thread
+    /// sub-namespace is the host's own choice via the `base` passed to
+    /// `with_vault`, never something this engine derives on its own.
+    vault: Option<ConfinedVault>,
 }
 
 // --- CF-FR-16, D-21: `+ 'static` is required here (not on the struct
@@ -1311,6 +1324,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             cancellation_token: None,
             shutdown_grace: std::time::Duration::from_secs(30),
             node_cache: None,
+            vault: None,
         }
     }
 
@@ -1516,6 +1530,59 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         self
     }
 
+    /// Wire `vault` as this engine's Vault store, granting `base` to every
+    /// node of every run on this engine (Doc 05 RT-04, D-21). Replaces any
+    /// previously configured grant.
+    ///
+    /// Cross-thread memory is the point of this method: EVERY node of every
+    /// run on this engine receives the SAME `base` grant through
+    /// `NodeContext::vault()`, and a `NodeSpec::Paladin` node receives the
+    /// same grant through the defaulted `PaladinPort::execute_scoped`
+    /// dispatch (`engine::superstep`'s Paladin arm). A per-thread
+    /// sub-namespace is never derived automatically -- if a host wants one,
+    /// it is the host's own choice to make `base` itself carry a
+    /// per-deployment segment; this method promises exactly one grant,
+    /// shared by the whole engine, never an implicit per-thread narrowing.
+    ///
+    /// Without a call to this method, `NodeContext::vault()` is `None` for
+    /// every node on this engine -- never a handle silently granted the
+    /// root namespace.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use async_trait::async_trait;
+    /// use paladin_battalion::engine::WarEngine;
+    /// use paladin_core::platform::container::paladin::Paladin;
+    /// use paladin_core::platform::container::paladin_error::PaladinError;
+    /// use paladin_core::platform::container::vault::Namespace;
+    /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    /// use paladin_ports::output::vault_port::VaultPort;
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    ///
+    /// struct NoopPort;
+    /// #[async_trait]
+    /// impl PaladinPort for NoopPort {
+    ///     async fn execute(&self, _p: &Paladin, _i: &str) -> Result<PaladinResult, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     async fn execute_stream(&self, _p: &Paladin, _i: &str) -> Result<PaladinStream, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     fn validate(&self, _p: &Paladin) -> Result<(), PaladinError> { Ok(()) }
+    /// }
+    ///
+    /// # fn build_vault() -> Arc<dyn VaultPort> { unimplemented!() }
+    /// let base = Namespace::parse("app").unwrap();
+    /// let engine = WarEngine::new(Arc::new(NoopPort), Arc::new(InMemoryWaypointStore::new()))
+    ///     .with_vault(build_vault(), base);
+    /// ```
+    pub fn with_vault(mut self, vault: Arc<dyn VaultPort>, base: Namespace) -> Self {
+        self.vault = Some(ConfinedVault::new(vault, base));
+        self
+    }
+
     /// Start a new run of `graph` under `thread`, seeded with `initial`.
     ///
     /// Runs the full superstep loop (ENG-FR-01): validates the graph,
@@ -1564,6 +1631,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
             self.node_cache.clone(),
+            self.vault.clone(),
         )
         .await;
         self.trace_dispatcher
@@ -1765,6 +1833,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
             self.node_cache.clone(),
+            self.vault.clone(),
         )
         .await;
         self.trace_dispatcher
@@ -2099,6 +2168,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // beat -- only a Battalion child dispatch passes `Some`.
             None,
             self.node_cache.clone(),
+            self.vault.clone(),
         )
         .await;
         self.trace_dispatcher
@@ -2250,6 +2320,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // beat -- only a Battalion child dispatch passes `Some`.
             None,
             self.node_cache.clone(),
+            self.vault.clone(),
         )
         .await;
         self.trace_dispatcher.emit(TraceEvent::RunFinished {
@@ -8608,6 +8679,481 @@ mod tests {
                     assert!(offenders[0].contains("cached") && offenders[0].contains("nope"));
                 }
                 other => panic!("expected CacheKeyFieldUndeclared, got {other:?}"),
+            }
+        }
+    }
+
+    /// Plan 26-13, Doc 05 RT-04, D-21: `WarEngine::with_vault` grants a base
+    /// namespace to every node of every run on the engine, `NodeContext::
+    /// vault()` is the read/write handle a `StateNode` uses, an engine
+    /// without `with_vault` gives nodes no handle at all, and a
+    /// `NodeSpec::Paladin` node receives the same grant through the
+    /// defaulted `execute_scoped` dispatch.
+    mod vault_tests {
+        use super::*;
+        use std::collections::HashMap;
+        use std::sync::Mutex as StdMutex;
+
+        use paladin_core::platform::container::run_scope::RunScope;
+        use paladin_core::platform::container::vault::Namespace;
+        use paladin_ports::output::vault_port::{Page, VaultError, VaultPort, VaultRecord};
+
+        /// A minimal, real `VaultPort` -- exact-namespace storage, no
+        /// descendant leakage -- used only by this module's tests. Not
+        /// `paladin_memory::vault::InMemoryVault` (plan 26-04), to avoid
+        /// adding a `paladin-memory` dev-dependency to `paladin-battalion`
+        /// for a handful of tests; `search` keeps the trait's correct
+        /// `Unsupported` default, unexercised here.
+        #[derive(Default)]
+        struct TestVault {
+            data: StdMutex<HashMap<String, HashMap<String, serde_json::Value>>>,
+        }
+
+        impl TestVault {
+            /// Test-only escape hatch bypassing every `ConfinedVault` --
+            /// reads the raw backend directly, the way
+            /// `concurrent_confined_writes_produce_zero_cross_namespace_records`
+            /// proves no write ever landed under a foreign namespace.
+            fn raw_records(&self, ns: &Namespace) -> HashMap<String, serde_json::Value> {
+                self.data
+                    .lock()
+                    .unwrap()
+                    .get(&ns.to_string())
+                    .cloned()
+                    .unwrap_or_default()
+            }
+        }
+
+        #[async_trait]
+        impl VaultPort for TestVault {
+            async fn put(
+                &self,
+                ns: &Namespace,
+                key: &str,
+                value: serde_json::Value,
+            ) -> Result<(), VaultError> {
+                self.data
+                    .lock()
+                    .unwrap()
+                    .entry(ns.to_string())
+                    .or_default()
+                    .insert(key.to_string(), value);
+                Ok(())
+            }
+
+            async fn get(
+                &self,
+                ns: &Namespace,
+                key: &str,
+            ) -> Result<Option<VaultRecord>, VaultError> {
+                let value = self
+                    .data
+                    .lock()
+                    .unwrap()
+                    .get(&ns.to_string())
+                    .and_then(|m| m.get(key).cloned());
+                match value {
+                    Some(v) => Ok(Some(VaultRecord::new(ns.clone(), key, v)?)),
+                    None => Ok(None),
+                }
+            }
+
+            async fn delete(&self, ns: &Namespace, key: &str) -> Result<bool, VaultError> {
+                Ok(self
+                    .data
+                    .lock()
+                    .unwrap()
+                    .get_mut(&ns.to_string())
+                    .map(|m| m.remove(key).is_some())
+                    .unwrap_or(false))
+            }
+
+            async fn list(
+                &self,
+                ns: &Namespace,
+                _prefix: Option<&str>,
+                _page: Page,
+            ) -> Result<Vec<VaultRecord>, VaultError> {
+                let data = self.data.lock().unwrap();
+                Ok(data
+                    .get(&ns.to_string())
+                    .map(|m| {
+                        m.iter()
+                            .map(|(k, v)| {
+                                VaultRecord::new(ns.clone(), k.clone(), v.clone()).unwrap()
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default())
+            }
+
+            // `search` keeps the trait's correct `Unsupported` default.
+        }
+
+        fn one_field_schema() -> BattlefieldSchema {
+            BattlefieldSchema::new(vec![FieldSpec::new(
+                FieldName::new("result").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            )])
+        }
+
+        /// A `StateNode` that reads `ctx.vault()` and writes what it
+        /// observed into the `result` field: the granted namespace's
+        /// `Display` string if `Some`, or the literal `"none"` if `None` --
+        /// so a test can assert on `final_state` alone, never on internal
+        /// engine state.
+        struct VaultProbeNode;
+
+        #[async_trait]
+        impl StateNode for VaultProbeNode {
+            async fn run(
+                &self,
+                _state: &Battlefield,
+                ctx: &NodeContext,
+            ) -> Result<Directive, StateNodeError> {
+                let mut delta = StateDelta::new();
+                let observed = match ctx.vault() {
+                    Some(confined) => confined.granted().to_string(),
+                    None => "none".to_string(),
+                };
+                delta
+                    .set(FieldName::new("result").unwrap(), observed)
+                    .unwrap();
+                Ok(delta.into())
+            }
+        }
+
+        /// A `StateNode` that attempts a write WITHIN its grant (expected
+        /// to succeed) and a write to an unrelated namespace (expected to
+        /// be denied), recording both outcomes into the `result` field as
+        /// `"within_ok=<bool>,outside_denied=<bool>"`.
+        struct GrantBoundaryNode;
+
+        #[async_trait]
+        impl StateNode for GrantBoundaryNode {
+            async fn run(
+                &self,
+                _state: &Battlefield,
+                ctx: &NodeContext,
+            ) -> Result<Directive, StateNodeError> {
+                let confined = ctx
+                    .vault()
+                    .expect("this test always wires a Vault via with_vault");
+
+                let within = confined.granted().clone();
+                let within_ok = confined
+                    .put(&within, "n", serde_json::json!(1))
+                    .await
+                    .is_ok();
+
+                let outside = Namespace::parse("other").unwrap();
+                let outside_denied = matches!(
+                    confined.put(&outside, "n", serde_json::json!(1)).await,
+                    Err(VaultError::NamespaceDenied { .. })
+                );
+
+                let mut delta = StateDelta::new();
+                delta
+                    .set(
+                        FieldName::new("result").unwrap(),
+                        format!("within_ok={within_ok},outside_denied={outside_denied}"),
+                    )
+                    .unwrap();
+                Ok(delta.into())
+            }
+        }
+
+        fn probe_graph(node: Arc<dyn StateNode>) -> WarGraph {
+            let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+            let node_id = NodeId::new("probe");
+            graph.add_node(node_id.clone(), NodeSpec::Function(node));
+            graph.add_entry(node_id);
+            graph
+        }
+
+        /// Test 1: `engine_grants_the_base_namespace_to_every_node` -- a
+        /// `WarEngine` built with `with_vault(vault, ["app"])` gives every
+        /// node's `NodeContext::vault()` a handle granted `["app"]`.
+        #[tokio::test]
+        async fn engine_grants_the_base_namespace_to_every_node() {
+            let vault: Arc<dyn VaultPort> = Arc::new(TestVault::default());
+            let base = Namespace::parse("app").unwrap();
+            let engine = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_vault(vault, base.clone());
+
+            let graph = probe_graph(Arc::new(VaultProbeNode));
+            let thread = ThreadId::new("engine-grants-base").unwrap();
+            let outcome = engine
+                .start(&graph, thread, StateDelta::new())
+                .await
+                .unwrap();
+
+            match outcome {
+                RunOutcome::Completed { final_state, .. } => {
+                    assert_eq!(
+                        final_state
+                            .get::<String>(&FieldName::new("result").unwrap())
+                            .unwrap(),
+                        Some(base.to_string())
+                    );
+                }
+                other => panic!("expected Completed, got {other:?}"),
+            }
+        }
+
+        /// Test 2: `a_state_node_can_read_and_write_within_its_grant` -- a
+        /// `StateNode` writing through `ctx.vault()` under its own grant
+        /// succeeds, and a write to an unrelated namespace is denied.
+        #[tokio::test]
+        async fn a_state_node_can_read_and_write_within_its_grant() {
+            let vault: Arc<dyn VaultPort> = Arc::new(TestVault::default());
+            let base = Namespace::parse("app/counters").unwrap();
+            let engine = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_vault(vault, base);
+
+            let graph = probe_graph(Arc::new(GrantBoundaryNode));
+            let thread = ThreadId::new("grant-boundary").unwrap();
+            let outcome = engine
+                .start(&graph, thread, StateDelta::new())
+                .await
+                .unwrap();
+
+            match outcome {
+                RunOutcome::Completed { final_state, .. } => {
+                    assert_eq!(
+                        final_state
+                            .get::<String>(&FieldName::new("result").unwrap())
+                            .unwrap(),
+                        Some("within_ok=true,outside_denied=true".to_string())
+                    );
+                }
+                other => panic!("expected Completed, got {other:?}"),
+            }
+        }
+
+        /// A `PaladinPort` test double that records the `RunScope` it
+        /// receives through `execute_scoped`, so
+        /// `a_paladin_node_receives_the_same_grant_through_execute_scoped`
+        /// can assert on it directly.
+        #[derive(Default)]
+        struct ScopeRecordingPaladinPort {
+            observed: StdMutex<Option<RunScope>>,
+        }
+
+        impl ScopeRecordingPaladinPort {
+            fn observed_vault_namespace(&self) -> Option<Namespace> {
+                self.observed
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|scope| scope.vault_namespace.clone())
+            }
+        }
+
+        #[async_trait]
+        impl PaladinPort for ScopeRecordingPaladinPort {
+            async fn execute(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                Ok(PaladinResult {
+                    output: "ok".to_string(),
+                    ..Default::default()
+                })
+            }
+
+            async fn execute_stream(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                unimplemented!("not exercised by this test")
+            }
+
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+
+            async fn execute_scoped(
+                &self,
+                paladin: &Paladin,
+                input: &str,
+                _heartbeat: &HeartbeatHandle,
+                scope: &RunScope,
+            ) -> Result<PaladinResult, PaladinError> {
+                *self.observed.lock().unwrap() = Some(scope.clone());
+                self.execute(paladin, input).await
+            }
+        }
+
+        /// Test 3: `a_paladin_node_receives_the_same_grant_through_execute_scoped`
+        /// -- the Paladin arm calls `execute_scoped` with a `RunScope`
+        /// carrying the engine's base namespace.
+        #[tokio::test]
+        async fn a_paladin_node_receives_the_same_grant_through_execute_scoped() {
+            let vault: Arc<dyn VaultPort> = Arc::new(TestVault::default());
+            let base = Namespace::parse("app").unwrap();
+            let port = Arc::new(ScopeRecordingPaladinPort::default());
+            let engine = WarEngine::new(port.clone(), Arc::new(InMemoryWaypointStore::new()))
+                .with_vault(vault, base.clone());
+
+            let field_name = FieldName::new("summary").unwrap();
+            let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+                field_name.clone(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            )]);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let node_id = NodeId::new("p");
+            graph.add_node(
+                node_id.clone(),
+                NodeSpec::paladin(make_paladin("p"), InputMapping::new("go"), field_name),
+            );
+            graph.add_entry(node_id);
+
+            let thread = ThreadId::new("scope-through-execute-scoped").unwrap();
+            engine
+                .start(&graph, thread, StateDelta::new())
+                .await
+                .unwrap();
+
+            assert_eq!(port.observed_vault_namespace(), Some(base));
+        }
+
+        /// Test 4: `an_engine_without_with_vault_gives_nodes_no_vault` --
+        /// `NodeContext::vault()` is `None` and a node that tries to use it
+        /// gets `None`, not a root-granted handle.
+        #[tokio::test]
+        async fn an_engine_without_with_vault_gives_nodes_no_vault() {
+            let engine = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            );
+
+            let graph = probe_graph(Arc::new(VaultProbeNode));
+            let thread = ThreadId::new("no-vault-wired").unwrap();
+            let outcome = engine
+                .start(&graph, thread, StateDelta::new())
+                .await
+                .unwrap();
+
+            match outcome {
+                RunOutcome::Completed { final_state, .. } => {
+                    assert_eq!(
+                        final_state
+                            .get::<String>(&FieldName::new("result").unwrap())
+                            .unwrap(),
+                        Some("none".to_string())
+                    );
+                }
+                other => panic!("expected Completed, got {other:?}"),
+            }
+        }
+
+        /// A `StateNode` that writes `count` records under exactly its own
+        /// grant, each keyed uniquely and valued with `run_index` -- so a
+        /// concurrent run of N of these, sharing one backend but each under
+        /// its own `WarEngine::with_vault` grant, can be checked for
+        /// cross-namespace leakage afterward.
+        struct ConcurrentVaultWriterNode {
+            run_index: usize,
+            count: usize,
+        }
+
+        #[async_trait]
+        impl StateNode for ConcurrentVaultWriterNode {
+            async fn run(
+                &self,
+                _state: &Battlefield,
+                ctx: &NodeContext,
+            ) -> Result<Directive, StateNodeError> {
+                let confined = ctx
+                    .vault()
+                    .expect("this test always wires a Vault via with_vault");
+                let ns = confined.granted().clone();
+                for i in 0..self.count {
+                    confined
+                        .put(&ns, &format!("k{i}"), serde_json::json!(self.run_index))
+                        .await
+                        .map_err(|e| StateNodeError(e.to_string()))?;
+                }
+                Ok(StateDelta::new().into())
+            }
+        }
+
+        /// Test 6 (D-39, X-05): N concurrent runs under distinct grants,
+        /// sharing one backend, each writing M records; afterward every
+        /// namespace holds exactly M records and every record's value is
+        /// that namespace's own run index -- proving zero cross-namespace
+        /// records under real concurrency, not merely under the
+        /// single-threaded assertions Task 1's `ConfinedVault` tests cover.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        async fn concurrent_confined_writes_produce_zero_cross_namespace_records() {
+            const RUNS: usize = 5;
+            const RECORDS_PER_RUN: usize = 20;
+
+            let shared_vault = Arc::new(TestVault::default());
+            let mut handles = Vec::new();
+
+            for run_index in 0..RUNS {
+                let vault: Arc<dyn VaultPort> = shared_vault.clone();
+                let ns = Namespace::parse(&format!("run{run_index}")).unwrap();
+                let engine = WarEngine::new(
+                    Arc::new(UnimplementedPaladinPort),
+                    Arc::new(InMemoryWaypointStore::new()),
+                )
+                .with_vault(vault, ns.clone());
+
+                let graph = probe_graph(Arc::new(ConcurrentVaultWriterNode {
+                    run_index,
+                    count: RECORDS_PER_RUN,
+                }));
+                let thread = ThreadId::new(format!("concurrent-vault-{run_index}")).unwrap();
+
+                handles.push(tokio::spawn(async move {
+                    engine.start(&graph, thread, StateDelta::new()).await
+                }));
+            }
+
+            let results = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                futures::future::join_all(handles),
+            )
+            .await
+            .expect("all runs must finish within the timeout guard");
+
+            for result in results {
+                let outcome = result
+                    .expect("task must not panic")
+                    .expect("run must succeed");
+                assert!(matches!(outcome, RunOutcome::Completed { .. }));
+            }
+
+            for run_index in 0..RUNS {
+                let ns = Namespace::parse(&format!("run{run_index}")).unwrap();
+                let records = shared_vault.raw_records(&ns);
+                assert_eq!(
+                    records.len(),
+                    RECORDS_PER_RUN,
+                    "namespace run{run_index} must hold exactly {RECORDS_PER_RUN} records"
+                );
+                for value in records.values() {
+                    assert_eq!(
+                        value,
+                        &serde_json::json!(run_index),
+                        "every record under run{run_index} must have been written by run {run_index}, never another run"
+                    );
+                }
             }
         }
     }

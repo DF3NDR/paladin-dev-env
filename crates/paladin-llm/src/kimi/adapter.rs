@@ -310,22 +310,16 @@ mod tests {
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
     use paladin_ports::output::llm_port::FinishReason;
     use serde_json::json;
-    use std::collections::HashMap;
-    use uuid::Uuid;
 
     fn build_request(model: &str) -> LlmRequest {
-        LlmRequest {
-            id: Uuid::new_v4(),
-            model: model.to_string(),
-            prompt: PromptItem::new(PromptType::User(UserPrompt {
+        LlmRequest::new(
+            model,
+            PromptItem::new(PromptType::User(UserPrompt {
                 query: "Hello".to_string(),
                 context: None,
             }))
             .unwrap(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        }
+        )
     }
 
     // ── KimiConfig::from_env() defaulting logic ──

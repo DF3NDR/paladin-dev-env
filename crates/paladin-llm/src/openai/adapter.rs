@@ -806,18 +806,15 @@ mod tests {
         }
 
         fn build_request(stream: bool) -> LlmRequest {
-            LlmRequest {
-                id: Uuid::new_v4(),
-                model: "gpt-4o".to_string(),
-                prompt: PromptItem::new(PromptType::User(UserPrompt {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
                     query: "Hello".to_string(),
                     context: None,
                 }))
                 .expect("a user prompt must build"),
-                attachments: vec![],
-                stream,
-                metadata: HashMap::new(),
-            }
+            )
+            .with_stream(stream)
         }
 
         #[tokio::test]

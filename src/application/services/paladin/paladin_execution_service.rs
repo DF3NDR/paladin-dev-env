@@ -1890,14 +1890,7 @@ impl PaladinExecutionService {
             };
 
             // Create LLM request
-            let request = LlmRequest {
-                id: uuid::Uuid::new_v4(),
-                model: paladin.node.model.clone(),
-                prompt: prompt_item,
-                attachments: vec![],
-                stream: false,
-                metadata: std::collections::HashMap::new(),
-            };
+            let request = LlmRequest::new(paladin.node.model.clone(), prompt_item);
 
             // Wrap LLM call with circuit breaker (async version)
             let llm_port = Arc::clone(&self.llm_port);
@@ -2036,14 +2029,7 @@ impl PaladinExecutionService {
             };
 
             // Create LLM request
-            let request = LlmRequest {
-                id: uuid::Uuid::new_v4(),
-                model: paladin.node.model.clone(),
-                prompt: prompt_item,
-                attachments: vec![],
-                stream: false,
-                metadata: std::collections::HashMap::new(),
-            };
+            let request = LlmRequest::new(paladin.node.model.clone(), prompt_item);
 
             // Wrap LLM call with circuit breaker (async version)
             let llm_port = Arc::clone(&self.llm_port);
@@ -2338,16 +2324,13 @@ impl PaladinExecutionService {
             metadata: BTreeMap::new(),
         };
 
-        let request = LlmRequest {
-            id: uuid::Uuid::new_v4(),
-            model: paladin.node.model.clone(),
-            prompt: PromptItem {
+        let request = LlmRequest::new(
+            paladin.node.model.clone(),
+            PromptItem {
                 node: Node::new(prompt_data, Some("stream".to_string())),
             },
-            attachments: vec![],
-            stream: true,
-            metadata: HashMap::new(),
-        };
+        )
+        .with_stream(true);
 
         // Open the provider stream eagerly so an unsupported provider errors here
         // (before the caller starts an SSE response).

@@ -33,14 +33,7 @@ mod deepseek_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "deepseek-chat".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("deepseek-chat", prompt);
 
         let request_id = request.id;
         let result = adapter.generate(request).await;
@@ -74,14 +67,7 @@ mod deepseek_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "deepseek-chat".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("deepseek-chat", prompt);
 
         let response = adapter.generate(request).await.unwrap();
         assert!(!response.content.is_empty());
@@ -104,14 +90,7 @@ mod deepseek_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "deepseek-chat".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("deepseek-chat", prompt);
 
         let response = adapter.generate(request).await.unwrap();
 
@@ -146,14 +125,7 @@ mod deepseek_integration_tests {
         metadata.insert("temperature".to_string(), "0.9".to_string());
         metadata.insert("max_tokens".to_string(), "50".to_string());
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "deepseek-chat".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata,
-        };
+        let request = LlmRequest::new("deepseek-chat", prompt).with_metadata(metadata);
 
         let response = adapter.generate(request).await.unwrap();
         assert!(!response.content.is_empty());
@@ -173,14 +145,7 @@ mod deepseek_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "deepseek-chat".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("deepseek-chat", prompt);
 
         let response = adapter.generate(request).await.unwrap();
         assert!(response.content.contains("4"));

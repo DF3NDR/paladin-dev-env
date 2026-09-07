@@ -14,11 +14,9 @@ use paladin::{AnthropicAdapter, AnthropicConfig};
 use paladin::{OpenAIAdapter, OpenAIConfig};
 use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
 use paladin_ports::output::vision_llm_port::VisionCapableLlm;
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use uuid::Uuid;
 
 /// Helper to check if vision integration tests should run
 fn should_run_vision_tests() -> bool {
@@ -47,14 +45,10 @@ fn create_llm_request(model: &str, prompt: &str) -> LlmRequest {
         content: prompt.to_string(),
         role: PromptRole::User,
     };
-    LlmRequest {
-        id: Uuid::new_v4(),
-        model: model.to_string(),
-        prompt: PromptItem::new(PromptType::Text(text_prompt)).unwrap(),
-        attachments: vec![],
-        stream: false,
-        metadata: HashMap::new(),
-    }
+    LlmRequest::new(
+        model,
+        PromptItem::new(PromptType::Text(text_prompt)).unwrap(),
+    )
 }
 
 #[tokio::test]

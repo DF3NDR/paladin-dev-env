@@ -599,14 +599,7 @@ impl GroveExecutionService {
             .map_err(|e| BattalionError::RoutingError(format!("Failed to create prompt: {}", e)))?;
 
         // Call LLM
-        let llm_request = LlmRequest {
-            id: uuid::Uuid::new_v4(),
-            model: routing_model.to_string(),
-            prompt: prompt_item,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let llm_request = LlmRequest::new(routing_model.to_string(), prompt_item);
 
         let llm_response = llm_port.generate(llm_request).await.map_err(|e| {
             let msg = format!("LLM call failed: {}", e);

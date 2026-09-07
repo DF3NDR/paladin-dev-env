@@ -6,8 +6,6 @@ use mockito::{Server, ServerGuard};
 use paladin::core::platform::container::prompt::{PromptItem, PromptType, SystemPrompt};
 use paladin_llm::deepseek::{DeepSeekAdapter, DeepSeekConfig};
 use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
-use std::collections::HashMap;
-use uuid::Uuid;
 
 /// Helper to create a mock server and adapter configured to use it
 ///
@@ -37,14 +35,7 @@ fn create_test_request(content: &str) -> LlmRequest {
     }))
     .unwrap();
 
-    LlmRequest {
-        id: Uuid::new_v4(),
-        model: "deepseek-chat".to_string(),
-        prompt: system_prompt,
-        attachments: vec![],
-        stream: false,
-        metadata: HashMap::new(),
-    }
+    LlmRequest::new("deepseek-chat", system_prompt)
 }
 
 #[tokio::test]

@@ -35,10 +35,8 @@ use futures::StreamExt;
 use paladin::core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
 use paladin_llm::ollama::{OllamaAdapter, OllamaConfig};
 use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
-use std::collections::HashMap;
 use std::env;
 use std::time::Duration;
-use uuid::Uuid;
 
 /// The model `ollama-test-init` pulls (see `docker/docker-compose.test.yml`
 /// for the exact tag and the reasoning behind choosing it).
@@ -112,14 +110,7 @@ fn build_request(query: &str) -> LlmRequest {
     }))
     .expect("fixed, valid prompt construction cannot fail");
 
-    LlmRequest {
-        id: Uuid::new_v4(),
-        model: OLLAMA_TEST_MODEL.to_string(),
-        prompt,
-        attachments: vec![],
-        stream: false,
-        metadata: HashMap::new(),
-    }
+    LlmRequest::new(OLLAMA_TEST_MODEL, prompt)
 }
 
 /// A real non-streaming `generate()` round trip against the pulled model

@@ -403,14 +403,7 @@ mod tests {
         mock.add_success("Second response");
         mock.add_success("Third response");
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: "mock".to_string(),
-            prompt: create_test_prompt(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("mock", create_test_prompt());
 
         let response1 = mock.generate(request.clone()).await.unwrap();
         assert_eq!(response1.content, "First response");
@@ -431,14 +424,7 @@ mod tests {
         let mock = MockLlmAdapter::new();
         assert_eq!(mock.call_count(), 0);
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: "mock".to_string(),
-            prompt: create_test_prompt(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("mock", create_test_prompt());
 
         mock.generate(request.clone()).await.unwrap();
         assert_eq!(mock.call_count(), 1);
@@ -457,14 +443,7 @@ mod tests {
         mock.add_failure(LlmError::ProcessingError("Simulated LLM error".to_string()));
         mock.add_success("Another success");
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: "mock".to_string(),
-            prompt: create_test_prompt(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("mock", create_test_prompt());
 
         let response1 = mock.generate(request.clone()).await;
         assert!(response1.is_ok());
@@ -489,14 +468,7 @@ mod tests {
         mock.add_success("Response 1");
         mock.add_success("Response 2");
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: "mock".to_string(),
-            prompt: create_test_prompt(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("mock", create_test_prompt());
 
         mock.generate(request.clone()).await.unwrap();
         mock.generate(request.clone()).await.unwrap();
@@ -515,14 +487,7 @@ mod tests {
         let mock = MockLlmAdapter::new();
         mock.add_tool_call("web_search", r#"{"query": "Rust programming"}"#);
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: "mock".to_string(),
-            prompt: create_test_prompt(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("mock", create_test_prompt());
 
         let response = mock.generate(request).await.unwrap();
         assert!(response.function_call.is_some());
@@ -539,23 +504,9 @@ mod tests {
         mock.add_success("Response 1");
         mock.add_success("Response 2");
 
-        let request1 = LlmRequest {
-            id: Uuid::new_v4(),
-            model: "gpt-4".to_string(),
-            prompt: create_test_prompt(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request1 = LlmRequest::new("gpt-4", create_test_prompt());
 
-        let request2 = LlmRequest {
-            id: Uuid::new_v4(),
-            model: "gpt-3.5-turbo".to_string(),
-            prompt: create_test_prompt(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request2 = LlmRequest::new("gpt-3.5-turbo", create_test_prompt());
 
         mock.generate(request1).await.unwrap();
         mock.generate(request2).await.unwrap();
@@ -575,14 +526,7 @@ mod tests {
         let mock = MockLlmAdapter::new();
         mock.add_streaming(vec!["Hello", " ", "World", "!"]);
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: "mock".to_string(),
-            prompt: create_test_prompt(),
-            attachments: vec![],
-            stream: true,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("mock", create_test_prompt()).with_stream(true);
 
         // For non-streaming generate, it concatenates chunks
         let response = mock.generate(request).await.unwrap();

@@ -8,7 +8,6 @@ mod anthropic_integration_tests {
     use paladin::core::platform::container::prompt::{PromptItem, PromptType, SystemPrompt};
     use paladin::{AnthropicAdapter, AnthropicConfig};
     use paladin_ports::output::llm_port::{FinishReason, LlmPort, LlmRequest};
-    use std::collections::HashMap;
     use std::env;
 
     /// Helper to create Anthropic adapter from environment
@@ -38,14 +37,7 @@ mod anthropic_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "claude-3-5-sonnet-20241022".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("claude-3-5-sonnet-20241022", prompt);
 
         let request_id = request.id;
         let result = adapter.generate(request).await;
@@ -86,14 +78,7 @@ mod anthropic_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "claude-3-5-sonnet-20241022".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("claude-3-5-sonnet-20241022", prompt);
 
         let response = adapter.generate(request).await.unwrap();
         assert!(!response.content.is_empty());
@@ -117,14 +102,7 @@ mod anthropic_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "claude-3-5-sonnet-20241022".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("claude-3-5-sonnet-20241022", prompt);
 
         let response = adapter.generate(request).await.unwrap();
         assert!(!response.content.is_empty());
@@ -154,14 +132,7 @@ mod anthropic_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "claude-3-5-sonnet-20241022".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("claude-3-5-sonnet-20241022", prompt);
 
         let response = adapter.generate(request).await.unwrap();
 
@@ -192,14 +163,7 @@ mod anthropic_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "claude-3-5-sonnet-20241022".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("claude-3-5-sonnet-20241022", prompt);
 
         let response = adapter.generate(request).await.unwrap();
         assert!(!response.content.is_empty());
@@ -223,14 +187,7 @@ mod anthropic_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "claude-3-haiku-20240307".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("claude-3-haiku-20240307", prompt);
 
         let response = adapter.generate(request).await.unwrap();
         assert!(!response.content.is_empty());

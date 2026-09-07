@@ -31,14 +31,7 @@ mod openai_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "gpt-3.5-turbo".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("gpt-3.5-turbo", prompt);
 
         let request_id = request.id;
         let result = adapter.generate(request).await;
@@ -68,21 +61,12 @@ mod openai_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "gpt-3.5-turbo".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: {
-                let mut meta = HashMap::new();
-                meta.insert(
-                    "functions".to_string(),
-                    r#"[{"name": "get_weather", "description": "Get weather for a location", "parameters": {"type": "object", "properties": {"location": {"type": "string"}}}}]"#.to_string(),
-                );
-                meta
-            },
-        };
+        let mut meta = HashMap::new();
+        meta.insert(
+            "functions".to_string(),
+            r#"[{"name": "get_weather", "description": "Get weather for a location", "parameters": {"type": "object", "properties": {"location": {"type": "string"}}}}]"#.to_string(),
+        );
+        let request = LlmRequest::new("gpt-3.5-turbo", prompt).with_metadata(meta);
 
         let result = adapter.generate(request).await;
         assert!(
@@ -117,14 +101,7 @@ mod openai_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "gpt-3.5-turbo".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("gpt-3.5-turbo", prompt);
 
         let response = adapter.generate(request).await.unwrap();
 
@@ -156,14 +133,7 @@ mod openai_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "gpt-nonexistent-model".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("gpt-nonexistent-model", prompt);
 
         let result = adapter.generate(request).await;
         assert!(result.is_err(), "Should fail with non-existent model");
@@ -182,14 +152,7 @@ mod openai_integration_tests {
         });
         let prompt = PromptItem::new(prompt_type).expect("Failed to create prompt");
 
-        let request = LlmRequest {
-            id: prompt.uuid(),
-            model: "gpt-3.5-turbo".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new("gpt-3.5-turbo", prompt);
 
         let response = adapter.generate(request).await.unwrap();
         assert!(!response.content.is_empty());

@@ -561,7 +561,6 @@ mod tests {
     use super::*;
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
     use paladin_ports::output::llm_port::LlmPort;
-    use uuid::Uuid;
 
     fn make_request() -> LlmRequest {
         let prompt = PromptItem::new(PromptType::User(UserPrompt {
@@ -569,14 +568,7 @@ mod tests {
             context: None,
         }))
         .unwrap();
-        LlmRequest {
-            id: Uuid::new_v4(),
-            model: "mock-model".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        }
+        LlmRequest::new("mock-model", prompt)
     }
 
     #[tokio::test]

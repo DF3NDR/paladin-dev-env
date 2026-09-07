@@ -31,8 +31,6 @@
 //! credential — every error printed here is an `LlmError`, which the engine
 //! has already routed through its redact-then-bound diagnostic excerpt.
 
-use std::collections::HashMap;
-
 use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
 use paladin_llm::gemini::adapter::{
     GEMINI_DEFAULT_BASE_URL, GEMINI_DEFAULT_MODEL, GEMINI_FALLBACK_MODELS,
@@ -45,7 +43,6 @@ use paladin_llm::kimi::{KimiAdapter, KimiConfig};
 use paladin_llm::qwen::adapter::{QWEN_DEFAULT_BASE_URL, QWEN_DEFAULT_MODEL, QWEN_FALLBACK_MODELS};
 use paladin_llm::qwen::{QwenAdapter, QwenConfig};
 use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
-use uuid::Uuid;
 
 /// Minimal `log::Log` implementation, no dependency (17-22, G-17-4d).
 ///
@@ -115,14 +112,7 @@ async fn probe_generate(port: &dyn LlmPort, model: &str) -> Result<GenerateOutco
     }))
     .map_err(|e| format!("failed to construct prompt: {e}"))?;
 
-    let request = LlmRequest {
-        id: Uuid::new_v4(),
-        model: model.to_string(),
-        prompt,
-        attachments: vec![],
-        stream: false,
-        metadata: HashMap::new(),
-    };
+    let request = LlmRequest::new(model.to_string(), prompt);
 
     match port.generate(request).await {
         Ok(response) => {

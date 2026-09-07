@@ -8,8 +8,6 @@ use paladin::core::platform::container::prompt::{
 };
 use paladin_llm::anthropic::{AnthropicAdapter, AnthropicConfig};
 use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
-use std::collections::HashMap;
-use uuid::Uuid;
 
 /// Helper to create a mock server and adapter configured to use it
 ///
@@ -40,14 +38,7 @@ fn create_test_request(content: &str) -> LlmRequest {
     }))
     .unwrap();
 
-    LlmRequest {
-        id: Uuid::new_v4(),
-        model: "claude-3-5-sonnet-20241022".to_string(),
-        prompt: system_prompt,
-        attachments: vec![],
-        stream: false,
-        metadata: HashMap::new(),
-    }
+    LlmRequest::new("claude-3-5-sonnet-20241022", system_prompt)
 }
 
 /// Helper to create a request with user prompt
@@ -58,14 +49,7 @@ fn create_user_request(content: &str) -> LlmRequest {
     }))
     .unwrap();
 
-    LlmRequest {
-        id: Uuid::new_v4(),
-        model: "claude-3-5-sonnet-20241022".to_string(),
-        prompt: user_prompt,
-        attachments: vec![],
-        stream: false,
-        metadata: HashMap::new(),
-    }
+    LlmRequest::new("claude-3-5-sonnet-20241022", user_prompt)
 }
 
 #[tokio::test]

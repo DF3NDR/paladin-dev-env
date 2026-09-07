@@ -237,8 +237,8 @@ from scratch rather than trusting the close-out narrative.
 | Requirements audited | 7 (RT-01…RT-07) |
 | Tasks audited | 56 (50 automated, 6 checkpoints) |
 | Distinct test filters extracted and checked | 184 |
-| Gaps found | 7 |
-| Resolved | 7 |
+| Gaps found | 9 (7 local + 2 found by CI, see Addendum) |
+| Resolved | 9 |
 | Escalated | 0 |
 | Tests MISSING (had to be written) | 0 |
 
@@ -286,6 +286,32 @@ the whole workspace. So the gap was in the *local* close-out evidence, which str
 see doctests, not in the project's CI coverage. The correct lesson is narrower than "no gate
 catches doctests": **do not seal a phase on a local `llvm-cov` + `--tests` pair and describe it as
 full coverage** — that pair has a doctest-shaped blind spot that CI will find later, on push.
+
+### Addendum — two further gaps, found by CI after the audit (2026-09-07)
+
+The audit above was assembled from **local** evidence and initially reported only the doctest
+defect. Pushing the branch ran `ci.yml` ([34146395148](https://github.com/DF3NDR/paladin-dev-env/actions/runs/34146395148)),
+which failed **five** jobs, not two. Three were the doctest defect (G7) under different job names
+(`Crate Isolation (paladin-battalion)`, `Integration Tests`, `Unit Tests (stable)`). The other two
+were separate Phase 26 defects this audit had missed, both invisible to any check runnable in the
+devcontainer:
+
+| # | Where | Gap | Resolution |
+|---|-------|-----|------------|
+| G8 | `Semver Checks (vs v0.9.0)` | `Settings` (root `paladin-ai`, `src/config/settings.rs:28`) gained the public `agent_runtime` field in plan 26-02 with **none** of the X-10 treatment: not `#[non_exhaustive]`, no `[package.metadata.cargo-semver-checks.lints]` suppression, no MIGRATION.md §9.2 row. `cargo semver-checks` failed it as `constructible_struct_adds_field` — a major break. 26-21's close-out recorded "semver-checks x11 packages, 0 findings each", which did not hold | Registered as X-10.3 option (b), the `PaladinResult` precedent (`Settings` implements `Default`, and functional-update syntax is disallowed cross-crate on `#[non_exhaustive]` structs): suppression in the root `Cargo.toml`, a matching allowlist `[[entry]]`, and a §9.2 row. Verified with CI's own invocation — `195 checks: 195 pass`, "no semver update required" (was `1 fail`) — and the §9.2/allowlist set-equality gate passes. Commit `3052be2f` |
+| G9 | `Docker Integration Tests` | Plan 26-07's `delete-mirror-now` checkpoint deleted the root `migrations/` directory and updated **only** the root `Dockerfile` (its SUMMARY records "Dockerfile:28/:57 COPY lines deleted"). Four stale `COPY migrations` references were left behind and break the image build: `docker/testserver/Dockerfile:89` — the stage CI actually builds — plus `Dockerfile.server:32`, `Dockerfile.chef:63` and `Dockerfile.chef:96`'s runtime `COPY --from` | All four replaced with the same embedded-migrations note the root `Dockerfile` received; the dead `migrations/**` glob dropped from the root `Cargo.toml` include list. Verified by a static check that every non-glob `COPY` source in all four Dockerfiles exists in its build context. Commit `3052be2f` |
+
+**Why the audit missed both.** Neither is reachable from the devcontainer: Docker is unavailable
+(so no image builds locally, a limitation this file's own Manual-Only table already records for
+Qdrant and Ollama), and `cargo semver-checks` against the published `0.9.0` baseline was not part of
+any row's `<automated>` command — 26-21-03 gates on clippy/fmt/security/api-surface but **not**
+semver. That is the structural lesson: **this phase's Per-Task Map has no row that runs the semver
+gate or builds a Docker image**, so no amount of local re-verification could have caught G8 or G9.
+CI is the only instrument that covers them, and it did so on the first push.
+
+*Known pre-existing, out of scope:* `docker/testserver/Dockerfile:31` and `:63` also `COPY config`,
+a directory absent from the repo. Those lines date to 2025-06-30 and sit in the `production` and
+`development` stages, which CI never builds — unrelated to Phase 26 and deliberately left alone.
 
 ### Verdict
 

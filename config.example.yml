@@ -183,7 +183,7 @@ agent_runtime:
     max_calls: 10
   token_budget:
     enabled: false
-    max_tokens: 999999
+    max_tokens: 100000
   tool_call_limit:
     enabled: false
     max_calls: 20

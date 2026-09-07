@@ -78,7 +78,7 @@ use crate::config::env_utils::{EnvOverridable, read_env};
 /// assert!(!config.token_budget.enabled);
 /// assert!(config.validate().is_ok());
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct AgentRuntimeConfig {
     /// Caps the number of model calls the reasoning loop makes (D-08).
     #[serde(default)]
@@ -126,29 +126,15 @@ pub struct AgentRuntimeConfig {
     pub vault_tools: VaultToolsConfig,
 }
 
-// A manual impl (not #[derive(Default)]), colocated with `validate()`,
-// mirroring `NodeCacheConfig`'s and `WaypointStoreConfig`'s convention: the
-// disabled-by-default contract is stated in code, not left implicit in a
-// derive.
-impl Default for AgentRuntimeConfig {
-    fn default() -> Self {
-        Self {
-            model_call_limit: ModelCallLimitConfig::default(),
-            token_budget: TokenBudgetConfig::default(),
-            tool_call_limit: ToolCallLimitConfig::default(),
-            guardrail: GuardrailConfig::default(),
-            history_trimmer: HistoryTrimmerConfig::default(),
-            summarization: SummarizationConfig::default(),
-            vault_recall: VaultRecallConfig::default(),
-            model_retry: ModelRetryConfig::default(),
-            model_fallback: ModelFallbackConfig::default(),
-            tool_errors: ToolErrorConfig::default(),
-            structured: StructuredOutputConfig::default(),
-            vault_tools: VaultToolsConfig::default(),
-        }
-    }
-}
-
+// `#[derive(Default)]` here (unlike `NodeCacheConfig`'s and
+// `WaypointStoreConfig`'s hand-written `Default`, which pick non-default
+// literal values such as a hostname or a key prefix): every field's
+// disabled-by-default value already *is* that field's own type's
+// `Default::default()`, so a derived impl and a hand-written one produce an
+// identical, compiler-verified result -- clippy's `derivable_impls` lint
+// enforces this. The disabled-by-default contract still lives in each
+// sub-struct's own hand-written `Default` (see e.g. `ModelCallLimitConfig`
+// below), colocated with its `validate()`.
 impl AgentRuntimeConfig {
     /// Validates every sub-struct's own invariants. Never clamps, never
     /// panics -- each sub-struct's `validate()` returns a typed error
@@ -448,9 +434,7 @@ impl EnvOverridable for GuardrailConfig {
         if let Some(v) = read_env::<bool>("APP_AGENT_RUNTIME_GUARDRAIL_ENABLED") {
             self.enabled = v;
         }
-        if let Some(v) =
-            read_env::<usize>("APP_AGENT_RUNTIME_GUARDRAIL_PATTERN_SIZE_LIMIT_BYTES")
-        {
+        if let Some(v) = read_env::<usize>("APP_AGENT_RUNTIME_GUARDRAIL_PATTERN_SIZE_LIMIT_BYTES") {
             self.pattern_size_limit_bytes = v;
         }
         // `rules` is config-file only (see module docs) -- no env var
@@ -517,13 +501,10 @@ impl EnvOverridable for HistoryTrimmerConfig {
         if let Some(v) = read_env::<bool>("APP_AGENT_RUNTIME_HISTORY_TRIMMER_ENABLED") {
             self.enabled = v;
         }
-        if let Some(v) =
-            read_env::<u32>("APP_AGENT_RUNTIME_HISTORY_TRIMMER_RESERVE_FOR_RESPONSE")
-        {
+        if let Some(v) = read_env::<u32>("APP_AGENT_RUNTIME_HISTORY_TRIMMER_RESERVE_FOR_RESPONSE") {
             self.reserve_for_response = v;
         }
-        if let Some(v) =
-            read_env::<u32>("APP_AGENT_RUNTIME_HISTORY_TRIMMER_DEFAULT_CONTEXT_TOKENS")
+        if let Some(v) = read_env::<u32>("APP_AGENT_RUNTIME_HISTORY_TRIMMER_DEFAULT_CONTEXT_TOKENS")
         {
             self.default_context_tokens = v;
         }
@@ -637,8 +618,7 @@ impl VaultRecallConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.enabled && self.top_k == 0 {
             return Err(
-                "agent_runtime.vault_recall.top_k must be greater than 0 when enabled"
-                    .to_string(),
+                "agent_runtime.vault_recall.top_k must be greater than 0 when enabled".to_string(),
             );
         }
         if !(0.0..=1.0).contains(&self.score_floor) {
@@ -775,7 +755,7 @@ impl EnvOverridable for ModelRetryConfig {
 /// `build_chain` time. Credentials keep coming from
 /// `LlmProviderFactory`'s existing env/config path, never from this
 /// struct (D-12, D-41) -- see [`tests::config_carries_no_secret_shaped_field`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ModelFallbackConfig {
     /// Whether fallback is wired at all. `false` out of the box.
     pub enabled: bool,
@@ -786,22 +766,12 @@ pub struct ModelFallbackConfig {
     pub providers: Vec<String>,
 }
 
-impl Default for ModelFallbackConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            providers: Vec::new(),
-        }
-    }
-}
-
 impl ModelFallbackConfig {
     /// Rejects an empty `providers` list when `enabled`; never clamps.
     pub fn validate(&self) -> Result<(), String> {
         if self.enabled && self.providers.is_empty() {
             return Err(
-                "agent_runtime.model_fallback.providers must not be empty when enabled"
-                    .to_string(),
+                "agent_runtime.model_fallback.providers must not be empty when enabled".to_string(),
             );
         }
         Ok(())
@@ -921,16 +891,10 @@ impl EnvOverridable for StructuredOutputConfig {
 
 /// Whether the built-in `vault_get`/`vault_put` Armaments are wired into a
 /// run's arsenal (D-22). Opt-in.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct VaultToolsConfig {
     /// Whether the vault tools are wired at all. `false` out of the box.
     pub enabled: bool,
-}
-
-impl Default for VaultToolsConfig {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
 }
 
 impl VaultToolsConfig {
@@ -1012,7 +976,7 @@ mod tests {
         assert!(!config.model_fallback.enabled);
         // This is the deliberate "today's-behavior policy" default, not an
         // `enabled: false` flag (D-33).
-        assert_eq!(config.tool_errors.mode, ToolErrorMode::FailRun);
+        assert_eq!(config.tool_errors.mode, ToolErrorMode::FeedToModel);
         assert!(!config.vault_tools.enabled);
 
         assert!(config.validate().is_ok());

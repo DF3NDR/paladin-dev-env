@@ -384,6 +384,7 @@ use tokio::sync::mpsc;
 use paladin_core::platform::container::heartbeat::HeartbeatHandle;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::run_scope::RunScope;
 
 // Re-export pure domain result types from core
 pub use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
@@ -770,6 +771,77 @@ pub trait PaladinPort: Send + Sync {
         self.execute(paladin, input).await
     }
 
+    /// Execute a Paladin under a host-issued [`RunScope`] (Doc 05 RT-04,
+    /// D-21).
+    ///
+    /// The superstep engine calls THIS method -- never `execute_observed`
+    /// directly -- for every `NodeSpec::Paladin` dispatch, passing a
+    /// `RunScope` carrying whatever grant the engine was configured with
+    /// (`WarEngine::with_vault`'s `base` namespace, if any). An
+    /// implementation that understands scoped capabilities (e.g. a Vault
+    /// grant) overrides this method to act on `scope`; one that does not is
+    /// never asked to.
+    ///
+    /// # The default is correct, not a placeholder (X-10.4, D-21)
+    ///
+    /// This is a second DEFAULTED method on this pre-existing public trait
+    /// (the Phase 25 `execute_observed` default is the first), and its
+    /// default body delegates to [`PaladinPort::execute_observed`],
+    /// discarding `scope` entirely. That default is a *correct* claim, not
+    /// a stub: an implementor that does not override this method genuinely
+    /// has no scoped capability to offer, so ignoring the grant it was
+    /// handed is exactly right -- it never fabricates access to a resource
+    /// it does not understand. Overriding `execute_scoped` is how an
+    /// implementor opts INTO scoped capabilities; every existing
+    /// implementor compiles unchanged and behaves exactly as before (no new
+    /// required method is added to any published trait this phase).
+    ///
+    /// `PaladinExecutionService`'s own inherent `execute_scoped` method (not
+    /// this trait method) is where a real Vault grant is resolved and
+    /// enforced -- see its rustdoc for the resolution order and the
+    /// "no grant means denied, never root" rule.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_trait::async_trait;
+    /// use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+    /// use paladin_core::platform::container::paladin::Paladin;
+    /// use paladin_core::platform::container::paladin_error::PaladinError;
+    /// use paladin_core::platform::container::run_scope::RunScope;
+    /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    ///
+    /// struct PlainPort;
+    ///
+    /// #[async_trait]
+    /// impl PaladinPort for PlainPort {
+    ///     async fn execute(&self, _p: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
+    ///         Ok(PaladinResult { output: input.to_string(), ..Default::default() })
+    ///     }
+    ///
+    ///     // Never overrides `execute_scoped` -- it claims no scoped
+    ///     // capability, which is true: whatever grant the engine hands it
+    ///     // is silently ignored, never fabricated into access.
+    ///
+    ///     async fn execute_stream(&self, _p: &Paladin, _i: &str) -> Result<PaladinStream, PaladinError> {
+    ///         unimplemented!()
+    ///     }
+    ///
+    ///     fn validate(&self, _p: &Paladin) -> Result<(), PaladinError> {
+    ///         Ok(())
+    ///     }
+    /// }
+    /// ```
+    async fn execute_scoped(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        heartbeat: &HeartbeatHandle,
+        _scope: &RunScope,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.execute_observed(paladin, input, heartbeat).await
+    }
+
     /// Execute a Paladin with streaming output
     ///
     /// Similar to `execute()` but returns a stream of chunks as they are generated.
@@ -962,6 +1034,73 @@ mod tests {
         assert_eq!(observed.loop_count, direct.loop_count);
         assert_eq!(observed.stop_reason, direct.stop_reason);
         assert_eq!(heartbeat.beats(), 0, "the default body emits no beat");
+    }
+
+    /// Plan 26-13, D-21/X-10.4: `execute_scoped` is a SECOND defaulted
+    /// method whose default body delegates to `execute_observed`, ignoring
+    /// `scope` entirely -- a port that never overrides it produces exactly
+    /// what `execute_observed` produces for the same input, whatever
+    /// `RunScope` it is handed.
+    #[tokio::test]
+    async fn paladin_port_execute_scoped_default_delegates() {
+        use paladin_core::platform::container::paladin::PaladinData;
+        use paladin_core::platform::container::run_scope::RunScope;
+        use paladin_core::platform::container::vault::Namespace;
+
+        struct ExecuteOnlyPort;
+
+        #[async_trait]
+        impl PaladinPort for ExecuteOnlyPort {
+            async fn execute(
+                &self,
+                _paladin: &Paladin,
+                input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                Ok(PaladinResult {
+                    output: format!("echo:{input}"),
+                    token_count: 3,
+                    loop_count: 1,
+                    stop_reason: StopReason::Completed,
+                    ..Default::default()
+                })
+            }
+
+            async fn execute_stream(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                unimplemented!("not exercised")
+            }
+
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+        }
+
+        let port = ExecuteOnlyPort;
+        let paladin: Paladin = paladin_core::base::entity::node::Node::new(
+            PaladinData::default(),
+            Some("p".to_string()),
+        );
+        let heartbeat = HeartbeatHandle::new();
+
+        let observed = port
+            .execute_observed(&paladin, "hi", &heartbeat)
+            .await
+            .unwrap();
+
+        let scope =
+            RunScope::default().with_vault_namespace(Namespace::parse("user/alice").unwrap());
+        let scoped = port
+            .execute_scoped(&paladin, "hi", &heartbeat, &scope)
+            .await
+            .unwrap();
+
+        assert_eq!(scoped.output, observed.output);
+        assert_eq!(scoped.token_count, observed.token_count);
+        assert_eq!(scoped.loop_count, observed.loop_count);
+        assert_eq!(scoped.stop_reason, observed.stop_reason);
     }
 
     #[test]

@@ -33,6 +33,10 @@ pub use platform::container::transience::Transience;
 // generic to glob-import safely, unlike `Namespace`/`VaultRecord`/
 // `VaultError`, which carry no ambiguity with any other type in this crate.
 pub use platform::container::vault::{Namespace, VaultError, VaultRecord};
+// D-21: `RunScope` carries no ambiguity with any other type in this crate,
+// the same reasoning as the `Namespace`/`VaultRecord`/`VaultError` re-export
+// immediately above.
+pub use platform::container::run_scope::RunScope;
 // D-26: `Structured<T>`, `StructuredOptions` and `SchemaRef` are re-exported
 // through the crate prelude; `extract_json`/`shape_check`/
 // `render_instruction_block` stay reachable only via their full module path

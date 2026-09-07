@@ -2799,7 +2799,7 @@ impl StreamingExecutorPort for PaladinExecutionService {
 /// JSON-schema-level half of structured output natively.
 ///
 /// For **every** model call this drives -- the first attempt and every
-/// repair re-prompt alike -- [`Self::execute_structured_call`] sets both
+/// repair re-prompt alike -- `execute_structured_call` sets both
 /// mechanisms, belt and braces (D-27, D-28):
 ///
 /// 1. `LlmRequest.response_format` is set to
@@ -2833,9 +2833,9 @@ impl StreamingExecutorPort for PaladinExecutionService {
 ///
 /// # This impl does not run `self.middleware` (WR-02, `26-REVIEW.md`)
 ///
-/// [`Self::execute_structured_call`] builds its own scratch
+/// `execute_structured_call` builds its own scratch
 /// `ModelCallContext` and dispatches straight through
-/// [`Self::execute_with_retry_and_temperature`] -- never through
+/// `execute_with_retry_and_temperature` -- never through
 /// `run_before`/`run_after`/`run_around_tool` (`middleware::chain`). Any
 /// `ExecutionMiddleware` installed via [`Self::with_middleware`]/
 /// [`Self::with_middleware_chain`] (`Guardrail`, `VaultRecallMiddleware`,
@@ -2897,7 +2897,7 @@ impl PaladinExecutionService {
     /// One structured-output model call (RT-05, D-27): builds a scratch
     /// [`ModelCallContext`] carrying `response_format`, then dispatches
     /// through the SAME retry/circuit-breaker call site
-    /// ([`Self::execute_with_retry_and_temperature`]) every ordinary
+    /// (`execute_with_retry_and_temperature`) every ordinary
     /// reasoning-loop iteration uses -- not a second call path.
     ///
     /// Deliberately does **not** run the full multi-loop `execute_internal`

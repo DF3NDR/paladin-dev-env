@@ -58,6 +58,7 @@ pub mod llm_live_api_tests;
 pub mod mcp_stdio_test;
 pub mod mcp_streamable_http_live_test;
 pub mod mcp_streamable_http_test;
+pub mod middleware_under_engine_test;
 pub mod notification_system_integration_test;
 #[cfg(feature = "llm-openai")]
 pub mod openai_content_analysis_integration_test;

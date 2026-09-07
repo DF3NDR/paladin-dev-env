@@ -228,6 +228,17 @@ pub enum InterceptDecision {
 /// a `NodeError.transience`, so an interceptor's own policy decision is
 /// retried only if the caller's `Aegis` says a `Function`-sourced error at
 /// that transience is retryable, same as any other node failure.
+///
+/// # A third layer sits INSIDE this chain (Phase 26, D-05)
+///
+/// For a `NodeSpec::Paladin` node specifically, the facade's own
+/// `ExecutionMiddleware` chain (`paladin::application::services::paladin::middleware`)
+/// runs inside the node's own execution -- once per model call and once per
+/// tool/handoff dispatch -- while THIS trait continues to bracket the whole
+/// node once per Aegis attempt. The two layers are independent and neither
+/// wraps a registry the other reads: a `PaladinExecutionService` carrying
+/// middleware applies its chain unchanged when the engine dispatches it
+/// through `PaladinPort::execute_observed`, with no engine-side change.
 #[async_trait]
 pub trait NodeInterceptor: Send + Sync {
     /// Decide whether `ctx`'s node should execute against `state` this

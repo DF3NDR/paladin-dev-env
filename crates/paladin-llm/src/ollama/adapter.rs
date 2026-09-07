@@ -547,4 +547,59 @@ mod tests {
         assert!(caps.supports_system_messages);
         assert_eq!(caps.max_context_tokens, None);
     }
+
+    // ── Shared conformance suite (RT-06, D-31) ──
+    //
+    // Nested in its own module (rather than inline in `mod tests`) so every generated test's
+    // full path contains "conformance" -- `cargo test --lib conformance` (the plan's own
+    // acceptance criterion) selects it by that substring. Bodies below are copied verbatim from
+    // this module's own hand-written tests above
+    // (`generate_posts_with_placeholder_authorization_header_present`,
+    // `generate_stream_assembles_deltas_in_wire_order_with_terminal_stop`) rather than invented
+    // for this suite (26-PATTERNS.md).
+    mod conformance_suite {
+        use super::*;
+        use std::sync::Arc;
+
+        struct OllamaFixture;
+
+        impl crate::conformance::ConformanceFixture for OllamaFixture {
+            const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
+
+            fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
+                let config = OllamaConfig::new(base_url.to_string(), "llama3".to_string());
+                Arc::new(OllamaAdapter::new(config).expect("test config must build"))
+            }
+
+            fn success_body() -> String {
+                json!({
+                    "id": "cmpl-1",
+                    "model": "llama3",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi there"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+                })
+                .to_string()
+            }
+
+            fn stream_body() -> String {
+                concat!(
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"lo \"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"world\"},\"finish_reason\":\"stop\"}]}\n\n",
+                    "data: [DONE]\n\n",
+                )
+                .to_string()
+            }
+
+            fn error_body(status: u16) -> String {
+                json!({"error": format!("mock error for status {status}")}).to_string()
+            }
+        }
+
+        crate::llm_conformance_suite!(OllamaFixture);
+    }
 }

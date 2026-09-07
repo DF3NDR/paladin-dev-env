@@ -3044,4 +3044,65 @@ mod tests {
             "expected AuthenticationError, got: {result:?}"
         );
     }
+
+    // ── Shared conformance suite (RT-06, D-31) ──
+    //
+    // Nested in its own module (rather than inline in `mod tests`) so every generated test's
+    // full path contains "conformance" -- `cargo test --lib conformance` (the plan's own
+    // acceptance criterion) selects it by that substring. Bodies below are copied verbatim from
+    // this module's own hand-written tests above
+    // (`generate_posts_to_generate_content_with_x_goog_api_key_header`,
+    // `generate_stream_assembles_three_frames_in_wire_order`) rather than invented for this
+    // suite (26-PATTERNS.md).
+    mod conformance_suite {
+        use super::*;
+
+        struct GeminiFixture;
+
+        impl crate::conformance::ConformanceFixture for GeminiFixture {
+            const WIRE: crate::conformance::Wire = crate::conformance::Wire::Gemini;
+
+            fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
+                Arc::new(test_adapter(base_url))
+            }
+
+            fn success_body() -> String {
+                json!({
+                    "candidates": [{
+                        "content": {"role": "model", "parts": [{"text": "Hi there"}]},
+                        "finishReason": "STOP"
+                    }],
+                    "usageMetadata": {
+                        "promptTokenCount": 5,
+                        "candidatesTokenCount": 3,
+                        "totalTokenCount": 8
+                    }
+                })
+                .to_string()
+            }
+
+            fn stream_body() -> String {
+                concat!(
+                    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hel\"}]}}]}\n\n",
+                    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo \"}]}}]}\n\n",
+                    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"world\"}],\"role\":\"model\"},",
+                    "\"finishReason\":\"STOP\"}]}\n\n",
+                )
+                .to_string()
+            }
+
+            fn error_body(status: u16) -> String {
+                json!({
+                    "error": {
+                        "code": status,
+                        "message": format!("mock error for status {status}"),
+                        "status": "UNKNOWN"
+                    }
+                })
+                .to_string()
+            }
+        }
+
+        crate::llm_conformance_suite!(GeminiFixture);
+    }
 }

@@ -204,6 +204,60 @@ impl ToolResultFormatter {
         output
     }
 
+    /// Formats a tool call FAILURE for LLM context injection (D-33, D-34).
+    ///
+    /// Used by both the Arsenal tool-call branch and the handoff branch of
+    /// the reasoning loop's `ToolErrorMode::FeedToModel` path (the default,
+    /// today's v0.9 behavior unchanged) — one shared shape for every tool
+    /// failure the model sees, rather than two independently-drifting
+    /// inline `format!`s. Keeps the pre-existing
+    /// `🔧 Tool Execution: {name}\nResult: FAILED\nError: {reason}` shape
+    /// (X-03: no unplanned behavioral change to the text a model already
+    /// received) and appends the PRD's own sentence: the model may retry
+    /// with corrected arguments or proceed without the tool.
+    ///
+    /// `reason` is sanitized before it is embedded: [`redact_secret_patterns`]
+    /// runs BEFORE [`bounded_excerpt`] — redact, then bound, never the
+    /// reverse. Bounding first can slice a secret across the truncation
+    /// boundary and leak the surviving tail
+    /// (`.github/instructions/security.instructions.md`, T-26-03).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use paladin::infrastructure::adapters::arsenal::tool_result_formatter::ToolResultFormatter;
+    /// use paladin::core::platform::container::arsenal::ArmamentCall;
+    /// use std::collections::HashMap;
+    ///
+    /// let formatter = ToolResultFormatter::new();
+    /// let call = ArmamentCall::new("fetch_report", HashMap::new());
+    /// let formatted = formatter.format_error(&call, "upstream gateway timed out");
+    ///
+    /// assert!(formatted.contains("Tool Execution: fetch_report"));
+    /// assert!(formatted.contains("Result: FAILED"));
+    /// assert!(formatted.contains("You may retry"));
+    /// ```
+    ///
+    /// [`redact_secret_patterns`]: paladin_llm::redaction::redact_secret_patterns
+    /// [`bounded_excerpt`]: paladin_llm::redaction::bounded_excerpt
+    pub fn format_error(&self, call: &ArmamentCall, reason: &str) -> String {
+        let tool_icon = if self.use_emoji { "🔧 " } else { "" };
+
+        // T-26-03: redact-then-bound, never the reverse -- bounding first
+        // can slice a secret across the truncation boundary and leak the
+        // surviving tail.
+        let redacted = paladin_llm::redaction::redact_secret_patterns(reason);
+        let sanitized = paladin_llm::redaction::bounded_excerpt(
+            &redacted,
+            paladin_llm::redaction::RESPONSE_EXCERPT_CHAR_BUDGET,
+        );
+
+        format!(
+            "{tool_icon}Tool Execution: {}\nResult: FAILED\nError: {}\nYou may retry with corrected arguments or proceed without it.\n",
+            call.tool_name, sanitized
+        )
+    }
+
     /// Formats an output value for display
     ///
     /// Converts output values into human-readable strings with
@@ -320,6 +374,72 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use uuid::Uuid;
+
+    // ── D-33/D-34: format_error (Task 2, Plan 26-19) ─────────────────────
+
+    #[test]
+    fn format_error_keeps_todays_shape_and_appends_the_prd_sentence() {
+        let formatter = ToolResultFormatter::new();
+        let call = ArmamentCall::new("fetch_report", HashMap::new());
+
+        let formatted = formatter.format_error(&call, "upstream gateway timed out");
+
+        assert!(
+            formatted.contains("🔧 Tool Execution: fetch_report"),
+            "got {formatted}"
+        );
+        assert!(formatted.contains("Result: FAILED"), "got {formatted}");
+        assert!(
+            formatted.contains("Error: upstream gateway timed out"),
+            "got {formatted}"
+        );
+        assert!(
+            formatted.contains("You may retry with corrected arguments or proceed without it."),
+            "got {formatted}"
+        );
+    }
+
+    #[test]
+    fn both_arms_use_the_same_formatter() {
+        // The Arsenal arm and the handoff arm both call format_error with
+        // the same shape of inputs; asserting their outputs match one
+        // expected shape (up to the tool name and reason) proves there is
+        // exactly one formatter, not two independently-drifting call
+        // sites.
+        let formatter = ToolResultFormatter::new();
+        let arsenal_call = ArmamentCall::new("web_search", HashMap::new());
+        let handoff_call = ArmamentCall::new("delegate_to_specialist", HashMap::new());
+
+        let arsenal_output = formatter.format_error(&arsenal_call, "connection reset");
+        let handoff_output = formatter.format_error(&handoff_call, "connection reset");
+
+        let expected_shape = |tool_name: &str| {
+            format!(
+                "🔧 Tool Execution: {tool_name}\nResult: FAILED\nError: connection reset\n\
+                 You may retry with corrected arguments or proceed without it.\n"
+            )
+        };
+
+        assert_eq!(arsenal_output, expected_shape("web_search"));
+        assert_eq!(handoff_output, expected_shape("delegate_to_specialist"));
+    }
+
+    #[test]
+    fn format_error_redacts_a_secret_in_the_reason_before_bounding() {
+        // T-26-03: a credential in the failure reason must never reach the
+        // model, redacted before it is bounded.
+        let formatter = ToolResultFormatter::new();
+        let call = ArmamentCall::new("fetch_report", HashMap::new());
+        let reason = "upstream rejected: Authorization: Bearer sk-live-abcdef0123456789";
+
+        let formatted = formatter.format_error(&call, reason);
+
+        assert!(!formatted.contains("abcdef0123456789"), "got {formatted}");
+        // `paladin_llm::redaction::CREDENTIAL_PLACEHOLDER` is `pub(crate)`
+        // to that crate, so this asserts the literal it is defined as
+        // rather than importing it.
+        assert!(formatted.contains("[REDACTED]"), "got {formatted}");
+    }
 
     #[test]
     fn test_format_success_result() {

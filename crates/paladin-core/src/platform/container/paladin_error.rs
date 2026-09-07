@@ -144,6 +144,36 @@ pub enum PaladinError {
         /// The model's raw output from the LAST attempt, verbatim.
         raw_output: String,
     },
+
+    /// A tool (Armament or handoff) call failed and the effective
+    /// tool-error policy for that tool is `FailRun` (D-33, D-34, configured
+    /// via the facade's `ToolErrorConfig`/`ToolErrorMode`, which
+    /// `paladin-core` does not depend on) -- fails the run with a
+    /// structured error rather than feeding the failure back into the
+    /// model's context. The default policy, `FeedToModel` (matching v0.9's
+    /// unnamed behavior), never constructs this variant.
+    ///
+    /// Free under the pre-existing `#[non_exhaustive]` attribute (X-06) --
+    /// no new `MIGRATION.md` §9.2 row is created for this variant; the
+    /// existing `PaladinError` row's Change cell is extended instead (D-33,
+    /// D-34, D-37).
+    ///
+    /// `reason` is a redacted, human-readable summary of the failure -- the
+    /// same sanitized text `ToolResultFormatter::format_error` would have
+    /// fed back to the model under `FeedToModel`, never raw provider or
+    /// tool output.
+    ///
+    /// Named `reason`, not `source` -- a field literally named `source`
+    /// triggers `thiserror`'s implicit `Error::source()` derivation, which
+    /// requires the field's own type to implement `std::error::Error`; a
+    /// plain sanitized `String` summary does not, and should not need to.
+    #[error("tool `{tool}` failed: {reason}")]
+    ArmamentFailed {
+        /// The name of the tool (Armament or handoff) that failed.
+        tool: String,
+        /// A redacted, human-readable summary of the failure.
+        reason: String,
+    },
 }
 
 impl PaladinError {
@@ -211,6 +241,14 @@ impl PaladinError {
             // reproduces the identical exhaustion; only a different prompt,
             // schema, or model changes the outcome.
             PaladinError::StructuredOutputInvalid { .. } => Transience::Permanent,
+
+            // A tool failure under `FailRun` could be either -- a
+            // transient network blip on the tool's side or a permanent
+            // argument/configuration mistake -- and no typed field
+            // distinguishes them (the `reason` string is a sanitized
+            // summary, not a classification), so this is Unknown per D-05's
+            // default rather than a guess in either direction.
+            PaladinError::ArmamentFailed { .. } => Transience::Unknown,
 
             // Unresolvable from a bare string: no typed field distinguishes
             // a transient cause from a permanent one.
@@ -334,6 +372,13 @@ mod tests {
                     raw_output: "y".into(),
                 },
                 Permanent,
+            ),
+            (
+                PaladinError::ArmamentFailed {
+                    tool: "fetch_report".into(),
+                    reason: "upstream gateway rejected the request".into(),
+                },
+                Unknown,
             ),
             (
                 PaladinError::LlmFailure {

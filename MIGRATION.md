@@ -14,7 +14,7 @@
 |---|---|---|---|
 | M-B-01 | **BUG-01 fix.** `EdgeCondition::Custom(name)` no longer evaluates to `true` when no evaluator is registered. Campaign/graph validation now fails with `BattalionError::InvalidGraph` naming each unregistered condition, before any node executes. | Any v0.9 workflow using `EdgeCondition::Custom`. Such workflows were routing *incorrectly* (always following the custom edge); after upgrade they fail loudly at validation. | Register an evaluator for each name via the new registry API (CF-FR-01), or replace the condition with `Contains`/`Regex`/`Always`. |
 | M-B-02 | **Graceful shutdown.** On SIGTERM/SIGINT the process now waits up to `shutdown_grace` (default 30 s, env `APP_ENGINE_SHUTDOWN_GRACE_SECS`) for in-flight engine runs to halt before exiting — `paladin-server`'s `shutdown_signal` and `ServiceRunner::wait_for_shutdown` both cancel a shared `ShutdownCoordinator` and wait for registered runs to drain (HITL-04, D-21/D-22). | Operators; container orchestration. | Set `terminationGracePeriodSeconds` ≥ 2 × `shutdown_grace` — `k8s/server/deployment.yaml` and `k8s/deployment.yaml` ship `60` (landed, HITL-FR-15). Set `APP_ENGINE_GRACEFUL_SHUTDOWN=false` to restore the old no-wait behavior for legacy-only deployments (landed, HITL-04). |
-| M-B-03 | **Tool errors fed to the model by default** (RT-FR-24, `tool_error_mode = FeedToModel`). | Users of the Arsenal tool loop who relied on a tool failure aborting the run. | Set `tool_error_mode = FailRun` globally or per tool to restore the previous behavior. |
+| M-B-03 | **No behavioral change.** `tool_error_mode` (RT-FR-24) NAMES a policy the v0.9 loop already implemented, rather than introducing one: a failed Arsenal or handoff tool call was always appended to the accumulated output and the run continued (`paladin_execution_service.rs`'s Arsenal and handoff error-handling arms, unchanged since before this phase). This phase adds `FailRun` as a new opt-in (`PaladinError::ArmamentFailed { tool, reason }`) and sanitizes the fed-back text (redact-then-bound, D-34) before the model ever sees it — the sanitization is the ONLY observable difference for an existing user. | Users of the Arsenal/handoff tool loop. None from the policy itself; a leaked credential previously visible in a tool's raw error text is now redacted before the model sees it. | None required to keep today's behavior — `tool_error_mode` defaults to `FeedToModel`, byte-for-byte matching v0.9 apart from sanitization. Set `tool_error_mode = FailRun` (globally via `AgentRuntimeConfig.tool_errors.mode`, or per tool via `tool_errors.per_tool`) to opt into failing the run on a tool error instead. |
 | M-B-04 | **Automatic per-superstep checkpointing.** Any graph executed through the new `WarEngine` (via `WarGraph`/`WarEngine::start`/`WarEngine::resume`) now writes one `Waypoint` — a **full `Battlefield` snapshot**, including whatever a workflow places in shared state (which may include raw LLM prompts and model outputs) — after every superstep, by default (`WaypointDurability::Strict`). The write goes to whichever `WaypointPort` backend the caller wires in: `InMemoryWaypointStore` (ungated, tests/dev) or, once landed, `SqliteWaypointStore`/`PostgresWaypointStore` (ENG-05) for durable deployments. Growth is bounded by `EngineLimits` (`max_supersteps` default 50, `max_node_visits` default 25) and, once configured, by `WaypointRetentionConfig` (`max_age_days`, `max_waypoints_per_thread` — see §9.5). | Any workflow author who adopts the new `WarEngine`/`WarGraph` APIs (ENG-01…ENG-08). | **Legacy `FormationExecutionService`, `PhalanxExecutionService`, `CampaignExecutionService`, and `Commander` execution paths are completely unaffected — they write no Waypoints and their behavior is byte-for-byte unchanged (ENG-FR-20).** A v0.9 workflow gains **no new persistence** unless it is explicitly rebuilt against the new engine. To adopt it: choose a `WaypointPort` backend, review `WaypointDurability` (default `Strict` fails the run on a write error; `BestEffort` downgrades to a logged warning), and configure `WaypointRetentionConfig` if snapshots — which may contain raw prompts/outputs — must not accumulate unbounded. |
 
 **Worked examples** (owed alongside the rows above, per D-08's rule that a pending item is acceptable only in later-epic-owned content):
@@ -114,7 +114,32 @@
   window (Waypoint records completion normally) or is aborted at the deadline (`NodeOutcomeKind::
   Skipped { reason: "shutdown" }`, re-listed in the Halted Waypoint's vanguard for exactly-once
   resume) — no in-flight work silently vanishes either way.
-- M-B-03: TBD — owner RT-07, Phase 26. A concrete `tool_error_mode` before/after example lands when RT-07 ships the tool-loop default and records its rationale here.
+- M-B-03: **landed (RT-07, Phase 26).** No behavioral change — the v0.9 loop already fed a failed
+  tool call back into the model's context and continued; this phase names that policy
+  (`tool_error_mode`, default `FeedToModel`), adds `FailRun` as a new opt-in
+  (`PaladinError::ArmamentFailed { tool, reason }`), and sanitizes the fed-back text. The
+  sanitization is the only observable difference:
+
+  ```text
+  // v0.9 / v0.10 default (FeedToModel) -- BEFORE this phase, an upstream
+  // gateway's raw error text (including a leaked credential) reached the
+  // model verbatim:
+  🔧 Tool Execution: fetch_report
+  Result: FAILED
+  Error: upstream gateway rejected the request: Authorization: Bearer sk-live-abcdef0123456789
+
+  // v0.10 -- the identical failure, sanitized (redact-then-bound, D-34)
+  // before the model ever sees it:
+  🔧 Tool Execution: fetch_report
+  Result: FAILED
+  Error: upstream gateway rejected the request: Authorization: Bearer [REDACTED]
+  You may retry with corrected arguments or proceed without it.
+  ```
+
+  Set `tool_error_mode = FailRun` (`AgentRuntimeConfig.tool_errors.mode`, or per tool via
+  `tool_errors.per_tool`) to fail the run instead of feeding the error back —
+  `PaladinExecutionService::with_tool_error_config`, service-level configuration only
+  (`PaladinConfig` is untouched, D-10).
 - M-B-04: no worked example owed — this phase (ENG-08) both introduces the behavior and documents it in full above.
 
 **Note on Phase 25 (Node-Level Fault Tolerance — epic `FT`), D-30: no behavioral change; no row is added above.** Every Aegis capability — per-node retry, per-attempt `run_timeout`/`idle_timeout`, `Route`/`Absorb`/`Custom` error handlers, node result caching — is **opt-in per node** through `WarGraph::set_aegis`/`with_default_aegis` (code, not configuration; §9.5), and a v0.9 graph declares none, so an upgraded deployment's workflows execute identically: one attempt per node, no per-attempt bound, a node failure fails the run with the same `node execution error: {message}` display line as before, and nothing is served from a cache (`node_without_aegis_behaves_exactly_as_before`, `pre_aegis_and_limit_failures_carry_none`, `the_display_line_on_a_failed_waypoint_is_unchanged`). The one run-level knob this phase makes real, `EngineConfig.run_timeout_secs` (§9.5), keeps its `None` default, so no run gains a budget it did not configure. `FallbackLlmAdapter` is a new adapter a caller constructs explicitly — no existing provider adapter's behavior changes, and the shared `map_http_status` mapping (25-05) changes only which *typed* `LlmError` variant a non-2xx status becomes (`ProviderError { status }` instead of `ProcessingError(String)`), never whether an adapter's own retry loop retries it. The legacy `FormationExecutionService`/`PhalanxExecutionService`/`CampaignExecutionService`/`Commander` paths and the legacy Battalion `RetryPolicy`/`ErrorStrategy`/timeout services are untouched (X-03). Two accepted, documented caveats that are *not* behavioral changes for a v0.9 graph but matter once a node opts in: an `idle_timeout` on a node whose `PaladinPort` keeps the default `execute_observed` degrades to a per-attempt wall clock (D-19), and a hanging `EdgeConditionEvaluator` remains outside every timeout (R-23-01, still accepted — per-attempt timeouts wrap node execution, not edge evaluation).

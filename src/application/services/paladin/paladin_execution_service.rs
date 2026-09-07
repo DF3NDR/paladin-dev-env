@@ -61,6 +61,7 @@ use crate::application::services::sanctum::memory_extraction_service::{
     MemoryExtractionService, MemoryExtractionStrategy,
 };
 use crate::application::services::sanctum::rag_retrieval_service::RagRetrievalService;
+use crate::config::agent_runtime::{ToolErrorConfig, ToolErrorMode};
 use crate::core::base::entity::node::Node;
 use crate::core::platform::container::arsenal::{ArmamentCall, ArsenalError};
 use crate::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
@@ -207,6 +208,13 @@ pub struct PaladinExecutionService {
     /// [`PaladinExecutionService::confined_vault`]): a run with no grant
     /// never sees the vault tools listed, regardless of this flag.
     vault_tools_enabled: bool,
+
+    /// Governs whether a failed tool (Armament or handoff) call is fed
+    /// back to the model or fails the run (D-33, D-34). Defaults to
+    /// [`ToolErrorConfig::default`] (`mode: FeedToModel`) -- today's v0.9
+    /// behavior, not a new default. Set via
+    /// [`PaladinExecutionService::with_tool_error_config`].
+    tool_error_config: ToolErrorConfig,
 }
 
 /// D-16: the latest-summary-wins effective-history rule.
@@ -367,6 +375,7 @@ impl PaladinExecutionService {
             vault: None,
             default_vault_namespace: None,
             vault_tools_enabled: false,
+            tool_error_config: ToolErrorConfig::default(),
         }
     }
 
@@ -407,6 +416,47 @@ impl PaladinExecutionService {
         info!("Attaching RAG retrieval service to PaladinExecutionService");
         self.rag_retrieval_service = Some(service);
         self
+    }
+
+    /// Sets the tool-error policy (D-33, D-34): whether a failed tool
+    /// (Armament or handoff) call is fed back into the model's context
+    /// (`ToolErrorMode::FeedToModel`, the default -- today's v0.9 behavior,
+    /// unchanged) or fails the run with a structured
+    /// [`PaladinError::ArmamentFailed`] (`ToolErrorMode::FailRun`, the new
+    /// opt-in), with an optional per-tool-name override
+    /// (`ToolErrorConfig::per_tool`) taking precedence over the global
+    /// mode. Does NOT touch `PaladinConfig` -- this is service-level
+    /// configuration only (D-10).
+    ///
+    /// [`PaladinError::ArmamentFailed`]: paladin_core::platform::container::paladin_error::PaladinError::ArmamentFailed
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The tool-error policy this service applies to every
+    ///   run's Arsenal and handoff tool-call failures.
+    ///
+    /// # Returns
+    ///
+    /// Returns self for method chaining.
+    pub fn with_tool_error_config(mut self, config: ToolErrorConfig) -> Self {
+        info!(
+            "Setting tool-error policy on PaladinExecutionService: mode={:?}, per_tool_overrides={}",
+            config.mode,
+            config.per_tool.len()
+        );
+        self.tool_error_config = config;
+        self
+    }
+
+    /// Resolves the effective [`ToolErrorMode`] for `tool_name`: a
+    /// `per_tool` override if one is configured for that name, else the
+    /// global `mode` (D-34).
+    fn effective_tool_error_mode(&self, tool_name: &str) -> ToolErrorMode {
+        self.tool_error_config
+            .per_tool
+            .get(tool_name)
+            .copied()
+            .unwrap_or(self.tool_error_config.mode)
     }
 
     /// Installs `vault` as this service's Vault store, with `default_namespace`
@@ -1526,11 +1576,26 @@ impl PaladinExecutionService {
                                         "Handoff execution failed: id={}, error={}",
                                         execution_id, e
                                     );
-                                    let error_message = format!(
-                                        "\n\n🤝 Handoff Execution: {}\nResult: FAILED\nError: {}\n",
-                                        effective_function_call.name, e
-                                    );
-                                    accumulated_output.push_str(&error_message);
+                                    // D-33/D-34: route through the shared
+                                    // formatter, branching on the effective
+                                    // tool-error policy for this tool name.
+                                    match self
+                                        .effective_tool_error_mode(&effective_function_call.name)
+                                    {
+                                        ToolErrorMode::FeedToModel => {
+                                            let error_message = self
+                                                .formatter
+                                                .format_error(&effective_call, &e.to_string());
+                                            accumulated_output.push_str("\n\n");
+                                            accumulated_output.push_str(&error_message);
+                                        }
+                                        ToolErrorMode::FailRun => {
+                                            return Err(PaladinError::ArmamentFailed {
+                                                tool: effective_function_call.name.clone(),
+                                                reason: e.to_string(),
+                                            });
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1621,12 +1686,29 @@ impl PaladinExecutionService {
                                                 "Tool execution failed: id={}, tool={}, error={}",
                                                 execution_id, effective_call.tool_name, e
                                             );
-                                            // Inject error message for LLM to see and potentially recover
-                                            let error_message = format!(
-                                                "\n\n🔧 Tool Execution: {}\nResult: FAILED\nError: {}\n",
-                                                effective_call.tool_name, e
-                                            );
-                                            accumulated_output.push_str(&error_message);
+                                            // D-33/D-34: route through the
+                                            // shared formatter, branching on
+                                            // the effective tool-error
+                                            // policy for this tool name.
+                                            match self.effective_tool_error_mode(
+                                                &effective_call.tool_name,
+                                            ) {
+                                                ToolErrorMode::FeedToModel => {
+                                                    let error_message =
+                                                        self.formatter.format_error(
+                                                            &effective_call,
+                                                            &e.to_string(),
+                                                        );
+                                                    accumulated_output.push_str("\n\n");
+                                                    accumulated_output.push_str(&error_message);
+                                                }
+                                                ToolErrorMode::FailRun => {
+                                                    return Err(PaladinError::ArmamentFailed {
+                                                        tool: effective_call.tool_name.clone(),
+                                                        reason: e.to_string(),
+                                                    });
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -5194,6 +5276,258 @@ mod middleware_wiring_tests {
             cumulative[0] + 30,
             "cumulative_tokens after iteration 2 must equal both responses' total_tokens summed \
              (30 each, the MockLlmAdapter default)"
+        );
+    }
+
+    // ── D-33/D-34: tool-error policy (Task 2, Plan 26-19) ────────────────
+
+    /// An `ArsenalPort` whose `invoke` always fails with a fixed
+    /// `ArsenalError::TransportError` message, counting how many times it
+    /// was called.
+    struct FailingArsenal {
+        message: String,
+        calls: Mutex<u32>,
+    }
+
+    impl FailingArsenal {
+        fn new(message: impl Into<String>) -> Self {
+            Self {
+                message: message.into(),
+                calls: Mutex::new(0),
+            }
+        }
+
+        fn call_count(&self) -> u32 {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    #[async_trait]
+    impl ArsenalPort for FailingArsenal {
+        async fn list_armaments(&self) -> Vec<crate::core::platform::container::arsenal::Armament> {
+            Vec::new()
+        }
+
+        async fn invoke(
+            &self,
+            _call: ArmamentCall,
+        ) -> Result<crate::core::platform::container::arsenal::ArmamentResult, ArsenalError>
+        {
+            *self.calls.lock().unwrap() += 1;
+            Err(ArsenalError::TransportError(self.message.clone()))
+        }
+
+        fn validate_call(&self, _call: &ArmamentCall) -> Result<(), ArsenalError> {
+            Ok(())
+        }
+    }
+
+    /// D-33: `ToolErrorConfig::default()` (`mode: FeedToModel`) is v0.9's
+    /// unnamed behavior, unchanged -- a failing tool's error is appended to
+    /// the accumulated output and the run continues to completion.
+    #[tokio::test]
+    async fn feed_to_model_is_the_default_and_matches_v0_9() {
+        let llm = Arc::new(
+            MockLlmAdapter::new().with_script(vec![MockScriptEntry::ToolCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            }]),
+        );
+        let arsenal = Arc::new(FailingArsenal::new("transport blip"));
+        let service = make_service_with_arsenal(llm, arsenal.clone() as Arc<dyn ArsenalPort>);
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(arsenal.call_count(), 1);
+        assert!(
+            result.output.contains("🔧 Tool Execution: lookup"),
+            "got {}",
+            result.output
+        );
+        assert!(
+            result.output.contains("Result: FAILED"),
+            "got {}",
+            result.output
+        );
+        assert!(
+            result.output.contains("transport blip"),
+            "got {}",
+            result.output
+        );
+        assert!(
+            result
+                .output
+                .contains("You may retry with corrected arguments or proceed without it."),
+            "got {}",
+            result.output
+        );
+    }
+
+    /// D-33: `ToolErrorMode::FailRun` is the new opt-in -- a failing tool
+    /// fails the run with a structured `PaladinError::ArmamentFailed`
+    /// naming the tool, rather than feeding anything back.
+    #[tokio::test]
+    async fn fail_run_produces_a_structured_error() {
+        let llm = Arc::new(
+            MockLlmAdapter::new().with_script(vec![MockScriptEntry::ToolCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            }]),
+        );
+        let arsenal = Arc::new(FailingArsenal::new("boom"));
+        let service = make_service_with_arsenal(llm, arsenal.clone() as Arc<dyn ArsenalPort>)
+            .with_tool_error_config(ToolErrorConfig {
+                mode: ToolErrorMode::FailRun,
+                per_tool: HashMap::new(),
+            });
+        let paladin = make_paladin(1);
+
+        let err = service.execute(&paladin, "hi").await.unwrap_err();
+
+        match err {
+            PaladinError::ArmamentFailed { tool, reason } => {
+                assert_eq!(tool, "lookup");
+                assert!(reason.contains("boom"), "got {reason}");
+            }
+            other => panic!("expected PaladinError::ArmamentFailed, got {other:?}"),
+        }
+    }
+
+    /// D-34: a `per_tool` override beats the global mode -- the named
+    /// tool's failure fails the run while another tool's failure (under
+    /// the same service, same global default) is still fed back.
+    #[tokio::test]
+    async fn per_tool_override_beats_the_global_mode() {
+        let config = ToolErrorConfig {
+            mode: ToolErrorMode::FeedToModel,
+            per_tool: HashMap::from([("danger".to_string(), ToolErrorMode::FailRun)]),
+        };
+        let paladin = make_paladin(1);
+
+        // The overridden tool fails the run.
+        let llm_danger =
+            Arc::new(
+                MockLlmAdapter::new().with_script(vec![MockScriptEntry::ToolCall {
+                    name: "danger".to_string(),
+                    arguments: "{}".to_string(),
+                }]),
+            );
+        let arsenal_danger = Arc::new(FailingArsenal::new("boom"));
+        let service_danger =
+            make_service_with_arsenal(llm_danger, arsenal_danger as Arc<dyn ArsenalPort>)
+                .with_tool_error_config(config.clone());
+
+        let err = service_danger.execute(&paladin, "hi").await.unwrap_err();
+        assert!(
+            matches!(err, PaladinError::ArmamentFailed { ref tool, .. } if tool == "danger"),
+            "expected ArmamentFailed naming 'danger', got {err:?}"
+        );
+
+        // A different tool's failure, under the same config, is fed back
+        // per the global default.
+        let llm_other =
+            Arc::new(
+                MockLlmAdapter::new().with_script(vec![MockScriptEntry::ToolCall {
+                    name: "lookup".to_string(),
+                    arguments: "{}".to_string(),
+                }]),
+            );
+        let arsenal_other = Arc::new(FailingArsenal::new("boom"));
+        let service_other =
+            make_service_with_arsenal(llm_other, arsenal_other as Arc<dyn ArsenalPort>)
+                .with_tool_error_config(config);
+
+        let result = service_other.execute(&paladin, "hi").await.unwrap();
+        assert!(
+            result.output.contains("🔧 Tool Execution: lookup"),
+            "got {}",
+            result.output
+        );
+        assert!(
+            result.output.contains("Result: FAILED"),
+            "got {}",
+            result.output
+        );
+    }
+
+    /// T-26-03: a credential embedded in a failing tool's error text must
+    /// never reach the model -- redacted before the fed-back text is ever
+    /// appended to the accumulated output.
+    #[tokio::test]
+    async fn a_secret_in_a_tool_error_never_reaches_the_model() {
+        let llm = Arc::new(
+            MockLlmAdapter::new().with_script(vec![MockScriptEntry::ToolCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            }]),
+        );
+        let arsenal = Arc::new(FailingArsenal::new(
+            "upstream rejected: Authorization: Bearer sk-live-abcdef0123456789",
+        ));
+        let service = make_service_with_arsenal(llm, arsenal.clone() as Arc<dyn ArsenalPort>);
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert!(
+            !result.output.contains("abcdef0123456789"),
+            "got {}",
+            result.output
+        );
+        // `paladin_llm::redaction::CREDENTIAL_PLACEHOLDER` is `pub(crate)`
+        // to that crate; assert the literal it is defined as.
+        assert!(
+            result.output.contains("[REDACTED]"),
+            "got {}",
+            result.output
+        );
+    }
+
+    /// D-34: the handoff arm routes through the SAME tool-error policy and
+    /// the same shared formatter as the Arsenal arm -- proven end to end by
+    /// forcing a handoff to fail via `HandoffConfig.max_depth = 0` (an
+    /// immediate, deterministic `HandoffError::MaxDepthExceeded` with no
+    /// executor call needed).
+    #[tokio::test]
+    async fn handoff_arm_routes_through_the_same_tool_error_policy() {
+        use crate::application::services::paladin::handoff_service::HandoffService;
+        use crate::core::platform::container::autonomous_config::HandoffConfig;
+        use crate::core::platform::container::handoff::HandoffStrategy;
+
+        let handoff_config = Arc::new(HandoffConfig {
+            enabled: true,
+            strategy: HandoffStrategy::Automatic,
+            max_depth: 0,
+            retry: Default::default(),
+        });
+        let handoff_service = HandoffService::new(handoff_config).unwrap();
+
+        let llm = Arc::new(
+            MockLlmAdapter::new().with_script(vec![MockScriptEntry::ToolCall {
+                name: "handoff_to_specialist".to_string(),
+                arguments: r#"{"specialist_name":"x","task_description":"y"}"#.to_string(),
+            }]),
+        );
+        let service = make_service(llm).with_handoff_service(Arc::new(handoff_service));
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        // Same shape the Arsenal arm produces -- "🔧 Tool Execution", not
+        // the pre-existing "🤝 Handoff Execution" text (D-34's explicit
+        // unification onto one shared formatter).
+        assert!(
+            result
+                .output
+                .contains("🔧 Tool Execution: handoff_to_specialist"),
+            "got {}",
+            result.output
+        );
+        assert!(
+            result.output.contains("Result: FAILED"),
+            "got {}",
+            result.output
         );
     }
 }

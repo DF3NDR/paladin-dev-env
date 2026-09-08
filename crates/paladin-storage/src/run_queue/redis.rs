@@ -843,12 +843,24 @@ mod tests {
     /// Full aggregate run of every shared clause in one go, in addition to
     /// the per-clause tests above -- mirrors `waypoint::contract_tests`'
     /// `run_all` convenience, exercised here at least once per backend.
+    ///
+    /// Probes reachability once up front to take the SKIP path exactly like
+    /// every other test in this module, then hands `run_all` a factory that
+    /// builds a fresh `RedisRunQueue` under its own randomized `key_prefix`
+    /// per clause -- `queue_or_skip` was already proven reachable a moment
+    /// ago, so a `None` from a later call inside the factory would indicate
+    /// the server vanished mid-test, not a normal SKIP condition.
     #[tokio::test]
     async fn redis_run_queue_full_contract_suite_via_run_all() {
-        let Some(queue) = queue_or_skip().await else {
+        if queue_or_skip().await.is_none() {
             return;
-        };
-        contract_tests::run_all(&queue).await;
+        }
+        contract_tests::run_all(|| async {
+            queue_or_skip()
+                .await
+                .expect("redis-test was reachable a moment ago")
+        })
+        .await;
     }
 
     /// Two `RedisRunQueue` instances with different `key_prefix` values,

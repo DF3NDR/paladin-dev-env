@@ -275,17 +275,23 @@ mod tests {
         contract_tests::depth_counts_ready_plus_leased(&InMemoryRunQueue::new()).await;
     }
 
-    // RED: `run_all` runs every clause back-to-back on ONE
-    // `InMemoryRunQueue`, so leases left behind by the fifo, lease-expiry
-    // and extend-lease clauses are still visible when
-    // `ack_removes_message_permanently` asserts `depth() == 1` -- the same
-    // suite-isolation defect CI's `redis_run_queue_full_contract_suite_via_run_all`
-    // hit at `contract_tests.rs:188` (`left: 6 right: 1`), reproduced here
-    // without Redis. This proves the defect is not Redis-specific before
-    // `run_all` is changed to take a fresh-queue factory.
+    /// Full aggregate run of every shared clause in one go, via the
+    /// fresh-queue-per-clause `run_all` factory -- proves the suite-isolation
+    /// fix locally without Redis (CI run 34238527001 hit this defect on the
+    /// Redis backend at `contract_tests.rs:188`, `left: 6 right: 1`).
     #[tokio::test]
     async fn in_memory_run_queue_full_contract_suite_via_run_all() {
-        contract_tests::run_all(&InMemoryRunQueue::new()).await;
+        contract_tests::run_all(|| async { InMemoryRunQueue::new() }).await;
+    }
+
+    /// Running `run_all` twice against the same factory passes both times --
+    /// a fresh queue per clause means the second run inherits nothing (not
+    /// leases, not tokens, not depth) from the first (PLAT-02 idempotency
+    /// probe).
+    #[tokio::test]
+    async fn in_memory_run_queue_full_contract_suite_via_run_all_is_idempotent_across_runs() {
+        contract_tests::run_all(|| async { InMemoryRunQueue::new() }).await;
+        contract_tests::run_all(|| async { InMemoryRunQueue::new() }).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

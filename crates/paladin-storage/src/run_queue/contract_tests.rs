@@ -23,6 +23,7 @@
 //! (D-06, D-08).
 
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -424,22 +425,39 @@ pub async fn concurrent_workers_each_message_exactly_once(queue: Arc<dyn RunQueu
     );
 }
 
-/// Runs every `&dyn RunQueuePort` contract function above against `queue`.
+/// Runs every `&dyn RunQueuePort` contract function above, each against its
+/// OWN freshly constructed, still-empty queue built by calling
+/// `fresh_queue()` once per clause.
 ///
-/// **Requires a freshly constructed, still-empty `queue`.** The concurrency
-/// clause is not included here (it needs an `Arc<dyn RunQueuePort>` and is
-/// heavier); call [`concurrent_workers_each_message_exactly_once`]
-/// separately. Prefer invoking each function from its own named
-/// `#[tokio::test]` for per-clause failure diagnostics (mirroring
-/// `waypoint::contract_tests`'s own convention); this aggregator is a
-/// convenience, not a replacement.
-pub async fn run_all(queue: &dyn RunQueuePort) {
-    fifo_order_and_distinct_lease_tokens(queue).await;
-    lease_expiry_redelivers_with_attempt_incremented(queue).await;
-    extend_lease_keeps_message_hidden_until_new_expiry(queue).await;
-    ack_removes_message_permanently(queue).await;
-    nack_requeues_after_delay_with_attempt_incremented(queue).await;
-    expired_token_operations_return_lease_expired_and_touch_nothing(queue).await;
-    unknown_token_operations_return_unknown_lease(queue).await;
-    depth_counts_ready_plus_leased(queue).await;
+/// **Fresh-queue-per-clause, not one shared queue.** A single queue instance
+/// run through all eight clauses back-to-back leaks state forward: the fifo,
+/// lease-expiry and extend-lease clauses each leave behind leased (unacked)
+/// messages that are not that clause's cleanup responsibility, and a later
+/// clause -- e.g. `ack_removes_message_permanently`'s `depth() == 1`
+/// assertion -- then observes them as if they were its own fixture. `run_all`
+/// takes a factory precisely so no clause can ever see another clause's
+/// leftover leases, tokens or depth (the defect CI run 34238527001 exposed:
+/// `ack_removes_message_permanently` saw `depth() == 6`, the five leases the
+/// fifo, lease-expiry and extend-lease clauses left behind, instead of `1`).
+///
+/// The concurrency clause is not included here (it needs an
+/// `Arc<dyn RunQueuePort>` and is heavier); call
+/// [`concurrent_workers_each_message_exactly_once`] separately. Prefer
+/// invoking each function from its own named `#[tokio::test]` for per-clause
+/// failure diagnostics (mirroring `waypoint::contract_tests`'s own
+/// convention); this aggregator is a convenience, not a replacement.
+pub async fn run_all<F, Fut, Q>(fresh_queue: F)
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Q>,
+    Q: RunQueuePort,
+{
+    fifo_order_and_distinct_lease_tokens(&fresh_queue().await).await;
+    lease_expiry_redelivers_with_attempt_incremented(&fresh_queue().await).await;
+    extend_lease_keeps_message_hidden_until_new_expiry(&fresh_queue().await).await;
+    ack_removes_message_permanently(&fresh_queue().await).await;
+    nack_requeues_after_delay_with_attempt_incremented(&fresh_queue().await).await;
+    expired_token_operations_return_lease_expired_and_touch_nothing(&fresh_queue().await).await;
+    unknown_token_operations_return_unknown_lease(&fresh_queue().await).await;
+    depth_counts_ready_plus_leased(&fresh_queue().await).await;
 }

@@ -2,7 +2,7 @@
 //!
 //! `paladin-eval` provides a serde scenario file format (`.eval.yaml`, see
 //! [`scenario::Scenario`]), a scripted [`paladin_ports::output::llm_port::LlmPort`]
-//! implementation (`scripted_llm::ScenarioLlm`) that makes a run deterministic without
+//! implementation ([`scripted_llm::ScenarioLlm`]) that makes a run deterministic without
 //! touching a real provider, and (in later plans of Phase 28) an assertion library
 //! evaluated over the captured trace record and the final `Battlefield`, plus a
 //! `cargo test`-integrable runner.
@@ -54,9 +54,11 @@
 #![warn(missing_docs)]
 
 pub mod scenario;
+pub mod scripted_llm;
 
 pub use scenario::{
     Assertion, Case, EVAL_SCHEMA_VERSION, LiveOptions, LlmErrorKind, LlmScript, MatchRule,
     ParleyScript, RunStatusValue, Scenario, ScenarioError, ScenarioTarget, ScriptEntry, StoreKind,
     Times,
 };
+pub use scripted_llm::{CapturedRequest, ScenarioLlm, ScenarioLlmError};

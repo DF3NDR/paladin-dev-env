@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 27
 current_phase_name: platform-api
 status: executing
-stopped_at: Phase 27 context gathered
-last_updated: "2026-09-08T01:49:20.142Z"
+stopped_at: "Phase 27 executed (18/18 plans merged, gates green); verification gaps_found — 5 CI-evidenced gaps (Redis attempt off-by-one, Postgres µs timestamps, sdk-clients smoke, api-surface baseline, e2e_platform_api not run in CI) + code review 1 critical/4 warnings; next: /gsd-plan-phase 27 --gaps"
+last_updated: "2026-09-08T11:58:04.051Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 27 execution started
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 103
-  completed_plans: 85
+  completed_plans: 103
 ---
 
 # Project State
@@ -845,14 +845,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 27 context gathered
+**Stopped at:** Phase 27 executed (18/18 plans merged, gates green); verification gaps_found — 5 CI-evidenced gaps (Redis attempt off-by-one, Postgres µs timestamps, sdk-clients smoke, api-surface baseline, e2e_platform_api not run in CI) + code review 1 critical/4 warnings; next: /gsd-plan-phase 27 --gaps
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-08T00:01:29.158Z
-Resume file: .planning/phases/27-platform-api/27-CONTEXT.md
+Last session: 2026-09-08T11:58:03.994Z
+Resume file: .planning/phases/27-platform-api/27-VERIFICATION.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

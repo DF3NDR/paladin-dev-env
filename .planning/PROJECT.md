@@ -109,6 +109,8 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 27 complete (2026-09-08)** — platform-api, the v0.10.0 milestone's sixth planned phase: durable background runs (`Run` status machine, `RunRepositoryPort` SQLite/Postgres, `RunQueuePort` InMemory/Redis with Lua lease claims), a worker pool with lease heartbeats, resume-not-restart redelivery and cross-instance cancellation, Parley `AwaitingInput` release and same-`run_id` resume, live SSE streaming with a documented polling degraded mode, append-only versioned assistants with `WarGraphDoc` compile and a restart-stable fingerprint, cron schedules, HMAC-signed webhook delivery behind an SSRF guard, and the production-shaped HTTP surface (auth, rate limits, scopes, pagination, regenerated `openapi.json`, generated Python/TypeScript clients smoke-tested in CI). 26 plans (18 planned + 8 gap-closure), verification passed 6/6 after a gap-closure cycle whose live proof is `27-CI-EVIDENCE.md` (CI run 34245093476 @ `2bf43cd2`: `redis-queue` 19/19 live, `postgres-integration` 87/87 live, coverage 89.98 % ≥ 82 % floor, `sdk-clients` both generated clients reach `completed`, `api-surface` unchanged at 3763 items on CI's own nightly via the new `normalize-api-bounds.py` canonicaliser, new `e2e-platform-api` job 1/1). Code review of the gap-closure set: CR-01/WR-01…04 remediated; open advisories WR-27-01 (the `Ok(None)` signing-key arm in `webhook/service.rs` still sends with an empty key — sibling of the fixed WR-01) and IN-27-01 (stale eslint comment in `smoke.ts`). Carried concerns: no `27-SECURITY.md` yet (security enforcement is on — run `/gsd-secure-phase 27` before advancing); WINDOWS.md rows 31/32 track the deferred `Agent`-kind webhook/live-bus delivery and the unscoped run-read routes; webhook SSRF DNS rebinding remains a documented limitation.
+
 **Phase 26 complete (2026-09-07)** — agent-runtime-enhancements, the v0.10.0 milestone's
 fifth planned phase: the `ExecutionMiddleware` onion chain on `PaladinExecutionService` with
 `AgentRuntimeConfig` (twelve inert-by-default sub-structs, `build_chain`), the limit / guardrail /
@@ -650,7 +652,7 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
   handlers, model fallback, node caching (Doc 04)
 - [x] **RT-01 … RT-07** (✓ Phase 26, 2026-09-07) — Middleware chain + built-ins, context management, Vault,
   structured output, provider-conformance close-out, reasoning_agent preset (Doc 05)
-- [ ] **PLAT-01 … PLAT-06** — Background runs, worker pool + queue, parley/streaming integration,
+- [x] **PLAT-01 … PLAT-06** (✓ Phase 27, 2026-09-08) — Background runs, worker pool + queue, parley/streaming integration,
   versioned assistants, schedules + webhooks, API cross-cutting + generated-client gate (Doc 06)
 - [ ] **OBS-01 … OBS-04** — Trace event model + sinks, visualization export, eval harness (Doc 07)
 - [ ] **SHIP-01 … SHIP-04** — `MIGRATION.md` complete, compat proofs (v0.9-config boot test,
@@ -1621,5 +1623,5 @@ requirements, 86 forward requirements across 16 phases, 60 variant entries acros
 69 warnings, 0 locked decisions, 0 blockers, 11 ADR candidates**)*
 
 ---
-*Last updated: 2026-09-07 after Phase 26 completion (v0.10.0 milestone; next: Phase 27
-platform API).*
+*Last updated: 2026-09-08 after Phase 27 completion (v0.10.0 milestone; next: Phase 28
+observability & tooling).*

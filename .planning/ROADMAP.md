@@ -614,8 +614,8 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 27-11-PLAN.md — Schedules storage + `ScheduleService`: croner/chrono-tz, conditional tick claim, restart/race proofs under a paused clock (PLAT-05)
-- [ ] 27-12-PLAN.md — Assistant service: compile-is-validation, stored resolver, `DocGraphRegistry`, assistant routes with synthetic code entries (PLAT-04)
+- [x] 27-11-PLAN.md — Schedules storage + `ScheduleService`: croner/chrono-tz, conditional tick claim, restart/race proofs under a paused clock (PLAT-05)
+- [x] 27-12-PLAN.md — Assistant service: compile-is-validation, stored resolver, `DocGraphRegistry`, assistant routes with synthetic code entries (PLAT-04)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

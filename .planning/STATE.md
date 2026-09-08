@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 27
 current_phase_name: platform-api
 status: executing
-stopped_at: "Phase 27 gap closure: 27-26 (run_all fresh queue per clause) merged and gated green locally; pushing for CI re-verification of redis-queue/coverage/integration-tests; 27-25 human-verify checkpoint still pending on that run."
-last_updated: "2026-09-08T15:28:41.628Z"
+stopped_at: "Phase 27 gap closure complete: 26/26 plans merged; CI evidence run 34245093476 @ 2bf43cd2 all green (coverage 89.98%); 27-25 human gate approved 2026-09-08; next: code review, regression gate, phase verification."
+last_updated: "2026-09-08T16:15:48.314Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 27 execution started
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 111
-  completed_plans: 110
+  completed_plans: 111
 ---
 
 # Project State
@@ -845,13 +845,13 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 27 gap closure: 27-26 (run_all fresh queue per clause) merged and gated green locally; pushing for CI re-verification of redis-queue/coverage/integration-tests; 27-25 human-verify checkpoint still pending on that run.
+**Stopped at:** Phase 27 gap closure complete: 26/26 plans merged; CI evidence run 34245093476 @ 2bf43cd2 all green (coverage 89.98%); 27-25 human gate approved 2026-09-08; next: code review, regression gate, phase verification.
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-08T15:28:41.498Z
+Last session: 2026-09-08T16:15:48.248Z
 Resume file: .planning/phases/27-platform-api/27-CI-EVIDENCE.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.

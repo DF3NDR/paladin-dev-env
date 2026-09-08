@@ -587,7 +587,7 @@ Plans:
   4. Assistants are append-only immutable versions (no PUT, ever) with `latest` frozen at submit time, and `WarGraphDoc` compiles through a registry-resolving `compile()` with a restart-stable fingerprint round-trip (PLAT-04)
   5. Cron schedules survive restart without duplicate or missed-then-double firing; HMAC-signed webhook delivery retries bounded on 5xx/timeout with an SSRF guard rejecting non-http(s)/loopback/link-local/private/metadata targets; and every new endpoint carries existing auth, rate limiting, scopes and pagination, with `openapi.json` regenerated and Python/TypeScript clients generated and smoke-tested in CI (PLAT-05, PLAT-06)
 
-**Plans:** 25 plans (18 executed + 7 gap-closure)
+**Plans:** 26 plans (18 executed + 8 gap-closure)
 
 Plans:
 
@@ -648,9 +648,13 @@ Plans:
 
 - [x] 27-24-PLAN.md — Toolchain-order-independent API-surface extraction + regenerated baseline; `e2e-platform-api` CI job (PLAT-06)
 
+**Gap closure — Wave 2.5** *(added 2026-09-08 from CI run 34238527001 at the Wave-2 SHA: the one remaining red cause once 27-19 made later `run_all` clauses reachable)*
+
+- [x] 27-26-PLAN.md — `contract_tests::run_all` provisions a fresh queue per clause (factory), exercised on both backends; unblocks `redis-queue`, `coverage`, `integration-tests` (PLAT-02)
+
 **Gap closure — Wave 3** *(blocked on Wave 2)*
 
-- [ ] 27-25-PLAN.md — CI evidence checkpoint: live-run proof for every closed gap, recorded in 27-CI-EVIDENCE.md (all)
+- [x] 27-25-PLAN.md — CI evidence checkpoint: live-run proof for every closed gap, recorded in 27-CI-EVIDENCE.md (all)
 
 ### Phase 28: Observability & Tooling
 

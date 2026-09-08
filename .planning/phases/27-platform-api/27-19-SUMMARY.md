@@ -145,3 +145,10 @@ None - no external service configuration required. (Tier-2 Redis verification re
 ---
 *Phase: 27-platform-api*
 *Completed: 2026-09-08*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/27-platform-api/27-19-SUMMARY.md`
+- FOUND: `6ea517fd` (Task 1 commit)
+- FOUND: `58dc995f` (Task 2 commit)
+- FOUND: `305e81cc` (this SUMMARY's own commit)

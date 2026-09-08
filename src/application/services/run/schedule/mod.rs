@@ -8,10 +8,15 @@
 //! implements -- a fired schedule tick is indistinguishable, downstream,
 //! from an HTTP-submitted run.
 
+/// `impl ScheduleAdminPort for ScheduleService` (PLAT-05, D-42, D-46) --
+/// validate-then-persist create/get/list/patch/delete, plus `SsrfGuard`,
+/// this plan's own write-time SSRF check (D-42).
+pub mod admin;
 /// `ScheduleService`, `ScheduleServiceOptions`, `ScheduleTickOutcome`,
 /// `SkipReason` -- the claim-then-submit tick loop itself.
 pub mod service;
 
+pub use admin::SsrfGuard;
 pub use service::{ScheduleService, ScheduleServiceOptions, ScheduleTickOutcome, SkipReason};
 
 /// `schedule_restart_exactly_once`, `two_services_one_tick_exactly_one_fire`,

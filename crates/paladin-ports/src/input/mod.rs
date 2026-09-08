@@ -24,3 +24,6 @@ pub mod run_event_stream_port;
 /// depend on it without a default-build edge to `paladin-battalion`
 /// (ADR-0031).
 pub mod run_submission_port;
+/// Schedule admin port (PLAT-05, D-36..D-39, D-42, D-46) — validate-then-persist
+/// `RunSchedule`s; the `paladin-web` `/v1/schedules*` routes drive this trait.
+pub mod schedule_admin_port;

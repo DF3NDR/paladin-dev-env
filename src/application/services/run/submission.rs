@@ -12,6 +12,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 
+use paladin_core::platform::container::assistant::AssistantSource;
 use paladin_core::platform::container::run::{Run, RunId};
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::input::run_submission_port::{
@@ -64,6 +65,9 @@ fn map_repository_error(err: RunRepositoryError) -> RunSubmissionError {
     match err {
         RunRepositoryError::ThreadBusy { thread_id } => {
             RunSubmissionError::ThreadBusy { thread_id }
+        }
+        RunRepositoryError::UnknownAssistant { assistant_id } => {
+            RunSubmissionError::UnknownAssistant { assistant_id }
         }
         other => RunSubmissionError::Backend {
             message: other.to_string(),
@@ -140,6 +144,14 @@ impl RunSubmissionPort for RunSubmissionService {
             .resolver
             .resolve(&request.assistant_id, request.version)
             .await?;
+        // D-30: only a `version: None` submission against a STORED
+        // assistant freezes `latest` inside the repository's own atomic
+        // insert. A pinned `version: Some(v)` uses a plain `insert` with
+        // the caller's own reference; a code-registered assistant is
+        // always frozen at version 1 by `CodeWorkflowResolver` itself, so
+        // `insert_with_latest` would only ever fail `UnknownAssistant`
+        // there (no `assistants` row for a code id).
+        let use_latest = request.version.is_none() && resolved.source == AssistantSource::Stored;
 
         let thread_id = request.thread_id.unwrap_or_else(generate_thread_id);
         let mut run = Run::new(
@@ -152,10 +164,19 @@ impl RunSubmissionPort for RunSubmissionService {
             run = run.with_webhook(webhook);
         }
 
-        self.repository
-            .insert(&run)
-            .await
-            .map_err(map_repository_error)?;
+        if use_latest {
+            let resolved_version = self
+                .repository
+                .insert_with_latest(&run)
+                .await
+                .map_err(map_repository_error)?;
+            run.assistant.version = resolved_version;
+        } else {
+            self.repository
+                .insert(&run)
+                .await
+                .map_err(map_repository_error)?;
+        }
         self.queue
             .enqueue(QueuedRun {
                 run_id: run.run_id.clone(),
@@ -199,9 +220,17 @@ impl RunSubmissionPort for RunSubmissionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::services::run::resolver::CodeWorkflowResolver;
+    use crate::application::services::run::resolver::{
+        AssistantResolver, CodeWorkflowResolver, ResolveError, ResolvedAssistant, Runnable,
+    };
+    use async_trait::async_trait;
     use paladin_battalion::engine::{EngineLimits, WarGraph};
+    use paladin_core::platform::container::assistant::{
+        AssistantDefinition, AssistantId, AssistantKind, NewAssistantVersion,
+    };
     use paladin_core::platform::container::battlefield::BattlefieldSchema;
+    use paladin_ports::output::assistant_repository_port::AssistantRepositoryPort;
+    use paladin_storage::assistant::in_memory::InMemoryAssistantRepository;
     use paladin_storage::run::in_memory::InMemoryRunRepository;
     use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
 
@@ -317,5 +346,156 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, RunSubmissionError::ThreadBusy { .. }));
+    }
+
+    // --- D-30: `insert_with_latest` freezes a stored assistant's version ---
+
+    /// A minimal `AssistantResolver` test double that always resolves
+    /// `assistant_id` to the empty graph at whatever version is requested
+    /// (or `1` when `None`), with `source: AssistantSource::Stored` --
+    /// proving `submit`'s own routing decision (`use_latest`) rather than
+    /// re-testing `StoredAssistantResolver` itself (owned by
+    /// `services::assistant::resolver`).
+    struct StubStoredResolver;
+
+    #[async_trait]
+    impl AssistantResolver for StubStoredResolver {
+        async fn resolve(
+            &self,
+            assistant_id: &str,
+            version: Option<u32>,
+        ) -> Result<ResolvedAssistant, ResolveError> {
+            Ok(ResolvedAssistant {
+                reference: paladin_core::platform::container::run::AssistantRef {
+                    assistant_id: assistant_id.to_string(),
+                    version: version.unwrap_or(1),
+                },
+                runnable: Runnable::Workflow(empty_graph()),
+                allowed_roles: Vec::new(),
+                source: AssistantSource::Stored,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_without_version_against_a_stored_assistant_freezes_latest() {
+        let assistants = Arc::new(InMemoryAssistantRepository::new());
+        let id = AssistantId::new("stored-wf").unwrap();
+        assistants
+            .create(
+                &id,
+                NewAssistantVersion {
+                    definition: AssistantDefinition {
+                        kind: AssistantKind::Workflow,
+                        body: serde_json::json!({}),
+                    },
+                    created_by: None,
+                    note: None,
+                },
+            )
+            .await
+            .unwrap();
+        // Publish a second version so `latest` (2) differs from the
+        // resolver's own hardcoded fallback (1) -- proving the run's
+        // persisted version comes from the REPOSITORY's atomic freeze, not
+        // from whatever the resolver happened to return.
+        assistants
+            .append_version(
+                &id,
+                NewAssistantVersion {
+                    definition: AssistantDefinition {
+                        kind: AssistantKind::Workflow,
+                        body: serde_json::json!({}),
+                    },
+                    created_by: None,
+                    note: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let repository: Arc<dyn RunRepositoryPort> =
+            Arc::new(InMemoryRunRepository::new().with_assistants(Arc::clone(&assistants)));
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let service =
+            RunSubmissionService::new(Arc::clone(&repository), queue, Arc::new(StubStoredResolver));
+
+        let accepted = service
+            .submit(SubmitRun {
+                assistant_id: "stored-wf".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: None,
+            })
+            .await
+            .unwrap();
+
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.assistant.version, 2,
+            "the run must be frozen at the repository's own latest (2), not the \
+             resolver's hardcoded fallback (1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_with_explicit_version_uses_a_pinned_insert_not_latest() {
+        let assistants = Arc::new(InMemoryAssistantRepository::new());
+        let id = AssistantId::new("stored-wf-pinned").unwrap();
+        assistants
+            .create(
+                &id,
+                NewAssistantVersion {
+                    definition: AssistantDefinition {
+                        kind: AssistantKind::Workflow,
+                        body: serde_json::json!({}),
+                    },
+                    created_by: None,
+                    note: None,
+                },
+            )
+            .await
+            .unwrap();
+        assistants
+            .append_version(
+                &id,
+                NewAssistantVersion {
+                    definition: AssistantDefinition {
+                        kind: AssistantKind::Workflow,
+                        body: serde_json::json!({}),
+                    },
+                    created_by: None,
+                    note: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let repository: Arc<dyn RunRepositoryPort> =
+            Arc::new(InMemoryRunRepository::new().with_assistants(Arc::clone(&assistants)));
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let service =
+            RunSubmissionService::new(Arc::clone(&repository), queue, Arc::new(StubStoredResolver));
+
+        let accepted = service
+            .submit(SubmitRun {
+                assistant_id: "stored-wf-pinned".to_string(),
+                version: Some(1),
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: None,
+            })
+            .await
+            .unwrap();
+
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.assistant.version, 1,
+            "a pinned version: Some(1) must be inserted verbatim, ignoring the \
+             assistant's later-published latest (2)"
+        );
     }
 }

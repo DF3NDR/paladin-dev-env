@@ -1,5 +1,8 @@
 //! Input port modules — port traits for data ingestion and processing pipelines.
 
+/// Assistant admin port (D-28, D-31, D-46) — validate-then-publish assistant
+/// definitions, no update method by construction (D-29).
+pub mod assistant_admin_port;
 /// Content ingestion port.
 pub mod content_input_port;
 /// Document parsing port.

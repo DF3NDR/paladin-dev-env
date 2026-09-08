@@ -18,8 +18,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use async_trait::async_trait;
 use paladin_battalion::engine::WarGraph;
-use paladin_core::platform::container::waypoint::GraphFingerprint;
+use paladin_core::platform::container::waypoint::{GraphFingerprint, ThreadId};
+
+use super::adapter::GraphResolver;
 
 /// A code-registered, fingerprint-keyed lookup from a [`GraphFingerprint`]
 /// to the [`WarGraph`] that produced it.
@@ -84,6 +87,21 @@ impl GraphRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(fingerprint)
             .cloned()
+    }
+}
+
+/// `GraphRegistry` implements [`GraphResolver`] purely by fingerprint (D-33) --
+/// `thread` is ignored, matching this type's pre-existing, fingerprint-only lookup
+/// contract (D-26) and requiring no change to `paladin-server`'s existing
+/// construction of an empty registry (X-03).
+#[async_trait]
+impl GraphResolver for GraphRegistry {
+    async fn resolve(
+        &self,
+        _thread: &ThreadId,
+        fingerprint: &GraphFingerprint,
+    ) -> Option<Arc<WarGraph>> {
+        self.resolve(fingerprint)
     }
 }
 

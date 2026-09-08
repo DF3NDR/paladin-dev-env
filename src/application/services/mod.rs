@@ -1,5 +1,7 @@
 pub mod analysis;
 pub mod arsenal;
+/// Assistant validation, publishing and resolution facade (PLAT-04, D-28..D-33).
+pub mod assistant;
 pub mod battalion;
 pub mod chronicle;
 pub mod content;

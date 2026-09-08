@@ -858,6 +858,165 @@ mod tests {
         );
     }
 
+    // --- X-05: 16 concurrent traced runs through one CompositeSink -----
+
+    use paladin_ports::output::trace_sink_port::CompositeSink;
+
+    /// X-05 (D-37): sixteen dispatchers, each its own `ThreadId`, run
+    /// concurrently on a real multi-thread runtime, all feeding one
+    /// `CompositeSink` of two `RecordingTraceSink` children. Every run's
+    /// `seq` sequence must stay gapless and exactly `1..=n` on BOTH
+    /// children, with exact per-run record counts and no cross-run
+    /// contamination -- proving `TraceDispatcher`'s per-run `seq` counter
+    /// and `CompositeSink`'s fan-out hold up under real OS-thread
+    /// concurrency, not just cooperative single-thread interleaving.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn sixteen_concurrent_runs_keep_per_run_seq_gapless() {
+        const N_RUNS: usize = 16;
+        const N_SUPERSTEPS: u64 = 20;
+        // 1 RunStarted + N_SUPERSTEPS * (SuperstepStarted, NodeStarted,
+        // NodeFinished) + 1 RunFinished.
+        let per_run: usize = 2 + 3 * N_SUPERSTEPS as usize;
+        let expected_total = N_RUNS * per_run;
+
+        let child_a = RecordingTraceSink::new();
+        let child_b = RecordingTraceSink::new();
+        let composite: Arc<dyn TraceSink> = Arc::new(CompositeSink::new(vec![
+            child_a.clone() as Arc<dyn TraceSink>,
+            child_b.clone() as Arc<dyn TraceSink>,
+        ]));
+
+        // Capacity large enough that nothing drops: sixteen runs' worth of
+        // events, comfortably over-provisioned.
+        let dispatchers: Vec<Arc<TraceDispatcher>> = (0..N_RUNS)
+            .map(|i| {
+                Arc::new(TraceDispatcher::with_capacity(
+                    ThreadId::new(format!("x05-run-{i}")).unwrap(),
+                    None,
+                    Some(composite.clone()),
+                    4096,
+                ))
+            })
+            .collect();
+
+        let handles: Vec<_> = dispatchers
+            .iter()
+            .cloned()
+            .map(|dispatcher| {
+                tokio::spawn(async move {
+                    dispatcher.emit(run_started());
+                    for superstep in 0..N_SUPERSTEPS {
+                        dispatcher.emit(superstep_started(superstep));
+                        dispatcher.emit(TraceEvent::NodeStarted {
+                            superstep,
+                            node_id: NodeId::new("n1"),
+                            attempt: 1,
+                            muster_task_key: None,
+                        });
+                        dispatcher.emit(TraceEvent::NodeFinished {
+                            superstep,
+                            node_id: NodeId::new("n1"),
+                            attempt: 1,
+                            outcome: paladin_core::platform::container::waypoint::NodeOutcomeKind::Succeeded,
+                            duration_ms: 0,
+                            token_count: 0,
+                            cache_hit: false,
+                        });
+                    }
+                    dispatcher.emit(run_finished());
+                })
+            })
+            .collect();
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            for handle in handles {
+                handle.await.expect("producer task must not panic");
+            }
+        })
+        .await
+        .expect("sixteen concurrent producers must complete inside the timeout");
+
+        // Drop the dispatchers so each per-run consumer task's doorbell
+        // sender goes away and it can drain and exit on its own.
+        drop(dispatchers);
+
+        let drained = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let len_a = child_a.events().await.len();
+                let len_b = child_b.events().await.len();
+                if len_a >= expected_total && len_b >= expected_total {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        if drained.is_err() {
+            let len_a = child_a.events().await.len();
+            let len_b = child_b.events().await.len();
+            panic!(
+                "draining sixteen concurrent runs timed out after 30s; observed {len_a} \
+                 records on child a and {len_b} on child b (expected {expected_total} each)"
+            );
+        }
+
+        let records_a = child_a.events().await;
+        let records_b = child_b.events().await;
+        assert_eq!(records_a.len(), expected_total);
+        assert_eq!(records_b.len(), expected_total);
+
+        fn seqs_by_thread(
+            records: &[TraceRecord],
+        ) -> std::collections::BTreeMap<ThreadId, Vec<u64>> {
+            let mut map: std::collections::BTreeMap<ThreadId, Vec<u64>> =
+                std::collections::BTreeMap::new();
+            for record in records {
+                map.entry(record.thread_id.clone())
+                    .or_default()
+                    .push(record.seq);
+            }
+            for seqs in map.values_mut() {
+                seqs.sort_unstable();
+            }
+            map
+        }
+
+        let expected_seqs: Vec<u64> = (1..=per_run as u64).collect();
+        for (label, records) in [("a", &records_a), ("b", &records_b)] {
+            let grouped = seqs_by_thread(records);
+            assert_eq!(
+                grouped.len(),
+                N_RUNS,
+                "child {label} must show exactly sixteen distinct threads, no cross-run contamination"
+            );
+            for (thread_id, seqs) in &grouped {
+                assert_eq!(
+                    seqs, &expected_seqs,
+                    "child {label}'s seq for thread {thread_id} must be exactly 1..={per_run}, gapless"
+                );
+            }
+        }
+
+        // The two children must have received exactly the same set of
+        // records -- compared order-independently (sorted by (thread_id,
+        // seq)): sixteen independent producer tasks racing to forward
+        // through one shared `CompositeSink` give no cross-record ordering
+        // guarantee between two DIFFERENT records' own `on_event` calls,
+        // only that within any ONE call every child sees the record
+        // (D-08); asserting raw `Vec` order equality here would assert a
+        // guarantee this design never made and could invent a flaky
+        // failure under real concurrency.
+        let mut sorted_a = records_a.clone();
+        let mut sorted_b = records_b.clone();
+        let sort_key = |r: &TraceRecord| (r.thread_id.clone(), r.seq);
+        sorted_a.sort_by_key(sort_key);
+        sorted_b.sort_by_key(sort_key);
+        assert_eq!(
+            sorted_a, sorted_b,
+            "both CompositeSink children must have received exactly the same records"
+        );
+    }
+
     // --- NodeInterceptor / InterceptDecision --------------------------
 
     struct AlwaysSkip;

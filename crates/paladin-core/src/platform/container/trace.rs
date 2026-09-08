@@ -166,7 +166,7 @@ pub enum RunFinishStatus {
 /// serializes to a single flat JSON object whose `"kind"` key names the
 /// variant (`"node_started"`, `"delta_merged"`, …) — OBS-FR-04's "one line
 /// per event", grep-able by `thread_id`, `seq` and `kind` alike.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum TraceEvent {
@@ -329,7 +329,7 @@ pub enum TraceEvent {
 /// SINGLE flat JSON object (never a nested `{"envelope": …, "event": {…}}`
 /// shape) — OBS-FR-04's "one line per event", with `thread_id`/`seq`/`kind`
 /// among the first keys so a log line is grep-able by any of the three.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TraceRecord {
     /// The thread (run) this record belongs to.
     pub thread_id: ThreadId,

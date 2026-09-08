@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 27
-current_phase_name: platform-api
-status: executing
-stopped_at: "Phase 27 gap closure complete: 26/26 plans merged; CI evidence run 34245093476 @ 2bf43cd2 all green (coverage 89.98%); 27-25 human gate approved 2026-09-08; next: code review, regression gate, phase verification."
-last_updated: "2026-09-08T16:15:48.314Z"
+current_phase: 28
+current_phase_name: Observability & Tooling
+status: planning
+stopped_at: "Phase 27 complete (2026-09-08): 26/26 plans (18 + 8 gap-closure) merged; verification passed 6/6; CI evidence run 34245093476 @ 2bf43cd2 all green (coverage 89.98%); code review 0 critical / 1 warning (WR-27-01 Ok(None) signing-key arm) / 1 info; no 27-SECURITY.md yet. Next: /gsd-discuss-phase 28 (or /gsd-secure-phase 27 first)."
+last_updated: "2026-09-08T16:26:46.694Z"
 last_activity: 2026-09-08
-last_activity_desc: Phase 27 execution started
+last_activity_desc: Phase 27 complete, transitioned to Phase 28
 progress:
   total_phases: 7
   completed_phases: 7
@@ -20,15 +20,15 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-07 after Phase 26)
+See: .planning/PROJECT.md (updated 2026-09-08 after Phase 27)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 27 — platform-api
+**Current focus:** Phase 28 — Observability & Tooling (ready to discuss/plan)
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
-**Progress:** [███████░░░] v0.10.0 — 6 of 9 phases complete (22, 22.1, 23, 24, 25, 26); 85/85 planned plans executed (Phase 27 not yet planned)
+**Progress:** [████████░░] v0.10.0 — 7 of 9 phases complete (22, 22.1, 23, 24, 25, 26, 27); 111/111 planned plans executed
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -51,16 +51,16 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 27 (platform-api) — EXECUTING
-Plan: 1 of 25
-Status: Executing Phase 27
-Last activity: 2026-09-08 — Phase 27 execution started
+Phase: 28 — Observability & Tooling
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-08 — Phase 27 complete, transitioned to Phase 28
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 272
+- Total plans completed: 298
 - Average duration: —
 - Total execution time: —
 
@@ -93,6 +93,7 @@ Last activity: 2026-09-08 — Phase 27 execution started
 | 24 | 14 | - | - |
 | 25 | 14 | - | - |
 | 26 | 21 | - | - |
+| 27 | 26 | - | - |
 
 *Updated after each plan completion*
 

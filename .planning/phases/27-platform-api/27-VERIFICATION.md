@@ -1,179 +1,197 @@
 ---
 phase: 27-platform-api
-verified: 2026-09-08T12:10:00Z
-status: gaps_found
-score: 12/17 must-have truth clusters verified (5 confirmed gaps; see below)
+verified: 2026-09-08T14:30:00Z
+status: passed
+score: 6/6 must-have truth clusters verified (all ROADMAP success criteria + all six requirements PLAT-01..06)
 behavior_unverified: 0
 overrides_applied: 0
-gaps:
-  - truth: "PLAT-FR-03 redelivery: 'A message dequeued with lease L is invisible to every other dequeue until L elapses, then becomes visible again with the same run_id and an attempt one higher — on InMemoryRunQueue and RedisRunQueue alike' (27-03 must_haves, D-06)."
-    status: failed
-    reason: "Live CI run 34222317640, job 'Redis Run Queue Contract Suite' (log 102048101987): 13 passed, 3 FAILED — redis_run_queue_full_contract_suite_via_run_all, redis_run_queue_lease_expiry_redelivers_with_attempt_incremented, redis_run_queue_nack_requeues_after_delay_with_attempt_incremented. All three fail the SAME assertion shape: `contract_tests.rs:105` expects `leased.queued.attempt == 1` on the very FIRST dequeue after enqueue but observes `2`. Root cause confirmed by reading the adapters: `RUN_QUEUE_CLAIM_LUA` (crates/paladin-storage/src/run_queue/redis.rs:111, `decoded.attempt = decoded.attempt + 1`) increments attempt UNCONDITIONALLY on every claim, including the very first claim of a freshly-enqueued message — whereas `InMemoryRunQueue::dequeue` (crates/paladin-storage/src/run_queue/in_memory.rs:138-164) does NOT increment attempt on a fresh claim; it only increments in `reclaim_expired_leases` (:75, on lease-expiry redelivery) and `nack` (:195, on explicit nack). The nack Lua (`redis.rs:208`, also unconditional `decoded.attempt = decoded.attempt + 1`) double-counts for the same reason on the nack path (contract_tests.rs:220 expects attempt==1 on first dequeue before the nack under test)."
-    artifacts:
-      - path: "crates/paladin-storage/src/run_queue/redis.rs"
-        issue: "RUN_QUEUE_CLAIM_LUA (~line 111) increments `attempt` on every claim; must only increment when reclaiming a message whose lease already expired (redelivery), not on the first-ever claim of a message that was never leased before."
-    missing:
-      - "Encode the enqueue-time attempt (or a 'never claimed' marker) in the ZSET member so RUN_QUEUE_CLAIM_LUA can distinguish a first claim (no increment) from a lease-expiry reclaim (increment), matching InMemoryRunQueue's semantics exactly."
-      - "Re-run the Redis contract suite (`RUN_QUEUE_REDIS_TEST_URL` set) and confirm all tests in crates/paladin-storage/src/run_queue/contract_tests.rs pass, including the two assertions at :105 and :220."
-    impact_note: "This same root cause also fails the `coverage` CI job (log job-102048101815.log): with a live Redis service (`redis=localhost:6380`), `cargo llvm-cov --workspace --features integration-tests,llm-all ...` hits the identical three assertions in paladin-storage (279 passed; 3 failed) and the whole coverage run aborts with exit 101 BEFORE any line-coverage percentage is computed — so the 82% floor is currently unproven on CI (not failed on the number, blocked before measurement). This is not a second, independent gap; it resolves automatically once the Redis attempt-counter fix above lands. The only coverage figure of record remains 27-18's local Tier-1-scoped 89.84%."
-  - truth: "27-02 must_haves: 'Every RunStatus transition through SqliteRunRepository and PostgresRunRepository is a single compare-and-set UPDATE...' — proven by the shared contract suite round-tripping every persisted field, including timestamps, without loss (D-01 X-04, D-03)."
-    status: failed
-    reason: "Live CI run 34222317640, job 'Postgres Storage Contract Suites' (log 102048101953): 83 passed, 3 FAILED, all in `run::postgres::tests`: insert_then_get_round_trips_every_field (contract_tests.rs:88), update_status_queued_to_running_sets_started_at_then_stale_cas_fails (contract_tests.rs:126), update_status_running_to_completed_sets_finished_at_then_terminal_is_absorbing (contract_tests.rs:165). Each fails a `DateTime<Utc>` equality assertion where the left (originally-constructed Rust value, nanosecond precision, e.g. `...533307246Z`) does not equal the right (value read back from Postgres, e.g. `...533307Z`) — Postgres TIMESTAMPTZ stores microsecond precision and silently truncates the sub-microsecond digits on write. `run/postgres.rs` (~line 332, `INSERT_RUN`) binds the nanosecond-precision `chrono::DateTime<Utc>` values unchanged; nothing truncates to µs before persisting or before comparing on read-back. assistant::postgres, run_schedule::postgres, webhook::postgres and waypoint::postgres suites in the SAME job all pass — this is confined to the `run` repository's timestamp fields (submitted_at/started_at/finished_at)."
-    artifacts:
-      - path: "crates/paladin-storage/src/run/postgres.rs"
-        issue: "Persists nanosecond-precision DateTime<Utc> values into a TIMESTAMPTZ column (microsecond precision) with no truncation, so a naive round-trip equality check fails."
-      - path: "crates/paladin-storage/src/run/contract_tests.rs"
-        issue: "Lines 88, 126, 165 assert exact DateTime<Utc> equality between the value passed in and the value read back, which cannot hold across a microsecond-precision store."
-    missing:
-      - "Truncate timestamps to microsecond precision before insert/compare in the Postgres adapter (or in the shared contract suite's helper), consistent with Postgres's native TIMESTAMPTZ resolution — the same fix class this codebase already documents for the analogous waypoint suite (which passes, so a working precedent likely exists to copy)."
-      - "Re-run the Postgres run-repository contract suite (STORAGE_POSTGRES_TEST_URL set) and confirm 0 failures."
-  - truth: "27-18 must_haves: 'A sdk-clients CI job generates a Python and a TypeScript client from openapi.json ... boots paladin-server ... and smoke-tests list assistants → submit run → poll status from each client; it runs on every PR' (D-49, PLAT-FR-17)."
-    status: failed
-    reason: "Live CI run 34222317640, job 'Generated SDK Clients smoke' (log 102048101784) exited 1. Two independent causes: (1) The TypeScript smoke never runs: `npm ci` (scripts/sdk-smoke/run.sh:93) requires an existing package-lock.json, but scripts/sdk-smoke/ ships no lockfile (`npm error code EUSAGE ... npm ci can only install with an existing package-lock.json`). (2) The Python smoke reports 'all checks passed' despite the submitted run reaching status 'failed', not 'completed': scripts/sdk-smoke/smoke-config.yml configures the resident smoke agent with a REAL `openai` provider (`llm_type: openai`, `llm_url: https://api.openai.com/v1`) and an empty API key, so the LLM call fails with 'Authentication failed: Invalid API key for provider openai' — the run legitimately fails end to end. scripts/sdk-smoke/smoke.py's `poll_until_terminal` treats ANY status in TERMINAL_STATUSES = {completed, failed, halted, cancelled} as success and never asserts `status == 'completed'`, so the script prints 'SDK smoke (Python): all checks passed.' on a run that did not actually work — this also means the 27-18 prohibition ('MUST NOT report green when ... the smoke server was unreachable') is satisfied only by accident (the job still failed overall because of the TypeScript half); the Python half's own pass/fail logic does not actually prove a working client round trip."
-    artifacts:
-      - path: "scripts/sdk-smoke/package.json"
-        issue: "No committed package-lock.json alongside it; run.sh's `npm ci` step cannot succeed without one."
-      - path: "scripts/sdk-smoke/smoke-config.yml"
-        issue: "Wires the smoke agent to the real OpenAI API (llm_type: openai, llm_url: https://api.openai.com/v1) with no valid key, instead of a mock/test provider — the submitted run cannot reach Completed."
-      - path: "scripts/sdk-smoke/smoke.py"
-        issue: "poll_until_terminal() accepts any of {completed, failed, halted, cancelled} as success; it should require status == 'completed' (or explicitly fail loudly on failed/halted/cancelled) to actually prove the generated client can drive a run to success."
-    missing:
-      - "Commit a package-lock.json for scripts/sdk-smoke/ (or change run.sh to `npm install` if a floating lockfile is intentional)."
-      - "Point smoke-config.yml's smoke agent at a mock/test LLM double (matching how Tier-1 Rust tests use MockLlmAdapter/mockito) so the submitted run actually completes."
-      - "Tighten smoke.py (and smoke.ts, for parity) to assert the terminal status is specifically 'completed', failing loudly otherwise."
-  - truth: "27-18 must_haves: '.project/current-exports.txt is regenerated with ./scripts/extract-public-api.sh so the api-surface CI job passes on the phase's purely additive public-API growth' (X-10.1 inventory)."
-    status: failed
-    reason: "Live CI run 34222317640, job 'API Surface Tracking' (log 102048101721) FAILED. `scripts/check-api-surface.sh .project/current-exports.txt` diffs the committed baseline against a fresh cargo-public-api v0.52.0 extraction on CI's runner and finds a real difference — but the diff (visible after the `+++ /tmp/current-api.txt` marker) is confined to auto-trait `impl` bound ORDERING for `RunWorkerPool<W>` (`Sync + core::marker::Send` locally vs `Send + core::marker::Sync` on CI, repeated across Freeze/Send/Sync/Unpin/UnsafeUnpin), not a real public-API addition or removal. This is a toolchain-dependent nondeterminism in how rustc/cargo-public-api orders synthesized auto-trait bounds between the devcontainer's local Rust toolchain and CI's pinned toolchain — the committed baseline was generated locally and does not match what CI's pinned toolchain produces."
-    artifacts:
-      - path: ".project/current-exports.txt"
-        issue: "Generated with a local toolchain whose cargo-public-api output orders auto-trait bounds differently from CI's pinned toolchain for RunWorkerPool<W>'s Freeze/Send/Sync/Unpin/UnsafeUnpin impls."
-    missing:
-      - "Regenerate .project/current-exports.txt using CI's exact toolchain (or run the extraction inside CI and commit the artifact it produces), then re-verify ./scripts/check-api-surface.sh reports 'API surface unchanged' both locally and on CI."
-      - "If this class of drift is expected to recur across toolchain versions, consider normalizing/sorting auto-trait bound lists in scripts/extract-public-api.sh so the baseline is toolchain-order-independent."
-  - truth: "27-18's own Task-3 checklist: '`test` — green, includes `e2e_platform_api`' (the phase's flagship PRD 06 acceptance-1 integration test)."
-    status: failed
-    reason: "Confirmed by direct inspection, not by a CI run: no CI job enables the `web-server` feature together with the `tests/integration/e2e_platform_api_test.rs` binary. Cargo.toml's `[[test]] name = \"e2e_platform_api\"` carries `required-features = [\"web-server\"]`; the `integration-tests` feature is `[]` (empty) so it does not imply `web-server`. `.github/workflows/ci.yml`'s `test` job runs `cargo test --workspace --lib --bins` only (no `--tests`, so no integration-test binaries run at all); its `integration` job runs `cargo test --workspace --features integration-tests --verbose -- --test-threads=1`, which does not enable `web-server` either. `.github/workflows/feature-flags.yml`'s `web-server` matrix entry runs `cargo test --workspace --lib --features web-server` — `--lib` only, so it never reaches the `tests/integration/` binaries. No job anywhere greps/invokes `e2e_platform_api` or `--test e2e_platform_api`. The test itself is real and passes locally (`cargo test --features web-server --test e2e_platform_api` → `test result: ok. 1 passed` in ~12s, re-confirmed during this verification), so the underlying functionality is correct — this is a CI-wiring gap, not a functional defect."
-    artifacts:
-      - path: ".github/workflows/ci.yml"
-        issue: "Neither the `test` job nor the `integration` job runs the `e2e_platform_api` integration test binary (it needs `--features web-server --test e2e_platform_api` or equivalent, which no job supplies)."
-    missing:
-      - "Add a step (or extend an existing job) that runs `cargo test --features web-server --test e2e_platform_api` on every PR/push, so PRD 06 acceptance criterion 1 is continuously proven in CI rather than only locally."
+re_verification:
+  previous_status: gaps_found
+  previous_score: 12/17 must-have truth clusters (5 confirmed CI-evidenced gaps)
+  gaps_closed:
+    - "PLAT-FR-03 redelivery: Redis attempt-counter off-by-one on first dequeue (plan 27-19, claim-marker fix + 27-26 run_all fresh-queue fix)"
+    - "PLAT-01 Postgres timestamp round-trip: nanosecond vs microsecond precision loss (plan 27-20, storage_timestamp truncation contract)"
+    - "sdk-clients CI job failure: missing package-lock.json, real unauthenticated OpenAI provider, weak terminal-status assertion (plan 27-21, hermetic mock-llm smoke)"
+    - "api-surface CI job failure: toolchain-dependent auto-trait bound ordering (plan 27-24, normalize-api-bounds.py canonicalization)"
+    - "e2e_platform_api never run by any CI job (plan 27-24, new e2e-platform-api job)"
+    - "CR-01 (code review): unbounded webhook response body read before truncation (plan 27-22, read_bounded_body)"
+    - "WR-01 (code review): webhook signed with silently-empty key on run-lookup failure (plan 27-22, reschedule instead of send)"
+    - "WR-04 (code review): LeaseHeartbeat busy-loop on zero-duration lease (plan 27-23, early-return guard)"
+  gaps_remaining: []
+  regressions:
+    - "contract_tests::run_all shared one queue across its 8 clauses, causing ack_removes_message_permanently to observe leftover depth from earlier clauses once 27-19's fix made the later clauses reachable for the first time (discovered on intermediate CI run 34238527001, fixed by gap-closure plan 27-26, not present in the original 18 plans' behavior)"
 deferred:
-  - truth: "GET /assistants merges synthetic code-registry entries across every paginated page, not just the first."
-    addressed_in: "Documented as an accepted, in-scope-for-later limitation (WINDOWS.md id 29, phase 27, status open — not phase-27-blocking per the plan's own documented decision in crates/paladin-web/src/assistant_controller.rs:396)."
-    evidence: "WINDOWS.md row 29: 'GET /assistants merges synthetic code-registry entries only on the first page (cursor=None); a heterogeneous keyset merge ... is out of scope for 27-12 (documented in-code).' — a pre-existing, explicitly documented scope window, not a fresh verification finding."
-  - truth: "Generated TypeScript client field/method names (Configuration/AssistantsApi/RunsApi) match smoke.ts's hand-written stub."
-    addressed_in: "WINDOWS.md id 30, phase 27, status open — explicitly deferred to CI's real openapi-generator-cli run (which this verification's CI evidence shows currently fails for unrelated reasons — see the sdk-clients gap above)."
-    evidence: "WINDOWS.md row 30: 'TypeScript generated-client field/method names ... could not be verified against the real openapi-generator-cli output locally ... CI's own sdk-clients job is the first real proof.'"
-human_verification:
-  - test: "Re-run `.github/workflows/ci.yml` on `feature/phase-26` at the commit that closes the five gaps above, and confirm the `coverage`, `msrv`, `semver` and `test` jobs are green (still pending/in-progress as of this verification, run 34222317640, pushed 2026-09-08T11:44:56Z). `pre-commit` (workflow run 34222317676) already PASSED and needs no re-check; `feature-flags` (34222317534) and `codeql` (34222317535, advisory-only) were still in progress."
-    expected: "coverage completes and reports >= 82% once the Redis attempt-counter fix lands (it currently aborts with exit 101 before computing a percentage — see the Redis gap's impact_note; 27-18's local Tier-1-scoped figure remains 89.84%); msrv passes at 1.88; semver-checks passes (no undeclared breaking change); `test` job green."
-    why_human: "These jobs need live CI infrastructure (this devcontainer has no Docker) and were still queued/in-progress or blocked by the still-open Redis gap when this verification ran."
-  - test: "After closing the Redis run-queue and Postgres run-repository gaps, confirm the `redis-queue`, `postgres-integration` and `coverage` CI jobs are fully green (not just improved) — re-check the exact test counts against the module's own declared test count per D-51's self-skip guard, and confirm `coverage` now completes and reports a percentage >= 82%."
-    expected: "redis-queue: log contains 'All run_queue::redis tests exercised the live server', 0 failed. postgres-integration: declared-vs-selected counts equal across waypoint/run/assistant/run_schedule/webhook, 0 failed. coverage: completes (no exit 101), percentage >= 82%."
-    why_human: "Requires a live CI run against real Redis/Postgres services this devcontainer cannot provide."
+  - truth: "WR-02: Agent-kind runs never emit SSE events or webhook deliveries"
+    addressed_in: "Accepted as a documented limitation for this phase, tracked as WINDOWS.md row 31 (open, not phase-27-blocking per plan 27-23's own decision)"
+    evidence: "worker.rs field docs + run_agent doc comments, webhook/mod.rs WebhookPayload docs, docs/src/api-reference/platform-api.md 'Known limitations' subsection, and a pinning test agent_kind_run_with_a_webhook_enqueues_no_delivery"
+  - truth: "WR-03: GET /runs, GET /runs/{id}, GET /runs/{id}/webhook-deliveries have no per-caller/tenant scoping"
+    addressed_in: "Accepted for v0.10 as a single-tenant/mutually-trusted-principal deployment model, tracked as WINDOWS.md row 32 (open, not phase-27-blocking per plan 27-23's own decision)"
+    evidence: "run_controller.rs 'Read scope' module-doc section and docs/src/api-reference/platform-api.md 'Authentication and scopes' section"
+  - truth: "IN-01/IN-02 (code review info-level notes: Run::attempt serde default mismatch, fork-edit empty-key silent drop)"
+    addressed_in: "Explicitly deferred by plan 27-23 as out of gap-closure scope (info-severity, no reachable production path)"
+    evidence: "27-23-SUMMARY.md key-decisions: 'IN-01 ... deferred', 'IN-02 ... deferred'"
 ---
 
 # Phase 27: Platform API Verification Report
 
 **Phase Goal:** Runs execute durably in the background on a worker pool, integrate with Parley pauses and live streaming, and are managed through versioned assistants, cron schedules and webhooks — all reachable over a production-shaped HTTP API.
-**Verified:** 2026-09-08T12:10:00Z
-**Status:** gaps_found
-**Re-verification:** No — initial verification
+**Verified:** 2026-09-08T14:30:00Z
+**Status:** passed
+**Re-verification:** Yes — after gap closure (8 gap-closure plans: 27-19 … 27-26)
 
 ## Goal Achievement
+
+This is a re-verification. The previous VERIFICATION.md (2026-09-08T12:10:00Z) recorded 5
+CI-evidenced gaps and 2 human_verification items, all against live-CI run `34222317640`
+(baseline, conclusion: failure). This re-verification checks the 8 gap-closure plans against both
+(a) a fresh local sweep re-run in this session, and (b) `27-CI-EVIDENCE.md`'s live-CI proof at
+evidence run `34245093476` / SHA `2bf43cd28829a5c957f5bd45b1abdd7c5c4212aa` — the binding Tier-2
+evidence per D-51 (local self-skip is not evidence; a recorded CI run is).
 
 ### Observable Truths (ROADMAP success criteria)
 
 | # | Truth (ROADMAP SC) | Status | Evidence |
 |---|---|---|---|
-| 1 | `POST /runs` → 202 (enqueue only), `RunRepositoryPort` persists every status transition, monotonic status machine with typed illegal-transition errors (PLAT-01) | ⚠️ PARTIAL — code path VERIFIED, Postgres backend FAILED | `try_transition` + CAS `UPDATE` verified in code (run.rs:207, run/sqlite.rs:405); SQLite/InMemory contract suites pass locally. **Live CI (postgres-integration job, run 34222317640): 3/86 `run::postgres` tests FAIL** on exact-timestamp round-trip (see gaps). |
-| 2 | Worker pool executes runs via `RunQueuePort` (InMemory/Redis) with lease heartbeats, at-least-once redelivery that resumes (not restarts), cross-instance cancellation at superstep boundaries, `409 ThreadBusy` under 10 concurrent submits (PLAT-02) | ⚠️ PARTIAL — InMemory/logic VERIFIED, Redis backend FAILED | Heartbeat `lease/4` (worker.rs:130), resume-not-restart dispatch (worker.rs), `CancellationProbe` wired into `WarEngine`/superstep (mod.rs:1615, superstep.rs:2032), partial unique index `idx_runs_thread_active` present and `ten_concurrent_submits_one_accepted` test present. **Live CI (redis-queue job, run 34222317640): 3/16 Redis contract tests FAIL** — attempt counter off-by-one on first dequeue (see gaps). |
-| 3 | `AwaitingInput` releases the worker, `POST /threads/{id}/resume` re-enqueues under the same `run_id`, `GET /runs/{id}/stream` bridges live TraceSink events to SSE with documented degraded mode and 15s heartbeats (PLAT-03) | ✓ VERIFIED | `record_resume` + `enqueue` in parley/adapter.rs; `ResumeAcceptedResponse.run_id` present in thread_controller.rs; SSE seven wire event names + `KeepAlive::new().interval` in run_controller.rs/events.rs; **`tests/integration/e2e_platform_api_test.rs` (full lifecycle incl. AwaitingInput → webhook → resume → Completed → history → fork) re-run during this verification: `cargo test --features web-server --test e2e_platform_api` → `test result: ok. 1 passed` in ~12s.** Note: this test is not wired into any CI job (see gap 5) — locally proven, not continuously proven. |
-| 4 | Assistants are append-only immutable versions (no PUT, ever), `latest` frozen at submit time, `WarGraphDoc` compiles through registry-resolving `compile()` with restart-stable fingerprint round-trip (PLAT-04) | ✓ VERIFIED | No PUT/PATCH route exists (`no_put_or_patch_route_exists` test, assistant_controller.rs:1097); `assistant_versions` PK `(assistant_id, version)`, no update method (assistant_repository_port.rs); `insert_with_latest` freezes latest transactionally; `WarGraphDoc::compile` + `CompileError::UnsupportedNodeKind` (graph_doc.rs); two-process fingerprint test present (`wargraph_doc_fingerprint_two_process`); **Postgres `assistant::postgres` suite: 10/10 pass in live CI.** |
-| 5 | Cron schedules survive restart without duplicate/missed-then-double firing; HMAC-signed webhook delivery with bounded retry and SSRF guard; every new endpoint carries auth/rate limiting/scopes/pagination; `openapi.json` regenerated; Python/TS clients generated and smoke-tested in CI (PLAT-05, PLAT-06) | ⚠️ PARTIAL — schedules/webhooks/pagination/auth VERIFIED, SDK-client CI gate FAILED | `claim_tick` conditional UPDATE (run_schedule contract_tests.rs); `RUN_QUEUE_CLAIM_LUA`-style Lua for schedules N/A (uses SQL claim); HMAC `sign_webhook_body` (signature.rs) verified via mockito in e2e test; SSRF guard rejects metadata/private ranges (ssrf.rs); no-redirect webhook client (client.rs); `resolve_limit`/`decode_cursor` 400s verified (pagination.rs); **`run_schedule::postgres` (10/10) and `webhook::postgres` (9/9) pass in live CI.** **`sdk-clients` CI job FAILED** (live run 34222317640) and **`api-surface` CI job FAILED** (same run) — see gaps. |
+| 1 | `POST /runs` → 202, `RunRepositoryPort` persists every status transition, monotonic status machine with typed illegal-transition errors (PLAT-01) | ✓ VERIFIED | Status machine + CAS `UPDATE` code-verified (run.rs, run/sqlite.rs, run/postgres.rs). **Locally re-run this session:** `cargo test -p paladin-storage --features sqlite --lib run::` → 46 passed, 0 failed, including `storage_timestamp_truncates_sub_microsecond_digits_toward_zero`/`storage_timestamp_is_identity_at_microsecond_resolution`/`insert_then_get_round_trips_every_field`. **CI evidence (27-CI-EVIDENCE.md, job 102125436566):** Postgres suite `87 passed; 0 failed`, including the new `postgres_run_timestamps_round_trip_at_microsecond_precision` clause — the previous gap's exact failing assertions now pass. |
+| 2 | Worker pool executes runs via `RunQueuePort` (InMemory/Redis) with lease heartbeats, at-least-once redelivery that resumes, cross-instance cancellation, `409 ThreadBusy` under 10 concurrent submits (PLAT-02) | ✓ VERIFIED | Heartbeat, resume-not-restart dispatch, `CancellationProbe` wiring, partial unique index all code-verified (unchanged from prior pass). **Locally re-run this session:** `cargo test -p paladin-storage --features redis-queue --lib claim_marker` → 3 passed (claim-marker guard tests pinning the fix without a live server). **CI evidence (job 102125436850):** Redis suite `19 passed; 0 failed`, log confirms `All run_queue::redis tests exercised the live server` — the previous gap's exact failing assertions (`attempt == 1` on first dequeue) now pass. `contract_tests::run_all`'s suite-isolation defect (discovered mid-verification loop on intermediate CI run 34238527001) is fixed by plan 27-26 (`fresh_queue()` factory, verified in code at `contract_tests.rs:449-463`) and reflected in the clean evidence run. |
+| 3 | `AwaitingInput` releases the worker, `POST /threads/{id}/resume` re-enqueues under the same `run_id`, `GET /runs/{id}/stream` bridges live TraceSink events to SSE with degraded mode and 15s heartbeats (PLAT-03) | ✓ VERIFIED | Unchanged from prior pass (already fully verified then). **Locally re-run this session:** `cargo test --features web-server --test e2e_platform_api` → `test result: ok. 1 passed` in 12.19s. **CI evidence (job 102125436985, new `e2e-platform-api` job added by plan 27-24):** `test result: ok. 1 passed` — this is now continuously proven in CI, closing the prior "locally proven, not CI-wired" gap. |
+| 4 | Assistants are append-only immutable versions (no PUT, ever), `latest` frozen at submit time, `WarGraphDoc` compiles through registry-resolving `compile()` with restart-stable fingerprint round-trip (PLAT-04) | ✓ VERIFIED | Unchanged from prior pass (already fully verified then — Postgres assistant suite was already green at baseline). **Locally re-run this session:** `cargo test -p paladin-web --lib no_put_or_patch_route_exists` → 1 passed; `cargo test -p paladin-battalion --lib fingerprint` → 35 passed including `fingerprint_golden_hex_v6`, `resume_with_checks_graph_fingerprint`, `replay_rejects_fingerprint_mismatch`. |
+| 5 | Cron schedules survive restart without duplicate/missed-then-double firing; HMAC-signed webhook delivery with bounded retry and SSRF guard; every new endpoint carries auth/rate limiting/scopes/pagination; `openapi.json` regenerated; Python/TS clients generated and smoke-tested in CI (PLAT-05, PLAT-06) | ✓ VERIFIED | `claim_tick`, HMAC signing, SSRF guard, pagination clamps all code-verified (unchanged from prior pass). **New this session — CR-01/WR-01 hardening (plan 27-22):** `cargo test -p paladin-ai --lib bounded_body_` → 3 passed (`bounded_body_stops_at_the_cap`, `bounded_body_returns_a_small_body_whole`, `bounded_body_at_exactly_the_cap_is_not_truncated`) proving the webhook response-body read is now capped at 64 KiB before the attacker controls memory growth; `service.rs:225` confirmed the signing-key-load-failure path now reschedules (`Retrying`) instead of sending with an empty key. **New this session — sdk-clients (plan 27-21):** `python3 scripts/sdk-smoke/mock-llm.py --self-test` and `smoke.py --self-test` both pass locally; **CI evidence (job 102125436564):** both Python and TypeScript smokes report `terminal status 'completed' reached` — the previous gap (missing lockfile + real unauthenticated OpenAI provider + weak success assertion) is closed. **New this session — api-surface (plan 27-24):** `./scripts/check-api-surface.sh .project/current-exports.txt` re-run locally → `✅ API surface unchanged`; **CI evidence (job 102125436884):** same result on CI's own toolchain, closing the toolchain-drift gap. |
 
-**Score:** 2/5 ROADMAP success criteria fully green (SC3, SC4); 3/5 have a confirmed, CI-evidenced backend/CI-gate gap (SC1 Postgres timestamps, SC2 Redis attempt counter, SC5 sdk-clients + api-surface). 5 gaps total (see YAML frontmatter), plus the e2e_platform_api CI-wiring gap folded into SC3's evidence.
+**Score:** 5/5 ROADMAP success criteria fully green. All five gaps from the previous VERIFICATION.md
+are closed, each independently re-confirmed in this session (local re-run where runnable, CI
+evidence cited otherwise) rather than trusted from SUMMARY.md claims alone.
 
-### Required Artifacts (representative sample across all 18 plans)
+### Deferred Items
+
+Items explicitly accepted as documented, tracked limitations rather than closed — not phase-27-blocking per the gap-closure plans' own decisions (WINDOWS.md rows 31/32).
+
+| # | Item | Addressed In | Evidence |
+|---|------|-------------|----------|
+| 1 | WR-02: `Agent`-kind runs bypass SSE bus and webhook delivery | Documented + pinned test, WINDOWS.md row 31 | `agent_kind_run_with_a_webhook_enqueues_no_delivery` test; `docs/src/api-reference/platform-api.md:350` "Known limitations" section (confirmed present at grep) |
+| 2 | WR-03: Run/webhook-delivery read routes have no per-caller/tenant scoping | Documented, WINDOWS.md row 32 | `run_controller.rs` "Read scope" module doc; `platform-api.md` "Authentication and scopes" section |
+| 3 | IN-01/IN-02: minor serde-default and fork-edit-key info notes | Explicitly deferred, no reachable production path | 27-23-SUMMARY.md key-decisions |
+
+### Required Artifacts (representative sample, including all gap-closure artifacts)
 
 | Artifact | Expected | Status | Details |
 |---|---|---|---|
-| `crates/paladin-core/src/platform/container/run.rs` | RunId/RunStatus/try_transition/IllegalTransition | ✓ VERIFIED | 884 lines; `try_transition` + exhaustive self-transition-rejection test present |
-| `crates/paladin-ports/src/output/run_queue_port.rs` + `run_repository_port.rs` | RunQueuePort/RunRepositoryPort traits | ✓ VERIFIED | present, substantive |
-| `crates/paladin-storage/src/run/{sqlite,postgres,contract_tests}.rs` | Run repository adapters + shared suite | ⚠️ HOLLOW (Postgres) | Files present, substantive, wired; **Postgres adapter fails 3 contract-suite assertions in live CI** (timestamp precision) |
-| `crates/paladin-storage/src/run_queue/{redis,in_memory,contract_tests}.rs` | Run queue adapters + shared suite | ⚠️ HOLLOW (Redis) | Files present, substantive, wired; **Redis adapter fails 3 contract-suite assertions in live CI** (attempt off-by-one) |
-| `src/application/services/run/worker.rs` | RunWorkerPool, LeaseHeartbeat, dispatch | ✓ VERIFIED | 1482 lines; `lease/4` heartbeat, resume-not-restart dispatch, ShutdownCoordinator registration all present |
-| `crates/paladin-battalion/src/engine/graph_doc.rs` | WarGraphDoc + compile() | ✓ VERIFIED | 1625 lines; typed CompileError variants present |
-| `crates/paladin-ports/src/output/cancellation_probe.rs` | CancellationProbe trait | ✓ VERIFIED | wired into WarEngine builder and superstep boundary check |
-| `src/application/services/run/webhook/{ssrf,signature,client,service}.rs` | SSRF guard, HMAC sign, no-redirect client, drain service | ✓ VERIFIED | all present, substantive; live CI `webhook::postgres` suite green |
-| `src/application/services/run/schedule/{service,admin}.rs` | ScheduleService claim-then-submit | ✓ VERIFIED | `claim_tick` present; live CI `run_schedule::postgres` suite green |
-| `crates/paladin-web/src/{run,assistant,schedule}_controller.rs` + `pagination.rs` | HTTP surface, pagination clamps | ✓ VERIFIED | routes present; `resolve_limit`/`decode_cursor` 400-path tests present |
-| `tests/integration/e2e_platform_api_test.rs` | PRD 06 acceptance-1 lifecycle | ⚠️ VERIFIED LOCALLY, NOT IN CI | passes locally (1/1); no CI job runs it (gap 5) |
-| `scripts/sdk-smoke/{smoke.py,smoke.ts,package.json,smoke-config.yml}` | SDK generated-client smoke | ✗ FAILING IN CI | present, but functionally broken — see gaps (missing lockfile, wrong LLM provider, weak success assertion) |
-| `.project/current-exports.txt` | Public API baseline | ✗ FAILING IN CI | present, locally matches HEAD, but diverges from CI's toolchain output (auto-trait bound ordering) |
-| `k8s/server/worker-deployment.yaml`, `docs/src/api-reference/platform-api.md` | Ops docs | ✓ VERIFIED | present, substantive |
+| `crates/paladin-storage/src/run_queue/redis.rs` | Corrected `RUN_QUEUE_CLAIM_LUA`/`RUN_QUEUE_NACK_LUA` with claim-marker gating | ✓ VERIFIED | 3 claim-marker guard tests pass locally; CI Redis suite 19/19 |
+| `crates/paladin-storage/src/run_queue/contract_tests.rs` | `run_all` takes a fresh-queue-per-clause factory | ✓ VERIFIED | Code inspection confirms `fn run_all<F, Fut, Q>(fresh_queue: F)` calling `fresh_queue().await` before each of 8 clauses (lines 449-463) |
+| `crates/paladin-storage/src/run/mod.rs` + `run/postgres.rs` | `storage_timestamp` microsecond-truncation contract applied at every bind site | ✓ VERIFIED | Unit tests pass locally; CI Postgres suite 87/87 including the new round-trip test |
+| `scripts/sdk-smoke/{mock-llm.py,lib-boot.sh,smoke-http.sh,package-lock.json}` | Hermetic loopback LLM stub, committed lockfile, exact-`completed` assertion | ✓ VERIFIED | `mock-llm.py --self-test` and `smoke.py --self-test` pass locally; CI job green with both clients reaching `completed` |
+| `src/application/services/run/webhook/client.rs` | `read_bounded_body` capping response reads at 64 KiB | ✓ VERIFIED | 3 bounded-body tests pass locally (`bounded_body_stops_at_the_cap`, etc.) |
+| `src/application/services/run/webhook/service.rs` | Signing-key-load failure reschedules instead of sending | ✓ VERIFIED | Code inspection confirms `Retrying` outcome on `Err` branch (service.rs:225), no send |
+| `src/application/services/run/worker.rs` | `LeaseHeartbeat::spawn` guarded against non-positive lease | ✓ VERIFIED | `lease_heartbeat_with_a_zero_lease_never_extends` passes locally |
+| `scripts/normalize-api-bounds.py` + `.project/current-exports.txt` | Toolchain-order-independent API baseline | ✓ VERIFIED | `--self-test` passes; `check-api-surface.sh` reports unchanged locally and on CI |
+| `.github/workflows/ci.yml` (`e2e-platform-api` job) | Runs `--features web-server --test e2e_platform_api` on every push/PR | ✓ VERIFIED | CI evidence job 102125436985 green, 1 passed |
+| `.planning/phases/27-platform-api/27-CI-EVIDENCE.md` | Single evidentiary record tying all 5 gaps + 2 human_verification items to named CI jobs/runs/log lines | ✓ VERIFIED | Present, substantive, pre-filled-then-populated per its own anti-gaming design (T-27-25-03) |
 
-### Key Link Verification (sample)
+### Key Link Verification (gap-closure deltas)
 
 | From | To | Via | Status |
 |---|---|---|---|
-| `run_controller.rs` | `run_submission_port.rs` | `RunApiState` holds `Option<Arc<dyn RunSubmissionPort>>` | ✓ WIRED |
-| `worker.rs` | `run_queue_port.rs` | `dequeue(` / `ack` / `nack` | ✓ WIRED (logic correct; Redis adapter's attempt semantics are the bug, not the wiring) |
-| `worker.rs` | `run_repository_port.rs` | `update_status(` | ✓ WIRED |
-| `engine/mod.rs` | `cancellation_probe.rs` | `with_cancellation_probe` → `superstep::run` | ✓ WIRED |
-| `parley/adapter.rs` | `run_queue_port.rs` | `enqueue(QueuedRun {..})` after `record_resume` | ✓ WIRED |
-| `assistant/validator.rs` | `graph_doc.rs` | `WarGraphDoc` deserialize + `compile()` | ✓ WIRED |
-| `run/worker.rs` | `webhook_delivery_port.rs` | enqueue on terminal/AwaitingInput outcome | ✓ WIRED |
-| `.github/workflows/ci.yml` | `crates/paladin-web/openapi.json` | `openapi-generator-cli -i ...` | ⚠️ WIRED BUT FAILING — job exits 1 (see gaps) |
-| `.github/workflows/ci.yml` (`test` job) | `tests/integration/e2e_platform_api_test.rs` | *(none)* | ✗ NOT WIRED — no job supplies `--features web-server --test e2e_platform_api` |
+| `run_queue/redis.rs` claim/nack Lua | claim-marker JSON key | embedded literal in both scripts, read back by `#[cfg(test)]` introspection | ✓ WIRED |
+| `run_queue/contract_tests.rs::run_all` | `in_memory.rs` / `redis.rs` callers | `fresh_queue()` factory closure per clause | ✓ WIRED |
+| `run/postgres.rs` INSERT/UPDATE binds | `storage_timestamp()` | every `DateTime<Utc>` bind routed through it (INSERT_RUN, INSERT_RUN_WITH_LATEST, update_status) | ✓ WIRED |
+| `webhook/service.rs` non-2xx handler | `client.rs::read_bounded_body` | replaces `response.text()` | ✓ WIRED |
+| `.github/workflows/ci.yml` | `tests/integration/e2e_platform_api_test.rs` | new `e2e-platform-api` job, `--features web-server --test e2e_platform_api` | ✓ WIRED |
+| `.github/workflows/ci.yml` (`api-surface` job) | `scripts/normalize-api-bounds.py` | `extract-public-api.sh` pipes through the normalizer before diffing | ✓ WIRED |
 
-### Behavioral Spot-Checks
+### Behavioral Spot-Checks (this session, all re-run fresh, not trusted from SUMMARY)
 
 | Behavior | Command | Result | Status |
 |---|---|---|---|
-| PRD 06 acceptance-1 full lifecycle | `cargo test --features web-server --test e2e_platform_api` (re-run during this verification) | `test result: ok. 1 passed` in 12.28s | ✓ PASS (locally; not CI-wired, see gap) |
-| No PUT/PATCH on assistants | code inspection: `no_put_or_patch_route_exists` test | asserts 404/405 for both methods | ✓ PASS |
-| Pagination clamps | code inspection: `resolve_limit_zero_is_400`, `resolve_limit_101_is_400`, `decode_cursor_bad_base64_is_invalid_cursor_400` | present, asserting `bad_request`/`invalid_cursor` | ✓ PASS |
+| Redis claim-marker guard (Tier-1, no live server) | `cargo test -p paladin-storage --features redis-queue --lib claim_marker` | 3 passed; 0 failed | ✓ PASS |
+| Postgres timestamp truncation + SQLite run suite | `cargo test -p paladin-storage --features sqlite --lib run::` | 46 passed; 0 failed | ✓ PASS |
+| PRD 06 acceptance-1 full lifecycle, now CI-wired | `cargo test --features web-server --test e2e_platform_api` | 1 passed in 12.19s | ✓ PASS |
+| Public API surface baseline | `./scripts/check-api-surface.sh .project/current-exports.txt` | `✅ API surface unchanged` (3763 items) | ✓ PASS |
+| Webhook bounded-body read (CR-01) | `cargo test -p paladin-ai --lib bounded_body_` | 3 passed; 0 failed | ✓ PASS |
+| LeaseHeartbeat zero-lease guard (WR-04) | `cargo test -p paladin-ai --lib lease_heartbeat_with_a_zero_lease` | 1 passed; 0 failed | ✓ PASS |
+| sdk-smoke mock LLM self-test | `python3 scripts/sdk-smoke/mock-llm.py --self-test` | `self-test: ok` | ✓ PASS |
+| sdk-smoke terminal-status decision self-test | `python3 scripts/sdk-smoke/smoke.py --self-test` | `self-test: ok (6/6 cases)` | ✓ PASS |
+| api-bounds normalizer self-test | `python3 scripts/normalize-api-bounds.py --self-test` | `ok` | ✓ PASS |
+| Formatting | `cargo fmt --all -- --check` | exit 0, no output | ✓ PASS |
+| No-PUT assistant route (regression) | `cargo test -p paladin-web --lib no_put_or_patch_route_exists` | 1 passed | ✓ PASS |
+| WarGraphDoc fingerprint suite (regression) | `cargo test -p paladin-battalion --lib fingerprint` | 35 passed | ✓ PASS |
 
-### Probe Execution
+### Tier-2 CI Evidence (not re-run in this session, per D-51 — cited from 27-CI-EVIDENCE.md's live run)
 
-Not applicable — this phase has no `scripts/*/tests/probe-*.sh` convention; verification instead relied on the live CI job results supplied by the orchestrator (run 34222317640, SHA `1e81939a`) plus one locally re-run named test (`e2e_platform_api`).
+| Job | CI Run/SHA | Result | Proof cited |
+|---|---|---|---|
+| `Redis Run Queue Contract Suite (live server)` | `34245093476` @ `2bf43cd2` | PASS | `19 passed; 0 failed`; live-server log line present |
+| `Postgres Storage Contract Suites (live server)` | same | PASS | `87 passed; 0 failed`, incl. new µs round-trip clause |
+| `Coverage` | same | PASS | `Lines: 99781/110890 = 89.98%` (floor 82%), no exit 101 |
+| `Generated SDK Clients (Python + TypeScript) smoke` | same | PASS | both clients report terminal status `completed` |
+| `API Surface Tracking` | same | PASS | `API surface unchanged` |
+| `e2e-platform-api` | same | PASS | `1 passed` |
+| `Integration Tests` | same | PASS | 5382 passed, 0 failed (same Redis root cause, independently confirmed fixed) |
+| `Unit Tests` / `MSRV (1.88)` / `Semver Checks` | same | PASS | regression guards, all green |
+
+This verifier did not re-run CI (per task instructions — evidence is binding, not to be re-derived).
+27-CI-EVIDENCE.md quotes exact log lines per job rather than conclusion-only, consistent with its
+own `must_haves.prohibitions` (bar not lowered after seeing results) — this was checked by reading
+the file, not assumed.
 
 ### Requirements Coverage
 
 | Requirement | Description (abridged) | Status | Evidence |
 |---|---|---|---|
-| PLAT-01 | Run submission decoupled, RunRepositoryPort, monotonic status machine | ⚠️ PARTIAL | Status machine + SQLite/InMemory verified; **Postgres adapter fails contract suite in live CI (timestamp precision)** |
-| PLAT-02 | Durable worker pool, RunQueuePort (InMemory+Redis), lease heartbeats, redelivery, cross-instance cancel, 409 ThreadBusy | ⚠️ PARTIAL | Worker/cancellation/busy-index all verified; **Redis adapter fails contract suite in live CI (attempt off-by-one)** |
-| PLAT-03 | Parley/streaming integration | ✓ SATISFIED | Verified in code + locally re-run e2e test (not CI-wired — see gap 5, folded under PLAT-06/X-02 below) |
-| PLAT-04 | Versioned assistants, WarGraphDoc | ✓ SATISFIED | No-PUT enforced; compile-is-validation; Postgres assistant suite green in live CI |
-| PLAT-05 | Schedules and webhooks | ✓ SATISFIED | claim_tick, SSRF, HMAC all verified in code; Postgres schedule/webhook suites green in live CI |
-| PLAT-06 | Production-shaped HTTP surface: auth, pagination, openapi, generated-client CI gate | ✗ BLOCKED | Auth/pagination/openapi verified in code; **sdk-clients CI job FAILED and api-surface CI job FAILED** in live CI; e2e_platform_api not wired into any CI job |
+| PLAT-01 | Run submission decoupled, RunRepositoryPort, monotonic status machine, SQLite+Postgres contract suite | ✓ SATISFIED | Postgres timestamp gap closed (plan 27-20), CI-evidenced 87/87; local SQLite/InMemory suite 46/46. **Traceability note:** REQUIREMENTS.md line 218 checkbox is still `[ ]` despite `27-20-SUMMARY.md` and `27-25-SUMMARY.md` both declaring `requirements-completed: [PLAT-01, ...]` — see Anti-Patterns below (doc-staleness, not a functional gap). |
+| PLAT-02 | Durable worker pool, RunQueuePort (InMemory+Redis), lease heartbeats, redelivery, cross-instance cancel, 409 ThreadBusy | ✓ SATISFIED | Redis attempt-counter fixed (27-19) and run_all isolation fixed (27-26), CI-evidenced 19/19; REQUIREMENTS.md line 223 already `[x]` |
+| PLAT-03 | Parley/streaming integration | ✓ SATISFIED | Verified in code; e2e_platform_api now CI-wired (27-24), CI-evidenced 1/1; REQUIREMENTS.md line 230 already `[x]` |
+| PLAT-04 | Versioned assistants, WarGraphDoc | ✓ SATISFIED | No-PUT + fingerprint suite regression-checked locally; Postgres assistant suite was already green at baseline and remains so. **Traceability note:** REQUIREMENTS.md line 236 checkbox is still `[ ]` despite `27-25-SUMMARY.md` declaring `requirements-completed: [..., PLAT-04, ...]` — see Anti-Patterns below. |
+| PLAT-05 | Schedules and webhooks | ✓ SATISFIED | claim_tick, SSRF, HMAC verified; CR-01/WR-01 hardening (27-22) code-confirmed; REQUIREMENTS.md line 243 already `[x]` |
+| PLAT-06 | Production-shaped HTTP surface: auth, pagination, openapi, generated-client CI gate | ✓ SATISFIED | sdk-clients (27-21) and api-surface (27-24) gaps closed, CI-evidenced; REQUIREMENTS.md line 251 already `[x]` |
 
-No orphaned requirements found — PLAT-01…06 are the complete set declared across the 18 plans' `requirements:` frontmatter, matching REQUIREMENTS.md lines 216-255 verbatim.
+No orphaned requirements — PLAT-01…06 are the complete set declared across the 26 plans' `requirements:` frontmatter, matching REQUIREMENTS.md lines 216-255 and ROADMAP.md line 580 verbatim.
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 |---|---|---|---|---|
-| `MIGRATION.md` | 271, 538 | `TBD` | ℹ️ Info, not a blocker | Both lines explicitly name the owning phase/requirement (`SHIP-02`/`SHIP-01`, Phase 29) per this phase's own D-53 design ("Every TBD below carries the requirement or phase that owns closing it") — this is the documented, intentional MIGRATION.md structure, not an unresolved debt marker left by this phase. |
+| `.planning/REQUIREMENTS.md` | 218, 236, 382, 385 | PLAT-01 and PLAT-04 checkboxes/table rows still read `[ ]`/`Pending` | ⚠️ Warning (documentation-traceability gap, not a functional gap) | Both requirements are functionally satisfied and CI-evidenced (see Requirements Coverage above); `27-20-SUMMARY.md` (`requirements-completed: [PLAT-01]`) and `27-25-SUMMARY.md` (`requirements-completed: [PLAT-01, PLAT-02, PLAT-03, PLAT-04, PLAT-05, PLAT-06]`) both declared closure, but no commit in this phase's history ever flipped these two checkboxes — every sibling requirement (PLAT-02/03/05/06) was flipped by its closing plan's commit (e.g. `3242c3be docs(27-19): ... mark PLAT-02 requirement complete`, `d943fd25 docs(27-23): ... mark PLAT-03/05/06 complete`), but no equivalent commit exists for PLAT-01 or PLAT-04. Recommend a follow-up commit updating REQUIREMENTS.md lines 218, 236, 382, 385 before this milestone ships, so the traceability table matches the proven state. Not phase-27-blocking (the underlying capability is proven, independently, in this verification pass) but should not be carried silently into Phase 29's SHIP-03 program acceptance audit. |
+| `MIGRATION.md` | 271, 538 | `TBD` markers | ℹ️ Info, not a blocker | Both carry an owning requirement/phase reference (`SHIP-02`/`SHIP-01`, Phase 29) per this phase's own documented structure — unchanged from prior verification pass. |
 
-No other TBD/FIXME/XXX, empty-implementation, or hardcoded-empty-data patterns found across the ~124 files this phase's 18 plans declared in `files_modified`.
+No other TBD/FIXME/XXX, empty-implementation, or hardcoded-empty-data patterns found in the gap-closure files (`crates/paladin-storage/src/run_queue/{redis,contract_tests}.rs`, `crates/paladin-storage/src/run/{mod,postgres,contract_tests}.rs`, `scripts/sdk-smoke/*`, `src/application/services/run/webhook/{client,service}.rs`, `src/application/services/run/worker.rs`, `scripts/normalize-api-bounds.py`, `.github/workflows/ci.yml`).
+
+### Probe Execution
+
+Not applicable — no `scripts/*/tests/probe-*.sh` convention in this project; verification relies on
+named-test execution (this session, local) plus 27-CI-EVIDENCE.md's cited live-CI log lines
+(Tier-2, not re-run per task instructions).
+
+### Human Verification Required
+
+None. Both human_verification items the previous VERIFICATION.md left open (re-run CI on the
+gap-closing SHA; confirm Redis/Postgres/coverage jobs go green) are closed by 27-CI-EVIDENCE.md's
+recorded, human-approved (`checkpoint:human-verify`, approved 2026-09-08) evidence run
+`34245093476`. No new human-verification-only truths were introduced by the 8 gap-closure plans —
+every gap-closure must-have was either a Tier-1 test this session re-ran directly, or a Tier-2
+claim with a cited exact log line in 27-CI-EVIDENCE.md that this verification read and cross-
+checked against the plan's own pre-committed proof requirements (T-27-25-03) rather than trusting
+a conclusion-only pass.
 
 ### Gaps Summary
 
-Five concrete, CI-evidenced gaps block a clean pass, all traced to precise root causes:
+None remaining. All 5 gaps from the previous VERIFICATION.md (Redis attempt off-by-one, Postgres
+timestamp precision, sdk-clients CI failure, api-surface toolchain drift, e2e_platform_api not
+CI-wired) and both human_verification items are closed, each independently re-confirmed in this
+session: 6 of the 8 gap-closure fixes were re-run locally against the actual test files (not
+trusted from SUMMARY.md), and the 4 fixes needing live Redis/Postgres/coverage/sdk-generator
+infrastructure are backed by 27-CI-EVIDENCE.md's exact-log-line evidence at a named run/SHA,
+itself checked against its own pre-committed (before-the-run) proof table rather than accepted on
+narrative. The code-review findings (CR-01, WR-01, WR-04) are also closed in code and locally
+re-tested; WR-02 and WR-03 are accepted, documented, ledgered deviations (WINDOWS.md rows 31/32)
+per the gap-closure plan's own explicit scope decision, not silent gaps.
 
-1. **Redis run-queue attempt counter is off by one** (PLAT-02) — `RUN_QUEUE_CLAIM_LUA` increments `attempt` on every claim, not just on lease-expiry redelivery, so the very first dequeue already reports `attempt=2` instead of `1`. 3 live-CI test failures in the `redis-queue` job, plus the SAME 3 failures abort the `coverage` job (exit 101, before any percentage is computed) — the 82% floor is currently unproven on CI, not because coverage is too low but because the run never finishes. One fix closes both.
-2. **Postgres run-repository timestamp round-trip loses precision** (PLAT-01) — nanosecond-precision Rust `DateTime<Utc>` values are compared for exact equality against microsecond-precision Postgres `TIMESTAMPTZ` reads. 3 live-CI test failures.
-3. **`sdk-clients` CI job fails** (PLAT-06) — TypeScript smoke never runs (`npm ci` needs a missing `package-lock.json`); Python smoke silently "passes" despite the submitted run reaching `failed` because the smoke config wires a real (unauthenticated) OpenAI provider instead of a mock, and the smoke script accepts any terminal status as success.
-4. **`api-surface` CI job fails** (PLAT-06/X-10.1) — the committed `.project/current-exports.txt` was generated with a local toolchain that orders auto-trait bounds differently from CI's pinned toolchain; a real but toolchain-cosmetic diff, not a genuine API change.
-5. **`e2e_platform_api` (PRD 06 acceptance-1) is never run by any CI job** (PLAT-06/X-02) — the test binary requires `--features web-server`, which no `test`/`integration`/`feature-flags` job supplies; the test itself passes locally.
-
-All five are precisely scoped, single-file-class fixes (a Lua script, a timestamp truncation, two smoke-script files + one config file, a baseline regeneration, and one CI YAML addition) — none require architectural rework. Every other must-have across the 18 plans (status machine, worker pool mechanics, cancellation, assistants/WarGraphDoc, schedules, webhook signing/SSRF, pagination, auth, docs) was verified directly against the codebase and, where live CI evidence exists, is green (Postgres assistant/schedule/webhook suites, waypoint suite all pass in the same CI run that surfaced these five gaps).
+One non-blocking documentation-traceability item is flagged above (Anti-Patterns): REQUIREMENTS.md
+never flipped the PLAT-01/PLAT-04 checkboxes despite both being functionally proven and declared
+closed in two plans' `requirements-completed` frontmatter. This does not affect the phase-goal
+verdict (the underlying capability is independently proven above) but should be corrected before
+Phase 29's program acceptance audit treats REQUIREMENTS.md as the source of truth.
 
 ---
 
-_Verified: 2026-09-08T12:10:00Z_
+_Verified: 2026-09-08T14:30:00Z_
 _Verifier: Claude (gsd-verifier)_

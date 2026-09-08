@@ -215,7 +215,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
 
 ### Platform API (Doc 06, epic `PLAT`)
 
-- [ ] **PLAT-01**: Run submission is decoupled from execution: `POST /runs` returns 202 within
+- [x] **PLAT-01**: Run submission is decoupled from execution: `POST /runs` returns 202 within
   250 ms p99 (enqueue only), a `RunRepositoryPort` (SQLite + Postgres, contract suite) persists
   every status transition, and the status machine is monotonic with typed illegal-transition
   errors (PLAT-FR-01; PRD 06 §2.1)
@@ -233,7 +233,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   polling-backed degraded mode (terminal events always eventually delivered) and 15 s heartbeats
   (PLAT-FR-06, PLAT-FR-07)
 
-- [ ] **PLAT-04**: Assistants are named, versioned configurations: append-only immutable versions
+- [x] **PLAT-04**: Assistants are named, versioned configurations: append-only immutable versions
   (no PUT, ever), `latest` frozen at submit time for each run, full publish-time validation with
   machine-readable violations, creator/timestamp/note audit trail, the code-registered registry
   exposed read-only as synthetic entries, and `WarGraphDoc` with documented JSON Schema,
@@ -379,10 +379,10 @@ Which phases cover which requirements. Populated during roadmap creation.
 | RT-05 | Phase 26 | Complete |
 | RT-06 | Phase 26 | Complete |
 | RT-07 | Phase 26 | Complete |
-| PLAT-01 | Phase 27 | Pending |
+| PLAT-01 | Phase 27 | Complete |
 | PLAT-02 | Phase 27 | Complete |
 | PLAT-03 | Phase 27 | Complete |
-| PLAT-04 | Phase 27 | Pending |
+| PLAT-04 | Phase 27 | Complete |
 | PLAT-05 | Phase 27 | Complete |
 | PLAT-06 | Phase 27 | Complete |
 | OBS-01 | Phase 28 | Pending |

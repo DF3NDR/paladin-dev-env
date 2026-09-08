@@ -159,3 +159,13 @@ None - no external service configuration required.
 ---
 *Phase: 27-platform-api*
 *Completed: 2026-09-08*
+
+## Self-Check: PASSED
+
+- FOUND: crates/paladin-storage/src/run/mod.rs
+- FOUND: crates/paladin-storage/src/run/postgres.rs
+- FOUND: crates/paladin-storage/src/run/contract_tests.rs
+- FOUND: .planning/phases/27-platform-api/27-20-SUMMARY.md
+- FOUND commit: 1b91203c (feat: normalise run-store timestamps to microsecond precision)
+- FOUND commit: 2c6b0911 (test: pin Postgres timestamp truncation contract with a dedicated round-trip test)
+- FOUND commit: 566501fb (docs: add plan summary for run-store timestamp precision gap closure)

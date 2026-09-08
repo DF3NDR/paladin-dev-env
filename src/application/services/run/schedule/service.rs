@@ -34,7 +34,7 @@ use paladin_ports::output::run_schedule_repository_port::RunScheduleRepositoryPo
 use paladin_storage::cron::parse_run_cron;
 
 use super::super::resolver::AssistantResolver;
-use super::admin::SsrfGuard;
+use super::super::webhook::SsrfGuard;
 
 /// How many due schedules [`ScheduleService::tick_once`] processes per call.
 /// Generous enough that a normal deployment's schedule count fits in one
@@ -170,7 +170,7 @@ impl ScheduleService {
             submission,
             options,
             resolver: None,
-            ssrf_guard: SsrfGuard::default(),
+            ssrf_guard: SsrfGuard::new(false),
         }
     }
 

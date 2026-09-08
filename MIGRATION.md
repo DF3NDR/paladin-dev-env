@@ -186,6 +186,8 @@ The **Crate** cell of every row marked `Y` is the crate's **published crates.io 
 | `paladin-ports` | `ResumeAccepted` (new in 0.10, shipped HITL-05 Phase 24; this row records its Phase 27 extension) | new additive field `run_id: Option<RunId>` with accessor `run_id()`; new constructor `with_run_id(self, run_id) -> Self`; struct marked `#[non_exhaustive]` — landed PLAT-03, Phase 27 (27-08) | `#[non_exhaustive]`; construction stays possible only through `new()` + `with_run_id()` (X-10.3). Suppressed via the existing `[package.metadata.cargo-semver-checks.lints] struct_marked_non_exhaustive = "allow"` already present in `crates/paladin-ports/Cargo.toml` (no new entry needed) | N/A — `ResumeAccepted` did not exist at the `v0.9.0` baseline (it shipped in this same v0.10.0 cycle, Phase 24); X-10 governs only a signature change to a type that shipped in a PUBLISHED release, so this is not a deliberate-breaking row and needs no `.cargo/semver-checks-allowlist.toml` entry | PLAT-03, PLAT-FR-06 |
 | `paladin-web` | `ResumeAcceptedResponse` (new in 0.10, shipped HITL-05 Phase 24; this row records its Phase 27 extension) | new additive field `run_id: Option<String>`; new constructor `ResumeAcceptedResponse::new(thread_id, state_url, run_id)`; struct marked `#[non_exhaustive]` — landed PLAT-03, Phase 27 (27-08) | `#[non_exhaustive]`, suppressed via a NEW `[package.metadata.cargo-semver-checks.lints] struct_marked_non_exhaustive = "allow"` line added to `crates/paladin-web/Cargo.toml`'s existing lints table (previously carried only `function_requires_different_generic_type_params`); construction stays possible only through the new `new()` constructor (X-10.3) — the sole in-tree call site (`thread_controller.rs`'s `resume_thread` handler) was migrated in the same commit | N/A — `ResumeAcceptedResponse` did not exist at the `v0.9.0` baseline (new-in-0.10, Phase 24); X-10 governs only a signature change to a type that shipped in a PUBLISHED release, so this is not a deliberate-breaking row and needs no `.cargo/semver-checks-allowlist.toml` entry | PLAT-03, PLAT-FR-06 |
 | `paladin-web` | `require_authentication` (fn) | Gained a generic type parameter: `pub async fn require_authentication<S>(...)  where S: HasAgentAuth + Clone + Send + Sync + 'static` — was non-generic at v0.9.0. Landed HITL-05, Phase 24 (24-11); surfaced by `cargo semver-checks` during 24-12's gate-evidence pass, not recorded at landing time. | No backward-compatible mitigation exists for a generic-arity change — any external caller invoking the old zero-generic signature via turbofish breaks. Suppressed via `[package.metadata.cargo-semver-checks.lints] function_requires_different_generic_type_params = "allow"` in `crates/paladin-web/Cargo.toml`, mirrored in `.cargo/semver-checks-allowlist.toml`. | Y — genericizing this ONE function is what lets `ThreadApiState`'s routes reuse the exact same authentication middleware `AgentApiState`'s routes already layer, rather than a duplicated ~15-line copy per router state (D-24); accepted as the minimal, intentional cost of that reuse. | HITL-FR-16 |
+| `paladin-web` | `ThreadApiState` (new type in `paladin-web`, listed for completeness at HITL-05/Phase 24 per the note below; this row records its Phase 27 extension) | new additive fields `runs: Option<Arc<dyn RunRepositoryPort>>` and `run_submission: Option<Arc<dyn RunSubmissionPort>>`, with `with_runs`/`with_run_submission` builders; struct marked `#[non_exhaustive]` — landed PLAT-06, Phase 27 (27-15, D-45) for `GET /threads`, `GET /threads/{id}`, `POST /threads/{id}/fork` and `DELETE /threads/{id}` | `#[non_exhaustive]`; construction stays possible only through `ThreadApiState::new()` plus the `with_*` builder methods (X-10.3) — no in-tree struct literal exists to migrate, every construction site already used the builder | N/A — `ThreadApiState` did not exist at the `v0.9.0` baseline (it shipped in this same v0.10.0 cycle, Phase 24); X-10 governs only a signature change to a type that shipped in a PUBLISHED release, so this is not a deliberate-breaking row and needs no `.cargo/semver-checks-allowlist.toml` entry | PLAT-06, PLAT-FR-16 |
+| `paladin-ports` | `RunSubmissionPort` (new in 0.10, shipped PLAT-01 Phase 27; this row records its Phase 27 extension) | `cancel`'s signature gained a `requested_by: Option<(String, UserRole)>` parameter (D-46 invocation-shaped authorization); a new `fork(&self, request: ForkRun) -> Result<RunAccepted, RunSubmissionError>` method was added — landed PLAT-06, Phase 27 (27-15, D-45/D-46) | No mitigation needed — `RunSubmissionPort` is a new-in-0.10 trait with exactly four implementors, ALL in-tree (`RunSubmissionService`, the port module's own `AlwaysUnwired` test double, `paladin-web::run_controller`'s `MockSubmissionPort` test double, `schedule::tests`' `RecordingSubmission` test double), all four migrated in the same wave | N/A — `RunSubmissionPort` did not exist at the `v0.9.0` baseline; X-10 governs only a signature change to a type/trait that shipped in a PUBLISHED release | PLAT-06, PLAT-FR-16 |
 
 **Note on Plan 22-01 (this phase's tracer plan):** Plan 22-01 added the `battlefield`, `battlefield_error`, and `waypoint` modules to `paladin-core`, `waypoint_port` to `paladin-ports`, the `waypoint` adapter module to `paladin-storage`, and the `engine` module to `paladin-battalion`. All of these are **new** modules/types — none of Plan 22-01's changes touched a *pre-existing* public type's signature (its "modified" files were module-registration edits, e.g. adding a `mod battlefield;` line). **This is a deliberate zero**, not an omission: no register row is added for Plan 22-01.
 
@@ -371,6 +373,65 @@ all (X-03 — the exact Phase 24 in-process-spawn behaviour is preserved for tha
 property on the `ResumeAcceptedResponse` schema (`git diff --stat` shows 8 insertions, 1 deletion),
 verified by `openapi_matches_committed_baseline` and confirmed by direct JSON-path inspection that
 every other schema and path is byte-identical.
+
+**Remaining run routes, thread list/get/fork/delete, and pagination everywhere — landed Phase 27
+(PLAT-06, Plan 27-15, D-45…D-47).** The last new `/v1/runs*` routes this phase's `RunApiState`
+carries, plus four new routes on the existing `ThreadApiState` (D-45), completing PRD 06 §2.1's
+run/thread surface and PLAT-FR-16's "pagination, auth and scopes are consistent everywhere" claim.
+
+| Method | Path | Status codes |
+|---|---|---|
+| `GET` | `/v1/runs` | `200`, `400`, `401`, `501` |
+| `POST` | `/v1/runs/{run_id}/cancel` | `202`, `400`, `401`, `403`, `404`, `409`, `501` |
+| `GET` | `/v1/runs/{run_id}/webhook-deliveries` | `200`, `400`, `401`, `501` |
+| `GET` | `/v1/threads` | `200`, `400`, `401`, `501` |
+| `GET` | `/v1/threads/{id}` | `200`, `400`, `401`, `404`, `501` |
+| `POST` | `/v1/threads/{id}/fork` | `202`, `400`, `401`, `403`, `404`, `409`, `501` |
+| `DELETE` | `/v1/threads/{id}` | `204`, `400`, `401`, `403`, `404`, `409`, `501` |
+
+**Pagination (D-47), applied verbatim on every list route in this table plus the pre-existing
+`/v1/assistants*`/`/v1/schedules*`/`/v1/assistants/{id}/versions` routes:** `limit` (an omitted
+value defaults to 20; `0` or a value above 100 is `400 bad_request`, message "limit must be
+between 1 and 100") and an opaque `cursor` (`400 invalid_cursor` on anything malformed — never a
+`500`, never a silent full-table scan, never the cursor's internal encoding in the error message).
+`{ items, next_cursor }`, `next_cursor: null` on the last page, `{ items: [], next_cursor: null }`
+on an empty result (never a bare array, never `404`). The cursor is a keyset walk — a STABLE
+ordering for rows that already existed when the first page was fetched, but NOT a point-in-time
+snapshot: a row inserted after the first page was read may be omitted from the walk. Every list
+route's own `#[utoipa::path]` description states this explicitly. `crates/paladin-web/src/pagination.rs`
+(`resolve_limit`, `encode_cursor`/`decode_cursor`, base64url no-padding over compact JSON) is the
+one shared implementation `run_controller.rs`/`thread_controller.rs`/`assistant_controller.rs`/
+`schedule_controller.rs` all call — the two latter files' limit handling switched from a locally
+duplicated `parse_limit` to this shared helper in the same plan, with no behavior change beyond
+the newly typed `limit == 0` rejection (previously silently defaulted to 20 in both files).
+
+**Two-tier authorization scopes (D-46), applied on every mutating route across this whole phase:**
+invocation-shaped (`POST /runs`, `POST /runs/{id}/cancel`, `POST /threads/{id}/resume`, `POST
+/threads/{id}/fork`) — any authenticated principal, subject to the target assistant's own
+`allowed_roles` (empty ⇒ any authenticated caller), authorized entirely inside
+`RunSubmissionService` (`paladin-web` never resolves `allowed_roles` itself, ADR-0031); vs.
+registry-shaped (`POST`/`DELETE /assistants*`, `POST`/`PATCH`/`DELETE /schedules*`, `DELETE
+/threads/{id}`) — `require_admin`. Reads need authentication only. Proven at the router level (not
+just per-file) by `run_controller.rs`'s `run_controller_auth` test group, which hits a
+merged-in `/v1/assistants` admin route through the SAME `run_router` this table's own routes
+mount on.
+
+**Rate limiting (pre-existing `tower-governor` layer, D-44) proven on `/v1/runs*` for the first
+time this plan** — `run_controller_auth::rate_limited_request_is_429` applies the SAME
+`apply_rate_limit`/`RateLimitConfig` `/v1/agents/*` already used, confirming the layer generalizes
+to the new router with no route-specific wiring.
+
+`crates/paladin-web/openapi.json` was regenerated; the diff is exactly these seven new paths and
+their schemas, verified by `openapi_matches_committed_baseline` — every pre-existing path and
+schema is byte-identical.
+
+**SsrfGuard collapsed onto one shared implementation (D-42), not a new endpoint but recorded here
+since the wave_context called it out explicitly.** 27-14 (parallel wave, `src/application/
+services/run/schedule/admin.rs`) built its own standalone `SsrfGuard` because 27-13's real guard
+was not in that plan's worktree base at the time. This plan deletes that duplicate and routes
+`ScheduleService`'s write-time webhook check through `src/application/services/run/webhook::SsrfGuard`
+(the same guard 27-13's webhook client already uses at send time) — one guard, two call sites, no
+behavior change to either.
 
 ## 9.7 Deprecations
 

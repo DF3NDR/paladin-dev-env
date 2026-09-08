@@ -1,5 +1,5 @@
 //! Shared pagination primitives for every `/v1` list endpoint (D-47):
-//! [`PageQuery`], [`resolve_limit`], [`encode_cursor`]/[`decode_cursor`].
+//! `PageQuery`, `resolve_limit`, `encode_cursor`/`decode_cursor`.
 //!
 //! One `limit` + opaque `cursor` shape, applied verbatim by every list
 //! handler in this crate (`run_controller`, `thread_controller`,
@@ -7,8 +7,8 @@
 //! claim is a single sentence, not six independent ones.
 //!
 //! `limit` is clamped by validation, never silently: an omitted `limit`
-//! defaults to [`DEFAULT_PAGE_LIMIT`] (20); `Some(0)` and anything above
-//! [`MAX_PAGE_LIMIT`] (100) are rejected with `400 bad_request`; `Some(100)`
+//! defaults to `DEFAULT_PAGE_LIMIT` (20); `Some(0)` and anything above
+//! `MAX_PAGE_LIMIT` (100) are rejected with `400 bad_request`; `Some(100)`
 //! succeeds. `cursor` is an opaque, base64url (no padding) encoding of a
 //! compact JSON value whose shape is entirely this crate's own choice --
 //! never documented as a stable format a client should parse, and a

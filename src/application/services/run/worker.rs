@@ -38,13 +38,13 @@ use tokio_util::sync::CancellationToken;
 
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_battalion::engine::{EngineError, RunOutcome, WarEngine};
-use paladin_core::platform::container::battlefield::StateDelta;
+use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{ParleyRequest, ParleyResponse};
 use paladin_core::platform::container::run::{
-    Run, RunEventKind, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
+    ForkSpec, Run, RunEventKind, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
 };
-use paladin_core::platform::container::waypoint::Waypoint;
+use paladin_core::platform::container::waypoint::{Waypoint, WaypointId};
 use paladin_core::platform::container::webhook::{WebhookDelivery, WebhookDeliveryId};
 use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::paladin_port::PaladinPort;
@@ -149,7 +149,8 @@ impl Drop for LeaseHeartbeat {
 }
 
 /// What a worker does with a resolved workflow run, decided purely from the
-/// thread's latest [`Waypoint`] and the run's parked responses (D-09).
+/// thread's latest [`Waypoint`], the run's parked responses, and (D-45) the
+/// run's own `fork_from` (D-09).
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkerDispatch {
     /// No Waypoint exists yet for this thread: begin a fresh run.
@@ -160,19 +161,79 @@ pub enum WorkerDispatch {
     /// A Waypoint exists and the run carries parked responses: continue
     /// from it, delivering the responses (D-23).
     ResumeWith(Vec<ParleyResponse>),
+    /// `run.fork_from` is `Some` and the thread's latest Waypoint does not
+    /// yet reflect this fork point (`fork_of != Some(from)`) -- the fork
+    /// itself has not run yet: drive `WarEngine::fork` (D-45).
+    Fork {
+        /// The Waypoint to fork from.
+        from: String,
+        /// An optional state edit merged at the fork point.
+        edit: Option<serde_json::Value>,
+    },
 }
 
 impl WorkerDispatch {
-    /// Decide dispatch purely from whether a Waypoint exists and whether
-    /// responses are parked on the run -- the worker's single entry point
-    /// (D-09).
-    pub fn decide(latest: Option<&Waypoint>, pending: &[ParleyResponse]) -> WorkerDispatch {
+    /// Decide dispatch purely from whether a Waypoint exists, whether
+    /// responses are parked on the run, and the run's own `fork_from`
+    /// (D-09, D-45) -- the worker's single entry point.
+    ///
+    /// A fork not yet started (`fork_from` is `Some` and the latest
+    /// Waypoint's `fork_of` does not already match it) takes priority over
+    /// `Start`/`Resume`/`ResumeWith`: redelivery AFTER the fork Waypoint
+    /// exists falls through to the normal resume path below, since
+    /// `fork_of` then matches.
+    pub fn decide(
+        latest: Option<&Waypoint>,
+        pending: &[ParleyResponse],
+        fork_from: Option<&ForkSpec>,
+    ) -> WorkerDispatch {
+        if let Some(fork) = fork_from {
+            let already_forked = latest
+                .and_then(|wp| wp.fork_of.as_ref())
+                .map(|id| id.to_string() == fork.from_waypoint_id)
+                .unwrap_or(false);
+            if !already_forked {
+                return WorkerDispatch::Fork {
+                    from: fork.from_waypoint_id.clone(),
+                    edit: fork.edit.clone(),
+                };
+            }
+        }
         match latest {
             None => WorkerDispatch::Start,
             Some(_) if !pending.is_empty() => WorkerDispatch::ResumeWith(pending.to_vec()),
             Some(_) => WorkerDispatch::Resume,
         }
     }
+}
+
+/// Parse a Waypoint id string (as stored on [`ForkSpec::from_waypoint_id`])
+/// back into a [`WaypointId`], reusing its `#[serde(transparent)]`
+/// `Deserialize` impl over a bare JSON string -- `WaypointId` exposes no
+/// public string-parsing constructor of its own (core type, ADR-0016),
+/// mirroring `thread_controller::parse_waypoint_id`'s identical trick one
+/// layer up the stack.
+fn parse_fork_waypoint_id(raw: &str) -> Option<WaypointId> {
+    serde_json::from_value(serde_json::Value::String(raw.to_string())).ok()
+}
+
+/// Merge a fork's optional JSON `edit` object into a [`StateDelta`] (D-45).
+/// A non-object (or absent) edit yields an empty delta -- a no-op merge,
+/// never a panic; a key that fails [`FieldName::new`] (only the empty
+/// string) is silently dropped, since [`WarEngine::fork`] itself already
+/// rejects any field name its own schema does not declare via a typed
+/// `EngineError::Battlefield` at merge time.
+fn fork_edit_to_state_delta(edit: Option<serde_json::Value>) -> StateDelta {
+    let mut delta = StateDelta::new();
+    let Some(serde_json::Value::Object(map)) = edit else {
+        return delta;
+    };
+    for (key, value) in map {
+        if let Ok(field) = FieldName::new(key) {
+            delta.values.insert(field, value);
+        }
+    }
+    delta
 }
 
 /// What [`RunWorkerPool::run_once`] does with a successful [`RunOutcome`]
@@ -627,7 +688,11 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         };
 
         let latest = self.waypoint_port.latest(&run.thread_id).await?;
-        let dispatch = WorkerDispatch::decide(latest.as_ref(), &run.pending_responses);
+        let dispatch = WorkerDispatch::decide(
+            latest.as_ref(),
+            &run.pending_responses,
+            run.fork_from.as_ref(),
+        );
 
         // --- D-14, D-16: when an `engine_factory` is wired, build a FRESH
         // per-run engine carrying its own child `CancellationToken`,
@@ -684,6 +749,32 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 }
                 result
             }
+            WorkerDispatch::Fork { from, edit } => match parse_fork_waypoint_id(&from) {
+                Some(waypoint_id) => {
+                    let delta = fork_edit_to_state_delta(edit);
+                    run_engine
+                        .fork(&graph, &run.thread_id, waypoint_id, delta)
+                        .await
+                }
+                None => {
+                    // D-45: `from` is this service's own prior write
+                    // (`RunSubmissionService::fork` stores
+                    // `WaypointId::to_string()`), so a parse failure here
+                    // means the persisted row is corrupt -- record it as an
+                    // engine failure rather than silently ignoring it or
+                    // panicking. `heartbeat` is dropped (and stops) via the
+                    // normal early-return Drop, exactly as every other
+                    // return path in this function.
+                    drop(heartbeat);
+                    return self
+                        .record_engine_failure(
+                            &leased,
+                            &run,
+                            format!("corrupt fork_from.from_waypoint_id: {from}"),
+                        )
+                        .await;
+                }
+            },
         };
         // D-10: stop heartbeating the moment the run returns.
         drop(heartbeat);
@@ -1003,14 +1094,17 @@ mod tests {
 
     #[test]
     fn decide_returns_start_when_no_waypoint_exists() {
-        assert_eq!(WorkerDispatch::decide(None, &[]), WorkerDispatch::Start);
+        assert_eq!(
+            WorkerDispatch::decide(None, &[], None),
+            WorkerDispatch::Start
+        );
     }
 
     #[test]
     fn decide_returns_resume_when_waypoint_exists_and_no_pending_responses() {
         let waypoint = sample_waypoint();
         assert_eq!(
-            WorkerDispatch::decide(Some(&waypoint), &[]),
+            WorkerDispatch::decide(Some(&waypoint), &[], None),
             WorkerDispatch::Resume
         );
     }
@@ -1020,9 +1114,82 @@ mod tests {
         let waypoint = sample_waypoint();
         let responses = vec![sample_response()];
         assert_eq!(
-            WorkerDispatch::decide(Some(&waypoint), &responses),
+            WorkerDispatch::decide(Some(&waypoint), &responses, None),
             WorkerDispatch::ResumeWith(responses)
         );
+    }
+
+    // --- WorkerDispatch::decide (D-45, fork) -----------------------------
+
+    fn sample_fork_spec(from: &WaypointId) -> ForkSpec {
+        ForkSpec {
+            from_waypoint_id: from.to_string(),
+            edit: None,
+        }
+    }
+
+    #[test]
+    fn decide_returns_fork_when_no_waypoint_exists_yet_and_fork_from_is_set() {
+        let from = WaypointId::generate();
+        let fork = sample_fork_spec(&from);
+        assert_eq!(
+            WorkerDispatch::decide(None, &[], Some(&fork)),
+            WorkerDispatch::Fork {
+                from: from.to_string(),
+                edit: None,
+            }
+        );
+    }
+
+    #[test]
+    fn decide_returns_fork_when_latest_waypoint_fork_of_does_not_match() {
+        let from = WaypointId::generate();
+        let fork = sample_fork_spec(&from);
+        let mut waypoint = sample_waypoint();
+        waypoint.fork_of = None; // the mainline Waypoint being forked FROM
+        assert_eq!(
+            WorkerDispatch::decide(Some(&waypoint), &[], Some(&fork)),
+            WorkerDispatch::Fork {
+                from: from.to_string(),
+                edit: None,
+            }
+        );
+    }
+
+    #[test]
+    fn decide_falls_through_to_resume_once_fork_of_already_matches() {
+        let from = WaypointId::generate();
+        let fork = sample_fork_spec(&from);
+        let mut waypoint = sample_waypoint();
+        waypoint.fork_of = Some(from); // the fork Waypoint itself already exists
+        assert_eq!(
+            WorkerDispatch::decide(Some(&waypoint), &[], Some(&fork)),
+            WorkerDispatch::Resume
+        );
+    }
+
+    #[test]
+    fn parse_fork_waypoint_id_round_trips_a_valid_id() {
+        let id = WaypointId::generate();
+        assert_eq!(parse_fork_waypoint_id(&id.to_string()), Some(id));
+    }
+
+    #[test]
+    fn parse_fork_waypoint_id_rejects_garbage() {
+        assert_eq!(parse_fork_waypoint_id("not-a-uuid"), None);
+    }
+
+    #[test]
+    fn fork_edit_to_state_delta_merges_object_fields() {
+        let edit = serde_json::json!({ "field_a": 1, "field_b": "x" });
+        let delta = fork_edit_to_state_delta(Some(edit));
+        assert_eq!(delta.values.len(), 2);
+    }
+
+    #[test]
+    fn fork_edit_to_state_delta_is_empty_for_none() {
+        let delta = fork_edit_to_state_delta(None);
+        assert!(delta.values.is_empty());
     }
 
     // --- map_outcome ---------------------------------------------------

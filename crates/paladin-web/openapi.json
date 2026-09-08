@@ -2262,6 +2262,372 @@
         ]
       }
     },
+    "/v1/threads": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`GET /threads` -- paginated thread list, newest-activity-first (D-45,\nD-47). Authenticated, any role.",
+        "description": "A cursor walk gives a stable ordering for threads that already existed\nwhen the first page was fetched, but is NOT a point-in-time snapshot: a\nthread whose latest waypoint was written after the first page was read\nmay be omitted from the walk (D-47 backstop).\n\nReturns:\n- `200 OK` with [`ThreadListResponse`] on success; `{ items: [],\n  next_cursor: null }` when empty;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, or an unparseable\n  `cursor`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "operationId": "list_threads",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return, 1..=100 (default 20)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: threads updated after the first page was fetched may be omitted",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of threads; { items: [], next_cursor: null } when empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/threads/{id}": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`GET /threads/{id}` -- one thread's summary (D-45). Authenticated, any\nrole.",
+        "description": "Returns:\n- `200 OK` with [`ThreadResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` if no Waypoint exists for `id`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "operationId": "get_thread",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thread summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`DELETE /threads/{id}` -- delete a thread's whole Waypoint history\n(admin, D-45).",
+        "description": "Returns:\n- `204 No Content` on success;\n- `400 Bad Request` for an invalid thread id;\n- `403 Forbidden` for a non-admin principal;\n- `404 Not Found` if nothing was deleted;\n- `409 Conflict` (`thread_busy`) while a run is active on the thread;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "operationId": "delete_thread",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Thread deleted"
+          },
+          "400": {
+            "description": "Invalid thread id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Nothing was deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Thread busy -- a run is active on this thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/threads/{id}/fork": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`POST /threads/{id}/fork` -- submit a NEW run that continues the thread\nfrom a specific Waypoint, optionally editing state at the fork point\n(D-45, D-46).",
+        "description": "Invocation-shaped: any authenticated principal, subject to the target\nassistant's own `allowed_roles` (checked inside\n[`RunSubmissionPort::fork`] -- `paladin-web` has no visibility into\n`allowed_roles` itself, ADR-0031).\n\nReturns:\n- `202 Accepted` with [`ForkThreadResponse`] on success;\n- `400 Bad Request` for an invalid thread id or `webhook_url_rejected`\n  (write-time SSRF guard, D-42);\n- `403 Forbidden` if the principal's role is not permitted;\n- `404 Not Found` for an unknown thread or an unknown `from_waypoint_id`;\n- `409 Conflict` (`thread_busy`) while a run is already active on the\n  thread;\n- `501 Not Implemented` if no run submission backend is configured.",
+        "operationId": "fork_thread",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForkThreadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Fork accepted; a new run continues the thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForkThreadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id, or webhook_url_rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not permitted for this assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown thread or waypoint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Thread busy -- a run is already active on this thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run submission backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/threads/{id}/history": {
       "get": {
         "tags": [
@@ -3018,6 +3384,52 @@
           }
         }
       },
+      "ForkThreadRequest": {
+        "type": "object",
+        "description": "Request body for `POST /threads/{id}/fork`.",
+        "required": [
+          "from_waypoint_id"
+        ],
+        "properties": {
+          "edit": {
+            "type": "object",
+            "description": "An optional state edit merged at the fork point."
+          },
+          "from_waypoint_id": {
+            "type": "string",
+            "description": "The Waypoint to fork from."
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunWebhookRequestDto",
+                "description": "An optional webhook delivery target for the forked run's lifecycle\nevents."
+              }
+            ]
+          }
+        }
+      },
+      "ForkThreadResponse": {
+        "type": "object",
+        "description": "Response body for a successful `POST /threads/{id}/fork` (`202 Accepted`).",
+        "required": [
+          "run_id",
+          "thread_id"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "description": "The newly created forked run's identity."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread the fork continues on."
+          }
+        }
+      },
       "HistoryResponse": {
         "type": "object",
         "description": "Response body for `GET /threads/{id}/history`.\n\n`next_cursor` is `None` on the last page; otherwise it is the last\nreturned item's `waypoint_id`, opaque to clients (D-27) -- its internal\nstructure may change (PLAT-06) without this being a breaking change.",
@@ -3655,6 +4067,65 @@
           }
         }
       },
+      "ThreadListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /threads`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadSummaryDto"
+            },
+            "description": "The page of thread summaries, newest-activity-first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, `None` on the last page."
+          }
+        }
+      },
+      "ThreadResponse": {
+        "type": "object",
+        "description": "Response body for `GET /threads/{id}`.",
+        "required": [
+          "thread_id",
+          "latest_status",
+          "latest_waypoint_id",
+          "updated_at"
+        ],
+        "properties": {
+          "active_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thread's currently active run id, if [`ThreadApiState::runs`] is\nwired and one exists."
+          },
+          "latest_status": {
+            "type": "string",
+            "description": "Stable, lowercase status label of the thread's latest waypoint."
+          },
+          "latest_waypoint_id": {
+            "type": "string",
+            "description": "The thread's latest waypoint id."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread's identity."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the latest waypoint was created."
+          }
+        }
+      },
       "ThreadStateResponse": {
         "type": "object",
         "description": "Response body for `GET /threads/{id}/state`.\n\n`parleys`/`responses` are always present, empty unless `status` is\n`\"awaiting_input\"` (Test 2: a running/completed thread carries the\nsummary fields with no outstanding parleys, not an omitted key).",
@@ -3705,6 +4176,37 @@
           "waypoint_id": {
             "type": "string",
             "description": "The returned Waypoint's own identity."
+          }
+        }
+      },
+      "ThreadSummaryDto": {
+        "type": "object",
+        "description": "Wire projection of a [`paladin_ports::output::waypoint_port::ThreadSummary`]\nfor `GET /threads`.\n\n**Known limitation:** `ThreadSummary` (the port this list is built from)\ncarries no `waypoint_id` field -- only [`ThreadResponse`] (`GET\n/threads/{id}`, built from a full [`Waypoint`]) can report one. Adding a\n`waypoint_id` to `ThreadSummary`/`WaypointPort::list_threads` would touch\nevery backend adapter in `paladin-storage`, outside this plan's declared\nfile scope -- documented here rather than silently omitted without\nexplanation.",
+        "required": [
+          "thread_id",
+          "latest_status",
+          "updated_at"
+        ],
+        "properties": {
+          "active_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thread's currently active run id, if [`ThreadApiState::runs`] is\nwired and one exists."
+          },
+          "latest_status": {
+            "type": "string",
+            "description": "Stable, lowercase status label of the thread's latest waypoint."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread's identity."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the thread's latest waypoint was created."
           }
         }
       },

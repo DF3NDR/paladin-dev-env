@@ -3,32 +3,18 @@
 //! Validate-then-persist: [`ScheduleService::create`]/[`ScheduleService::patch`] validate
 //! the cron (5/6 field via `paladin_storage::cron::parse_run_cron`), the IANA timezone
 //! (same call), the assistant reference (`AssistantResolver::resolve`, if a resolver is
-//! wired via [`ScheduleService::with_resolver`]) and the webhook URL (a write-time SSRF
-//! guard, D-42) — nothing is ever persisted until every check passes.
+//! wired via [`ScheduleService::with_resolver`]) and the webhook URL (the shared write-time
+//! SSRF guard, D-42) — nothing is ever persisted until every check passes.
 //!
-//! # The write-time SSRF guard (D-42)
+//! # The write-time SSRF guard (D-42, collapsed onto 27-13's shared guard in 27-15)
 //!
-//! [`SsrfGuard::check_url`] is this plan's own standalone implementation of D-42's table:
-//! reject non-`http(s)` schemes and any literal-IP host that classifies as loopback,
-//! link-local (`169.254.0.0/16` — which already covers the metadata address
-//! `169.254.169.254` — and `fe80::/10`), RFC1918, unique-local (`fc00::/7`) or unspecified,
-//! overridable only by `allow_private`. 27-13's sibling plan builds the SAME check as
-//! `src/application/services/run/webhook/ssrf.rs`'s `SsrfGuard::check_url`, applied at BOTH
+//! 27-14 (this module's own plan) built an independent, standalone `SsrfGuard` copy here
+//! because 27-13's real guard (`src/application/services/run/webhook/ssrf.rs`) was not in
+//! that plan's parallel-wave worktree base. Both waves have since landed, so this module now
+//! routes through [`super::super::webhook::SsrfGuard`] directly — ONE guard applied at both
 //! write time (here, on schedule create/patch) and send time (27-13's webhook client, on
-//! every delivery attempt) — this module's copy is written so a later plan (27-15) can
-//! delete it and route both call sites through 27-13's shared guard with no behavior
-//! change, just a `use` update (the `check_url` name and signature are chosen to match).
-//!
-//! A non-IP-literal hostname is accepted by this WRITE-time check without a live DNS
-//! resolution dependency (this facade has no reason to hold a resolver just to validate a
-//! schedule at create/patch time); a hostname that only later resolves to a private address
-//! is still caught at SEND time by 27-13's guard, which resolves immediately before every
-//! delivery attempt. This is a documented, intentional scope boundary, not an oversight —
-//! see this crate's `security.instructions.md` precedent of naming a gap rather than
-//! claiming coverage that does not exist.
-
-use std::net::{Ipv4Addr, Ipv6Addr};
-
+//! every delivery attempt), never two independently-maintained copies of the same
+//! security-relevant classification table (D-42 wave_context, 27-15).
 use async_trait::async_trait;
 
 use paladin_core::platform::container::run_schedule::{
@@ -49,83 +35,6 @@ use super::service::ScheduleService;
 
 fn default_timezone() -> String {
     "UTC".to_string()
-}
-
-/// Write-time (and, in 27-13, send-time) guard against SSRF via a schedule's webhook URL
-/// (D-42). `allow_private` defaults to `false` — the X-09 safe default; a future
-/// `webhooks.allow_private` config knob (owned outside this plan's file scope) is what would
-/// flip it.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SsrfGuard {
-    /// Overrides every host-classification rejection when `true` (D-42,
-    /// `webhooks.allow_private`). Defaults to `false`.
-    pub allow_private: bool,
-}
-
-impl SsrfGuard {
-    /// Construct a guard with `allow_private` set explicitly.
-    pub fn new(allow_private: bool) -> Self {
-        Self { allow_private }
-    }
-
-    /// Reject a webhook URL per D-42's table. `Ok(())` when the URL is acceptable to send an
-    /// unattended, credentialed request to.
-    ///
-    /// # Errors
-    ///
-    /// Returns a human-readable rejection reason (never persisted verbatim to a client
-    /// without being wrapped in a [`ValidationViolation`] by the caller).
-    pub fn check_url(&self, raw_url: &str) -> Result<(), String> {
-        let parsed = url::Url::parse(raw_url).map_err(|e| format!("invalid webhook URL: {e}"))?;
-        match parsed.scheme() {
-            "http" | "https" => {}
-            other => {
-                return Err(format!(
-                    "webhook URL scheme must be http or https, got {other:?}"
-                ));
-            }
-        }
-        if self.allow_private {
-            return Ok(());
-        }
-        let Some(host) = parsed.host() else {
-            return Err("webhook URL must have a host".to_string());
-        };
-        match host {
-            url::Host::Domain(domain) => {
-                if domain.eq_ignore_ascii_case("localhost") {
-                    return Err("webhook URL host must not be localhost".to_string());
-                }
-                Ok(())
-            }
-            url::Host::Ipv4(ip) => classify_ipv4(ip),
-            url::Host::Ipv6(ip) => classify_ipv6(ip),
-        }
-    }
-}
-
-fn classify_ipv4(ip: Ipv4Addr) -> Result<(), String> {
-    if ip.is_loopback() || ip.is_link_local() || ip.is_private() || ip.is_unspecified() {
-        return Err(format!(
-            "webhook URL host {ip} resolves to a disallowed loopback/link-local/private/unspecified address"
-        ));
-    }
-    Ok(())
-}
-
-fn classify_ipv6(ip: Ipv6Addr) -> Result<(), String> {
-    if let Some(mapped) = ip.to_ipv4_mapped() {
-        return classify_ipv4(mapped);
-    }
-    let segments = ip.segments();
-    let is_link_local = (segments[0] & 0xffc0) == 0xfe80; // fe80::/10
-    let is_unique_local = (segments[0] & 0xfe00) == 0xfc00; // fc00::/7
-    if ip.is_loopback() || ip.is_unspecified() || is_link_local || is_unique_local {
-        return Err(format!(
-            "webhook URL host {ip} resolves to a disallowed loopback/link-local/unique-local/unspecified address"
-        ));
-    }
-    Ok(())
 }
 
 /// Map a [`CronParseError`] (other than [`CronParseError::UnknownTimezone`], handled
@@ -223,12 +132,12 @@ impl ScheduleAdminPort for ScheduleService {
         }
 
         if let Some(webhook) = &create.webhook
-            && let Err(message) = self.ssrf_guard.check_url(&webhook.url)
+            && let Err(rejection) = self.ssrf_guard.check_url(&webhook.url).await
         {
             violations.push(ValidationViolation::new(
                 "/webhook/url",
                 "webhook_url_rejected",
-                message,
+                rejection.to_string(),
             ));
         }
 
@@ -343,12 +252,12 @@ impl ScheduleAdminPort for ScheduleService {
         }
 
         if let Some(webhook) = &update.webhook
-            && let Err(message) = self.ssrf_guard.check_url(&webhook.url)
+            && let Err(rejection) = self.ssrf_guard.check_url(&webhook.url).await
         {
             violations.push(ValidationViolation::new(
                 "/webhook/url",
                 "webhook_url_rejected",
-                message,
+                rejection.to_string(),
             ));
         }
 
@@ -391,72 +300,5 @@ impl ScheduleAdminPort for ScheduleService {
 
     async fn delete(&self, schedule_id: &RunScheduleId) -> Result<(), ScheduleAdminError> {
         self.repo.delete(schedule_id).await.map_err(map_repo_error)
-    }
-}
-
-#[cfg(test)]
-mod ssrf_guard_tests {
-    use super::SsrfGuard;
-
-    #[test]
-    fn rejects_non_http_scheme() {
-        let guard = SsrfGuard::default();
-        assert!(guard.check_url("ftp://example.com/hook").is_err());
-    }
-
-    #[test]
-    fn rejects_loopback_ipv4() {
-        let guard = SsrfGuard::default();
-        assert!(guard.check_url("http://127.0.0.1/hook").is_err());
-    }
-
-    #[test]
-    fn rejects_metadata_link_local_ipv4() {
-        let guard = SsrfGuard::default();
-        assert!(
-            guard
-                .check_url("http://169.254.169.254/latest/meta-data")
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn rejects_rfc1918_ipv4() {
-        let guard = SsrfGuard::default();
-        assert!(guard.check_url("http://10.0.0.5/hook").is_err());
-        assert!(guard.check_url("http://192.168.1.1/hook").is_err());
-    }
-
-    #[test]
-    fn rejects_unspecified_ipv4() {
-        let guard = SsrfGuard::default();
-        assert!(guard.check_url("http://0.0.0.0/hook").is_err());
-    }
-
-    #[test]
-    fn rejects_loopback_and_unique_local_ipv6() {
-        let guard = SsrfGuard::default();
-        assert!(guard.check_url("http://[::1]/hook").is_err());
-        assert!(guard.check_url("http://[fc00::1]/hook").is_err());
-        assert!(guard.check_url("http://[fe80::1]/hook").is_err());
-    }
-
-    #[test]
-    fn rejects_localhost_hostname() {
-        let guard = SsrfGuard::default();
-        assert!(guard.check_url("http://localhost/hook").is_err());
-    }
-
-    #[test]
-    fn accepts_public_https_hostname() {
-        let guard = SsrfGuard::default();
-        assert!(guard.check_url("https://example.com/hook").is_ok());
-    }
-
-    #[test]
-    fn allow_private_overrides_every_rejection() {
-        let guard = SsrfGuard::new(true);
-        assert!(guard.check_url("http://127.0.0.1/hook").is_ok());
-        assert!(guard.check_url("http://169.254.169.254/latest").is_ok());
     }
 }

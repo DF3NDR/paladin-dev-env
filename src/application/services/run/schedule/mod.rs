@@ -9,14 +9,14 @@
 //! from an HTTP-submitted run.
 
 /// `impl ScheduleAdminPort for ScheduleService` (PLAT-05, D-42, D-46) --
-/// validate-then-persist create/get/list/patch/delete, plus `SsrfGuard`,
-/// this plan's own write-time SSRF check (D-42).
+/// validate-then-persist create/get/list/patch/delete. The write-time SSRF
+/// check routes through the shared `super::webhook::SsrfGuard` (collapsed
+/// from this module's own 27-14-era duplicate in 27-15).
 pub mod admin;
 /// `ScheduleService`, `ScheduleServiceOptions`, `ScheduleTickOutcome`,
 /// `SkipReason` -- the claim-then-submit tick loop itself.
 pub mod service;
 
-pub use admin::SsrfGuard;
 pub use service::{ScheduleService, ScheduleServiceOptions, ScheduleTickOutcome, SkipReason};
 
 /// `schedule_restart_exactly_once`, `two_services_one_tick_exactly_one_fire`,

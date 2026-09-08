@@ -222,6 +222,16 @@ axum = "0.8.4"
 # mirroring `paladin-web`'s own test convention -- dev-only, unified with
 # `paladin-web`'s pinned `tower = "0.5"` by the workspace resolver.
 tower = { version = "0.5", features = ["util"] }
+# `src/application/services/run/tracer_e2e.rs` (Phase 27, Task 3, D-11) is
+# the only crate that sees the engine, the queue adapter and the HTTP
+# router at once, and mounts `paladin-web`'s `run_router` over a real
+# `WarEngine` via `tower::util::oneshot` -- the same pattern as
+# `paladin-server.rs`'s own test module above. `paladin-web` is normally an
+# OPTIONAL runtime dependency (the `web-server` feature, `[dependencies]`
+# above); this unconditional dev-dependency entry is what makes it
+# available to `cargo test -p paladin-ai --lib` with no feature flags,
+# mirroring how `axum`/`tower` above are already dev-only-unconditional.
+paladin-web = { workspace = true }
 
 # Integration test configuration
 [[test]]

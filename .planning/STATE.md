@@ -5,12 +5,12 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 27
 current_phase_name: Platform API
 status: planning
-stopped_at: Phase 26 complete and UAT-closed (135/135 pass, 0 issues; verification re-verified passed 10/10 after close-out commits); Phase 27 ready to discuss and plan
-last_updated: "2026-09-07T22:47:45.000Z"
+stopped_at: Phase 27 context gathered
+last_updated: "2026-09-08T00:01:29.232Z"
 last_activity: 2026-09-07
-last_activity_desc: Phase 26 UAT complete (gap G-26-135 fixed, two SUMMARY coverage blocks repaired)
+last_activity_desc: Phase 26 complete, transitioned to Phase 27
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 6
   total_plans: 85
   completed_plans: 85
@@ -845,14 +845,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 26 complete (2026-09-07) — 21/21 plans merged, verification passed 10/10 (re-verified after the code-review fix pass), `26-REVIEW.md` 6 findings → 5 fixed/documented in `26-REVIEW-FIX.md`, IN-01 open (advisory). Next: `/gsd-secure-phase 26`, then `/gsd-discuss-phase 27`.
+**Stopped at:** Phase 27 context gathered
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-06T23:48:34.927Z
-Resume file: .planning/phases/26-agent-runtime-enhancements/26-VERIFICATION.md
+Last session: 2026-09-08T00:01:29.158Z
+Resume file: .planning/phases/27-platform-api/27-CONTEXT.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

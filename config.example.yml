@@ -244,3 +244,61 @@ agents:
     model: "gpt-4"
     system_prompt: "You write concise summaries."
     allowed_roles: ["admin"] # restricted to admins
+
+# ─────────────────────────────────────────────────────────────────────────
+# Platform API (Phase 27, PLAT-01..06) — run store, queue, worker, stream,
+# assistants, schedules, webhooks
+# ─────────────────────────────────────────────────────────────────────────
+# These seven subsystems are NOT part of this YAML file's own schema (X-09):
+# `Settings` never carries them, so there is no `run_store:` (etc.) key to
+# uncomment below — each is its own `Default` + `apply_env_overrides()` +
+# `validate()` config struct, read directly from environment variables at
+# startup, mirroring `waypoint_store` (Phase 24)'s identical env-only
+# precedent. Every one defaults to OFF or today's behaviour (D-50): this
+# file, completely unmodified, boots a v0.10 `paladin-server` with the run
+# server fully disabled and every new route (`/v1/runs*`, `/v1/assistants*`,
+# `/v1/schedules*`) answering `501 not_implemented`.
+#
+# run_store: which durable Run backend (if any) is wired.
+#   APP_RUN_STORE_BACKEND=disabled|sqlite|postgres    (default: disabled)
+#   APP_RUN_STORE_PATH=sqlite://./data/runs.db        (sqlite backend)
+#   APP_RUN_STORE_URL_ENV=RUN_DATABASE_URL            (postgres backend — names
+#                                                      the env var holding the
+#                                                      connection url, never
+#                                                      the url itself)
+#
+# run_queue: which Run dispatch queue backend is wired.
+#   APP_RUN_QUEUE_BACKEND=in_memory|redis             (default: in_memory)
+#   APP_RUN_QUEUE_URL_ENV=RUN_QUEUE_REDIS_URL         (redis backend)
+#   APP_RUN_QUEUE_KEY_PREFIX=paladin:run_queue        (default shown)
+#
+# run_worker: the worker pool's concurrency/lease/probe tuning.
+#   APP_RUN_WORKER_CONCURRENCY=4                      (default shown)
+#   APP_RUN_WORKER_LEASE_SECONDS=60                   (default shown; heartbeat
+#                                                      is derived as lease/4)
+#   APP_RUN_WORKER_MIN_PROBE_INTERVAL_MS=1000         (default shown)
+#
+# run_stream: the degraded-mode SSE polling interval (GET /runs/{id}/stream).
+#   APP_RUN_STREAM_POLL_INTERVAL_MS=1000              (default shown)
+#
+# assistants: whether GET /assistants merges in synthetic code-registry
+# entries — the ONE subsystem here that defaults ON (D-32): the data is
+# already discoverable through the pre-existing `agents:` registry above.
+#   APP_ASSISTANTS_EXPOSE_CODE_REGISTRY=true          (default shown)
+#
+# schedules: whether the ScheduleService cron tick loop runs at all. The
+# persisted schema is unaffected by this flag; only the periodic
+# claim-and-fire loop is gated.
+#   APP_SCHEDULES_ENABLED=false                       (default shown)
+#   APP_SCHEDULES_TICK_INTERVAL_MS=1000               (default shown)
+#
+# webhooks: the webhook delivery SSRF guard and retry-schedule tuning.
+#   APP_WEBHOOKS_ALLOW_PRIVATE=false                  (default shown — the
+#                                                      ONLY override of the
+#                                                      SSRF guard; flipping it
+#                                                      on is a deliberate,
+#                                                      documented widening of
+#                                                      the deployment's SSRF
+#                                                      surface)
+#   APP_WEBHOOKS_MAX_ATTEMPTS=5                       (default shown)
+#   APP_WEBHOOKS_TIMEOUT_SECS=10                      (default shown)

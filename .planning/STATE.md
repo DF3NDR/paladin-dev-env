@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 27
 current_phase_name: platform-api
 status: executing
-stopped_at: "Phase 27 executed (18/18 plans merged, gates green); verification gaps_found — 5 CI-evidenced gaps (Redis attempt off-by-one, Postgres µs timestamps, sdk-clients smoke, api-surface baseline, e2e_platform_api not run in CI) + code review 1 critical/4 warnings; next: /gsd-plan-phase 27 --gaps"
-last_updated: "2026-09-08T12:56:08.932Z"
+stopped_at: "Phase 27 gap closure: 6/7 plans merged (27-19..27-24 + 27-25 Task 1 evidence record); 27-25 at blocking human-verify checkpoint. CI run 34238527001 @ a1dbe74e: postgres-integration, api-surface, sdk-clients, e2e-platform-api GREEN; redis-queue + coverage RED on ONE new defect — contract_tests::run_all shares one queue across clauses (ack clause sees depth 6 not 1, contract_tests.rs:188); 27-19's attempt fix itself passes. Decision needed: fix run_all isolation (plan against it) before re-verifying."
+last_updated: "2026-09-08T14:44:23.645Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 27 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 110
-  completed_plans: 103
+  completed_plans: 109
 ---
 
 # Project State
@@ -845,14 +845,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 27 executed (18/18 plans merged, gates green); verification gaps_found — 5 CI-evidenced gaps (Redis attempt off-by-one, Postgres µs timestamps, sdk-clients smoke, api-surface baseline, e2e_platform_api not run in CI) + code review 1 critical/4 warnings; next: /gsd-plan-phase 27 --gaps
+**Stopped at:** Phase 27 gap closure: 6/7 plans merged (27-19..27-24 + 27-25 Task 1 evidence record); 27-25 at blocking human-verify checkpoint. CI run 34238527001 @ a1dbe74e: postgres-integration, api-surface, sdk-clients, e2e-platform-api GREEN; redis-queue + coverage RED on ONE new defect — contract_tests::run_all shares one queue across clauses (ack clause sees depth 6 not 1, contract_tests.rs:188); 27-19's attempt fix itself passes. Decision needed: fix run_all isolation (plan against it) before re-verifying.
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-08T11:58:03.994Z
-Resume file: .planning/phases/27-platform-api/27-VERIFICATION.md
+Last session: 2026-09-08T14:44:23.586Z
+Resume file: .planning/phases/27-platform-api/27-CI-EVIDENCE.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

@@ -604,8 +604,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 27-07-PLAN.md — `CancellationProbe` engine seam, debounced DB probe, persisted-flag-first cancel, cross-instance test (PLAT-02)
-- [ ] 27-08-PLAN.md — Resume re-enqueues the same `run_id`; `ResumeAccepted`/`ResumeAcceptedResponse.run_id`; §9.2/§9.6 (PLAT-03)
+- [x] 27-07-PLAN.md — `CancellationProbe` engine seam, debounced DB probe, persisted-flag-first cancel, cross-instance test (PLAT-02)
+- [x] 27-08-PLAN.md — Resume re-enqueues the same `run_id`; `ResumeAccepted`/`ResumeAcceptedResponse.run_id`; §9.2/§9.6 (PLAT-03)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

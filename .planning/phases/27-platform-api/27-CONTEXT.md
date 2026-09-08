@@ -1,6 +1,10 @@
 # Phase 27: Platform API - Context
 
 **Gathered:** 2026-09-07
+**Amended:** 2026-09-08 — six factual corrections applied after `27-RESEARCH.md` disproved
+claims made during discussion. D-34 is **revised** (its rationale was void); D-08, D-25, D-33 and
+D-53 keep their decisions but carry corrected facts and, for D-33, a narrowed scope. Each is marked
+inline with `Correction (research, 2026-09-08)`. See `27-RESEARCH.md` for the evidence.
 **Status:** Ready for planning
 
 <domain>
@@ -125,8 +129,14 @@ plainly reversible.
   PRD 06 §2.2 leaves this to the implementer and says the contract suite decides. The ZSET pattern
   makes claim-and-expire a single atomic `EVAL`, gives `extend_lease` and `nack(delay)` as trivial
   score updates, and the `script` feature is already enabled on the pinned `redis 0.32.2`
-  (`crates/paladin-storage/Cargo.toml:61-64`) with a Lua/`scan_match` house style established by
-  the Phase 25 node-cache adapter (`crates/paladin-storage/src/node_cache/redis.rs`). Rejected:
+  (`crates/paladin-storage/Cargo.toml:61-64`). **Correction (research, 2026-09-08): there is no Lua
+  precedent in this tree** — no `EVAL`/`Script` call exists anywhere, including
+  `crates/paladin-storage/src/node_cache/redis.rs`, whose reusable house style is the connection
+  manager and `safe_iterators`/`scan_match`, not scripting. The ZSET+Lua lease adapter is therefore
+  **greenfield**, and the plan must budget for establishing the idiom (script loading, `NOSCRIPT`
+  reload, testing) rather than copying one. The decision stands — the enabled `script` feature and
+  the contract suite still make it the right shape — but the rationale no longer leans on a
+  precedent that does not exist. Rejected:
   Streams + consumer groups — redelivery is native, but `XCLAIM`-based lease extension and delayed
   requeue are awkward and the pending-entries list becomes a second source of truth. —
   **Reversibility:** reversible — the contract suite is the contract; the backend is swappable
@@ -245,7 +255,18 @@ plainly reversible.
   `superstep`, `node_started`, `node_finished`, `state_delta`, `parley`, `done`, `error` (PRD 06
   PLAT-FR-07) are the published contract, specified in the OpenAPI schema. Today's `TraceEvent`
   variants map onto them in **one function**, and unmapped variants are dropped; when OBS-01 lands
-  the authoritative enum, that single function is the only thing that changes. Rejected: defining
+  the authoritative enum, that single function is the only thing that changes.
+  **Correction (research, 2026-09-08): a `TraceEvent` mapping alone cannot produce all seven.**
+  `TraceEvent` has exactly eight variants today — `RunStarted`, `SuperstepStarted`, `NodeStarted`,
+  `NodeFinished`, `DeltaMerged`, `WaypointSaved`, `RunFinished`, `FallbackHop`
+  (`crates/paladin-ports/src/output/trace_sink_port.rs:67-152`) — with **no** parley variant, no
+  error variant, and a `RunFinished` that does not distinguish success from failure. So the bus has
+  two producers, not one: the `TraceSink` adapter emits `superstep` / `node_started` /
+  `node_finished` / `state_delta`, and the **worker** publishes `parley`, `done` and `error`
+  directly from the `RunOutcome` it already matches on
+  (`crates/paladin-battalion/src/engine/mod.rs:272-312`, whose `AwaitingInput` / `Completed` /
+  `Failed` / `Halted` arms carry exactly the needed information). Phase 28 can later collapse this
+  into the single mapping function once the authoritative enum carries those cases. Rejected: defining
   the authoritative enum here — it is explicitly Phase 28's deliverable and PRD 06 lists PRD 07 as a
   soft dependency for exactly this reason. — **Reversibility:** costly — the wire names are a
   published contract; the internal enum is not.
@@ -309,14 +330,32 @@ plainly reversible.
   minimal fingerprint-keyed `GraphRegistry`
   (`src/application/services/parley/registry.rs`) behind the unchanged `ParleyPort` — the
   replacement 24-CONTEXT D-26 anticipated by name.
-- **D-34: The JSON Schema is hand-authored, checked in, and drift-guarded by an example corpus.**
-  `docs/schemas/wargraph-doc.schema.json` plus an mdBook page. The guard: example docs under
-  `crates/paladin-battalion/tests/fixtures/graph_docs/` must both (a) validate against the checked-in
-  schema via `jsonschema` as a **dev-dependency** and (b) deserialize → compile → re-serialize
-  byte-identically. A struct field added without a schema update fails (a); a schema tightened
-  without a struct update fails (a) too. Rejected: deriving the schema with `schemars` — a runtime
-  derive dependency on a public type, for a document published once, against X-11.4's "do not grow
-  the default dependency graph"; `schemars` is only in `Cargo.lock` transitively today.
+  **Scope correction (research, 2026-09-08): `WarGraphDoc` node kinds are `{Paladin, Gate,
+  Workflow}` for v0.10 — `Function` nodes are NOT expressible.** `EngineRegistries`
+  (`crates/paladin-battalion/src/engine/registries.rs:32-50`) carries `edge_evaluators`,
+  `retry_predicates`, `error_handlers` and `output_schemas` — there is **no** name→`Arc<dyn
+  StateNode>` registry, so a data-driven document has no way to name an arbitrary `Function` node's
+  behavior. The options were to add a node registry (new public surface, an X-10 event, and a
+  capability no PLAT FR asks for) or to scope the document to the kinds that *are* nameable. Scoping
+  wins: it is the smallest change preserving D-33's intent, every PRD 06 acceptance path (a workflow
+  assistant with a `Gate`) is still expressible, and a node registry stays available later as a
+  purely additive change. The unsupported kind must produce a **typed `CompileError` naming the
+  limitation**, never a silent drop, and the limitation is documented on the JSON Schema page.
+- **D-34 (REVISED after research, 2026-09-08): The JSON Schema is DERIVED with `schemars` and
+  checked in as a golden file.** The original decision hand-authored the schema to avoid adding a
+  runtime dependency — **that rationale was factually wrong and is withdrawn**: `schemars = "1.2"`
+  is already a **direct workspace dependency** (`Cargo.toml:143`), added in Phase 26 plan 26-17
+  precisely for `schemars::schema_for!`, while `jsonschema` — the crate the hand-authored guard
+  needed — is **not in `Cargo.lock` at all** (0 occurrences) and would have been the genuinely new
+  dependency. With the facts corrected, deriving is both cheaper and better guarded. So:
+  `WarGraphDoc` derives `JsonSchema`; a test runs `schema_for!(WarGraphDoc)` and asserts byte
+  equality against the checked-in `docs/schemas/wargraph-doc.schema.json` (regenerated by an
+  `--bless`-style path, mirroring how this repo blesses other golden files), plus an mdBook page.
+  Example docs under `crates/paladin-battalion/tests/fixtures/graph_docs/` still round-trip
+  deserialize → compile → re-serialize byte-identically. A struct field added without regenerating
+  the golden file now fails on the *derive* comparison rather than on a hand-maintained corpus —
+  a strictly stronger drift guard with no new dependency. Rejected (now): hand-authoring, which buys
+  nothing once `schemars` is already present and leaves the schema free to drift silently.
 - **D-35: Fingerprint stability is proven across a real process boundary, not a round trip.**
   `GraphFingerprint::from_canonical_bytes`
   (`crates/paladin-core/src/platform/container/waypoint.rs:391`) is content-addressed, so
@@ -462,7 +501,10 @@ plainly reversible.
   `ResumeAcceptedResponse` (`run_id`), and any pre-existing public type this epic touches — the
   verification pass diffs the public API and every unregistered change is a finding (X-10.1).
   §9.3: `hmac`, `croner`, `jsonschema` (dev-only), plus `ipnet` if the SSRF guard needs more than
-  `std::net::IpAddr` — each `cargo msrv verify`'d at 1.85 (X-11.1). §9.4: the `runs`, `assistants`,
+  `std::net::IpAddr` — each `cargo msrv verify`'d at **1.88** (X-11.1). **Correction (research,
+  2026-09-08): the workspace MSRV is 1.88** (`Cargo.toml:18`; CI's `msrv` job pins
+  `RUSTUP_TOOLCHAIN: "1.88"`), not the 1.85 the program overview still states — a later phase raised
+  it. Every "verify at 1.85" instruction in this phase reads 1.88. §9.4: the `runs`, `assistants`,
   `assistant_versions`, `schedules` and `webhook_deliveries` migrations. §9.5: every struct in
   D-50. §9.6: every new endpoint plus the resume-response field.
 - **D-54: Coverage stays at the 82% workspace floor (ADR-0006), and tests land inside each plan
@@ -509,7 +551,8 @@ None. `todo.match-phase 27` returned one match at score 0.2 — below the `--aut
   requirement.** X-01 hexagonal dependency rule; X-02 TDD + 82% floor; X-03 backward compatibility
   and the stop-and-flag rule; X-04 `schema_version` on every persisted type; X-05 `Send + Sync` and
   the multi-thread stress-test requirement; X-06 no new stringly-typed errors; X-07 feature gates;
-  X-08 docs; X-09 config structs; X-10 semver hygiene and the §9.2 register; X-11 MSRV 1.85 and
+  X-08 docs; X-09 config structs; X-10 semver hygiene and the §9.2 register; X-11 MSRV (stated as
+  1.85 there, **actually 1.88** today — see D-53) and
   dependency discipline.
 
 ### Program deliverable this phase appends to
@@ -594,8 +637,9 @@ None. `todo.match-phase 27` returned one match at score 0.2 — below the `--aut
   `ScheduleRepositoryPort` and the assistant repository should be near-mechanical copies of its
   shape.
 - **`crates/paladin-storage/src/node_cache/redis.rs`** — the Redis house style (connection manager,
-  Lua via the already-enabled `script` feature, `safe_iterators`), the closest analog for D-08's
-  sorted-set lease adapter.
+  `safe_iterators`/`scan_match`, error mapping), the closest analog for D-08's sorted-set lease
+  adapter. Note the limit research found: it contains **no Lua** — D-08's scripted lease is
+  greenfield and only the connection/error scaffolding transfers.
 - **`crates/paladin-storage/src/scheduler.rs:59-95`** — a working 5-field↔6-field cron normalization
   with a good error message, written to be unit-testable as a free function. D-38 extracts and
   reuses it rather than writing a second one. The adapter *around* it is deliberately not reused
@@ -616,9 +660,12 @@ None. `todo.match-phase 27` returned one match at score 0.2 — below the `--aut
 - **`crates/paladin-ports/src/output/trace_sink_port.rs`** — `TraceSink` + `#[non_exhaustive]
   TraceEvent`, already engine-wired; D-24's bus is a sink implementation, not new plumbing. Its
   "errors are diagnostics only" doc section is the contract D-14's probe copies.
-- **Dependency head start:** `hmac 0.12`, `croner`, `ipnet` and `schemars` are all already in
-  `Cargo.lock` transitively, so promoting the ones we need (D-38, D-41, possibly D-42) adds no new
-  tree and carries low MSRV risk — though X-11.1 still requires `cargo msrv verify` at 1.85 for each.
+- **Dependency head start (corrected by research, 2026-09-08):** `hmac 0.12`, `croner` and `ipnet`
+  are already resolved in `Cargo.lock` transitively, so promoting the ones we need (D-38, D-41,
+  possibly D-42) adds no new tree and carries low MSRV risk. `schemars 1.2` is stronger still — a
+  **direct** workspace dependency since Phase 26 (`Cargo.toml:143`), which is what flipped D-34.
+  `jsonschema` is **not** in the lockfile and is no longer needed. X-11.1 still requires
+  `cargo msrv verify` at **1.88** for each promotion.
 
 ### Established Patterns
 

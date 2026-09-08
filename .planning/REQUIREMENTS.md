@@ -256,7 +256,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
 
 ### Observability & Tooling (Doc 07, epic `OBS`)
 
-- [ ] **OBS-01**: Every run has a machine-consumable account: the authoritative serde `TraceEvent`
+- [x] **OBS-01**: Every run has a machine-consumable account: the authoritative serde `TraceEvent`
   enum with per-run monotonic `seq` (causal-order guarantee, gapless-or-counted-drops test),
   bounded-payload field changes (never full state values by default), and a `TraceSinkPort`
   whose slow/panicking implementations cannot stall or fail a run (bounded channel, drop-oldest,
@@ -385,7 +385,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | PLAT-04 | Phase 27 | Complete |
 | PLAT-05 | Phase 27 | Complete |
 | PLAT-06 | Phase 27 | Complete |
-| OBS-01 | Phase 28 | Pending |
+| OBS-01 | Phase 28 | Complete |
 | OBS-02 | Phase 28 | Pending |
 | OBS-03 | Phase 28 | Pending |
 | OBS-04 | Phase 28 | Pending |

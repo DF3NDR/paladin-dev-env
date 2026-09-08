@@ -1064,6 +1064,114 @@ jobs:
         if: always()
         run: docker compose -f docker/docker-compose.test.yml down -v
 
+  # Generated SDK clients smoke (PLAT-FR-17, D-49, 27-18): proves
+  # `crates/paladin-web/openapi.json` is genuinely generatable into a working Python
+  # AND TypeScript client, not just schema-valid — runs on every PR/push (no path
+  # filter, matching this file's own D-03 policy). `ubuntu-latest` ships Docker
+  # (27-RESEARCH.md Environment Availability), so the pinned image below is the
+  # primary path; the npm package is the documented fallback if the pull fails.
+  # Every assertion below is a REAL check on generated output (file counts, a
+  # compile step, a live 202 + terminal status), never a bare exit-code pass-through
+  # — this job's own prohibition (P1) is that it must not be able to go green on a
+  # client that failed to install, listed nothing, or submitted nothing.
+  sdk-clients:
+    name: Generated SDK Clients (Python + TypeScript) smoke
+    runs-on: ubuntu-latest
+    env:
+      # Pinned to the current stable v7.x tag (looked up on Docker Hub at
+      # execution time, 2026-09-08). Bump deliberately, not silently, when a
+      # newer v7.x lands.
+      OPENAPI_GENERATOR_IMAGE: "openapitools/openapi-generator-cli:v7.25.0"
+      OPENAPI_GENERATOR_NPM_FALLBACK: "@openapitools/openapi-generator-cli@2.41.0"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: sdk-clients
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate the Python client
+        run: |
+          set -euo pipefail
+          mkdir -p target/sdk/python target/sdk/typescript
+          if ! docker run --rm -v "$PWD:/local" "$OPENAPI_GENERATOR_IMAGE" generate \
+              -i /local/crates/paladin-web/openapi.json \
+              -g python \
+              -o /local/target/sdk/python \
+              --additional-properties packageName=openapi_client; then
+            echo "::warning::docker pull/run of $OPENAPI_GENERATOR_IMAGE failed — falling back to the npm openapi-generator-cli package (documented fallback, D-49)."
+            npx --yes "$OPENAPI_GENERATOR_NPM_FALLBACK" generate \
+              -i crates/paladin-web/openapi.json \
+              -g python \
+              -o target/sdk/python \
+              --additional-properties packageName=openapi_client
+          fi
+
+      - name: Generate the TypeScript client
+        run: |
+          set -euo pipefail
+          if ! docker run --rm -v "$PWD:/local" "$OPENAPI_GENERATOR_IMAGE" generate \
+              -i /local/crates/paladin-web/openapi.json \
+              -g typescript-fetch \
+              -o /local/target/sdk/typescript \
+              --additional-properties npmName=paladin-sdk,supportsES6=true; then
+            echo "::warning::docker pull/run of $OPENAPI_GENERATOR_IMAGE failed — falling back to the npm openapi-generator-cli package (documented fallback, D-49)."
+            npx --yes "$OPENAPI_GENERATOR_NPM_FALLBACK" generate \
+              -i crates/paladin-web/openapi.json \
+              -g typescript-fetch \
+              -o target/sdk/typescript \
+              --additional-properties npmName=paladin-sdk,supportsES6=true
+          fi
+
+      # Prohibition P1: a zero (or near-zero) generated tree must fail the job, not
+      # read as success because every later step happened to also exit 0.
+      - name: Assert the Python client generated a non-empty tree
+        run: |
+          set -euo pipefail
+          count=$(find target/sdk/python -type f | wc -l)
+          echo "generated $count files (python)"
+          if [ "$count" -lt 20 ]; then
+            echo "::error::Python client generation produced only $count files (< 20) — the generator likely failed silently."
+            exit 1
+          fi
+
+      - name: Assert the TypeScript client generated a non-empty tree
+        run: |
+          set -euo pipefail
+          count=$(find target/sdk/typescript -type f | wc -l)
+          echo "generated $count files (typescript)"
+          if [ "$count" -lt 20 ]; then
+            echo "::error::TypeScript client generation produced only $count files (< 20) — the generator likely failed silently."
+            exit 1
+          fi
+
+      - name: Build paladin-server
+        run: cargo build --bin paladin-server --features web-server
+
+      # Boots the server, waits for /health, pip-installs + runs smoke.py, npm
+      # ci + tsc + node smoke.ts, then stops the server — see
+      # scripts/sdk-smoke/run.sh's own module docs for the full sequence. Both
+      # scripts assert a real 202 from POST /v1/runs followed by a terminal
+      # status, and a non-empty items array from GET /v1/assistants — never a
+      # bare exit-code pass-through.
+      - name: Run the SDK smoke (both clients against a live server)
+        run: scripts/sdk-smoke/run.sh
+
   # Coverage measurement (PIPE-02) — MEASURE-ONLY as of this commit: no minimum-
   # threshold flag. D-04 requires the figure to be measured before the floor
   # derived from it can be set; plan 15-03 adds the threshold once this job has

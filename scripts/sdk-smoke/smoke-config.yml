@@ -1,0 +1,41 @@
+# Standalone Settings file for the `sdk-clients` CI job's smoke boot (D-49,
+# PLAT-FR-17) -- NOT a partial overlay: `Settings::load_from_file` reads exactly
+# one file with no merge, so every field `Settings` requires (no `#[serde(default)]`)
+# must be present here, mirroring `config.test.yml`'s own required top-level shape.
+#
+# Deviation (recorded in 27-18-SUMMARY.md): this file is not named in 27-18-PLAN.md's
+# `files_modified` frontmatter, but `scripts/sdk-smoke/run.sh` (which IS declared)
+# needs some config exposing a code-registered agent and a static test API key for
+# `paladin-server` to boot against -- `config.test.yml` has neither. A new,
+# narrowly-scoped file colocated with the script that needs it is the minimal
+# footprint that makes `run.sh` runnable.
+llm_type: "openai"
+llm_url: "https://api.openai.com/v1"
+llm_api_key: ""
+max_file_size: 10485760
+sources: []
+
+server:
+  host: "127.0.0.1"
+  port: 18080
+
+llm:
+  default_provider: "openai"
+
+# One resident, code-registered agent (D-32) -- the id `scripts/sdk-smoke/run.sh`
+# submits a run against. `allowed_roles` omitted: any authenticated caller (the
+# smoke scripts' own static API key, granted `admin`) may invoke it.
+agents:
+  - id: "sdk-smoke-agent"
+    model: "gpt-4"
+    system_prompt: "You are a helpful assistant used only by the SDK smoke test."
+
+http:
+  auth:
+    enabled: true
+    api_keys:
+      - key: "sdk-smoke-test-key"
+        name: "sdk-smoke"
+        role: "admin"
+  docs:
+    enabled: true

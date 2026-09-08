@@ -619,8 +619,8 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 27-13-PLAN.md — Webhooks: delivery table/adapters, SSRF guard (write + send), HMAC over exact bytes, no-redirect client, bounded-retry drain (PLAT-05)
-- [ ] 27-14-PLAN.md — `ScheduleAdminPort` + `/v1/schedules` routes (PLAT-05, PLAT-06)
+- [x] 27-13-PLAN.md — Webhooks: delivery table/adapters, SSRF guard (write + send), HMAC over exact bytes, no-redirect client, bounded-retry drain (PLAT-05)
+- [x] 27-14-PLAN.md — `ScheduleAdminPort` + `/v1/schedules` routes (PLAT-05, PLAT-06)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

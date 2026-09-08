@@ -12,3 +12,7 @@ pub mod in_memory;
 /// both unit tests inside each backend crate and future integration tests
 /// can call it.
 pub mod contract_tests;
+
+/// SQLite implementation, behind the `sqlite` feature (D-03).
+#[cfg(feature = "sqlite")]
+pub mod sqlite;

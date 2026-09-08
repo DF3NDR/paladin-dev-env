@@ -75,3 +75,17 @@ pub mod run;
 /// available (no feature gate); the Redis ZSET+Lua lease backend is added
 /// by a later plan behind the existing `redis-queue` feature.
 pub mod run_queue;
+
+/// Cron parsing for run schedules (D-38): `parse_run_cron` (5- and 6-field
+/// forms via `croner`, IANA timezones via `chrono-tz`) and
+/// `cron_field_count`, the counting primitive `scheduler.rs`'s own
+/// six-field `validate_cron_field_count` delegates to. Always compiled (no
+/// feature gate) -- `run_schedule::in_memory` needs it with no
+/// `sqlite`/`postgres` feature enabled.
+pub mod cron;
+
+/// `RunScheduleRepositoryPort` storage adapters (D-36, D-37). The in-memory
+/// backend is always available (no feature gate, mirroring `run`'s D-03
+/// precedent); SQLite and Postgres adapters are added behind the existing
+/// `sqlite`/`postgres` features.
+pub mod run_schedule;

@@ -46,6 +46,13 @@ thiserror  = { workspace = true }
 uuid       = { workspace = true }
 tokio      = { workspace = true }
 
+# croner/chrono-tz back `cron.rs`'s cron parsing (D-38) -- always compiled,
+# no feature gate, since `run_schedule`'s InMemory adapter needs them with
+# no `sqlite`/`postgres` feature enabled. Pinned to the same workspace
+# versions promoted in root Cargo.toml.
+croner     = { workspace = true }
+chrono-tz  = { workspace = true }
+
 # sqlx is optional: activated by the sqlite or mysql feature.
 sqlx = { workspace = true, optional = true }
 

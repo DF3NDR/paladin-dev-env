@@ -23,6 +23,12 @@
 /// plans behind their own feature flags.
 pub mod waypoint;
 
+/// `RunTracePort` storage adapters (OBS-02, D-17). The in-memory backend is
+/// always available (no feature gate, mirroring `waypoint`'s D-01
+/// precedent); SQLite and Postgres adapters are added behind the existing
+/// `sqlite`/`postgres` features.
+pub mod run_trace;
+
 /// `NodeCachePort` storage adapters (Doc 04 FT-FR-18…20, D-27). The
 /// in-memory backend is always available (no feature gate, mirroring
 /// `waypoint`'s D-01 precedent); the Redis backend is added behind the

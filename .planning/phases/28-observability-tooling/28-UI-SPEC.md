@@ -1,7 +1,8 @@
 ---
 phase: 28
 slug: observability-tooling
-status: draft
+status: approved
+reviewed_at: 2026-09-08
 shadcn_initialized: false
 preset: none
 created: 2026-09-08
@@ -51,6 +52,12 @@ Q11), default `https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs`
 for air-gapped operators — **not vendored** (a multi-megabyte JS asset in a published crate's
 `include` list was explicitly rejected). This is the page's one external runtime dependency; see
 Registry Safety.
+
+**Visual hierarchy (primary anchor).** The execution diagram (E1) is the page's primary visual
+anchor: first panel, full width, `xl` (32px) gap below the page title. The three panels below it
+are secondary reference surfaces — Node Visits and Fired Edges side by side in a two-column grid
+(stacking to one column below ~900px), then the full-width Superstep table. Nothing competes with
+the diagram for attention: no hero copy, no accent-coloured controls, no imagery.
 
 ---
 
@@ -142,6 +149,8 @@ worker-template node can still be colored by its last outcome once visited).
 | Error state — thread not found (404) | Heading: "Thread not found." Body: "No thread exists with id `{thread_id}`. Check the id and try again." |
 | Error state — inspector not wired (501) | Heading: "Inspector not available." Body: "This server was not built with a run inspector. Enable the `dev-ui` feature and wire a `RunInspectorPort` to use this page." (matches the existing `NotWired` error-envelope precedent, D-25) |
 | Error state — diagram render failed (client-side) | No heading change; the diagram panel falls back to: "Mermaid could not be loaded from `{mermaid_url}`. Showing the raw diagram source below." followed by a `<pre>` block with the exported Mermaid text (see UI Considerations, element E1). |
+| Loading state — diagram (client-side) | "Rendering diagram…" shown inside the diagram container until `mermaid.run` resolves (see UI Considerations, E1 loading; a 5 s timeout falls through to the render-failed row above). |
+| Error state — inspector data could not be parsed (client-side) | Heading: "Inspector data could not be parsed." Body: "The embedded inspector payload is not valid JSON. Raw payload shown below." — rendered in all three data panels with a `<pre>` of the raw payload (see UI Considerations, E2/E3/E4 error). |
 | Destructive confirmation | Not applicable — the page has no destructive actions (read-only, no editing, no delete/mutate affordance of any kind). |
 
 **Locked example copy (28-CONTEXT.md D-26, verbatim — freeze exactly as written, used in the
@@ -155,50 +164,58 @@ golden/smoke test):**
 
 ## UI Considerations
 
-> Populated by the ui-phase UI-consideration probe (Step 9.5) and lifted by plan-phase's
-> `## UI Considerations` lift rule. Shape-rooted UI *state* coverage (empty / loading / error /
-> populated / partial / overflow / zero-one-many / long-text). Empty-state and error-state COPY
-> live in `## Copywriting Contract` above — this section covers state coverage and REFERENCES
-> those rows rather than restating the copy.
+> Populated by the ui-phase UI-consideration probe (Step 9.5, run 2026-09-08 after the checker
+> approved this contract) and lifted by plan-phase's `## UI Considerations` lift rule. Shape-rooted
+> UI *state* coverage (empty / loading / error / populated / partial / overflow / zero-one-many /
+> long-text). Empty-state and error-state COPY live in `## Copywriting Contract` above — rows here
+> REFERENCE those copy rows rather than restating them.
 
-Four elements classified against the six element kinds (author-supplied, not heuristic — the
-element set is fixed by 28-CONTEXT.md D-26):
+**Elements and confirmed kinds** (author-supplied `elements` override, `--auto` kind-confirmation:
+the heuristic cue set plus the identifier-text surfaces each panel carries):
 
-- **E1 — Execution diagram** → `media`
-- **E2 — Node visits panel** → `list-collection`
-- **E3 — Fired-edge list panel** → `list-collection`
-- **E4 — Superstep table** → `list-collection`
+- **E1 — Execution diagram** → `media`, `static-content` (node/edge labels are static identifier text)
+- **E2 — Node visits panel** → `list-collection`, `static-content`
+- **E3 — Fired-edge list panel** → `list-collection`, `static-content`
+- **E4 — Superstep table** → `list-collection`, `static-content`
 
-Applicable state considerations resolved: 22 covered, 0 backstop, 1 unresolved.
+**Probe report:** 30 applicable considerations raised (E1 6, E2 8, E3 8, E4 8) — **29 covered,
+1 backstop, 0 unresolved, 0 dismissed.** No-silent-drop equality: 30 raised = 30 rows below.
+(`--auto`: every item was upgraded from the auto-`backstop` floor to `covered` only where the
+resolution is a concrete, DOM-assertable truth; the one item without such a truth stays
+`backstop` and routes to `human_needed` at verify time unless a golden fixture proves it.)
 
-| Category | Element(s) | Status | Resolution / Reason |
-|----------|------------|--------|---------------------|
-| empty | E1 diagram | dismissed | A `GraphShape` always exists once a run has started (D-22's `observed_only` fallback renders whatever nodes were seen); the "no data at all" case is the pre-execution thread, which is the superstep table's empty state (E4), not the diagram's. |
-| empty | E2 visits | ✅ covered | "No nodes have executed yet." — see Copywriting Contract empty-state row. |
-| empty | E3 fired edges | ✅ covered | "No edges evaluated yet." — see Copywriting Contract empty-state row. |
-| empty | E4 supersteps | ✅ covered | "No supersteps recorded yet" heading + body — see Copywriting Contract empty-state row. This is the primary whole-page empty state (a thread that exists but has not completed a superstep). |
-| loading | E1 diagram | ✅ covered | Mermaid is loaded from a CDN at client-side script-execution time (D-26); a slow/blocked load falls back after a fixed timeout to rendering the raw Mermaid source text in a `<pre>` block instead of a blank panel — the acceptance question ("which branch fired") stays answerable via the source text and the E3 fired-edge panel even if the diagram never renders. |
-| loading | E2, E3, E4 | dismissed | Page is server-rendered with `InspectorView` fully embedded at request time (D-26); there is no client-side fetch for panel data, so no loading state exists to design. |
-| error | E1 diagram | ✅ covered | Same CDN-failure fallback as the loading row above — one resolution covers both. |
-| error | E2, E3, E4 | dismissed | Single atomic embedded payload; no per-panel fetch to fail. Page-level HTTP errors (404 unknown thread, 501 no port wired) are the only error surface on this page — see Copywriting Contract error-state rows. |
-| populated | E1 diagram | ✅ covered | D-19/D-21 rendering rules (node/edge styling, outcome `classDef` colors and glyphs above, `×N` visit-count badges on loop nodes, `<duration>ms · <tokens>tok` labels). |
-| populated | E2 visits | ✅ covered | One row per visited node: `«kind» node_id — N visits`, with the supersteps/outcomes detail inline per the locked example copy. |
-| populated | E3 fired edges | ✅ covered | Grouped by superstep, per the locked example copy (trace-source and Waypoints-only variants both specified). |
-| populated | E4 supersteps | ✅ covered | One row per superstep: superstep number, vanguard node ids, completed nodes with outcome, changed field **names** only (never values — `InspectorView.field_changes: Vec<FieldName>` per D-24's port contract; the page has no values-shown mode to design for regardless of the `trace.state_values` debug flag, D-05). |
-| partial | E4 supersteps | ✅ covered | A superstep row with zero field changes (e.g. a Gate-only superstep) renders the inline label "no field changes" rather than an empty, unlabeled list. |
-| overflow | E2 visits | ✅ covered | Panel gets `max-height: 400px; overflow-y: auto` once the node count exceeds ~10; no data is truncated, only scrolled. |
-| overflow | E3 fired edges | ✅ covered | Same `max-height` + `overflow-y: auto` pattern once total supersteps exceed ~15. |
-| overflow | E4 supersteps | ✅ covered | Table body scrolls (`max-height: 600px; overflow-y: auto`, sticky header row) beyond ~30 supersteps rather than paginating — pagination would hide data behind a fetch this static page cannot make (D-26: no fetches), and the acceptance criterion is a DOM-level assertion on the full embedded payload, so nothing may be dropped from the DOM. |
-| zero-one-many | E2 visits | ✅ covered | Singular "1 visit" vs plural "N visits"; the `×3` case is the acceptance-bar example and is the locked example copy above. |
-| zero-one-many | E3 fired edges | ✅ covered | One fired edge vs many at a fan-out gate — each listed individually, never collapsed or summarized. |
-| zero-one-many | E4 supersteps | ✅ covered | Zero → the empty state above; one → single row, no pagination chrome; many → the overflow row above. |
-| long-text | E2 visits | ✅ covered | Node ids wrap (`overflow-wrap: anywhere`) in the monospace stack, never clipped — operators need the exact id to correlate with logs/traces. |
-| long-text | E4 supersteps | ✅ covered | Field names wrap the same way, same reasoning. |
-| long-text | E1 diagram (node/edge labels) | ⚠ unresolved | Very long node ids or condition-kind labels (e.g. a long `regex(...)` pattern) inside a Mermaid node/edge label are not addressed — Mermaid's own text-wrapping behavior inside flowchart nodes is inherited as-is, untested against a long-id fixture. Planner should treat as an assumption; if the golden fixtures (D-20: linear, branch+join, loop, muster, subgraph) surface a real overflow case, resolve there rather than here. |
-
-**Additional layout note (not a taxonomy row):** the diagram panel and the superstep table both
-get `overflow-x: auto` on their immediate container regardless of the rows above, so a wide graph
-or a table with many outcome columns scrolls horizontally rather than breaking the page layout.
+| Category | Element | Status | Resolution (truth the executor implements and the verifier checks) |
+|----------|---------|--------|---------------------------------------------------------------------|
+| empty | E1 | covered | When `InspectorView.supersteps` is empty the diagram panel renders the whole-page empty state (Copywriting "Empty state heading/body" rows) in place of a Mermaid container and `mermaid.run` is never invoked — no blank canvas, no CDN request. |
+| loading | E1 | covered | Mermaid loads from `web_server.dev_ui.mermaid_url` via `<script type="module">`; until `mermaid.run` resolves the container shows the Copywriting "Loading state — diagram" text; a 5 s timeout swaps in the raw-source fallback (error row below), so the panel is never blank. |
+| error | E1 | covered | If the module import rejects or `mermaid.run` throws, the panel renders the Copywriting "Error state — diagram render failed" row plus a `<pre>` of the exported Mermaid source; the E3 fired-edge panel keeps "which branch fired" answerable without the diagram. |
+| populated | E1 | covered | D-19/D-21 rendering: outcome `classDef` colours and glyphs from the Color section, `×N` visit badges on loop nodes, `<duration>ms · <tokens>tok` labels, bold fired edges, dotted evaluated-not-fired edges, dashed worker-template/deferred nodes, and the locked `(observed nodes only — no graph document available)` title when `observed_only` is true. |
+| overflow | E1 | covered | The diagram container is `overflow-x: auto; overflow-y: auto; max-height: 70vh`; a wide or tall graph scrolls inside the panel and never breaks the page layout or clips nodes. |
+| long-text | E1 | backstop | { statement: "Node ids and condition-kind labels longer than 40 characters remain fully readable in the rendered diagram (wrapped, not clipped) on a golden fixture carrying a 60-character node id and a long `regex(...)` edge label", verification: backstop } — Mermaid's own flowchart label wrapping is inherited untested; the planner treats this as an assumption and resolves it in the D-20 golden fixtures if one surfaces overflow. |
+| empty | E2 | covered | `No nodes have executed yet.` (Copywriting empty-state row) when `InspectorView.visits` is empty. |
+| loading | E2 | covered | No network-bound loading state exists: the inline renderer runs after the embedded `<script id="inspector-data" type="application/json">` in the same document, so the panel is populated synchronously at parse time; no skeleton or spinner is designed or shown. |
+| error | E2 | covered | The renderer parses the embedded JSON inside one `try/catch`; on failure all three data panels render the Copywriting "Error state — inspector data could not be parsed" row with a `<pre>` of the raw payload — never three silently empty panels. |
+| populated | E2 | covered | One row per visited node in first-visit order: `«kind» node_id — N visits: supersteps a, b, c — entered via X → node each time; outcomes ✓ ✓ ✓`, exactly the locked example copy (`node X ran 3 times: …`). |
+| partial | E2 | covered | A visit whose numeric detail is unavailable (a `cache_hit` attempt with no duration/token figures, or a Waypoints-only source with no per-attempt data) renders `—` in that slot; the row is never omitted, and the "entered via" clause is dropped only when the source carries no fired-edge data. |
+| overflow | E2 | covered | `max-height: 400px; overflow-y: auto` once the panel exceeds ~10 rows; no data is truncated, only scrolled. |
+| zero-one-many | E2 | covered | Singular `1 visit` vs plural `N visits`; the `×3` case is the acceptance-bar example and the locked copy; zero visited nodes is the empty row above. |
+| long-text | E2 | covered | Node ids wrap (`overflow-wrap: anywhere`) in the monospace stack at body size; never clipped or ellipsised — operators need the exact id to correlate with logs and traces. |
+| empty | E3 | covered | `No edges evaluated yet.` (Copywriting empty-state row) when every superstep's `fired_edges` is empty. |
+| loading | E3 | covered | Same synchronous render from the embedded JSON as E2 — no loading state exists. |
+| error | E3 | covered | Same single parse-failure banner as E2 (Copywriting "inspector data could not be parsed" row). |
+| populated | E3 | covered | Grouped by superstep, fired edges first then evaluated-not-fired: `superstep 3: check → retry fired; check → done evaluated, not fired` — the locked example copy (trace source). |
+| partial | E3 | covered | Waypoints-only source (`InspectorView.source == Waypoints`, `evaluated_edges` empty per D-21): each group carries the locked suffix `(evaluated-but-not-fired edges unavailable — no persisted trace for this run)` so the missing half is labelled, never silent. |
+| overflow | E3 | covered | `max-height: 400px; overflow-y: auto` once total supersteps exceed ~15; nothing truncated. |
+| zero-one-many | E3 | covered | One fired edge vs many at a fan-out gate — every edge listed individually, never collapsed into `+N more`. |
+| long-text | E3 | covered | Node ids wrap (`overflow-wrap: anywhere`, monospace); the `→` arrow is kept attached to the target id with `white-space: nowrap` on the arrow span only. |
+| empty | E4 | covered | `No supersteps recorded yet` heading + body (Copywriting empty-state rows) replaces the table; this is the whole-page empty state for a thread that exists but has not completed a superstep. |
+| loading | E4 | covered | Same synchronous render from the embedded JSON — no loading state exists. |
+| error | E4 | covered | Same single parse-failure banner (Copywriting "inspector data could not be parsed" row); page-level 404/501 errors use their own Copywriting rows and render no table at all. |
+| populated | E4 | covered | One row per superstep: number, vanguard node ids, completed nodes as `glyph outcome` pairs, changed field **names** only (`InspectorView.field_changes: Vec<FieldName>`, D-24 — no values-shown mode exists regardless of `trace.state_values`, D-05); the latest superstep row carries the accent left border (Color section). |
+| partial | E4 | covered | A superstep with zero field changes renders the inline label `no field changes`; a superstep whose `completed` list is empty (a Gate suspension awaiting input) renders `— (awaiting input)` in the completed column — no unlabeled blank cells. |
+| overflow | E4 | covered | Table body scrolls (`max-height: 600px; overflow-y: auto`, sticky header row) beyond ~30 supersteps and the table container is `overflow-x: auto`; no pagination — the page makes no fetches (D-26) and the DOM-level smoke test needs the full embedded payload in the DOM. |
+| zero-one-many | E4 | covered | Zero → the empty state; one → a single row with no pagination chrome; many → the overflow row above. |
+| long-text | E4 | covered | Field names and node ids wrap (`overflow-wrap: anywhere`) in the monospace stack; table cells never clip. |
 
 ---
 
@@ -224,11 +241,12 @@ this is a script URL, not a registry block of source code entering the repositor
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS
-- [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS
-- [ ] Dimension 5 Spacing: PASS
-- [ ] Dimension 6 Registry Safety: PASS
+- [x] Dimension 1 Copywriting: PASS
+- [x] Dimension 2 Visuals: FLAG (non-blocking) — "no explicit primary visual anchor"; recommendation applied 2026-09-08 (see **Visual hierarchy** under Design System)
+- [x] Dimension 3 Color: PASS
+- [x] Dimension 4 Typography: PASS
+- [x] Dimension 5 Spacing: PASS
+- [x] Dimension 6 Registry Safety: PASS
 
-**Approval:** pending
+**Approval:** approved 2026-09-08 — gsd-ui-checker (`--auto`), status APPROVED, 5 PASS / 1 FLAG non-blocking;
+UI-consideration probe run post-approval: 30 raised, 29 covered, 1 backstop, 0 unresolved, 0 dismissed.

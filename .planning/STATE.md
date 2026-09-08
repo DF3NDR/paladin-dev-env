@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 28
 current_phase_name: Observability & Tooling
-status: planning
+status: executing
 stopped_at: Phase 28 UI-SPEC approved
-last_updated: "2026-09-08T20:43:10.539Z"
+last_updated: "2026-09-08T21:35:20.318Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 27 complete, transitioned to Phase 28
 progress:
   total_phases: 8
   completed_phases: 7
-  total_plans: 111
+  total_plans: 128
   completed_plans: 111
 ---
 
@@ -53,7 +53,7 @@ names. See MILESTONES.md.
 
 Phase: 28 — Observability & Tooling
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-08 — Phase 27 complete, transitioned to Phase 28
 
 ## Performance Metrics

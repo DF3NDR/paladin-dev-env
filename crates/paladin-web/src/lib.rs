@@ -37,6 +37,9 @@ pub mod openapi;
 pub mod request_log;
 /// Run submission/status HTTP controller (wire types, state, handlers, router; PLAT-01, D-44).
 pub mod run_controller;
+/// Run schedules -- `/v1/schedules*` routes on the shared `RunApiState`
+/// (PLAT-05, PLAT-06, D-42, D-44, D-46, D-47).
+pub mod schedule_controller;
 /// Thread inspection/resume/history HTTP controller (wire types, state, handlers, router).
 pub mod thread_controller;
 /// Execution timeout policy and resolution.

@@ -1531,6 +1531,428 @@
         ]
       }
     },
+    "/v1/schedules": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "`GET /schedules` -- paginated list (D-47). Authenticated, any role.",
+        "description": "Returns `200 OK` with [`ScheduleListResponse`] on success, or `501 Not Implemented` if no\nschedule admin backend is configured.",
+        "operationId": "list_schedules",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return (at most 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of schedules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "limit exceeds 100",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No schedule admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "`POST /schedules` -- create a brand-new schedule (admin).",
+        "description": "Returns:\n- `201 Created` with [`ScheduleResponse`] on success;\n- `400 Bad Request` for an invalid cron, timezone, assistant reference, webhook URL\n  (write-time SSRF guard, D-42) or thread strategy -- `error.details.violations` is a\n  non-empty, machine-readable list; nothing is persisted;\n- `401`/`403` per the module-level authorization docs;\n- `501 Not Implemented` if no schedule admin backend is configured.",
+        "operationId": "create_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Schedule created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cron, timezone, assistant reference, webhook URL, or thread strategy -- violations in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No schedule admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/schedules/{schedule_id}": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "`GET /schedules/{id}` -- one schedule, including `last_tick`/`next_tick`/`skipped_ticks`\n(D-39). Authenticated, any role.",
+        "description": "Returns:\n- `200 OK` with [`ScheduleResponse`] on success;\n- `400 Bad Request` for an invalid id;\n- `404 Not Found` if `id` does not exist;\n- `501 Not Implemented` if no schedule admin backend is configured.",
+        "operationId": "get_schedule",
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "description": "Schedule id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid schedule id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No schedule admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "`DELETE /schedules/{id}` -- delete (admin).",
+        "description": "Returns:\n- `204 No Content` on success;\n- `400 Bad Request` for an invalid id;\n- `401`/`403` per the module-level authorization docs;\n- `404 Not Found` if `id` does not exist;\n- `501 Not Implemented` if no schedule admin backend is configured.",
+        "operationId": "delete_schedule",
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "description": "Schedule id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "Invalid schedule id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No schedule admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "`PATCH /schedules/{id}` -- partial update (admin). A `cron`/`timezone` change\nrecomputes `next_tick`; `enabled: false` leaves `next_tick` in place (D-39); a `webhook`\nchange re-runs the write-time SSRF guard (D-42).",
+        "description": "Returns:\n- `200 OK` with [`ScheduleResponse`] on success;\n- `400 Bad Request` for an invalid id, cron, timezone, webhook URL or thread strategy --\n  `error.details.violations` is a non-empty, machine-readable list; nothing is persisted;\n- `401`/`403` per the module-level authorization docs;\n- `404 Not Found` if `id` does not exist;\n- `501 Not Implemented` if no schedule admin backend is configured.",
+        "operationId": "patch_schedule",
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "description": "Schedule id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Schedule updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid schedule id, cron, timezone, webhook URL, or thread strategy -- violations in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No schedule admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/threads/{id}/history": {
       "get": {
         "tags": [
@@ -2100,6 +2522,71 @@
           }
         }
       },
+      "CreateScheduleRequest": {
+        "type": "object",
+        "description": "Request body for `POST /schedules`.",
+        "required": [
+          "assistant_id",
+          "cron",
+          "enabled"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The assistant this schedule submits runs against."
+          },
+          "cron": {
+            "type": "string",
+            "description": "The cron expression (5- or 6-field -- D-38)."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this schedule starts out active."
+          },
+          "input": {
+            "type": "object",
+            "description": "The input every tick's submitted run receives."
+          },
+          "on_missed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"skip\"` or `\"run_once\"`; omitted for the default (`\"skip\"`)."
+          },
+          "thread_strategy": {
+            "type": "object",
+            "description": "`\"new_thread_per_tick\"` or `{ \"fixed_thread\": \"<thread id>\" }` (mirrors\n`RunSchedule::thread_strategy`'s own wire shape); omitted for the default\n(`new_thread_per_tick`)."
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA timezone the cron expression is evaluated in, or omitted for `\"UTC\"`."
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A specific version, or omitted to resolve `latest` at each tick.",
+            "minimum": 0
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebhookRequestDto",
+                "description": "An optional webhook delivery target, validated by the write-time SSRF guard (D-42)."
+              }
+            ]
+          }
+        }
+      },
       "CreateVersionRequest": {
         "type": "object",
         "description": "Request body for `POST /assistants/{id}/versions`.",
@@ -2387,6 +2874,65 @@
           }
         }
       },
+      "PatchScheduleRequest": {
+        "type": "object",
+        "description": "Request body for `PATCH /schedules/{id}` -- every field optional; only fields present\nchange (D-39's \"`enabled: false` leaves `next_tick` in place\" applies at the port layer).",
+        "properties": {
+          "cron": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new cron expression, if changing it."
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "A new enabled flag, if changing it."
+          },
+          "input": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A new input, if changing it."
+          },
+          "on_missed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new missed-tick policy (`\"skip\"` or `\"run_once\"`), if changing it."
+          },
+          "thread_strategy": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A new thread strategy, if changing it -- same wire shape as\n[`CreateScheduleRequest::thread_strategy`]."
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new timezone, if changing it."
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebhookRequestDto",
+                "description": "A new webhook target, if changing it -- re-validated by the write-time SSRF guard."
+              }
+            ]
+          }
+        }
+      },
       "ResumeAcceptedResponse": {
         "type": "object",
         "description": "Response body for a successful `POST /threads/{id}/resume` (`202 Accepted`).\n\n`#[non_exhaustive]` (D-21, PLAT-03): `run_id` was added after this type\nshipped in Phase 24, mirroring\n[`ResumeAccepted`](paladin_ports::input::parley_port::ResumeAccepted)'s\nown field of the same name and meaning one level down the stack.\nConstruction stays possible only through [`Self::new`] (X-10.3), so the\nnext field stays free without a semver-major bump.",
@@ -2486,6 +3032,132 @@
             "format": "int32",
             "description": "The resolved, frozen assistant version.",
             "minimum": 0
+          }
+        }
+      },
+      "ScheduleListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /schedules`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScheduleResponse"
+            },
+            "description": "The page of schedules, in the documented order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, `None` on the last page."
+          }
+        }
+      },
+      "ScheduleResponse": {
+        "type": "object",
+        "description": "Response body for `GET /schedules/{id}` and one item of `GET /schedules` -- every\n[`RunSchedule`] field, including `last_tick`/`next_tick`/`skipped_ticks` so \"why did\nnothing run\" is answerable without a log dive (D-39).",
+        "required": [
+          "schedule_id",
+          "assistant_id",
+          "cron",
+          "timezone",
+          "input",
+          "enabled",
+          "thread_strategy",
+          "on_missed",
+          "skipped_ticks",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The assistant this schedule submits runs against."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this schedule was created."
+          },
+          "cron": {
+            "type": "string",
+            "description": "The cron expression."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this schedule is currently active."
+          },
+          "input": {
+            "type": "object",
+            "description": "The input every tick's submitted run receives."
+          },
+          "last_tick": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The last tick this schedule fired (or was claimed) at, if any."
+          },
+          "next_tick": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The next tick this schedule is due at, if scheduled."
+          },
+          "on_missed": {
+            "type": "string",
+            "description": "`\"skip\"` or `\"run_once\"`."
+          },
+          "schedule_id": {
+            "type": "string",
+            "description": "This schedule's identity."
+          },
+          "skipped_ticks": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many ticks have been skipped (D-39's counted metric).",
+            "minimum": 0
+          },
+          "thread_strategy": {
+            "type": "object",
+            "description": "`\"new_thread_per_tick\"` or `{ \"fixed_thread\": \"<thread id>\" }`."
+          },
+          "timezone": {
+            "type": "string",
+            "description": "The IANA timezone the cron expression is evaluated in."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this schedule was last updated."
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A specific version, or `null` to resolve `latest` at each tick.",
+            "minimum": 0
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebhookResponseDto",
+                "description": "The webhook delivery target, if any -- `secret` redacted to `\"***\"` (T-27-14-03)."
+              }
+            ]
           }
         }
       },
@@ -2640,6 +3312,61 @@
           "waypoint_id": {
             "type": "string",
             "description": "The summarized waypoint's identity."
+          }
+        }
+      },
+      "WebhookRequestDto": {
+        "type": "object",
+        "description": "Wire shape of a webhook delivery target on write (`POST`/`PATCH`).",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The lifecycle events this webhook subscribes to (`\"awaiting_input\"`, `\"completed\"`,\n`\"failed\"`, `\"halted\"`, `\"cancelled\"`)."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The HMAC signing secret, if any."
+          },
+          "url": {
+            "type": "string",
+            "description": "The delivery URL -- validated by the write-time SSRF guard (D-42) before the\nschedule is ever persisted."
+          }
+        }
+      },
+      "WebhookResponseDto": {
+        "type": "object",
+        "description": "Wire shape of a webhook delivery target on read -- the SAME shape as\n[`WebhookRequestDto`], except `secret` is redacted (T-27-14-03).",
+        "required": [
+          "url",
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The lifecycle events this webhook subscribes to."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"***\"` when a secret is set on the stored schedule, `null` otherwise -- the raw\nsecret is never echoed back."
+          },
+          "url": {
+            "type": "string",
+            "description": "The delivery URL."
           }
         }
       }

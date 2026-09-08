@@ -33,6 +33,9 @@ use paladin_ports::input::run_submission_port::{RunSubmissionError, RunSubmissio
 use paladin_ports::output::run_schedule_repository_port::RunScheduleRepositoryPort;
 use paladin_storage::cron::parse_run_cron;
 
+use super::super::resolver::AssistantResolver;
+use super::admin::SsrfGuard;
+
 /// How many due schedules [`ScheduleService::tick_once`] processes per call.
 /// Generous enough that a normal deployment's schedule count fits in one
 /// tick; a deployment with more due schedules than this simply catches the
@@ -132,16 +135,31 @@ impl Default for ScheduleServiceOptions {
 }
 
 /// Drives due [`RunSchedule`]s through a claim-then-submit tick loop
-/// (PLAT-05, D-37, D-39).
+/// (PLAT-05, D-37, D-39), and -- via `admin.rs`'s `ScheduleAdminPort` impl --
+/// validates and persists them in the first place (D-42, D-46). Fields are
+/// `pub(super)` rather than private so `schedule::admin`'s
+/// `impl ScheduleAdminPort for ScheduleService` (a sibling module, not this
+/// one) can read them directly.
 pub struct ScheduleService {
-    repo: Arc<dyn RunScheduleRepositoryPort>,
-    submission: Arc<dyn RunSubmissionPort>,
-    options: ScheduleServiceOptions,
+    pub(super) repo: Arc<dyn RunScheduleRepositoryPort>,
+    pub(super) submission: Arc<dyn RunSubmissionPort>,
+    pub(super) options: ScheduleServiceOptions,
+    /// Resolves an `(assistant_id, version)` reference at schedule
+    /// create-time (`ScheduleAdminPort::create`'s `unknown_assistant`/
+    /// `unknown_version` violations) -- `None` skips that one check (e.g. a
+    /// bare `ScheduleService` under test that only exercises the tick
+    /// loop).
+    pub(super) resolver: Option<Arc<dyn AssistantResolver>>,
+    /// The write-time SSRF guard (D-42) `ScheduleAdminPort::create`/`patch`
+    /// run a schedule's `webhook.url` through before persisting.
+    pub(super) ssrf_guard: SsrfGuard,
 }
 
 impl ScheduleService {
     /// Construct a `ScheduleService` over the given repository and
-    /// submission port.
+    /// submission port. No assistant resolver is wired and the SSRF guard
+    /// defaults to `allow_private: false` -- see [`Self::with_resolver`]
+    /// and [`Self::with_ssrf_guard`].
     pub fn new(
         repo: Arc<dyn RunScheduleRepositoryPort>,
         submission: Arc<dyn RunSubmissionPort>,
@@ -151,7 +169,24 @@ impl ScheduleService {
             repo,
             submission,
             options,
+            resolver: None,
+            ssrf_guard: SsrfGuard::default(),
         }
+    }
+
+    /// Wire an [`AssistantResolver`] so [`ScheduleAdminPort::create`](
+    /// paladin_ports::input::schedule_admin_port::ScheduleAdminPort::create)
+    /// validates the `(assistant_id, version)` reference before persisting.
+    pub fn with_resolver(mut self, resolver: Arc<dyn AssistantResolver>) -> Self {
+        self.resolver = Some(resolver);
+        self
+    }
+
+    /// Override the default (`allow_private: false`) write-time SSRF guard
+    /// (D-42).
+    pub fn with_ssrf_guard(mut self, ssrf_guard: SsrfGuard) -> Self {
+        self.ssrf_guard = ssrf_guard;
+        self
     }
 
     /// Process every currently-due schedule once: for each, compute the next

@@ -104,6 +104,9 @@ pub struct RunApiState {
     /// Whether `GET /assistants` merges in synthetic code-registry entries (D-32).
     /// Defaults to `true`.
     pub expose_code_registry: bool,
+    /// Validates and persists run schedules (`/schedules*`, PLAT-05, D-42, D-46). `None`
+    /// when unwired (`schedules.enabled` config gate, D-44/D-50).
+    pub schedules: Option<Arc<dyn paladin_ports::input::schedule_admin_port::ScheduleAdminPort>>,
 }
 
 impl RunApiState {
@@ -118,7 +121,18 @@ impl RunApiState {
             assistants: None,
             code_registry: None,
             expose_code_registry: true,
+            schedules: None,
         }
+    }
+
+    /// Wire a [`paladin_ports::input::schedule_admin_port::ScheduleAdminPort`], enabling
+    /// `/schedules*`.
+    pub fn with_schedules(
+        mut self,
+        schedules: Arc<dyn paladin_ports::input::schedule_admin_port::ScheduleAdminPort>,
+    ) -> Self {
+        self.schedules = Some(schedules);
+        self
     }
 
     /// Wire an [`paladin_ports::input::assistant_admin_port::AssistantAdminPort`],
@@ -514,6 +528,7 @@ pub fn run_openapi_router(state: RunApiState) -> OpenApiRouter {
         .routes(routes!(get_run))
         .routes(routes!(stream_run))
         .merge(crate::assistant_controller::assistant_routes())
+        .merge(crate::schedule_controller::schedule_routes())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::agent_auth::require_authentication::<RunApiState>,

@@ -12,17 +12,22 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 
-use paladin_core::platform::container::run::RunId;
+use paladin_core::platform::container::assistant::AssistantSource;
+use paladin_core::platform::container::run::{AssistantRef, RunId, WebhookSpec};
 use paladin_core::platform::container::run_schedule::{
-    OnMissed, RunSchedule, RunScheduleId, ThreadStrategy,
+    OnMissed, RunSchedule, RunScheduleId, RunScheduleUpdate, ThreadStrategy,
 };
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::input::run_submission_port::{
     CancelOutcome, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
 };
+use paladin_ports::input::schedule_admin_port::{
+    CreateRunSchedule, ScheduleAdminError, ScheduleAdminPort,
+};
 use paladin_ports::output::run_schedule_repository_port::RunScheduleRepositoryPort;
 use paladin_storage::run_schedule::in_memory::InMemoryRunScheduleRepository;
 
+use super::super::resolver::{AssistantResolver, ResolveError, ResolvedAssistant, Runnable};
 use super::service::{ScheduleService, ScheduleServiceOptions, ScheduleTickOutcome, SkipReason};
 
 /// A [`RunSubmissionPort`] test double: always succeeds unless `busy_thread`
@@ -457,4 +462,338 @@ async fn spawn_ticks_on_interval_and_stops_on_shutdown() {
         1,
         "the one due schedule fires exactly once even across multiple interval ticks"
     );
+}
+
+// ── `ScheduleAdminPort` tests (Task 1, PLAT-05, D-42, D-46) ────────────────
+//
+// `admin.rs`'s `impl ScheduleAdminPort for ScheduleService` -- create/get/
+// list/patch/delete, cron+timezone+assistant+webhook validation, and the
+// write-time SSRF guard. `admin.rs`'s own `ssrf_guard_tests` module covers
+// `SsrfGuard::check_url`'s classification table directly; these tests cover
+// the port's validate-then-persist orchestration around it.
+
+/// A minimal [`AssistantResolver`] test double: resolves any id present in
+/// `known` (up to its recorded `latest` version), rejects everything else.
+struct MockResolver {
+    known: Vec<(String, u32)>,
+}
+
+#[async_trait]
+impl AssistantResolver for MockResolver {
+    async fn resolve(
+        &self,
+        assistant_id: &str,
+        version: Option<u32>,
+    ) -> Result<ResolvedAssistant, ResolveError> {
+        let Some((_, latest)) = self.known.iter().find(|(id, _)| id == assistant_id) else {
+            return Err(ResolveError::UnknownAssistant {
+                assistant_id: assistant_id.to_string(),
+            });
+        };
+        let resolved_version = version.unwrap_or(*latest);
+        if resolved_version > *latest {
+            return Err(ResolveError::UnknownVersion {
+                assistant_id: assistant_id.to_string(),
+                version: resolved_version,
+            });
+        }
+        Ok(ResolvedAssistant {
+            reference: AssistantRef {
+                assistant_id: assistant_id.to_string(),
+                version: resolved_version,
+            },
+            runnable: Runnable::Agent(Arc::new(paladin_core::base::entity::node::Node::new(
+                paladin_core::platform::container::paladin::PaladinData::default(),
+                Some(assistant_id.to_string()),
+            ))),
+            allowed_roles: vec![],
+            source: AssistantSource::Stored,
+        })
+    }
+}
+
+/// Build a `ScheduleService` wired with a [`MockResolver`] that only knows
+/// `"assistant-1"` (latest version `3`) -- used by every admin-port test
+/// below.
+fn admin_service(repo: Arc<dyn RunScheduleRepositoryPort>, clock: &AtomicClock) -> ScheduleService {
+    let submission = Arc::new(RecordingSubmission::default());
+    let resolver: Arc<dyn AssistantResolver> = Arc::new(MockResolver {
+        known: vec![("assistant-1".to_string(), 3)],
+    });
+    ScheduleService::new(
+        repo,
+        submission as Arc<dyn RunSubmissionPort>,
+        options_with(clock, 60),
+    )
+    .with_resolver(resolver)
+}
+
+fn create_request(assistant_id: &str, cron: &str) -> CreateRunSchedule {
+    CreateRunSchedule {
+        assistant_id: assistant_id.to_string(),
+        version: None,
+        cron: cron.to_string(),
+        timezone: None,
+        input: serde_json::Value::Null,
+        enabled: true,
+        thread_strategy: None,
+        on_missed: None,
+        webhook: None,
+    }
+}
+
+#[tokio::test]
+async fn create_sets_first_next_tick() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let now = base_time();
+    let clock = AtomicClock::new(now);
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let created = service
+        .create(create_request("assistant-1", "*/1 * * * *"))
+        .await
+        .unwrap();
+
+    let next_tick = created.next_tick.expect("next_tick must be set on create");
+    assert!(next_tick > now);
+}
+
+#[tokio::test]
+async fn create_rejects_bad_cron() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let err = service
+        .create(create_request("assistant-1", "not a cron"))
+        .await
+        .unwrap_err();
+    match err {
+        ScheduleAdminError::Invalid { violations } => {
+            assert!(violations.iter().any(|v| v.path == "/cron"));
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn create_rejects_unknown_timezone() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let mut request = create_request("assistant-1", "*/1 * * * *");
+    request.timezone = Some("Not/AZone".to_string());
+    let err = service.create(request).await.unwrap_err();
+    match err {
+        ScheduleAdminError::Invalid { violations } => {
+            assert!(violations.iter().any(|v| v.path == "/timezone"));
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn create_rejects_unknown_assistant() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let err = service
+        .create(create_request("nope", "*/1 * * * *"))
+        .await
+        .unwrap_err();
+    match err {
+        ScheduleAdminError::Invalid { violations } => {
+            assert!(violations.iter().any(|v| v.path == "/assistant_id"));
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    // Nothing was persisted: the repository's page stays empty.
+    let page = repo.list(10, None).await.unwrap();
+    assert!(page.items.is_empty());
+}
+
+#[tokio::test]
+async fn create_rejects_unknown_version() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let mut request = create_request("assistant-1", "*/1 * * * *");
+    request.version = Some(99);
+    let err = service.create(request).await.unwrap_err();
+    match err {
+        ScheduleAdminError::Invalid { violations } => {
+            assert!(violations.iter().any(|v| v.path == "/version"));
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn create_rejects_webhook_url_via_ssrf_guard() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let mut request = create_request("assistant-1", "*/1 * * * *");
+    request.webhook = Some(WebhookSpec {
+        url: "http://127.0.0.1/hook".to_string(),
+        secret: None,
+        events: vec![],
+    });
+    let err = service.create(request).await.unwrap_err();
+    match err {
+        ScheduleAdminError::Invalid { violations } => {
+            assert!(
+                violations
+                    .iter()
+                    .any(|v| v.path == "/webhook/url" && v.code == "webhook_url_rejected")
+            );
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn patch_cron_recomputes_next_tick() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let now = base_time();
+    let clock = AtomicClock::new(now);
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let created = service
+        .create(create_request("assistant-1", "*/1 * * * *"))
+        .await
+        .unwrap();
+    let original_next = created.next_tick.expect("next_tick set on create");
+
+    clock.set(now + chrono::Duration::seconds(30));
+    let update = RunScheduleUpdate {
+        cron: Some("*/5 * * * *".to_string()),
+        ..Default::default()
+    };
+    let patched = service.patch(&created.schedule_id, update).await.unwrap();
+
+    assert_eq!(patched.cron, "*/5 * * * *");
+    let new_next = patched.next_tick.expect("next_tick recomputed on patch");
+    assert_ne!(new_next, original_next);
+    assert!(new_next > now + chrono::Duration::seconds(30));
+}
+
+#[tokio::test]
+async fn patch_webhook_rejected_by_guard() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let created = service
+        .create(create_request("assistant-1", "*/1 * * * *"))
+        .await
+        .unwrap();
+
+    let update = RunScheduleUpdate {
+        webhook: Some(WebhookSpec {
+            url: "http://169.254.169.254/latest/meta-data".to_string(),
+            secret: None,
+            events: vec![],
+        }),
+        ..Default::default()
+    };
+    let err = service
+        .patch(&created.schedule_id, update)
+        .await
+        .unwrap_err();
+    match err {
+        ScheduleAdminError::Invalid { violations } => {
+            assert!(violations.iter().any(|v| v.path == "/webhook/url"));
+        }
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+
+    // Nothing persisted -- the schedule's webhook is still unset.
+    let reloaded = repo.get(&created.schedule_id).await.unwrap().unwrap();
+    assert!(reloaded.webhook.is_none());
+}
+
+#[tokio::test]
+async fn patch_enabled_false_leaves_next_tick_in_place() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let created = service
+        .create(create_request("assistant-1", "*/1 * * * *"))
+        .await
+        .unwrap();
+    let original_next = created.next_tick;
+
+    let update = RunScheduleUpdate {
+        enabled: Some(false),
+        ..Default::default()
+    };
+    let patched = service.patch(&created.schedule_id, update).await.unwrap();
+
+    assert!(!patched.enabled);
+    assert_eq!(patched.next_tick, original_next);
+}
+
+#[tokio::test]
+async fn patch_unknown_schedule_is_not_found() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let err = service
+        .patch(&RunScheduleId::new_v7(), RunScheduleUpdate::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ScheduleAdminError::NotFound { .. }));
+}
+
+#[tokio::test]
+async fn delete_then_get_is_none() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let created = service
+        .create(create_request("assistant-1", "*/1 * * * *"))
+        .await
+        .unwrap();
+
+    service.delete(&created.schedule_id).await.unwrap();
+    let after = service.get(&created.schedule_id).await.unwrap();
+    assert!(after.is_none());
+}
+
+#[tokio::test]
+async fn delete_unknown_schedule_is_not_found() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let err = service.delete(&RunScheduleId::new_v7()).await.unwrap_err();
+    assert!(matches!(err, ScheduleAdminError::NotFound { .. }));
+}
+
+#[tokio::test]
+async fn list_pages_created_schedules() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let _ = service
+        .create(create_request("assistant-1", "*/1 * * * *"))
+        .await
+        .unwrap();
+    let _ = service
+        .create(create_request("assistant-1", "*/2 * * * *"))
+        .await
+        .unwrap();
+
+    let page = service.list(10, None).await.unwrap();
+    assert_eq!(page.items.len(), 2);
 }

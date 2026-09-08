@@ -633,7 +633,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 27-18-PLAN.md — Acceptance-1 E2E test, `sdk-clients` CI job, phase-wide OpenAPI review, §9.6, CI evidence checkpoint (all)
+- [x] 27-18-PLAN.md — Acceptance-1 E2E test, `sdk-clients` CI job, phase-wide OpenAPI review, §9.6, CI evidence checkpoint (all)
 
 ### Phase 28: Observability & Tooling
 

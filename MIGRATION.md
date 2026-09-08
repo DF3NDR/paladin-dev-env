@@ -447,6 +447,88 @@ was not in that plan's worktree base at the time. This plan deletes that duplica
 (the same guard 27-13's webhook client already uses at send time) — one guard, two call sites, no
 behavior change to either.
 
+**`POST/GET /v1/runs`, `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream` — landed Phase 27
+(PLAT-01…PLAT-03, plans 27-01, 27-10, 27-15).** The submit/read/stream half of the run surface
+this section's earlier table (`cancel`/`webhook-deliveries`, 27-15) did not itself repeat; recorded
+here now so every `/v1/runs*` route this phase adds has one row (D-53).
+
+| Method | Path | Status codes |
+|---|---|---|
+| `POST` | `/v1/runs` | `202`, `400`, `401`, `403`, `404`, `409` (`thread_busy`, `webhook_url_rejected` — D-42), `501` |
+| `GET` | `/v1/runs` | `200`, `400`, `401`, `501` |
+| `GET` | `/v1/runs/{run_id}` | `200`, `400`, `401`, `404`, `501` |
+| `GET` | `/v1/runs/{run_id}/stream` | `200` (`text/event-stream`), `400`, `401`, `404`, `501` |
+
+`POST /v1/runs` is invocation-shaped (D-46): any authenticated principal, subject to the resolved
+assistant's own `allowed_roles`, authorized entirely inside `RunSubmissionService`. `GET
+/v1/runs/{run_id}/stream` frames the seven frozen wire events (`superstep`, `node_started`,
+`node_finished`, `state_delta`, `parley`, `done`, `error`, each carrying `seq`/`at`/`mode`/`dropped`)
+with a 15s heartbeat on both the live and degraded paths (PLAT-FR-07, D-24…D-27) — see 27-10's own
+route rustdoc for the full per-event payload shape.
+
+**`/v1/assistants*` (seven routes) — landed Phase 27 (PLAT-04, plan 27-12).** Publish/resolve
+surface for both `Agent` and `Workflow`-kind assistant definitions (D-28…D-32); no `PUT`/`PATCH`
+route is ever registered anywhere (D-29 — a stored version is immutable) and every mutating route
+rejects a code-registered `assistant_id` with `409 code_registered_immutable`, checked before the
+admin port is ever called.
+
+| Method | Path | Status codes |
+|---|---|---|
+| `POST` | `/v1/assistants` | `201`, `400`, `401`, `403`, `409` (`already_exists`, `code_registered_immutable`), `501` |
+| `GET` | `/v1/assistants` | `200`, `400`, `401`, `501` |
+| `GET` | `/v1/assistants/{assistant_id}` | `200`, `400`, `401`, `404`, `501` |
+| `DELETE` | `/v1/assistants/{assistant_id}` | `204`, `400`, `401`, `403`, `404`, `409` (`code_registered_immutable`), `501` |
+| `POST` | `/v1/assistants/{assistant_id}/versions` | `201`, `400`, `401`, `403`, `404`, `409` (`code_registered_immutable`, `version_conflict`), `501` |
+| `GET` | `/v1/assistants/{assistant_id}/versions` | `200`, `400`, `401`, `501` |
+| `GET` | `/v1/assistants/{assistant_id}/versions/{version}` | `200`, `400`, `401`, `404`, `501` |
+
+`POST`/`DELETE /assistants*` and `POST .../versions` require an admin credential
+(`require_admin`, registry-shaped per this section's own D-46 paragraph above); every `GET` needs
+authentication only. `GET /assistants` merges in synthetic `{ source: "code" }` entries for
+code-registered agents on the first page only when `assistants.expose_code_registry` is on
+(default `true`, D-32) — a known, documented scope boundary for a multi-page heterogeneous merge,
+tracked in `.planning/WINDOWS.md` (id 29), not this phase's own gap to close.
+
+**`/v1/schedules*` (five routes) — landed Phase 27 (PLAT-05, plans 27-11, 27-14).** Cron-driven
+recurring run submission against a `ScheduleAdminPort`, off by default (`schedules.enabled`, D-50)
+so the tick loop only spawns when explicitly turned on.
+
+| Method | Path | Status codes |
+|---|---|---|
+| `POST` | `/v1/schedules` | `201`, `400`, `401`, `403`, `501` |
+| `GET` | `/v1/schedules` | `200`, `400`, `401`, `501` |
+| `GET` | `/v1/schedules/{schedule_id}` | `200`, `400`, `401`, `404`, `501` |
+| `PATCH` | `/v1/schedules/{schedule_id}` | `200`, `400`, `401`, `403`, `404`, `501` |
+| `DELETE` | `/v1/schedules/{schedule_id}` | `204`, `400`, `401`, `403`, `404`, `501` |
+
+`POST`/`PATCH`/`DELETE /schedules*` require an admin credential (registry-shaped); `GET` needs
+authentication only. A `cron`/`timezone` change on `PATCH` recomputes `next_tick`; a `webhook`
+change on either `POST` or `PATCH` re-runs the write-time SSRF guard (D-42, the same shared
+`webhook::SsrfGuard` this section's collapse paragraph above names).
+
+**Phase-wide `openapi.json` diff review (D-48, plan 27-18):** `git log --oneline --
+crates/paladin-web/openapi.json` walked back to the commit immediately before 27-01 and confirmed
+every change across the whole phase is either an added path/schema, or the one registered
+field-level addition this section already documents (`ResumeAcceptedResponse.run_id`, above) — no
+pre-existing path or schema was ever removed or altered. SHIP-02 (Phase 29) is still the ship-gate
+golden-diff proof that restricts itself to pre-existing paths; this review is the phase-scoped
+superset (every path this phase touched, not just the pre-existing ones).
+
+**Workspace line coverage (D-54, X-02):** the 82% floor (ADR-0006) is proven under CI's exact
+invocation — `cargo llvm-cov --workspace --features integration-tests,llm-all --lcov
+--output-path lcov.info --fail-under-lines 82 -- --test-threads=1` — see the `coverage` CI job;
+`scripts/coverage.sh` (the same command, `make coverage`) hard-fails locally without a live
+Redis/MinIO, so this figure is only ever produced in CI or a UAT run with those services present,
+never claimed from a bare local run.
+
+**Generated SDK clients (D-49, PLAT-FR-17, plan 27-18):** a `sdk-clients` CI job generates a Python
+and a TypeScript (`typescript-fetch`) client from `crates/paladin-web/openapi.json` with one pinned
+`openapi-generator-cli` image (`openapitools/openapi-generator-cli:v7.25.0`, the npm package the
+documented fallback), asserts each output tree is non-empty (≥ 20 files), builds `paladin-server`,
+and runs `scripts/sdk-smoke/{smoke.py,smoke.ts}` against it on the all-InMemory/SQLite profile:
+list assistants → submit a run for a code-registered agent → poll to a terminal status. Runs on
+every PR/push, no path filter.
+
 ## 9.7 Deprecations
 
 Empty — no item is marked `#[deprecated]` by any phase so far, and **Phase 25 (FT) deliberately adds none (X-03)**: the legacy Battalion `RetryPolicy`, `ErrorStrategy` and `NodeError` summary types under `paladin_core::platform::container::battalion`, and the legacy Formation/Phalanx/Campaign timeout handling, remain live and undeprecated alongside the new `Aegis` family; the retained `PaladinError::LlmError(String)` variant, now constructed by no first-party production code (25-06), is likewise left undeprecated. Entries are added here as producing epics ship theirs; this section is finalized (or confirmed empty) at closeout, owner SHIP-01, Phase 29.

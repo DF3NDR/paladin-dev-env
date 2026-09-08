@@ -7,12 +7,22 @@
 use std::time::Duration;
 
 /// Build the `reqwest::Client` every webhook delivery attempt is sent
-/// through: `timeout`-bounded, no redirects.
+/// through: `timeout`-bounded, no redirects, no pooled idle connections.
+///
+/// `pool_max_idle_per_host(0)`: each delivery targets a caller-chosen,
+/// typically low-frequency host, and successive attempts to the SAME URL
+/// can be minutes to an hour apart (D-43's own backoff schedule) -- keeping
+/// an idle connection open that long buys little and, worse, a pooled
+/// connection spanning that gap is exactly the shape a paused-then-advanced
+/// test clock (`webhook_retry_schedule`) can observe as unexpectedly stale.
+/// A fresh connection per attempt is simpler and avoids that whole class of
+/// staleness bug in both production and tests.
 pub fn build_webhook_client(timeout: Duration) -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
         .user_agent("paladin-webhooks/0.10")
+        .pool_max_idle_per_host(0)
         .build()
 }
 

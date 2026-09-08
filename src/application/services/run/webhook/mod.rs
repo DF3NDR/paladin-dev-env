@@ -21,7 +21,11 @@ pub mod signature;
 /// The no-redirect webhook HTTP client (D-42).
 pub mod client;
 
+/// `WebhookDeliveryService` -- the claim-then-send drain loop (D-40, D-43).
+pub mod service;
+
 pub use client::build_webhook_client;
+pub use service::{WebhookDeliveryOptions, WebhookDeliveryService, backoff_for};
 pub use signature::{WEBHOOK_SIGNATURE_HEADER, sign_webhook_body};
 pub use ssrf::{SsrfGuard, SsrfRejection};
 
@@ -64,6 +68,12 @@ pub struct WebhookPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parleys: Option<Vec<ParleyRequest>>,
 }
+
+/// `webhook_retry_schedule`, `webhook_signature_verifies_on_receiver`,
+/// `webhook_payload_has_no_secret_or_input` and the write-time submission
+/// guard proofs (27-13 Task 2, D-40..D-43).
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 mod webhook_payload_tests {

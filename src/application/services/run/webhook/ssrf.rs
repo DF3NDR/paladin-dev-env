@@ -36,6 +36,11 @@ use url::Url;
 /// resolver closure.
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
+/// The injectable hostname-resolver closure type [`SsrfGuard`] holds --
+/// factored into a named alias so its own (already-necessary) complexity
+/// is declared once rather than repeated at every field/parameter site.
+pub type Resolver = Arc<dyn Fn(&str) -> BoxFuture<std::io::Result<Vec<IpAddr>>> + Send + Sync>;
+
 /// The cloud metadata address (AWS/GCP/Azure IMDS) -- always rejected,
 /// regardless of `allow_private` (D-42).
 const METADATA_ADDR: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
@@ -89,7 +94,7 @@ pub enum SsrfRejection {
 #[derive(Clone)]
 pub struct SsrfGuard {
     allow_private: bool,
-    resolver: Arc<dyn Fn(&str) -> BoxFuture<std::io::Result<Vec<IpAddr>>> + Send + Sync>,
+    resolver: Resolver,
 }
 
 impl std::fmt::Debug for SsrfGuard {
@@ -124,10 +129,7 @@ impl SsrfGuard {
     /// Override the resolver -- tests inject a deterministic, no-network
     /// closure so `check_url`'s hostname-resolution path is exercised
     /// without depending on real DNS.
-    pub fn with_resolver(
-        mut self,
-        resolver: Arc<dyn Fn(&str) -> BoxFuture<std::io::Result<Vec<IpAddr>>> + Send + Sync>,
-    ) -> Self {
+    pub fn with_resolver(mut self, resolver: Resolver) -> Self {
         self.resolver = resolver;
         self
     }
@@ -274,9 +276,7 @@ fn to_ipv4_mapped(addr: IpAddr) -> Option<IpAddr> {
 mod tests {
     use super::*;
 
-    fn stub_resolver(
-        answer: Vec<IpAddr>,
-    ) -> Arc<dyn Fn(&str) -> BoxFuture<std::io::Result<Vec<IpAddr>>> + Send + Sync> {
+    fn stub_resolver(answer: Vec<IpAddr>) -> Resolver {
         Arc::new(move |_host: &str| {
             let answer = answer.clone();
             Box::pin(async move { Ok(answer) })

@@ -35,6 +35,33 @@ API key or an external response body, confirm:
   `Debug`-formatted or serialised outward.
 - HTTP clients sending a credential header do not follow redirects, so the header
   cannot be forwarded to an attacker-influenced host.
+- **Webhook delivery (Phase 27, plan 27-13, D-40..D-43) — an outbound HTTP client to
+  a caller-chosen URL, carrying a credential-shaped header:**
+  - Every webhook URL passes the SSRF guard (`src/application/services/run/webhook/ssrf.rs`)
+    at BOTH write time (`RunSubmissionService::submit`, before a run is even
+    persisted) AND send time (`WebhookDeliveryService::process`, immediately
+    before the request leaves the process) — non-`http(s)` schemes, loopback,
+    link-local, RFC1918, unique-local, unspecified and the cloud metadata
+    address (`169.254.169.254`, always rejected regardless of `allow_private`)
+    are all covered by a single table-tested function, never duplicated logic.
+  - The webhook HTTP client (`build_webhook_client`) never follows redirects
+    (`Policy::none()`) — the same house pattern every LLM adapter's own client
+    uses — so a `3xx` can never carry the `X-Paladin-Signature` header to a
+    different, attacker-influenced host; a `3xx`/`4xx` response dead-letters
+    the delivery immediately rather than being retried or followed.
+  - `X-Paladin-Signature: sha256=<hex>` is computed over the EXACT byte buffer
+    stored on the delivery row and handed to the HTTP client — signed once,
+    sent verbatim, never re-serialised — so a receiver's own recomputed HMAC
+    over the raw bytes it captured always matches.
+  - **DNS rebinding is a known, documented limitation, not an oversight:**
+    neither the write-time nor the send-time SSRF check pins the resolved
+    address between the check and the actual TCP connection the HTTP client
+    makes, so a hostname that answers a public address at check time and a
+    rebound private/metadata address at connect time is not caught by this
+    guard alone. Resolve-then-connect address pinning (e.g. a custom
+    `reqwest` resolver hook) is not implemented in this phase — see
+    `src/application/services/run/webhook/ssrf.rs`'s own module docs for the
+    full rationale.
 
 ## Snyk was evaluated and removed (2026-08-18)
 

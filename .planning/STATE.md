@@ -5,8 +5,8 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 28
 current_phase_name: Observability & Tooling
 status: planning
-stopped_at: Phase 28 context gathered
-last_updated: "2026-09-08T20:17:35.074Z"
+stopped_at: Phase 28 UI-SPEC approved
+last_updated: "2026-09-08T20:43:10.539Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 27 complete, transitioned to Phase 28
 progress:
@@ -846,14 +846,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 28 context gathered
+**Stopped at:** Phase 28 UI-SPEC approved
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-08T20:17:34.999Z
-Resume file: .planning/phases/28-observability-tooling/28-CONTEXT.md
+Last session: 2026-09-08T20:43:10.483Z
+Resume file: .planning/phases/28-observability-tooling/28-UI-SPEC.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

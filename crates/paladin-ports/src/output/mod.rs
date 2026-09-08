@@ -35,6 +35,10 @@ pub mod run_queue_port;
 /// Run repository port (D-03): the persisted-`Run` contract every backend
 /// adapter (InMemory/SQLite/Postgres) implements.
 pub mod run_repository_port;
+/// Run schedule repository port (D-36, D-37): the persisted, restart- and
+/// replica-safe `RunSchedule` contract every backend adapter
+/// (InMemory/SQLite/Postgres) implements.
+pub mod run_schedule_repository_port;
 /// Sanctum (vector store / RAG) port.
 pub mod sanctum_port;
 /// Scheduler port.

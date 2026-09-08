@@ -9,6 +9,12 @@
 //! a delivery failure is persisted on the delivery row and never touches
 //! the run.
 //!
+//! The only path anywhere in this module that reads a response body at all
+//! is the non-2xx branch of `process`, and that read is capped during the
+//! read itself via `client::read_bounded_body` (CR-01) -- the 2xx path
+//! never inspects the body, and a timeout/connect error never receives a
+//! response to read from.
+//!
 //! # The injected clock
 //!
 //! Mirrors `schedule::service`'s own documented rationale:
@@ -29,7 +35,7 @@ use paladin_core::platform::container::webhook::{
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
-use super::client::build_webhook_client;
+use super::client::{MAX_ERROR_BODY_BYTES, build_webhook_client, read_bounded_body};
 use super::signature::WEBHOOK_SIGNATURE_HEADER;
 use super::ssrf::SsrfGuard;
 
@@ -178,6 +184,7 @@ impl WebhookDeliveryService {
 
         // The signing value lives on the RUN's own WebhookSpec, never on
         // the delivery row (prohibition P1) -- read it fresh at send time.
+        let new_attempt = delivery.attempt + 1;
         let signing_key = match self.runs.get(&delivery.run_id).await {
             Ok(Some(run)) => run
                 .webhook
@@ -190,7 +197,43 @@ impl WebhookDeliveryService {
                     "webhook delivery service: failed to load run {} for delivery {delivery_id}: {error}",
                     delivery.run_id
                 );
-                String::new()
+                // WR-01 (27-REVIEW.md): the run lookup that supplies this
+                // delivery's OWN signing secret failed with a backend
+                // error -- signing with a fallback empty key and sending
+                // anyway would hand a receiver a payload it must reject as
+                // mis-signed, while still burning one of the delivery's
+                // budgeted five attempts (`record_attempt` unconditionally
+                // increments `attempt`, see the tradeoff note below).
+                // Rescheduling instead costs the identical attempt but
+                // never ships a payload known in advance to be
+                // mis-signed -- strictly better than the alternative, even
+                // though it means a delivery can still dead-letter after
+                // enough transient backend errors despite the receiving
+                // target having been reachable the entire time.
+                //
+                // Tradeoff recorded as a deliberate non-goal: suppressing
+                // the `attempt` increment on this reschedule would need a
+                // new `WebhookDeliveryRepositoryPort` method threaded
+                // across the trait and its three adapters (in-memory,
+                // sqlite, postgres) -- out of this gap-closure plan's
+                // scope.
+                let delay = chrono::Duration::from_std(backoff_for(new_attempt))
+                    .unwrap_or_else(|_| chrono::Duration::zero());
+                self.finish(
+                    &delivery_id,
+                    WebhookAttemptResult {
+                        outcome: WebhookAttemptOutcome::Retrying {
+                            next_attempt_at: (self.options.now)() + delay,
+                        },
+                        response_status: None,
+                        error: Some(bounded_error(&format!(
+                            "signing key load failed for run {}: {error}",
+                            delivery.run_id
+                        ))),
+                    },
+                )
+                .await;
+                return;
             }
         };
 
@@ -198,7 +241,6 @@ impl WebhookDeliveryService {
             signing_key.as_bytes(),
             delivery.payload.as_bytes(),
         );
-        let new_attempt = delivery.attempt + 1;
 
         let send_result = self
             .client
@@ -221,7 +263,14 @@ impl WebhookDeliveryService {
                         error: None,
                     }
                 } else {
-                    let body = response.text().await.unwrap_or_default();
+                    // CR-01: the body is capped as it is read, never
+                    // buffered whole -- see `read_bounded_body`'s docs for
+                    // the threat this closes. This is the only path in the
+                    // whole webhook-delivery module that reads a response
+                    // body at all: the 2xx branch above never inspects the
+                    // body, and the timeout/connect-error branch below never
+                    // receives a response to read from.
+                    let body = read_bounded_body(response, MAX_ERROR_BODY_BYTES).await;
                     let error = Some(bounded_error(&format!("http {status}: {body}")));
                     if (500..600).contains(&status) {
                         self.retry_or_dead(&delivery, new_attempt, Some(status), error)

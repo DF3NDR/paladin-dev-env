@@ -2,14 +2,11 @@
   "name": "paladin-sdk-smoke",
   "version": "0.0.0",
   "private": true,
-  "description": "TypeScript generated-client smoke test for the sdk-clients CI job (D-49, PLAT-FR-17). Not published.",
+  "description": "TypeScript generated-client smoke test for the sdk-clients CI job (D-49, PLAT-FR-17). Not published. The generated `paladin-sdk` package is a build artefact, not a resolvable dependency: `run.sh` installs it separately, after `npm ci`, from its local build directory (`target/sdk/typescript`) via `npm install --no-save` -- a `file:` dependency on a tree that does not exist until CI generates it cannot be resolved by a committed package-lock.json.",
   "type": "commonjs",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "smoke": "node dist/smoke.js"
-  },
-  "dependencies": {
-    "paladin-sdk": "file:../../target/sdk/typescript"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

@@ -592,7 +592,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 27-01-PLAN.md — Tracer: core `Run`/status machine (D-01 checkpoint), ports, InMemory adapters, submission + worker, `POST /runs` → `Completed` end-to-end (PLAT-01, PLAT-02)
+- [x] 27-01-PLAN.md — Tracer: core `Run`/status machine (D-01 checkpoint), ports, InMemory adapters, submission + worker, `POST /runs` → `Completed` end-to-end (PLAT-01, PLAT-02)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

@@ -448,6 +448,21 @@ mod tests {
                 MockOutcome::NotWired => Err(RunSubmissionError::NotWired),
             }
         }
+
+        async fn cancel(
+            &self,
+            run_id: &RunId,
+        ) -> Result<paladin_ports::input::run_submission_port::CancelOutcome, RunSubmissionError>
+        {
+            match self.outcome {
+                MockOutcome::NotWired => Err(RunSubmissionError::NotWired),
+                _ => Ok(paladin_ports::input::run_submission_port::CancelOutcome {
+                    run_id: run_id.clone(),
+                    status: paladin_core::platform::container::run::RunStatus::Running,
+                    was_local: false,
+                }),
+            }
+        }
     }
 
     // --- Mock `RunRepositoryPort` ----------------------------------------

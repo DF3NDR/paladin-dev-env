@@ -3,6 +3,10 @@ pub mod arsenal_port;
 /// Authentication port for issuing and verifying bearer tokens.
 pub mod auth_port;
 pub mod battalion_port;
+/// Cancellation probe port (D-14): the seam a durable, cross-instance cancel
+/// signal attaches to the superstep engine through, consulted at every
+/// superstep boundary beside the existing `CancellationToken`.
+pub mod cancellation_probe;
 pub mod citadel_port;
 pub mod content_delivery_port;
 pub mod embedding_port;

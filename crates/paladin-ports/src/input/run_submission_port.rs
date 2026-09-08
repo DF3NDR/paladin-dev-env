@@ -42,6 +42,24 @@ pub struct RunAccepted {
     pub thread_id: ThreadId,
 }
 
+/// The result of a successful [`RunSubmissionPort::cancel`] call (D-16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CancelOutcome {
+    /// The cancelled run's identity.
+    pub run_id: RunId,
+    /// The run's status immediately after the durable flag was written --
+    /// always a non-terminal, "busy" status (`Queued`/`Running`/
+    /// `AwaitingInput`), since a terminal run is rejected with
+    /// [`RunSubmissionError::AlreadyTerminal`] before this is constructed.
+    pub status: RunStatus,
+    /// Whether THIS call site's own process instance held an in-process
+    /// cancellation signal for the run and fired it directly (a same-
+    /// instance fast path). `false` when the run is executing on a
+    /// different instance, or not currently dispatched by any worker at
+    /// all -- the durable flag written first is what reaches it either way.
+    pub was_local: bool,
+}
+
 /// Every way [`RunSubmissionPort::submit`] can reject a request (D-12).
 ///
 /// `#[non_exhaustive]`: 27-07 adds `cancel`-shaped variants, 27-13 adds
@@ -121,6 +139,18 @@ pub trait RunSubmissionPort: Send + Sync {
     /// enqueuing a new [`Run`](paladin_core::platform::container::run::Run),
     /// and returning immediately with a [`RunAccepted`] handle.
     async fn submit(&self, request: SubmitRun) -> Result<RunAccepted, RunSubmissionError>;
+
+    /// Idempotently request cancellation of `run_id` (D-16): persists the
+    /// durable flag through the repository FIRST -- so a cancel is never
+    /// lost to a crash between the durable write and any local signal --
+    /// then best-effort signals this instance's own in-process
+    /// cancellation token if it is the one currently dispatching the run.
+    ///
+    /// Calling this twice on the same non-terminal run is `Ok` both times
+    /// (idempotent). Returns [`RunSubmissionError::NotFound`] when `run_id`
+    /// does not exist, and [`RunSubmissionError::AlreadyTerminal`] when the
+    /// run has already reached a terminal status.
+    async fn cancel(&self, run_id: &RunId) -> Result<CancelOutcome, RunSubmissionError>;
 }
 
 #[cfg(test)]
@@ -133,6 +163,10 @@ mod tests {
     #[async_trait]
     impl RunSubmissionPort for AlwaysUnwired {
         async fn submit(&self, _request: SubmitRun) -> Result<RunAccepted, RunSubmissionError> {
+            Err(RunSubmissionError::NotWired)
+        }
+
+        async fn cancel(&self, _run_id: &RunId) -> Result<CancelOutcome, RunSubmissionError> {
             Err(RunSubmissionError::NotWired)
         }
     }

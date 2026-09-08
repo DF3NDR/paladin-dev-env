@@ -17,13 +17,26 @@
 //! one task permanently busy, `emit` keeps working, and the queue's
 //! drop-oldest policy — counted in an atomic rather than silently discarding
 //! (T-22-31) — is what keeps memory bounded when the sink cannot keep up.
+//!
+//! # Panic isolation (D-08)
+//!
+//! A `TraceSink::on_event` implementation that PANICS must not kill the
+//! consumer task for the rest of the run: every call is wrapped in
+//! `futures::FutureExt::catch_unwind(AssertUnwindSafe(..))`, a caught panic
+//! increments [`TraceDispatcher::sink_panics`] and logs one `error!` line
+//! under target `paladin::trace`, and the consumer loop keeps draining.
+//! Before this, a panicking sink would silently end the background task —
+//! every subsequent event for that dispatcher's lifetime would then sit in
+//! the queue until dropped, with no signal to the operator.
 
 use std::collections::VecDeque;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::Utc;
+use futures::FutureExt;
 use tokio::sync::mpsc;
 
 use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
@@ -59,6 +72,9 @@ struct TraceQueue {
     /// IS causal order regardless of how many concurrent callers share this
     /// dispatcher.
     seq: AtomicU64,
+    /// Total sink panics caught so far (D-08) — readable via
+    /// [`TraceDispatcher::sink_panics`].
+    sink_panics: AtomicU64,
 }
 
 /// The engine-owned trace event dispatcher (ENG-FR-21, D-03): sits between
@@ -123,6 +139,7 @@ impl TraceDispatcher {
             capacity: capacity.max(1),
             dropped: AtomicU64::new(0),
             seq: AtomicU64::new(0),
+            sink_panics: AtomicU64::new(0),
         });
         // Capacity 1: the doorbell only ever needs to prove "there is at
         // least one more thing to check for" -- the consumer always drains
@@ -148,10 +165,18 @@ impl TraceDispatcher {
                             // which have already returned by the time this
                             // task runs. The return value is diagnostic only
                             // (see trace_sink_port's module docs) and is
-                            // deliberately discarded. Panic isolation around
-                            // this call lands in a later commit of this same
-                            // plan (D-08).
-                            let _ = sink.on_event(record).await;
+                            // deliberately discarded. `catch_unwind` (D-08)
+                            // means a PANICKING sink never kills this
+                            // consumer task -- the loop keeps draining.
+                            let outcome =
+                                AssertUnwindSafe(sink.on_event(record)).catch_unwind().await;
+                            if outcome.is_err() {
+                                consumer_queue.sink_panics.fetch_add(1, Ordering::SeqCst);
+                                log::error!(
+                                    target: "paladin::trace",
+                                    "a TraceSink panicked while handling a trace record; the consumer task continues"
+                                );
+                            }
                         }
                         None => break,
                     }
@@ -180,25 +205,48 @@ impl TraceDispatcher {
     /// advances); with a sink configured, a full queue drops the OLDEST
     /// buffered record (incrementing the counter
     /// [`TraceDispatcher::dropped_count`] reports) to make room for the new
-    /// one.
+    /// one. The FIRST drop of this dispatcher's life logs one `warn!` line
+    /// (target `paladin::trace`) naming the thread and the configured
+    /// capacity; every subsequent drop is counted silently (D-07). A
+    /// `TraceEvent::RunFinished` event has its `trace_dropped_total` field
+    /// overwritten here, at the moment it is enqueued, with this
+    /// dispatcher's own final `dropped_count()` (D-07) -- `RunFinished` is
+    /// the run's last event, drop-oldest never evicts the newest push, so
+    /// this is always accurate.
     pub fn emit(&self, event: TraceEvent) {
         let Some((queue, doorbell)) = &self.inner else {
             return;
         };
         let seq = queue.seq.fetch_add(1, Ordering::SeqCst) + 1;
-        let record = TraceRecord {
-            thread_id: self.thread_id.clone(),
-            run_id: self.run_id.clone(),
-            seq,
-            at: Utc::now(),
-            event,
-        };
+        let mut event = event;
         {
             let mut buf = queue.buffer.lock().expect("trace queue mutex poisoned");
             if buf.len() >= queue.capacity {
                 buf.pop_front();
-                queue.dropped.fetch_add(1, Ordering::SeqCst);
+                let previously_dropped = queue.dropped.fetch_add(1, Ordering::SeqCst);
+                if previously_dropped == 0 {
+                    log::warn!(
+                        target: "paladin::trace",
+                        "dropped first trace event for thread {} (capacity {})",
+                        self.thread_id,
+                        queue.capacity
+                    );
+                }
             }
+            if let TraceEvent::RunFinished {
+                ref mut trace_dropped_total,
+                ..
+            } = event
+            {
+                *trace_dropped_total = queue.dropped.load(Ordering::SeqCst);
+            }
+            let record = TraceRecord {
+                thread_id: self.thread_id.clone(),
+                run_id: self.run_id.clone(),
+                seq,
+                at: Utc::now(),
+                event,
+            };
             buf.push_back(record);
         }
         // A full doorbell channel means a signal is already pending and the
@@ -213,6 +261,14 @@ impl TraceDispatcher {
         self.inner
             .as_ref()
             .map_or(0, |(queue, _)| queue.dropped.load(Ordering::SeqCst))
+    }
+
+    /// Total sink panics caught so far (D-08). Always `0` with no sink
+    /// configured.
+    pub fn sink_panics(&self) -> u64 {
+        self.inner
+            .as_ref()
+            .map_or(0, |(queue, _)| queue.sink_panics.load(Ordering::SeqCst))
     }
 
     /// The thread every record this dispatcher stamps belongs to.
@@ -495,6 +551,310 @@ mod tests {
             supersteps,
             vec![0, 2, 3],
             "superstep 1 (the oldest buffered) must be dropped, not superstep 3 (the newest)"
+        );
+    }
+
+    // --- D-06/D-07/D-08: ordering, drop accounting, panic isolation ----
+
+    use crate::engine::test_support::PanickingTraceSink;
+
+    /// Build the event sequence a `n`-superstep run emits, modelled the same
+    /// way `full_queue_drops_the_oldest_event_not_the_newest` (above) models
+    /// a run: `RunStarted`, `n` `SuperstepStarted`s, `RunFinished` --
+    /// exercising the dispatcher directly rather than a real `WarGraph`
+    /// (this file's own established style; no other test in this module
+    /// runs a real engine either).
+    fn run_events(n: u64) -> Vec<TraceEvent> {
+        let mut events = vec![run_started()];
+        for superstep in 0..n {
+            events.push(superstep_started(superstep));
+        }
+        events.push(run_finished());
+        events
+    }
+
+    #[tokio::test]
+    async fn trace_seq_is_gapless_over_twenty_supersteps() {
+        let sink = RecordingTraceSink::new();
+        let dispatcher = TraceDispatcher::new(
+            ThreadId::new("trace-seq-gapless").unwrap(),
+            None,
+            Some(sink.clone()),
+        );
+        for event in run_events(20) {
+            dispatcher.emit(event);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let records = sink.events().await;
+        // RunStarted + 20 SuperstepStarted + RunFinished = 22 records.
+        assert_eq!(records.len(), 22);
+        let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
+        let expected: Vec<u64> = (1..=22).collect();
+        assert_eq!(
+            seqs, expected,
+            "seq must be exactly 1..=n, no gaps, no repeats"
+        );
+        assert_eq!(dispatcher.dropped_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn trace_drops_are_counted_and_reconcile() {
+        // Capacity 4, gated on the first call, so the whole 22-event run
+        // overflows the queue before the consumer is released.
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let sink = GatedTraceSink::new(gate.clone());
+        let dispatcher = TraceDispatcher::with_capacity(
+            ThreadId::new("trace-drops-reconcile").unwrap(),
+            None,
+            Some(sink.clone()),
+            4,
+        );
+
+        let events = run_events(20);
+        dispatcher.emit(events[0].clone());
+        // Let the consumer pick the first event up and start blocking.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        for event in &events[1..] {
+            dispatcher.emit(event.clone());
+        }
+
+        let dropped = dispatcher.dropped_count();
+        assert!(
+            dropped > 0,
+            "an overflowing 22-event run over capacity 4 must drop"
+        );
+
+        gate.notify_one();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let records = sink.events().await;
+        let seqs: std::collections::BTreeSet<u64> = records.iter().map(|r| r.seq).collect();
+        let max_seq = *seqs
+            .iter()
+            .next_back()
+            .expect("at least one record survived");
+        let gaps = (max_seq as usize) - seqs.len();
+
+        let run_finished_dropped_total = records
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished {
+                    trace_dropped_total,
+                    ..
+                } => Some(*trace_dropped_total),
+                _ => None,
+            })
+            .expect("RunFinished must survive drop-oldest (D-07)");
+
+        assert_eq!(
+            gaps as u64, dropped,
+            "observed seq gaps must equal dropped_count()"
+        );
+        assert_eq!(
+            run_finished_dropped_total, dropped,
+            "RunFinished.trace_dropped_total must equal dropped_count()"
+        );
+        assert_ne!(dropped, 0, "all three reconciled values must be non-zero");
+    }
+
+    #[tokio::test]
+    async fn run_finished_is_never_dropped() {
+        // Capacity 1: as aggressive an overflow as possible.
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let sink = GatedTraceSink::new(gate.clone());
+        let dispatcher = TraceDispatcher::with_capacity(
+            ThreadId::new("run-finished-never-dropped").unwrap(),
+            None,
+            Some(sink.clone()),
+            1,
+        );
+
+        let events = run_events(20);
+        dispatcher.emit(events[0].clone());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        for event in &events[1..] {
+            dispatcher.emit(event.clone());
+        }
+        assert!(dispatcher.dropped_count() > 0);
+
+        gate.notify_one();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let records = sink.events().await;
+        let run_finished_count = records
+            .iter()
+            .filter(|r| matches!(r.event, TraceEvent::RunFinished { .. }))
+            .count();
+        assert_eq!(
+            run_finished_count, 1,
+            "exactly one RunFinished record must survive under saturation"
+        );
+    }
+
+    // --- D-07: a minimal in-process `log::Log` capturer, scoped by OS
+    // thread id so concurrently running `#[tokio::test]`s (each its own OS
+    // thread under the default per-test-thread `cargo test` harness) never
+    // observe each other's captured lines. Installed at most once per
+    // process (`log::set_boxed_logger` may only be called once) via `Once`.
+    struct CapturingLogger;
+
+    static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+    static CAPTURED: Mutex<Option<HashMapWarnings>> = Mutex::new(None);
+    type HashMapWarnings = std::collections::HashMap<std::thread::ThreadId, Vec<String>>;
+
+    impl log::Log for CapturingLogger {
+        fn enabled(&self, _metadata: &log::Metadata) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record) {
+            if record.target() == "paladin::trace" {
+                let mut guard = CAPTURED.lock().expect("captured warnings mutex poisoned");
+                let map = guard.get_or_insert_with(std::collections::HashMap::new);
+                map.entry(std::thread::current().id())
+                    .or_default()
+                    .push(record.args().to_string());
+            }
+        }
+        fn flush(&self) {}
+    }
+
+    fn install_capturing_logger() {
+        static LOGGER: CapturingLogger = CapturingLogger;
+        LOGGER_INIT.call_once(|| {
+            log::set_logger(&LOGGER).expect("install the capturing test logger");
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+    }
+
+    fn captured_warnings_for_this_thread() -> Vec<String> {
+        CAPTURED
+            .lock()
+            .expect("captured warnings mutex poisoned")
+            .as_ref()
+            .and_then(|m| m.get(&std::thread::current().id()).cloned())
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn first_drop_logs_one_warning() {
+        install_capturing_logger();
+        // Current-thread `#[tokio::test]` runtime: the spawned consumer
+        // task cooperatively runs on THIS SAME OS thread, so its `warn!`
+        // call is captured under this thread's own key.
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let sink = GatedTraceSink::new(gate.clone());
+        let dispatcher = TraceDispatcher::with_capacity(
+            ThreadId::new("first-drop-warns-once").unwrap(),
+            None,
+            Some(sink.clone()),
+            2,
+        );
+
+        dispatcher.emit(superstep_started(0));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // Fill to capacity then overflow ten times over.
+        for superstep in 1..=12 {
+            dispatcher.emit(superstep_started(superstep));
+        }
+        assert!(dispatcher.dropped_count() >= 10);
+
+        let warnings = captured_warnings_for_this_thread();
+        let trace_warnings: Vec<&String> = warnings
+            .iter()
+            .filter(|line| line.contains("dropped first trace event"))
+            .collect();
+        assert_eq!(
+            trace_warnings.len(),
+            1,
+            "exactly one warning must be logged for the whole dispatcher's life, got: {warnings:?}"
+        );
+        assert!(trace_warnings[0].contains("first-drop-warns-once"));
+        assert!(
+            trace_warnings[0].contains('2'),
+            "must name the configured capacity"
+        );
+
+        gate.notify_one();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    #[tokio::test]
+    async fn panicking_sink_does_not_kill_the_consumer() {
+        let sink = PanickingTraceSink::new(3);
+        let dispatcher = TraceDispatcher::new(
+            ThreadId::new("panicking-sink").unwrap(),
+            None,
+            Some(sink.clone()),
+        );
+
+        for event in run_events(20) {
+            dispatcher.emit(event);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(
+            dispatcher.sink_panics() >= 1,
+            "the dispatcher must have caught and counted the sink's panic"
+        );
+        let records = sink.events().await;
+        // 22 emitted, minus the one that panicked (never recorded) = 21.
+        assert_eq!(
+            records.len(),
+            21,
+            "every record except the panicking call must still have been delivered"
+        );
+        let has_run_finished = records
+            .iter()
+            .any(|r| matches!(r.event, TraceEvent::RunFinished { .. }));
+        assert!(
+            has_run_finished,
+            "the consumer must keep draining after the panic, through to RunFinished"
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_sink_does_not_slow_the_run() {
+        // A sink that sleeps 500ms per event: the RUN's own wall clock
+        // (measured here as the time to issue every `emit` call) must be
+        // independent of the sink's own latency (real sleeps, not a paused
+        // clock -- the assertion is about wall-clock independence).
+        struct SlowSink;
+        #[async_trait]
+        impl TraceSink for SlowSink {
+            async fn on_event(
+                &self,
+                _record: TraceRecord,
+            ) -> Result<(), paladin_ports::output::trace_sink_port::TraceSinkError> {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                Ok(())
+            }
+        }
+
+        let sink_disabled = tokio::time::Instant::now();
+        let dispatcher_no_sink =
+            TraceDispatcher::new(ThreadId::new("slow-sink-baseline").unwrap(), None, None);
+        for event in run_events(20) {
+            dispatcher_no_sink.emit(event);
+        }
+        let baseline_elapsed = sink_disabled.elapsed();
+
+        let with_slow_sink = tokio::time::Instant::now();
+        let dispatcher = TraceDispatcher::new(
+            ThreadId::new("slow-sink-run").unwrap(),
+            None,
+            Some(Arc::new(SlowSink)),
+        );
+        for event in run_events(20) {
+            dispatcher.emit(event);
+        }
+        let slow_sink_elapsed = with_slow_sink.elapsed();
+
+        assert!(
+            slow_sink_elapsed < baseline_elapsed + Duration::from_millis(50),
+            "emit-only wall clock ({slow_sink_elapsed:?}) must stay within \
+             sink-disabled ({baseline_elapsed:?}) + 50ms regardless of the \
+             sink's own 500ms-per-event latency"
         );
     }
 

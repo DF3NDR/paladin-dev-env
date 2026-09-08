@@ -745,6 +745,47 @@ impl TraceSink for GatedTraceSink {
     }
 }
 
+/// A [`TraceSink`] test double that PANICS on its `panic_on_nth`-th call
+/// (1-indexed) and records every call it actually reaches (D-08): proves a
+/// panicking sink is caught by `TraceDispatcher`'s `catch_unwind`, counted in
+/// `sink_panics`, and never kills the consumer task -- records after the
+/// panic still arrive.
+pub struct PanickingTraceSink {
+    panic_on_nth: usize,
+    calls: AtomicUsize,
+    events: tokio::sync::Mutex<Vec<TraceRecord>>,
+}
+
+impl PanickingTraceSink {
+    /// Construct a sink that panics on its `panic_on_nth`-th call
+    /// (1-indexed); every other call records normally.
+    pub fn new(panic_on_nth: usize) -> Arc<Self> {
+        Arc::new(Self {
+            panic_on_nth,
+            calls: AtomicUsize::new(0),
+            events: tokio::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The records this sink actually recorded (excludes the panicking
+    /// call), in receipt order.
+    pub async fn events(&self) -> Vec<TraceRecord> {
+        self.events.lock().await.clone()
+    }
+}
+
+#[async_trait]
+impl TraceSink for PanickingTraceSink {
+    async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if call == self.panic_on_nth {
+            panic!("PanickingTraceSink: simulated panic on call {call}");
+        }
+        self.events.lock().await.push(record);
+        Ok(())
+    }
+}
+
 // --- Plan 25-01: Aegis retry loop test doubles ---------------------------
 
 /// A [`StateNode`] test double that fails with a fixed message on its first

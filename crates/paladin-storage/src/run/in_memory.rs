@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 
 use paladin_core::platform::container::parley::ParleyResponse;
-use paladin_core::platform::container::run::{Run, RunId, RunStatus};
+use paladin_core::platform::container::run::{RUN_SCHEMA_VERSION, Run, RunId, RunStatus};
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunPage, RunQuery, RunRepositoryError, RunRepositoryPort,
@@ -57,7 +57,18 @@ impl RunRepositoryPort for InMemoryRunRepository {
     }
 
     async fn get(&self, run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
-        Ok(self.runs.read().await.get(run_id).cloned())
+        let run = self.runs.read().await.get(run_id).cloned();
+        match run {
+            // X-04: a row whose schema_version this build does not
+            // recognize must fail loudly rather than silently misparse --
+            // the SQL adapters enforce the identical check on read.
+            Some(run) if run.schema_version != RUN_SCHEMA_VERSION => {
+                Err(RunRepositoryError::UnknownSchemaVersion {
+                    found: run.schema_version,
+                })
+            }
+            other => Ok(other),
+        }
     }
 
     async fn update_status(
@@ -390,5 +401,114 @@ mod tests {
         .unwrap();
         let err = repo.request_cancel(&run.run_id).await.unwrap_err();
         assert!(matches!(err, RunRepositoryError::AlreadyTerminal { .. }));
+    }
+}
+
+#[cfg(test)]
+mod contract_suite {
+    use super::*;
+    use crate::run::contract_tests;
+    use std::sync::Arc;
+
+    // One #[tokio::test] per shared contract function (D-09 precedent), each
+    // against a fresh `InMemoryRunRepository`, so a failure names the
+    // violated contract clause. See `contract_tests` for the assertions
+    // themselves -- this module only wires `InMemoryRunRepository` into
+    // them, unchanged.
+
+    #[tokio::test]
+    async fn insert_then_get_round_trips_every_field() {
+        contract_tests::insert_then_get_round_trips_every_field(&InMemoryRunRepository::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn update_status_queued_to_running_sets_started_at_then_stale_cas_fails() {
+        contract_tests::update_status_queued_to_running_sets_started_at_then_stale_cas_fails(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn update_status_running_to_completed_sets_finished_at_then_terminal_is_absorbing() {
+        contract_tests::update_status_running_to_completed_sets_finished_at_then_terminal_is_absorbing(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn update_status_self_transition_fails() {
+        contract_tests::update_status_self_transition_fails(&InMemoryRunRepository::new()).await;
+    }
+
+    #[tokio::test]
+    async fn insert_rejects_second_active_run_then_succeeds_after_terminal() {
+        contract_tests::insert_rejects_second_active_run_then_succeeds_after_terminal(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_paginates_by_submitted_at_and_run_id_with_no_overlap_or_gap() {
+        contract_tests::list_paginates_by_submitted_at_and_run_id_with_no_overlap_or_gap(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_filters_by_thread_assistant_and_status() {
+        contract_tests::list_filters_by_thread_assistant_and_status(&InMemoryRunRepository::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn request_cancel_is_idempotent_and_rejects_terminal() {
+        contract_tests::request_cancel_is_idempotent_and_rejects_terminal(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn is_cancel_requested_reflects_active_run_flag() {
+        contract_tests::is_cancel_requested_reflects_active_run_flag(&InMemoryRunRepository::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn bump_attempt_increments_and_persists() {
+        contract_tests::bump_attempt_increments_and_persists(&InMemoryRunRepository::new()).await;
+    }
+
+    #[tokio::test]
+    async fn record_resume_on_awaiting_input_then_clear_pending_responses() {
+        contract_tests::record_resume_on_awaiting_input_then_clear_pending_responses(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn record_outcome_persists_fields_without_touching_status() {
+        contract_tests::record_outcome_persists_fields_without_touching_status(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn get_on_unsupported_schema_version_fails() {
+        contract_tests::get_on_unsupported_schema_version_fails(&InMemoryRunRepository::new())
+            .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ten_concurrent_inserts_one_thread_exactly_one_accepted() {
+        let repo: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        contract_tests::ten_concurrent_inserts_one_thread_exactly_one_accepted(repo).await;
     }
 }

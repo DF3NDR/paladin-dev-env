@@ -33,6 +33,9 @@ pub mod http_layers;
 pub mod job_store;
 /// OpenAPI spec assembly and interactive (Swagger UI) docs serving.
 pub mod openapi;
+/// Shared pagination primitives applied by every `/v1` list endpoint
+/// (D-47): `PageQuery`, `resolve_limit`, `encode_cursor`/`decode_cursor`.
+pub mod pagination;
 /// Request-logging middleware with request-id correlation.
 pub mod request_log;
 /// Run submission/status HTTP controller (wire types, state, handlers, router; PLAT-01, D-44).

@@ -53,10 +53,6 @@ use crate::error::{ApiError, ApiErrorBody};
 use crate::run_controller::RunApiState;
 
 const ASSISTANT_PORT_HINT: &str = "no assistant admin backend configured: set assistants.backend";
-/// Maximum `limit` either pagination query accepts, mirroring
-/// `thread_controller::MAX_HISTORY_LIMIT`'s own precedent.
-const MAX_ASSISTANT_LIMIT: u32 = 100;
-const DEFAULT_ASSISTANT_LIMIT: u32 = 20;
 
 // --- DTOs ----------------------------------------------------------------
 
@@ -235,17 +231,6 @@ fn to_definition(dto: DefinitionDto) -> Result<AssistantDefinition, ApiError> {
     })
 }
 
-fn parse_limit(limit: Option<u32>) -> Result<u32, ApiError> {
-    match limit {
-        None => Ok(DEFAULT_ASSISTANT_LIMIT),
-        Some(0) => Ok(DEFAULT_ASSISTANT_LIMIT),
-        Some(limit) if limit > MAX_ASSISTANT_LIMIT => Err(ApiError::bad_request(format!(
-            "limit must be at most {MAX_ASSISTANT_LIMIT}, got {limit}"
-        ))),
-        Some(limit) => Ok(limit),
-    }
-}
-
 fn synthetic_created_at() -> DateTime<Utc> {
     DateTime::<Utc>::from_timestamp(0, 0).unwrap_or_else(Utc::now)
 }
@@ -402,7 +387,7 @@ pub async fn list_assistants(
         .assistants
         .as_ref()
         .ok_or_else(|| ApiError::not_implemented(ASSISTANT_PORT_HINT))?;
-    let limit = parse_limit(params.limit)?;
+    let limit = crate::pagination::resolve_limit(params.limit)?;
     let cursor = params
         .cursor
         .as_deref()
@@ -621,7 +606,7 @@ pub async fn list_versions(
         .as_ref()
         .ok_or_else(|| ApiError::not_implemented(ASSISTANT_PORT_HINT))?;
     let id = parse_assistant_id(&assistant_id)?;
-    let limit = parse_limit(params.limit)?;
+    let limit = crate::pagination::resolve_limit(params.limit)?;
 
     let page = assistants
         .list_versions(&id, limit, params.cursor)

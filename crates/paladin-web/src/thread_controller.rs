@@ -58,6 +58,8 @@ use serde::{Deserialize, Serialize};
 use paladin_core::platform::container::parley::{ParleyKind, ParleyRequest, ParleyResponse};
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId, WaypointStatus};
 use paladin_ports::input::parley_port::{ParleyError, ParleyPort};
+use paladin_ports::input::run_submission_port::{ForkRun, RunSubmissionPort};
+use paladin_ports::output::run_repository_port::RunRepositoryPort;
 use paladin_ports::output::waypoint_port::{WaypointPort, WaypointSummary};
 
 use utoipa_axum::router::OpenApiRouter;
@@ -66,16 +68,28 @@ use utoipa_axum::routes;
 use crate::agent_auth::{HasAgentAuth, Principal, require_admin};
 use crate::agent_controller::{JsonValue, ok_body};
 use crate::error::{ApiError, ApiErrorBody};
+use crate::pagination::{decode_cursor, encode_cursor, resolve_limit};
+use crate::run_controller::{RunWebhookRequestDto, map_submission_error, to_run_webhook_spec};
 
 /// Shared state for the thread routes.
 ///
 /// Mirrors [`crate::agent_controller::AgentApiState`]'s injection-only
-/// trait-object shape (D-24): both `waypoints` and `parley` are `None` until
-/// a durable Waypoint backend is configured, at which point
-/// `src/bin/paladin-server.rs` wires both from the SAME store. Kept as its
-/// own struct -- never a field added to `AgentApiState` -- so the
+/// trait-object shape (D-24): `waypoints`/`parley`/`runs`/`run_submission`
+/// are `None` until a durable Waypoint backend (and, for the latter two, a
+/// run store/submission service) is configured, at which point
+/// `src/bin/paladin-server.rs` wires them all from the SAME stores. Kept as
+/// its own struct -- never a field added to `AgentApiState` -- so the
 /// pre-existing agent surface is untouched (X-10.3).
+///
+/// `#[non_exhaustive]` from 27-15 (D-45): `runs`/`run_submission` were added
+/// to an already-published (this same v0.10 cycle) type after
+/// `GET /threads`, `POST /threads/{id}/fork` and `DELETE /threads/{id}`
+/// needed the run-submission/run-repository seam this struct already had no
+/// slot for. Construction stays possible only through [`Self::new`] plus
+/// the `with_*` builder methods, so the next field stays free without a
+/// semver-major bump (X-10.3).
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct ThreadApiState {
     /// Reads the latest Waypoint / paginated history for `GET .../state` and
     /// `GET .../history`. `None` when no waypoint backend is configured.
@@ -84,6 +98,15 @@ pub struct ThreadApiState {
     /// waypoint backend is configured (the facade adapter needs one to
     /// resolve a thread's latest Waypoint).
     pub parley: Option<Arc<dyn ParleyPort>>,
+    /// Reads a thread's active run id for `GET /threads`/`GET /threads/{id}`
+    /// and checks the busy invariant for `DELETE /threads/{id}` (D-45).
+    /// `None` when no run store is configured -- `active_run_id` is simply
+    /// omitted from responses, and `DELETE` skips the busy check (a
+    /// pre-run-server deployment, X-03).
+    pub runs: Option<Arc<dyn RunRepositoryPort>>,
+    /// Submits a forked run for `POST /threads/{id}/fork` (D-45). `None`
+    /// when no run submission backend is configured.
+    pub run_submission: Option<Arc<dyn RunSubmissionPort>>,
     /// Authentication configuration -- the SAME [`crate::agent_auth::AgentAuthConfig`]
     /// shape `AgentApiState` carries, so the thread routes are authenticated
     /// exactly like `/v1/agents/*` (D-24).
@@ -98,6 +121,8 @@ impl ThreadApiState {
         Self {
             waypoints: None,
             parley: None,
+            runs: None,
+            run_submission: None,
             auth: crate::agent_auth::AgentAuthConfig::default(),
         }
     }
@@ -112,6 +137,21 @@ impl ThreadApiState {
     /// Wire a [`ParleyPort`], enabling `POST .../resume`.
     pub fn with_parley(mut self, parley: Arc<dyn ParleyPort>) -> Self {
         self.parley = Some(parley);
+        self
+    }
+
+    /// Wire a [`RunRepositoryPort`], enabling `active_run_id` on
+    /// `GET /threads`/`GET /threads/{id}` and the busy check on
+    /// `DELETE /threads/{id}` (D-45).
+    pub fn with_runs(mut self, runs: Arc<dyn RunRepositoryPort>) -> Self {
+        self.runs = Some(runs);
+        self
+    }
+
+    /// Wire a [`RunSubmissionPort`], enabling `POST /threads/{id}/fork`
+    /// (D-45).
+    pub fn with_run_submission(mut self, run_submission: Arc<dyn RunSubmissionPort>) -> Self {
+        self.run_submission = Some(run_submission);
         self
     }
 
@@ -145,6 +185,11 @@ const WAYPOINT_BACKEND_HINT: &str =
 /// Message for `POST .../resume` when [`ThreadApiState::parley`] is `None`.
 const PARLEY_PORT_HINT: &str =
     "no waypoint backend is configured; resume requires APP_WAYPOINT_STORE_BACKEND to be set";
+
+/// Message for `POST .../fork` when [`ThreadApiState::run_submission`] is
+/// `None`.
+const RUN_SUBMISSION_PORT_HINT: &str =
+    "no run submission backend configured: set run_store.backend and run_queue.backend";
 
 /// Maximum `limit` accepted by `GET .../history` (D-27, PLAT-FR-16
 /// pre-conformance); a larger value is a `400`.
@@ -443,6 +488,93 @@ pub struct HistoryQuery {
     pub cursor: Option<String>,
 }
 
+// --- Thread list/get/fork/delete DTOs (D-45) --------------------------------
+
+/// Wire projection of a [`paladin_ports::output::waypoint_port::ThreadSummary`]
+/// for `GET /threads`.
+///
+/// **Known limitation:** `ThreadSummary` (the port this list is built from)
+/// carries no `waypoint_id` field -- only [`ThreadResponse`] (`GET
+/// /threads/{id}`, built from a full [`Waypoint`]) can report one. Adding a
+/// `waypoint_id` to `ThreadSummary`/`WaypointPort::list_threads` would touch
+/// every backend adapter in `paladin-storage`, outside this plan's declared
+/// file scope -- documented here rather than silently omitted without
+/// explanation.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct ThreadSummaryDto {
+    /// The thread's identity.
+    pub thread_id: String,
+    /// Stable, lowercase status label of the thread's latest waypoint.
+    pub latest_status: String,
+    /// When the thread's latest waypoint was created.
+    pub updated_at: DateTime<Utc>,
+    /// The thread's currently active run id, if [`ThreadApiState::runs`] is
+    /// wired and one exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_run_id: Option<String>,
+}
+
+/// Response body for `GET /threads`.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct ThreadListResponse {
+    /// The page of thread summaries, newest-activity-first.
+    pub items: Vec<ThreadSummaryDto>,
+    /// Opaque cursor for the next page, `None` on the last page.
+    pub next_cursor: Option<String>,
+}
+
+/// Query parameters for `GET /threads`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadListQuery {
+    /// Maximum number of items to return (`1..=100`; omitted defaults to 20).
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Opaque pagination cursor from a previous page's `next_cursor`.
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+/// Response body for `GET /threads/{id}`.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct ThreadResponse {
+    /// The thread's identity.
+    pub thread_id: String,
+    /// Stable, lowercase status label of the thread's latest waypoint.
+    pub latest_status: String,
+    /// The thread's latest waypoint id.
+    pub latest_waypoint_id: String,
+    /// When the latest waypoint was created.
+    pub updated_at: DateTime<Utc>,
+    /// The thread's currently active run id, if [`ThreadApiState::runs`] is
+    /// wired and one exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_run_id: Option<String>,
+}
+
+/// Request body for `POST /threads/{id}/fork`.
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub struct ForkThreadRequest {
+    /// The Waypoint to fork from.
+    pub from_waypoint_id: String,
+    /// An optional state edit merged at the fork point.
+    #[serde(default)]
+    #[schema(value_type = Object)]
+    pub edit: Option<serde_json::Value>,
+    /// An optional webhook delivery target for the forked run's lifecycle
+    /// events.
+    #[serde(default)]
+    pub webhook: Option<RunWebhookRequestDto>,
+}
+
+/// Response body for a successful `POST /threads/{id}/fork` (`202 Accepted`).
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct ForkThreadResponse {
+    /// The newly created forked run's identity.
+    pub run_id: String,
+    /// The thread the fork continues on.
+    pub thread_id: String,
+}
+
 // --- Error mapping (D-25) ---------------------------------------------------
 
 /// Map a [`ParleyError`] onto the [`ApiError`] status/code D-25 specifies:
@@ -689,6 +821,285 @@ pub async fn get_thread_history(
     ))
 }
 
+/// Look up `thread`'s active run id through [`ThreadApiState::runs`], if
+/// wired. A backend error is swallowed to `None` rather than failing the
+/// whole list/get response -- `active_run_id` is a convenience projection,
+/// never the source of truth `GET /runs/{run_id}` itself is.
+async fn active_run_id_for(state: &ThreadApiState, thread: &ThreadId) -> Option<String> {
+    let runs = state.runs.as_ref()?;
+    runs.active_run_for_thread(thread)
+        .await
+        .ok()
+        .flatten()
+        .map(|run| run.run_id.to_string())
+}
+
+/// `GET /threads` -- paginated thread list, newest-activity-first (D-45,
+/// D-47). Authenticated, any role.
+///
+/// A cursor walk gives a stable ordering for threads that already existed
+/// when the first page was fetched, but is NOT a point-in-time snapshot: a
+/// thread whose latest waypoint was written after the first page was read
+/// may be omitted from the walk (D-47 backstop).
+///
+/// Returns:
+/// - `200 OK` with [`ThreadListResponse`] on success; `{ items: [],
+///   next_cursor: null }` when empty;
+/// - `400 Bad Request` for `limit == 0`/`limit > 100`, or an unparseable
+///   `cursor`;
+/// - `501 Not Implemented` if no waypoint backend is configured.
+#[utoipa::path(
+    get,
+    path = "/threads",
+    tag = "threads",
+    params(
+        ("limit" = Option<u32>, Query, description = "Max items to return, 1..=100 (default 20)"),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: threads updated after the first page was fetched may be omitted"),
+    ),
+    responses(
+        (status = 200, description = "A page of threads; { items: [], next_cursor: null } when empty", body = ThreadListResponse),
+        (status = 400, description = "Invalid limit or cursor", body = ApiErrorBody),
+        (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 501, description = "No waypoint backend configured", body = ApiErrorBody),
+    ),
+    security(("api_key" = []), ("bearer_token" = [])),
+)]
+pub async fn list_threads(
+    State(state): State<ThreadApiState>,
+    Extension(_principal): Extension<Principal>,
+    Query(params): Query<ThreadListQuery>,
+) -> Result<(StatusCode, JsonValue), ApiError> {
+    let waypoints = state
+        .waypoints
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(WAYPOINT_BACKEND_HINT))?;
+    let limit = resolve_limit(params.limit)?;
+    let before = params
+        .cursor
+        .as_deref()
+        .map(decode_cursor::<DateTime<Utc>>)
+        .transpose()?;
+
+    // limit+1 trick: fetch one extra to know whether a next page exists
+    // without a second round trip.
+    let page = waypoints
+        .list_threads(Some(limit + 1), before)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let has_more = page.len() as u32 > limit;
+    let page_items = if has_more {
+        &page[..limit as usize]
+    } else {
+        &page[..]
+    };
+
+    let mut items = Vec::with_capacity(page_items.len());
+    for summary in page_items {
+        let active_run_id = active_run_id_for(&state, &summary.thread_id).await;
+        items.push(ThreadSummaryDto {
+            thread_id: summary.thread_id.as_str().to_string(),
+            latest_status: waypoint_status_label(&summary.latest_status).to_string(),
+            updated_at: summary.last_updated_at,
+            active_run_id,
+        });
+    }
+    let next_cursor = if has_more {
+        page_items.last().map(|s| encode_cursor(&s.last_updated_at))
+    } else {
+        None
+    };
+
+    Ok((
+        StatusCode::OK,
+        ok_body(&ThreadListResponse { items, next_cursor }),
+    ))
+}
+
+/// `GET /threads/{id}` -- one thread's summary (D-45). Authenticated, any
+/// role.
+///
+/// Returns:
+/// - `200 OK` with [`ThreadResponse`] on success;
+/// - `400 Bad Request` for an invalid thread id;
+/// - `404 Not Found` if no Waypoint exists for `id`;
+/// - `501 Not Implemented` if no waypoint backend is configured.
+#[utoipa::path(
+    get,
+    path = "/threads/{id}",
+    tag = "threads",
+    params(("id" = String, Path, description = "Thread id")),
+    responses(
+        (status = 200, description = "Thread summary", body = ThreadResponse),
+        (status = 400, description = "Invalid thread id", body = ApiErrorBody),
+        (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 404, description = "Unknown thread", body = ApiErrorBody),
+        (status = 501, description = "No waypoint backend configured", body = ApiErrorBody),
+    ),
+    security(("api_key" = []), ("bearer_token" = [])),
+)]
+pub async fn get_thread(
+    State(state): State<ThreadApiState>,
+    Extension(_principal): Extension<Principal>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, JsonValue), ApiError> {
+    let waypoints = state
+        .waypoints
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(WAYPOINT_BACKEND_HINT))?;
+    let thread = parse_thread_id(&id)?;
+
+    let wp = waypoints
+        .latest(&thread)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(format!("unknown thread '{id}'")))?;
+
+    let active_run_id = active_run_id_for(&state, &thread).await;
+
+    Ok((
+        StatusCode::OK,
+        ok_body(&ThreadResponse {
+            thread_id: thread.as_str().to_string(),
+            latest_status: waypoint_status_label(&wp.status).to_string(),
+            latest_waypoint_id: wp.waypoint_id.to_string(),
+            updated_at: wp.created_at,
+            active_run_id,
+        }),
+    ))
+}
+
+/// `POST /threads/{id}/fork` -- submit a NEW run that continues the thread
+/// from a specific Waypoint, optionally editing state at the fork point
+/// (D-45, D-46).
+///
+/// Invocation-shaped: any authenticated principal, subject to the target
+/// assistant's own `allowed_roles` (checked inside
+/// [`RunSubmissionPort::fork`] -- `paladin-web` has no visibility into
+/// `allowed_roles` itself, ADR-0031).
+///
+/// Returns:
+/// - `202 Accepted` with [`ForkThreadResponse`] on success;
+/// - `400 Bad Request` for an invalid thread id or `webhook_url_rejected`
+///   (write-time SSRF guard, D-42);
+/// - `403 Forbidden` if the principal's role is not permitted;
+/// - `404 Not Found` for an unknown thread or an unknown `from_waypoint_id`;
+/// - `409 Conflict` (`thread_busy`) while a run is already active on the
+///   thread;
+/// - `501 Not Implemented` if no run submission backend is configured.
+#[utoipa::path(
+    post,
+    path = "/threads/{id}/fork",
+    tag = "threads",
+    params(("id" = String, Path, description = "Thread id")),
+    request_body = ForkThreadRequest,
+    responses(
+        (status = 202, description = "Fork accepted; a new run continues the thread", body = ForkThreadResponse),
+        (status = 400, description = "Invalid thread id, or webhook_url_rejected", body = ApiErrorBody),
+        (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 403, description = "Role not permitted for this assistant", body = ApiErrorBody),
+        (status = 404, description = "Unknown thread or waypoint", body = ApiErrorBody),
+        (status = 409, description = "Thread busy -- a run is already active on this thread", body = ApiErrorBody),
+        (status = 501, description = "No run submission backend configured", body = ApiErrorBody),
+    ),
+    security(("api_key" = []), ("bearer_token" = [])),
+)]
+pub async fn fork_thread(
+    State(state): State<ThreadApiState>,
+    Extension(principal): Extension<Principal>,
+    Path(id): Path<String>,
+    Json(body): Json<ForkThreadRequest>,
+) -> Result<(StatusCode, JsonValue), ApiError> {
+    let run_submission = state
+        .run_submission
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(RUN_SUBMISSION_PORT_HINT))?;
+    let thread = parse_thread_id(&id)?;
+    let from_waypoint_id = parse_waypoint_id(&body.from_waypoint_id)?;
+    let webhook = body.webhook.map(to_run_webhook_spec).transpose()?;
+
+    let accepted = run_submission
+        .fork(ForkRun {
+            thread_id: thread,
+            from_waypoint_id,
+            edit: body.edit,
+            webhook,
+            requested_by: Some((principal.id.clone(), principal.role)),
+        })
+        .await
+        .map_err(map_submission_error)?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        ok_body(&ForkThreadResponse {
+            run_id: accepted.run_id.to_string(),
+            thread_id: accepted.thread_id.as_str().to_string(),
+        }),
+    ))
+}
+
+/// `DELETE /threads/{id}` -- delete a thread's whole Waypoint history
+/// (admin, D-45).
+///
+/// Returns:
+/// - `204 No Content` on success;
+/// - `400 Bad Request` for an invalid thread id;
+/// - `403 Forbidden` for a non-admin principal;
+/// - `404 Not Found` if nothing was deleted;
+/// - `409 Conflict` (`thread_busy`) while a run is active on the thread;
+/// - `501 Not Implemented` if no waypoint backend is configured.
+#[utoipa::path(
+    delete,
+    path = "/threads/{id}",
+    tag = "threads",
+    params(("id" = String, Path, description = "Thread id")),
+    responses(
+        (status = 204, description = "Thread deleted"),
+        (status = 400, description = "Invalid thread id", body = ApiErrorBody),
+        (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 403, description = "Admin role required", body = ApiErrorBody),
+        (status = 404, description = "Nothing was deleted", body = ApiErrorBody),
+        (status = 409, description = "Thread busy -- a run is active on this thread", body = ApiErrorBody),
+        (status = 501, description = "No waypoint backend configured", body = ApiErrorBody),
+    ),
+    security(("api_key" = []), ("bearer_token" = [])),
+)]
+pub async fn delete_thread(
+    State(state): State<ThreadApiState>,
+    Extension(principal): Extension<Principal>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&principal)?;
+    let waypoints = state
+        .waypoints
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(WAYPOINT_BACKEND_HINT))?;
+    let thread = parse_thread_id(&id)?;
+
+    if let Some(runs) = &state.runs
+        && runs
+            .active_run_for_thread(&thread)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .is_some()
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "thread_busy",
+            format!("thread '{id}' has an active run"),
+        ));
+    }
+
+    let deleted = waypoints
+        .delete_thread(&thread)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if deleted == 0 {
+        return Err(ApiError::not_found(format!("unknown thread '{id}'")));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // --- Router -----------------------------------------------------------------
 
 /// Build the thread API as a `utoipa-axum` [`OpenApiRouter`], mirroring
@@ -702,6 +1113,10 @@ pub async fn get_thread_history(
 /// (D-24).
 pub fn thread_openapi_router(state: ThreadApiState) -> OpenApiRouter {
     OpenApiRouter::new()
+        .routes(routes!(list_threads))
+        .routes(routes!(get_thread))
+        .routes(routes!(delete_thread))
+        .routes(routes!(fork_thread))
         .routes(routes!(get_thread_state))
         .routes(routes!(resume_thread))
         .routes(routes!(get_thread_history))
@@ -744,9 +1159,12 @@ mod tests {
     use axum::http::Request;
     use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
     use paladin_core::platform::container::parley::{OnExpire, ParleyId};
+    use paladin_core::platform::container::run::{Run, RunId, RunStatus};
     use paladin_core::platform::container::user::UserRole;
     use paladin_core::platform::container::waypoint::{FrontierSnapshot, GraphFingerprint, NodeId};
     use paladin_ports::input::parley_port::ResumeAccepted;
+    use paladin_ports::input::run_submission_port::{RunSubmissionError, SubmitRun};
+    use paladin_ports::output::run_repository_port::RunRepositoryPort;
     use paladin_ports::output::waypoint_port::{ThreadSummary, WaypointError};
     use std::collections::BTreeMap;
     use std::collections::HashMap;
@@ -878,8 +1296,20 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn delete_thread(&self, _thread: &ThreadId) -> Result<u64, WaypointError> {
-            Ok(0)
+        async fn delete_thread(&self, thread: &ThreadId) -> Result<u64, WaypointError> {
+            let removed_latest = self
+                .latest
+                .lock()
+                .unwrap()
+                .remove(thread.as_str())
+                .is_some();
+            let removed_history = self
+                .history
+                .lock()
+                .unwrap()
+                .remove(thread.as_str())
+                .is_some();
+            Ok(u64::from(removed_latest || removed_history))
         }
 
         async fn delete_waypoint(
@@ -1437,15 +1867,441 @@ mod tests {
         let state = ThreadApiState::new();
         let (_router, api) = thread_openapi_router(state).split_for_parts();
         for expected in [
+            "/threads",
+            "/threads/{id}",
             "/threads/{id}/state",
             "/threads/{id}/resume",
             "/threads/{id}/history",
+            "/threads/{id}/fork",
         ] {
             assert!(
                 api.paths.paths.contains_key(expected),
                 "spec missing path {expected}"
             );
         }
+        // `DELETE /threads/{id}` shares the SAME path key as `GET
+        // /threads/{id}` -- assert the `delete` operation specifically.
+        assert!(
+            api.paths.paths["/threads/{id}"].delete.is_some(),
+            "spec missing DELETE /threads/{{id}}"
+        );
+    }
+
+    // --- list_threads / get_thread (D-45) ----------------------------------
+
+    #[derive(Default)]
+    struct MockRunRepository {
+        active: Mutex<HashMap<String, Run>>,
+    }
+
+    #[async_trait]
+    impl RunRepositoryPort for MockRunRepository {
+        async fn insert(
+            &self,
+            _run: &Run,
+        ) -> Result<(), paladin_ports::output::run_repository_port::RunRepositoryError> {
+            Ok(())
+        }
+
+        async fn get(
+            &self,
+            _run_id: &RunId,
+        ) -> Result<Option<Run>, paladin_ports::output::run_repository_port::RunRepositoryError>
+        {
+            Ok(None)
+        }
+
+        async fn update_status(
+            &self,
+            _run_id: &RunId,
+            _from: RunStatus,
+            _to: RunStatus,
+            _at: DateTime<Utc>,
+        ) -> Result<(), paladin_ports::output::run_repository_port::RunRepositoryError> {
+            Ok(())
+        }
+
+        async fn record_outcome(
+            &self,
+            _run_id: &RunId,
+            _outcome: paladin_ports::output::run_repository_port::RunOutcomeRecord,
+        ) -> Result<(), paladin_ports::output::run_repository_port::RunRepositoryError> {
+            Ok(())
+        }
+
+        async fn list(
+            &self,
+            _query: paladin_ports::output::run_repository_port::RunQuery,
+        ) -> Result<
+            paladin_ports::output::run_repository_port::RunPage,
+            paladin_ports::output::run_repository_port::RunRepositoryError,
+        > {
+            Ok(paladin_ports::output::run_repository_port::RunPage {
+                items: vec![],
+                next_cursor: None,
+            })
+        }
+
+        async fn active_run_for_thread(
+            &self,
+            thread_id: &ThreadId,
+        ) -> Result<Option<Run>, paladin_ports::output::run_repository_port::RunRepositoryError>
+        {
+            Ok(self.active.lock().unwrap().get(thread_id.as_str()).cloned())
+        }
+
+        async fn request_cancel(
+            &self,
+            run_id: &RunId,
+        ) -> Result<RunStatus, paladin_ports::output::run_repository_port::RunRepositoryError>
+        {
+            Err(
+                paladin_ports::output::run_repository_port::RunRepositoryError::NotFound {
+                    run_id: run_id.clone(),
+                },
+            )
+        }
+
+        async fn is_cancel_requested(
+            &self,
+            _thread_id: &ThreadId,
+        ) -> Result<bool, paladin_ports::output::run_repository_port::RunRepositoryError> {
+            Ok(false)
+        }
+
+        async fn bump_attempt(
+            &self,
+            _run_id: &RunId,
+        ) -> Result<u32, paladin_ports::output::run_repository_port::RunRepositoryError> {
+            Ok(1)
+        }
+
+        async fn record_resume(
+            &self,
+            _run_id: &RunId,
+            _responses: Vec<ParleyResponse>,
+        ) -> Result<u32, paladin_ports::output::run_repository_port::RunRepositoryError> {
+            Ok(1)
+        }
+
+        async fn clear_pending_responses(
+            &self,
+            _run_id: &RunId,
+        ) -> Result<(), paladin_ports::output::run_repository_port::RunRepositoryError> {
+            Ok(())
+        }
+    }
+
+    fn sample_run_for(thread: &ThreadId) -> Run {
+        use paladin_core::platform::container::run::AssistantRef;
+        Run::new(
+            RunId::new_v7(),
+            thread.clone(),
+            AssistantRef {
+                assistant_id: "a1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+    }
+
+    #[tokio::test]
+    async fn list_threads_returns_501_when_unwired() {
+        let state = ThreadApiState::new();
+        let err = list_threads(
+            State(state),
+            admin(),
+            Query(ThreadListQuery {
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn list_threads_empty_is_200_with_empty_items() {
+        let state = state_with_waypoints(Arc::new(MockWaypointStore::default()));
+        let (status, Json(body)) = list_threads(
+            State(state),
+            admin(),
+            Query(ThreadListQuery {
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["items"].as_array().unwrap().len(), 0);
+        assert!(body["next_cursor"].is_null());
+    }
+
+    #[tokio::test]
+    async fn list_threads_rejects_limit_zero() {
+        let state = state_with_waypoints(Arc::new(MockWaypointStore::default()));
+        let err = list_threads(
+            State(state),
+            admin(),
+            Query(ThreadListQuery {
+                limit: Some(0),
+                cursor: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn get_thread_unknown_returns_404() {
+        let state = state_with_waypoints(Arc::new(MockWaypointStore::default()));
+        let err = get_thread(State(state), admin(), Path("no-such-thread".to_string()))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_thread_found_returns_waypoint_id_and_active_run() {
+        let store = Arc::new(MockWaypointStore::default());
+        let t = thread("with-run");
+        store.seed_latest(sample_waypoint(&t, 1, WaypointStatus::Running));
+        let run_repo = Arc::new(MockRunRepository::default());
+        let run = sample_run_for(&t);
+        let run_id = run.run_id.to_string();
+        run_repo
+            .active
+            .lock()
+            .unwrap()
+            .insert(t.as_str().to_string(), run);
+        let state = ThreadApiState::new()
+            .with_waypoints(store)
+            .with_runs(run_repo);
+
+        let (status, Json(body)) = get_thread(State(state), admin(), Path(t.as_str().to_string()))
+            .await
+            .expect("ok");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["thread_id"], t.as_str());
+        assert_eq!(body["active_run_id"], run_id);
+        assert!(body["latest_waypoint_id"].is_string());
+    }
+
+    // --- fork_thread (D-45, D-46) --------------------------------------
+
+    enum ForkOutcome {
+        Accepted,
+        ThreadBusy,
+        UnknownWaypoint,
+        Forbidden,
+    }
+
+    struct MockForkSubmissionPort {
+        outcome: ForkOutcome,
+    }
+
+    #[async_trait]
+    impl RunSubmissionPort for MockForkSubmissionPort {
+        async fn submit(
+            &self,
+            _request: SubmitRun,
+        ) -> Result<paladin_ports::input::run_submission_port::RunAccepted, RunSubmissionError>
+        {
+            Err(RunSubmissionError::NotWired)
+        }
+
+        async fn cancel(
+            &self,
+            _run_id: &RunId,
+            _requested_by: Option<(String, paladin_core::platform::container::user::UserRole)>,
+        ) -> Result<paladin_ports::input::run_submission_port::CancelOutcome, RunSubmissionError>
+        {
+            Err(RunSubmissionError::NotWired)
+        }
+
+        async fn fork(
+            &self,
+            request: ForkRun,
+        ) -> Result<paladin_ports::input::run_submission_port::RunAccepted, RunSubmissionError>
+        {
+            match self.outcome {
+                ForkOutcome::Accepted => {
+                    Ok(paladin_ports::input::run_submission_port::RunAccepted {
+                        run_id: RunId::new_v7(),
+                        thread_id: request.thread_id,
+                    })
+                }
+                ForkOutcome::ThreadBusy => Err(RunSubmissionError::ThreadBusy {
+                    thread_id: request.thread_id,
+                }),
+                ForkOutcome::UnknownWaypoint => Err(RunSubmissionError::UnknownWaypoint {
+                    thread_id: request.thread_id,
+                    waypoint_id: request.from_waypoint_id.to_string(),
+                }),
+                ForkOutcome::Forbidden => Err(RunSubmissionError::Forbidden {
+                    reason: "role not permitted for this assistant".to_string(),
+                }),
+            }
+        }
+    }
+
+    fn fork_body() -> ForkThreadRequest {
+        ForkThreadRequest {
+            from_waypoint_id: WaypointId::generate().to_string(),
+            edit: None,
+            webhook: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn fork_thread_returns_501_when_unwired() {
+        let state = ThreadApiState::new();
+        let err = fork_thread(
+            State(state),
+            admin(),
+            Path("t".to_string()),
+            Json(fork_body()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn fork_thread_accepted_returns_202() {
+        let state = ThreadApiState::new().with_run_submission(Arc::new(MockForkSubmissionPort {
+            outcome: ForkOutcome::Accepted,
+        }));
+        let (status, Json(body)) = fork_thread(
+            State(state),
+            admin(),
+            Path("fork-thread".to_string()),
+            Json(fork_body()),
+        )
+        .await
+        .expect("accepted");
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(body["thread_id"], "fork-thread");
+        assert!(body["run_id"].is_string());
+    }
+
+    #[tokio::test]
+    async fn fork_thread_busy_returns_409() {
+        let state = ThreadApiState::new().with_run_submission(Arc::new(MockForkSubmissionPort {
+            outcome: ForkOutcome::ThreadBusy,
+        }));
+        let err = fork_thread(
+            State(state),
+            admin(),
+            Path("t".to_string()),
+            Json(fork_body()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn fork_thread_unknown_waypoint_returns_404() {
+        let state = ThreadApiState::new().with_run_submission(Arc::new(MockForkSubmissionPort {
+            outcome: ForkOutcome::UnknownWaypoint,
+        }));
+        let err = fork_thread(
+            State(state),
+            admin(),
+            Path("t".to_string()),
+            Json(fork_body()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn fork_thread_forbidden_returns_403() {
+        let state = ThreadApiState::new().with_run_submission(Arc::new(MockForkSubmissionPort {
+            outcome: ForkOutcome::Forbidden,
+        }));
+        let err = fork_thread(
+            State(state),
+            admin(),
+            Path("t".to_string()),
+            Json(fork_body()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+    }
+
+    // --- delete_thread (D-45) -------------------------------------------
+
+    #[tokio::test]
+    async fn delete_thread_returns_501_when_unwired() {
+        let state = ThreadApiState::new();
+        let err = delete_thread(State(state), admin(), Path("t".to_string()))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn delete_thread_unknown_returns_404() {
+        let state = state_with_waypoints(Arc::new(MockWaypointStore::default()));
+        let err = delete_thread(State(state), admin(), Path("no-such-thread".to_string()))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_thread_found_returns_204() {
+        let store = Arc::new(MockWaypointStore::default());
+        let t = thread("deletable");
+        store.seed_latest(sample_waypoint(&t, 1, WaypointStatus::Completed));
+        let state = state_with_waypoints(store);
+        let status = delete_thread(State(state), admin(), Path(t.as_str().to_string()))
+            .await
+            .expect("ok");
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn delete_thread_busy_returns_409() {
+        let store = Arc::new(MockWaypointStore::default());
+        let t = thread("busy-thread");
+        store.seed_latest(sample_waypoint(&t, 1, WaypointStatus::Running));
+        let run_repo = Arc::new(MockRunRepository::default());
+        run_repo
+            .active
+            .lock()
+            .unwrap()
+            .insert(t.as_str().to_string(), sample_run_for(&t));
+        let state = ThreadApiState::new()
+            .with_waypoints(store)
+            .with_runs(run_repo);
+        let err = delete_thread(State(state), admin(), Path(t.as_str().to_string()))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn delete_thread_non_admin_is_403() {
+        let store = Arc::new(MockWaypointStore::default());
+        let t = thread("admin-gated");
+        store.seed_latest(sample_waypoint(&t, 1, WaypointStatus::Completed));
+        let state = state_with_waypoints(store);
+        let user_principal = Extension(Principal {
+            id: "u".to_string(),
+            role: UserRole::User,
+        });
+        let err = delete_thread(State(state), user_principal, Path(t.as_str().to_string()))
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
     }
 
     // A quiet reference to `admin()` so the helper is not flagged unused if

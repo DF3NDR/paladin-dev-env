@@ -13,13 +13,15 @@ use async_trait::async_trait;
 use chrono::Utc;
 
 use paladin_core::platform::container::assistant::AssistantSource;
-use paladin_core::platform::container::run::{Run, RunId};
+use paladin_core::platform::container::run::{ForkSpec, Run, RunId};
+use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::input::run_submission_port::{
-    CancelOutcome, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
+    CancelOutcome, ForkRun, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
 };
 use paladin_ports::output::run_queue_port::{QueueError, QueuedRun, RunQueuePort};
-use paladin_ports::output::run_repository_port::{RunRepositoryError, RunRepositoryPort};
+use paladin_ports::output::run_repository_port::{RunQuery, RunRepositoryError, RunRepositoryPort};
+use paladin_ports::output::waypoint_port::WaypointPort;
 
 use super::cancel::LocalRunTokens;
 use super::resolver::{AssistantResolver, ResolveError};
@@ -111,6 +113,13 @@ pub struct RunSubmissionService {
     /// rejected unless a deployment explicitly opts in via
     /// [`RunSubmissionService::with_ssrf_guard`].
     ssrf_guard: SsrfGuard,
+    /// Validates a `fork`'s `from_waypoint_id` actually exists on the
+    /// target thread (D-45), wired via [`RunSubmissionService::with_waypoints`].
+    /// `None` (the default) means [`RunSubmissionService::fork`] answers
+    /// [`RunSubmissionError::NotWired`] -- fork cannot correctly validate
+    /// its own precondition without this collaborator, so failing closed
+    /// (a genuine 501) is the honest answer, not a silently skipped check.
+    waypoints: Option<Arc<dyn WaypointPort>>,
 }
 
 impl RunSubmissionService {
@@ -132,6 +141,7 @@ impl RunSubmissionService {
             resolver,
             local_tokens: LocalRunTokens::new(),
             ssrf_guard: SsrfGuard::new(false),
+            waypoints: None,
         }
     }
 
@@ -150,6 +160,36 @@ impl RunSubmissionService {
     pub fn with_ssrf_guard(mut self, ssrf_guard: SsrfGuard) -> Self {
         self.ssrf_guard = ssrf_guard;
         self
+    }
+
+    /// Wire a [`WaypointPort`] so [`RunSubmissionService::fork`] can
+    /// validate that `from_waypoint_id` actually exists on the target
+    /// thread before enqueuing a forked run (D-45).
+    pub fn with_waypoints(mut self, waypoints: Arc<dyn WaypointPort>) -> Self {
+        self.waypoints = Some(waypoints);
+        self
+    }
+
+    /// D-46: authorize an invocation-shaped request (`submit`/`cancel`/
+    /// `fork`) against `allowed_roles` -- empty means any authenticated
+    /// caller, `None` `requested_by` skips the check entirely (an
+    /// internal/same-process caller with no principal to authorize
+    /// against). Shared by all three call sites so the rule is expressed
+    /// exactly once.
+    fn authorize_invocation(
+        requested_by: &Option<(String, UserRole)>,
+        allowed_roles: &[UserRole],
+    ) -> Result<(), RunSubmissionError> {
+        let Some((_, role)) = requested_by else {
+            return Ok(());
+        };
+        if allowed_roles.is_empty() || allowed_roles.contains(role) {
+            Ok(())
+        } else {
+            Err(RunSubmissionError::Forbidden {
+                reason: "role not permitted for this assistant".to_string(),
+            })
+        }
     }
 }
 
@@ -171,6 +211,14 @@ impl RunSubmissionPort for RunSubmissionService {
             .resolver
             .resolve(&request.assistant_id, request.version)
             .await?;
+
+        // D-46: invocation-shaped -- authorize against the assistant's own
+        // `allowed_roles` before ANY resolve-consequent work (insert/
+        // enqueue). `paladin-web` has no visibility into `allowed_roles`
+        // at all (ADR-0031), so this is the only layer that can perform
+        // this check.
+        Self::authorize_invocation(&request.requested_by, &resolved.allowed_roles)?;
+
         // D-30: only a `version: None` submission against a STORED
         // assistant freezes `latest` inside the repository's own atomic
         // insert. A pinned `version: Some(v)` uses a plain `insert` with
@@ -227,7 +275,33 @@ impl RunSubmissionPort for RunSubmissionService {
     /// needs to see the run halt at its next superstep boundary. The local
     /// signal below is a latency optimization only, never load-bearing for
     /// correctness.
-    async fn cancel(&self, run_id: &RunId) -> Result<CancelOutcome, RunSubmissionError> {
+    ///
+    /// D-46: when `requested_by` is `Some`, authorizes against the run's
+    /// own assistant `allowed_roles` (resolved fresh -- `allowed_roles` is
+    /// not itself persisted on the run row) BEFORE the durable flag is
+    /// ever written; a mismatch returns [`RunSubmissionError::Forbidden`]
+    /// and touches nothing.
+    async fn cancel(
+        &self,
+        run_id: &RunId,
+        requested_by: Option<(String, UserRole)>,
+    ) -> Result<CancelOutcome, RunSubmissionError> {
+        if requested_by.is_some() {
+            let run = self
+                .repository
+                .get(run_id)
+                .await
+                .map_err(map_repository_error)?
+                .ok_or_else(|| RunSubmissionError::NotFound {
+                    run_id: run_id.clone(),
+                })?;
+            let resolved = self
+                .resolver
+                .resolve(&run.assistant.assistant_id, Some(run.assistant.version))
+                .await?;
+            Self::authorize_invocation(&requested_by, &resolved.allowed_roles)?;
+        }
+
         let status = self
             .repository
             .request_cancel(run_id)
@@ -240,6 +314,117 @@ impl RunSubmissionPort for RunSubmissionService {
             run_id: run_id.clone(),
             status,
             was_local,
+        })
+    }
+
+    /// D-45: validates the fork point exists (via the wired
+    /// [`WaypointPort`]), copies the assistant reference from the thread's
+    /// most recent run, then inserts and enqueues a NEW run carrying
+    /// `fork_from`. Subject to the same busy-thread and SSRF checks
+    /// [`RunSubmissionPort::submit`] enforces.
+    async fn fork(&self, request: ForkRun) -> Result<RunAccepted, RunSubmissionError> {
+        // D-42: same write-time SSRF guard `submit` runs.
+        if let Some(webhook) = &request.webhook
+            && let Err(rejection) = self.ssrf_guard.check_url(&webhook.url).await
+        {
+            return Err(RunSubmissionError::WebhookRejected {
+                reason: rejection.to_string(),
+            });
+        }
+
+        // D-17/D-18: a thread with an active run cannot accept a fork
+        // either -- the busy invariant is thread-wide, not run-specific.
+        if self
+            .repository
+            .active_run_for_thread(&request.thread_id)
+            .await
+            .map_err(map_repository_error)?
+            .is_some()
+        {
+            return Err(RunSubmissionError::ThreadBusy {
+                thread_id: request.thread_id.clone(),
+            });
+        }
+
+        // D-45: validate the fork point exists on this thread. Failing
+        // closed (`NotWired`) when no `WaypointPort` is wired is the
+        // honest answer -- this service cannot correctly skip the check
+        // and still claim to have performed it.
+        let waypoints = self
+            .waypoints
+            .as_ref()
+            .ok_or(RunSubmissionError::NotWired)?;
+        waypoints
+            .get(&request.thread_id, &request.from_waypoint_id)
+            .await
+            .map_err(|e| RunSubmissionError::Backend {
+                message: e.to_string(),
+            })?
+            .ok_or_else(|| RunSubmissionError::UnknownWaypoint {
+                thread_id: request.thread_id.clone(),
+                waypoint_id: request.from_waypoint_id.to_string(),
+            })?;
+
+        // Copy the assistant reference from the thread's most recent run
+        // (submitted_at DESC, so `limit: 1` is the latest one).
+        let page = self
+            .repository
+            .list(RunQuery {
+                thread_id: Some(request.thread_id.clone()),
+                limit: 1,
+                ..Default::default()
+            })
+            .await
+            .map_err(map_repository_error)?;
+        let Some(latest) = page.items.into_iter().next() else {
+            return Err(RunSubmissionError::UnknownThread {
+                thread_id: request.thread_id.clone(),
+            });
+        };
+
+        // D-46: same invocation-shaped authorization `submit`/`cancel`
+        // enforce, resolved fresh from the copied assistant reference.
+        let resolved = self
+            .resolver
+            .resolve(
+                &latest.assistant.assistant_id,
+                Some(latest.assistant.version),
+            )
+            .await?;
+        Self::authorize_invocation(&request.requested_by, &resolved.allowed_roles)?;
+
+        let fork_spec = ForkSpec {
+            from_waypoint_id: request.from_waypoint_id.to_string(),
+            edit: request.edit,
+        };
+        let mut run = Run::new(
+            RunId::new_v7(),
+            request.thread_id.clone(),
+            latest.assistant.clone(),
+            serde_json::json!({}),
+        )
+        .with_fork_from(fork_spec);
+        if let Some(webhook) = request.webhook {
+            run = run.with_webhook(webhook);
+        }
+
+        self.repository
+            .insert(&run)
+            .await
+            .map_err(map_repository_error)?;
+        self.queue
+            .enqueue(QueuedRun {
+                run_id: run.run_id.clone(),
+                thread_id: run.thread_id.clone(),
+                attempt: run.attempt,
+                enqueued_at: Utc::now(),
+            })
+            .await
+            .map_err(map_queue_error)?;
+
+        Ok(RunAccepted {
+            run_id: run.run_id,
+            thread_id: run.thread_id,
         })
     }
 }

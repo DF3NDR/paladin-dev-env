@@ -66,3 +66,10 @@ mod cancel_tests;
 /// `cargo llvm-cov` (D-54).
 #[cfg(test)]
 mod stream_tests;
+
+/// The router-level ten-concurrent-submits race (PRD acceptance 3, D-52)
+/// and the fork-from-waypoint end-to-end proof (D-45) -- 27-15 Task 2. A
+/// `#[cfg(test)]` module rather than a `tests/` target so it counts toward
+/// `cargo llvm-cov` (D-54).
+#[cfg(test)]
+mod http_surface_tests;

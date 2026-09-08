@@ -25,6 +25,8 @@ chrono = { workspace = true }
 reqwest = { workspace = true }
 log = { workspace = true }
 async-trait = { workspace = true }
+# Opaque, base64url (no padding) pagination cursors (D-47, `pagination.rs`).
+base64 = { workspace = true }
 # Streaming (SSE): build the axum SSE body from the agent PaladinStream with a deadline.
 futures = "0.3"
 async-stream = "0.3"

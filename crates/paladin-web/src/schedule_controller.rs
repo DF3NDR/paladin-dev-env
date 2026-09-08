@@ -47,10 +47,6 @@ use crate::error::{ApiError, ApiErrorBody};
 use crate::run_controller::RunApiState;
 
 const SCHEDULE_PORT_HINT: &str = "no schedule admin backend configured: set schedules.enabled";
-/// Maximum `limit` `GET /schedules` accepts, mirroring
-/// `assistant_controller::MAX_ASSISTANT_LIMIT`'s own precedent (D-47).
-const MAX_SCHEDULE_LIMIT: u32 = 100;
-const DEFAULT_SCHEDULE_LIMIT: u32 = 20;
 
 // --- DTOs ------------------------------------------------------------------
 
@@ -291,17 +287,6 @@ fn parse_schedule_id(raw: &str) -> Result<RunScheduleId, ApiError> {
     RunScheduleId::parse(raw).map_err(|e| ApiError::bad_request(e.to_string()))
 }
 
-fn parse_limit(limit: Option<u32>) -> Result<u32, ApiError> {
-    match limit {
-        None => Ok(DEFAULT_SCHEDULE_LIMIT),
-        Some(0) => Ok(DEFAULT_SCHEDULE_LIMIT),
-        Some(limit) if limit > MAX_SCHEDULE_LIMIT => Err(ApiError::bad_request(format!(
-            "limit must be at most {MAX_SCHEDULE_LIMIT}, got {limit}"
-        ))),
-        Some(limit) => Ok(limit),
-    }
-}
-
 fn to_thread_strategy(raw: Option<serde_json::Value>) -> Result<Option<ThreadStrategy>, ApiError> {
     let Some(value) = raw else {
         return Ok(None);
@@ -440,7 +425,7 @@ pub async fn list_schedules(
         .schedules
         .as_ref()
         .ok_or_else(|| ApiError::not_implemented(SCHEDULE_PORT_HINT))?;
-    let limit = parse_limit(params.limit)?;
+    let limit = crate::pagination::resolve_limit(params.limit)?;
     let cursor = params
         .cursor
         .as_deref()

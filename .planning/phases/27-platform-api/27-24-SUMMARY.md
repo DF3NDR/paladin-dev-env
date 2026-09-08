@@ -126,6 +126,17 @@ None - no external service configuration required. Note per the plan: adding the
 - `e2e_platform_api` (PRD 06 acceptance criterion 1) now runs on every push and pull request via the new `e2e-platform-api` job, and cannot report success without having actually run at least one test.
 - Plan 27-25's checkpoint is the place where the `api-surface` job reporting "API surface unchanged" and the new `e2e-platform-api` job going green on CI itself (not just locally) gets asserted — this plan proved both locally; CI-side confirmation is out of this plan's scope per its own `<verification>` section.
 
+## Self-Check: PASSED
+
+- FOUND: scripts/normalize-api-bounds.py
+- FOUND: .project/current-exports.txt
+- FOUND: .github/workflows/ci.yml
+- FOUND: .planning/phases/27-platform-api/27-24-SUMMARY.md
+- FOUND: f6debee4 (Task 1 commit)
+- FOUND: fa80bd95 (Task 2 commit)
+- FOUND: 4c2dc14b (Task 3 commit)
+- FOUND: 67b2f097 (SUMMARY.md commit)
+
 ---
 *Phase: 27-platform-api*
 *Completed: 2026-09-08*

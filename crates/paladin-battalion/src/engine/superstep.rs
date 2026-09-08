@@ -3571,13 +3571,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     // security-instructions ordering rule. Truncating
                     // first can slice a secret across the cap boundary and
                     // leak the surviving fragment.
-                    let value = trace.state_values_enabled().then(|| {
-                        let redacted = paladin_llm::redaction::redact_secret_patterns(&serialized);
-                        paladin_llm::redaction::bounded_excerpt(
-                            &redacted,
-                            trace.state_value_cap_bytes(),
-                        )
-                    });
+                    let value = trace.redacted_value(&serialized);
                     paladin_core::platform::container::trace::FieldChange {
                         field,
                         dispatch: String::new(),

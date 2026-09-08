@@ -10408,8 +10408,11 @@ mod tests {
         let sink2 = RecordingTraceSink::new();
         let thread2 = ThreadId::new("delta-merged-included").unwrap();
         let trace2 = Arc::new(
-            TraceDispatcher::new(thread2.clone(), None, Some(sink2.clone()))
-                .with_state_values(true, cap),
+            TraceDispatcher::new(thread2.clone(), None, Some(sink2.clone())).with_state_values(
+                true,
+                cap,
+                Arc::new(paladin_llm::redaction::redact_secret_patterns),
+            ),
         );
         let outcome2 = crate::engine::superstep::run(
             &store,

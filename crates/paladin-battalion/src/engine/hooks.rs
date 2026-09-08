@@ -129,6 +129,11 @@ pub struct TraceDispatcher {
     /// is enabled (D-05). Meaningless (never read) while `state_values` is
     /// `false`.
     state_value_cap_bytes: usize,
+    /// The redaction applied to a value before truncation when value
+    /// inclusion is enabled (D-05). `None` until
+    /// [`TraceDispatcher::with_state_values`] supplies one — and with `None`
+    /// no value is ever included, whatever `state_values` says.
+    value_redactor: Option<ValueRedactor>,
 }
 
 /// The default cap [`TraceDispatcher::state_value_cap_bytes`] reports
@@ -137,6 +142,32 @@ pub struct TraceDispatcher {
 /// plan 28-02); 28-06 passes the configured value through
 /// `with_state_values` in this constant's place.
 const DEFAULT_STATE_VALUE_CAP_BYTES: usize = 256;
+
+/// A redaction function applied to a serialized field value BEFORE it is
+/// truncated and placed on `DeltaMerged.field_changes[].value` (D-05,
+/// T-28-03-01 — the security-instructions redact-then-truncate rule).
+///
+/// The engine crate deliberately owns no redaction vocabulary of its own:
+/// ADR-0031 forbids a leaf-to-leaf dependency in the default build, so the
+/// facade's composition root (plan 28-06) injects
+/// `paladin_llm::redaction::redact_secret_patterns` here rather than the
+/// engine depending on `paladin-llm`. Without a redactor, values are never
+/// included — [`TraceDispatcher::with_state_values`] requires one.
+pub type ValueRedactor = Arc<dyn Fn(&str) -> String + Send + Sync>;
+
+/// Truncate `text` to a CHARACTER `budget`, appending a marker that names the
+/// original byte length — the same contract as
+/// `paladin_llm::redaction::bounded_excerpt`, kept local so the engine crate
+/// stays free of that dependency (ADR-0031). Character-based on purpose: it
+/// can never split a multi-byte UTF-8 sequence, and it is exact for
+/// ASCII-dominant JSON values.
+pub fn bounded_excerpt(text: &str, budget: usize) -> String {
+    if text.chars().count() <= budget {
+        return text.to_string();
+    }
+    let truncated: String = text.chars().take(budget).collect();
+    format!("{truncated}... [truncated, {} total bytes]", text.len())
+}
 
 impl TraceDispatcher {
     /// Construct a dispatcher stamping every record for `thread_id`
@@ -164,6 +195,7 @@ impl TraceDispatcher {
                 run_id,
                 state_values: false,
                 state_value_cap_bytes: DEFAULT_STATE_VALUE_CAP_BYTES,
+                value_redactor: None,
             };
         };
 
@@ -232,6 +264,7 @@ impl TraceDispatcher {
             run_id,
             state_values: false,
             state_value_cap_bytes: DEFAULT_STATE_VALUE_CAP_BYTES,
+            value_redactor: None,
         }
     }
 
@@ -349,21 +382,41 @@ impl TraceDispatcher {
     /// .field_changes` (D-05): the default (`false`, set at construction)
     /// carries field names, dispatch metadata and byte sizes only;
     /// `enabled: true` additionally carries each changed field's
-    /// serialized value, redacted through
-    /// [`paladin_llm::redaction::redact_secret_patterns`] and truncated to
+    /// serialized value, passed through `redactor` and THEN truncated to
     /// `cap_bytes` — in that order, never reversed (the
     /// security-instructions redact-then-truncate rule, T-28-03-01).
-    /// `cap_bytes` is handed to
-    /// [`paladin_llm::redaction::bounded_excerpt`] as a CHARACTER budget
-    /// (that helper's own contract) — an approximation of a byte cap that
-    /// is exact for ASCII-dominant JSON values and conservative (fewer
-    /// bytes than `cap_bytes`) for anything with multi-byte UTF-8; 28-06
-    /// wires this from `TraceConfig::state_values`/`value_cap_bytes` in
-    /// place of this direct setter, matching that config's own naming.
-    pub fn with_state_values(mut self, enabled: bool, cap_bytes: usize) -> Self {
+    /// `cap_bytes` is applied by [`bounded_excerpt`] as a CHARACTER budget —
+    /// exact for ASCII-dominant JSON values and conservative (fewer bytes
+    /// than `cap_bytes`) for anything with multi-byte UTF-8. The redactor is
+    /// injected rather than imported (ADR-0031: the engine crate carries no
+    /// `paladin-llm` edge); the facade wires
+    /// `paladin_llm::redaction::redact_secret_patterns` plus
+    /// `TraceConfig::state_values`/`value_cap_bytes` here (plan 28-06).
+    pub fn with_state_values(
+        mut self,
+        enabled: bool,
+        cap_bytes: usize,
+        redactor: ValueRedactor,
+    ) -> Self {
         self.state_values = enabled;
         self.state_value_cap_bytes = cap_bytes;
+        self.value_redactor = Some(redactor);
         self
+    }
+
+    /// The redacted, truncated form of a serialized field value for
+    /// `DeltaMerged.field_changes[].value` (D-05) — `None` unless value
+    /// inclusion is enabled AND a redactor was supplied, so the engine can
+    /// never emit an unredacted value by construction.
+    pub fn redacted_value(&self, serialized: &str) -> Option<String> {
+        if !self.state_values {
+            return None;
+        }
+        let redactor = self.value_redactor.as_ref()?;
+        Some(bounded_excerpt(
+            &redactor(serialized),
+            self.state_value_cap_bytes,
+        ))
     }
 
     /// Whether `DeltaMerged.field_changes` should carry redacted, truncated
@@ -374,7 +427,7 @@ impl TraceDispatcher {
     }
 
     /// The cap a `FieldChange.value` is truncated to when value inclusion
-    /// is enabled (D-05), via [`paladin_llm::redaction::bounded_excerpt`]
+    /// is enabled (D-05), via [`bounded_excerpt`]
     /// (see [`TraceDispatcher::with_state_values`]'s own doc comment for
     /// the character-vs-byte approximation this implies).
     pub fn state_value_cap_bytes(&self) -> usize {

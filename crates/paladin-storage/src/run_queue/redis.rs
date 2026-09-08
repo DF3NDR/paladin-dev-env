@@ -70,6 +70,23 @@ handling: `redis` 0.32.7's `Script::invoke_async` already retries once on
 `ErrorKind::NoScriptError` by reloading and re-invoking
 (`redis-0.32.7/src/script.rs:180,205`) -- this module relies on that
 built-in behavior rather than reimplementing it.
+
+## Claim marker (gap-closure, plan 27-19)
+
+A visibility score alone cannot distinguish a never-claimed member from an
+expired lease's member -- both are simply "visible now" to
+`ZRANGEBYSCORE`. So the member payload itself carries a marker,
+`RUN_QUEUE_CLAIMED_MARKER`, recording "this member has been claimed at
+least once": `RUN_QUEUE_CLAIM_LUA` increments `attempt` only when the
+decoded member already carries it (a lease-expiry reclaim, matching
+`InMemoryRunQueue::reclaim_expired_leases`), and sets it on a member that
+does not (a first claim, matching `InMemoryRunQueue::dequeue`, which never
+increments). `RUN_QUEUE_NACK_LUA` increments unconditionally -- a nack is
+an explicit redelivery, matching `InMemoryRunQueue::nack` -- and clears the
+marker, so the requeued message's next claim is a first claim rather than a
+second reclaim. The marker is invisible to every consumer of the decoded
+payload: `QueuedRun` has no `#[serde(deny_unknown_fields)]`, so
+`serde_json::from_str::<QueuedRun>` silently ignores it.
 */
 
 use std::sync::Arc;
@@ -85,12 +102,17 @@ use paladin_ports::output::run_queue_port::{
     LeaseToken, LeasedRun, QueueError, QueuedRun, RunQueuePort,
 };
 
-/// Claim script (D-08): atomically finds the oldest visible member of
-/// `ready` (score `<=` server-now), re-encodes it with `attempt`
-/// incremented, re-scores it to the new lease expiry under a
-/// caller-generated token, and records the lease in
-/// `leases`/`lease_expiry`. Returns the new member's JSON, or Lua `false`
-/// (a Redis Nil reply) if nothing is currently visible.
+/// Claim script (D-08, gap-closure plan 27-19): atomically finds the oldest
+/// visible member of `ready` (score `<=` server-now) and re-scores it to the
+/// new lease expiry under a caller-generated token, recording the lease in
+/// `leases`/`lease_expiry`. `attempt` is incremented only when the decoded
+/// member already carries the `RUN_QUEUE_CLAIMED_MARKER` key -- that is a
+/// lease-expiry reclaim, the `InMemoryRunQueue::reclaim_expired_leases`
+/// case. When the marker is absent this is the member's first claim (the
+/// `InMemoryRunQueue::dequeue` case, which never increments): `attempt` is
+/// left untouched and the marker is set for the first time before
+/// re-encoding. Returns the new member's JSON, or Lua `false` (a Redis Nil
+/// reply) if nothing is currently visible.
 ///
 /// - `KEYS[1..3]` = `ready`, `leases`, `lease_expiry`
 /// - `ARGV[1]` = lease duration, in microseconds
@@ -108,7 +130,10 @@ end
 
 local member = members[1]
 local decoded = cjson.decode(member)
-decoded.attempt = decoded.attempt + 1
+if decoded._claimed then
+    decoded.attempt = decoded.attempt + 1
+end
+decoded._claimed = true
 local new_member = cjson.encode(decoded)
 local new_expiry = now_us + tonumber(ARGV[1])
 
@@ -179,10 +204,14 @@ return 'ok'
 "#;
 
 /// Nack script (D-08): re-encodes a live lease's member with `attempt`
-/// incremented and re-scores it in `ready` to
+/// unconditionally incremented (a nack is an explicit redelivery, matching
+/// `InMemoryRunQueue::nack`) and re-scores it in `ready` to
 /// `server-now + requeue_delay`, then drops the token from
-/// `leases`/`lease_expiry`. Returns `"ok"`, `"expired"`, or `"unknown"`
-/// (see [`RUN_QUEUE_EXTEND_LUA`]).
+/// `leases`/`lease_expiry`. Also clears the `RUN_QUEUE_CLAIMED_MARKER` key
+/// on the re-encoded member (gap-closure plan 27-19), so the requeued
+/// message's next claim is treated as a first claim rather than a second
+/// reclaim on top of this nack's own increment. Returns `"ok"`, `"expired"`,
+/// or `"unknown"` (see [`RUN_QUEUE_EXTEND_LUA`]).
 ///
 /// - `KEYS[1..3]` = `ready`, `leases`, `lease_expiry`
 /// - `ARGV[1]` = the lease token
@@ -206,6 +235,7 @@ end
 
 local decoded = cjson.decode(member)
 decoded.attempt = decoded.attempt + 1
+decoded._claimed = nil
 local new_member = cjson.encode(decoded)
 local new_score = now_us + tonumber(ARGV[2])
 
@@ -216,6 +246,14 @@ redis.call('ZREM', KEYS[3], ARGV[1])
 
 return 'ok'
 "#;
+
+/// The adapter-internal key on a ZSET member's JSON payload that records
+/// "this member has been claimed at least once" -- see the "Claim marker"
+/// module docs above and [`RUN_QUEUE_CLAIM_LUA`] / [`RUN_QUEUE_NACK_LUA`].
+/// Crate-private (not `pub`): `paladin-storage`'s items are outside the
+/// tracked `.project/current-exports.txt` public-API baseline, and this key
+/// is an implementation detail of one adapter, never a field a caller reads.
+const RUN_QUEUE_CLAIMED_MARKER: &str = "_claimed";
 
 /// Configuration for the Redis-backed run queue (D-08).
 ///

@@ -220,7 +220,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   every status transition, and the status machine is monotonic with typed illegal-transition
   errors (PLAT-FR-01; PRD 06 §2.1)
 
-- [ ] **PLAT-02**: A worker pool executes runs durably: `RunQueuePort` (InMemory + Redis
+- [x] **PLAT-02**: A worker pool executes runs durably: `RunQueuePort` (InMemory + Redis
   adapters, shared contract suite including lease-expiry redelivery), lease heartbeats at
   ≤ lease/3, at-least-once redelivery that **resumes** the thread rather than restarting
   (kill-mid-run test), cross-instance cancellation via a persisted flag + `CancellationProbe`
@@ -380,7 +380,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | RT-06 | Phase 26 | Complete |
 | RT-07 | Phase 26 | Complete |
 | PLAT-01 | Phase 27 | Pending |
-| PLAT-02 | Phase 27 | Pending |
+| PLAT-02 | Phase 27 | Complete |
 | PLAT-03 | Phase 27 | Pending |
 | PLAT-04 | Phase 27 | Pending |
 | PLAT-05 | Phase 27 | Pending |

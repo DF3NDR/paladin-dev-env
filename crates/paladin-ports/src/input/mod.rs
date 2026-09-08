@@ -13,6 +13,10 @@ pub mod nlp_port;
 /// `paladin-battalion` (ADR-0031).
 pub mod parley_port;
 pub mod rpc_port;
+/// Run event stream port (D-27, PLAT-FR-07) — core-typed only, so
+/// `paladin-web` can depend on it without a default-build edge to
+/// `paladin-battalion` (ADR-0031).
+pub mod run_event_stream_port;
 /// Run submission port (D-12) — core-typed only, so `paladin-web` can
 /// depend on it without a default-build edge to `paladin-battalion`
 /// (ADR-0031).

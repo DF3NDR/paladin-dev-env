@@ -9,6 +9,10 @@
 /// `CancellationProbe` adapter) and `LocalRunTokens` (the same-instance
 /// fast-path registry), D-14/D-15/D-16.
 pub mod cancel;
+/// `RunEventBus`, `RunEventBusSink` (the `TraceSink` half of the bus's two
+/// producers) and `RunEventStreamService` (the facade `RunEventStreamPort`
+/// implementation, live/degraded) -- D-24..D-27, PLAT-FR-07.
+pub mod events;
 /// The seam every assistant source plugs into, plus this slice's
 /// code-registered implementation (D-32).
 pub mod resolver;
@@ -20,6 +24,7 @@ pub mod submission;
 pub mod worker;
 
 pub use cancel::{DbCancellationProbe, LocalRunTokens};
+pub use events::{RunEventBus, RunEventBusSink, RunEventStreamService, map_trace_event};
 pub use resolver::{
     AssistantResolver, CodeWorkflowResolver, ResolveError, ResolvedAssistant, Runnable,
 };
@@ -47,3 +52,11 @@ mod worker_tests;
 /// `cargo llvm-cov` (D-54).
 #[cfg(test)]
 mod cancel_tests;
+
+/// Live-path (real engine, real bus) and degraded-path (polling, real
+/// on-disk SQLite for the cross-instance proof) tests for `GET
+/// /v1/runs/{run_id}/stream` (27-10 Task 1, D-24..D-27, PLAT-FR-07). A
+/// `#[cfg(test)]` module rather than a `tests/` target so it counts toward
+/// `cargo llvm-cov` (D-54).
+#[cfg(test)]
+mod stream_tests;

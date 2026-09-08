@@ -3,6 +3,7 @@
 
 use crate::config::agent_runtime::AgentRuntimeConfig;
 use crate::config::env_utils::EnvOverridable;
+use crate::config::trace::TraceConfig;
 #[cfg(feature = "s3-storage")]
 use crate::infrastructure::adapters::file_storage::minio::MinioConfig;
 use config::{Config, ConfigError, Environment, File, FileFormat};
@@ -16,7 +17,7 @@ use super::{
     AgentDefinition, AgentTimeoutsConfig, ArsenalConfig, CitadelConfig, FileStorageConfig,
     GarrisonSettings, HeraldConfig, LlmConfig, MemoryExtractionConfig, MessageServiceSettings,
     QueueConfig, RagConfig, SanctumAdapterType, SanctumConfig, SchedulerConfig, ServerConfig,
-    SourceConfig, VisionConfig, WebHttpConfig,
+    SourceConfig, VisionConfig, WebHttpConfig, WebServerConfig,
 };
 
 /// Top-level application configuration struct.
@@ -63,6 +64,18 @@ pub struct Settings {
     /// identical behavior to a v0.9 configuration.
     #[serde(default)]
     pub agent_runtime: AgentRuntimeConfig,
+    /// Runtime trace pipeline configuration (X-09, D-36). Every field
+    /// defaults to today's behavior, so an absent `trace:` key resolves to
+    /// [`TraceConfig::default()`] and boots identically to a v0.9
+    /// configuration.
+    #[serde(default)]
+    pub trace: TraceConfig,
+    /// Web-server-scoped configuration for concerns outside core HTTP
+    /// bind/port settings -- currently the developer inspector UI's
+    /// Mermaid source (D-26, D-36, X-09). An absent `web_server:` key
+    /// resolves to [`WebServerConfig::default()`].
+    #[serde(default)]
+    pub web_server: WebServerConfig,
 }
 
 impl Settings {
@@ -82,11 +95,14 @@ impl Settings {
 
     /// Validates this configuration's own cross-cutting invariants.
     ///
-    /// Currently validates [`AgentRuntimeConfig`] only (X-09); other
-    /// domain configs perform their own validation through their
-    /// individual `get_*_config()` accessors.
+    /// Validates [`AgentRuntimeConfig`], [`TraceConfig`] and
+    /// [`WebServerConfig`] (X-09); other domain configs perform their own
+    /// validation through their individual `get_*_config()` accessors.
     pub fn validate(&self) -> Result<(), String> {
-        self.agent_runtime.validate()
+        self.agent_runtime.validate()?;
+        self.trace.validate()?;
+        self.web_server.validate()?;
+        Ok(())
     }
 
     /// Load settings from a file at the given path.
@@ -368,6 +384,8 @@ impl Default for Settings {
             timeouts: Some(AgentTimeoutsConfig::default()),
             http: Some(WebHttpConfig::default()),
             agent_runtime: AgentRuntimeConfig::default(),
+            trace: TraceConfig::default(),
+            web_server: WebServerConfig::default(),
         }
     }
 }

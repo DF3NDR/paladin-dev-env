@@ -135,3 +135,25 @@ vision:
     max_tokens: 1024            # Smaller token limit for tests
   anthropic:
     max_tokens: 1024            # Smaller token limit for tests
+
+# Runtime trace pipeline configuration for testing (X-09, D-36).
+# channel_capacity is overridden (non-default) so the config-round-trip test
+# can prove the override applies; every other field is spelled out at its
+# documented default.
+trace:
+  log_sink: true
+  channel_capacity: 32          # Non-default, so the override is provable
+  persist: false
+  state_values: false
+  value_cap_bytes: 256
+  heartbeat_interval_secs: 5
+  otel:
+    enabled: false
+    endpoint: "http://localhost:4318/v1/traces"
+    headers: {}
+    service_name: "paladin"
+
+# Web-server-scoped configuration for testing (D-26, D-36).
+web_server:
+  dev_ui:
+    mermaid_url: "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"

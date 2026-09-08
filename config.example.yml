@@ -227,6 +227,51 @@ agent_runtime:
   vault_tools:
     enabled: false
 
+# Runtime trace pipeline configuration (X-09, D-36). Every field below is
+# written out explicitly and is IDENTICAL to what TraceConfig::default()
+# produces -- the whole `trace:` section may be OMITTED ENTIRELY with no
+# behavior change: a v0.9 config.yml with no `trace:` key boots v0.10
+# identically. Env var overrides use the PALADIN_TRACE_* prefix (a
+# deliberate divergence from this file's other APP_* variables, D-36).
+trace:
+  # Whether the built-in log-sink TraceSink is wired by default. Traces
+  # reach the process log out of the box.
+  log_sink: true
+  # The bounded channel capacity between the engine's trace emitter and its
+  # sinks.
+  channel_capacity: 1024
+  # Whether trace records are persisted to `run_traces`. A new subsystem
+  # stays off by default.
+  persist: false
+  # Whether state-diff records carry actual field values (redacted then
+  # capped) rather than only field names. Unless explicitly opted in, no
+  # state value ever reaches a trace record, the SSE wire, or a persisted
+  # row.
+  state_values: false
+  # The maximum byte length of a captured state value before truncation.
+  value_cap_bytes: 256
+  # How often, in seconds, a running node's heartbeat may emit a trace
+  # record.
+  heartbeat_interval_secs: 5
+  # OTLP export configuration. Off by default; requires the `otel` Cargo
+  # feature to be compiled in when enabled (never a silent no-op).
+  otel:
+    enabled: false
+    endpoint: "http://localhost:4318/v1/traces"
+    headers: {}
+    service_name: "paladin"
+
+# Web-server-scoped configuration outside core HTTP bind/port settings
+# (see `server:` above for those) -- currently just the developer inspector
+# UI. Omitting `web_server:` entirely boots identically to a v0.9
+# configuration.
+web_server:
+  dev_ui:
+    # The Mermaid ESM bundle URL the inspector page's module script
+    # imports. Defaults to the jsDelivr `mermaid@11` CDN bundle; point this
+    # at a local mirror for an air-gapped deployment.
+    mermaid_url: "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
+
 # Agents served behind the HTTP API. Each becomes resident at /v1/agents/<id>:
 #   POST /v1/agents/<id>/execute          — buffered run
 #   POST /v1/agents/<id>/execute/stream   — token streaming (SSE)

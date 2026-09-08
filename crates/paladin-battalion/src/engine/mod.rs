@@ -104,7 +104,9 @@ use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::NodeCachePort;
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::structured_executor_port::StructuredExecutorPort;
-use paladin_ports::output::trace_sink_port::{RunFinishStatus, TraceEvent, TraceSink};
+use paladin_ports::output::trace_sink_port::{
+    RunFinishStatus, TraceEmitter, TraceEvent, TraceSink,
+};
 use paladin_ports::output::vault_confined::ConfinedVault;
 use paladin_ports::output::vault_port::VaultPort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
@@ -328,6 +330,23 @@ impl RunOutcome {
             RunOutcome::Failed { error, .. } => error.node_error(),
             _ => None,
         }
+    }
+}
+
+/// The [`RunFinishStatus`] a `superstep::run`/`run_with_namespace` call's own
+/// `Result<RunOutcome, EngineError>` maps onto (D-02, D-04; closes
+/// 27-CONTEXT D-25's correction, T-28-03-04). An engine-limit failure (e.g.
+/// `RecursionLimitExceeded`) is returned as a bare `Err` via `?`, never
+/// wrapped in `Ok(RunOutcome::Failed { .. })` -- so both paths map to
+/// `Failed` here, or `RunFinished.status` could never be trusted to
+/// distinguish success from failure for exactly the run shapes most likely
+/// to fail.
+fn run_finish_status(outcome: &Result<RunOutcome, EngineError>) -> RunFinishStatus {
+    match outcome {
+        Ok(RunOutcome::Completed { .. }) => RunFinishStatus::Completed,
+        Ok(RunOutcome::Failed { .. }) | Err(_) => RunFinishStatus::Failed,
+        Ok(RunOutcome::Halted { .. }) => RunFinishStatus::Halted,
+        Ok(RunOutcome::AwaitingInput { .. }) => RunFinishStatus::AwaitingInput,
     }
 }
 
@@ -1482,6 +1501,17 @@ pub struct WarEngine<W: WaypointPort> {
     /// Forwarded wholesale into every `NodeSpec::Battalion` child run, like
     /// every other engine resource.
     structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
+    /// The most recently constructed per-run `TraceDispatcher` (D-03),
+    /// populated by every `start`/`resume*` entry point's own dispatcher
+    /// construction (never rebuilt from this cell -- each entry point
+    /// always builds its OWN fresh, thread-scoped dispatcher exactly as
+    /// D-03 requires, then also stores a clone here) and, lazily, by
+    /// [`WarEngine::trace_emitter`] itself when called before this engine
+    /// has ever run. See `trace_emitter`'s own doc comment for the
+    /// before-any-run / after-a-run distinction this cell exists for.
+    /// `Mutex`, not `RwLock`: every access is a quick swap/clone, never
+    /// held across an `.await`.
+    trace_dispatcher_cell: std::sync::Mutex<Option<Arc<TraceDispatcher>>>,
 }
 
 // --- CF-FR-16, D-21: `+ 'static` is required here (not on the struct
@@ -1513,6 +1543,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             node_cache: None,
             vault: None,
             structured_executor: None,
+            trace_dispatcher_cell: std::sync::Mutex::new(None),
         }
     }
 
@@ -1598,6 +1629,59 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
     pub fn with_trace_sink(mut self, sink: Arc<dyn TraceSink>) -> Self {
         self.trace_sink = Some(sink);
         self
+    }
+
+    /// Store `trace` as this engine's most-recently-constructed dispatcher
+    /// (D-03) -- called by every `start`/`resume*` entry point right after
+    /// it builds its own fresh, thread-scoped dispatcher (never itself
+    /// constructing or replacing the dispatcher a run actually uses), so a
+    /// [`WarEngine::trace_emitter`] call can hand a caller a handle onto
+    /// the SAME `seq` counter.
+    fn remember_trace_dispatcher(&self, trace: &Arc<TraceDispatcher>) {
+        *self
+            .trace_dispatcher_cell
+            .lock()
+            .expect("trace dispatcher mutex poisoned") = Some(Arc::clone(trace));
+    }
+
+    /// A cheap, clonable [`TraceEmitter`] handle bound to this engine's own
+    /// `TraceDispatcher` (D-03): the SAME `seq` counter `start`/`resume*`'s
+    /// own `SuperstepStarted`/`NodeFinished`/... records stamp through, so
+    /// a below-engine producer composed with this handle (28-06:
+    /// `FallbackLlmAdapter::with_trace_emitter`, the middleware chain, the
+    /// execution service) lands in that run's own causal `seq` order
+    /// rather than starting a competing sequence of its own.
+    ///
+    /// Reflects the dispatcher of the MOST RECENT `start`/`resume*` call on
+    /// this engine (never rebuilt by a later call -- each entry point
+    /// always constructs its own fresh dispatcher for `seq` to restart at 1
+    /// per run, D-03, then also records it here). Before this engine has
+    /// run at all, there is nothing yet to bind to; this lazily constructs
+    /// one (stamped with a placeholder `ThreadId`, forwarding this engine's
+    /// own `trace_sink`/`trace_capacity`) so an early caller still gets a
+    /// working handle rather than `None` -- that SAME instance is then
+    /// orphaned (not reused) the moment the next real `start`/`resume*`
+    /// call replaces this cell with its own dispatcher, a known limitation
+    /// left for 28-06's own wiring work to resolve.
+    pub fn trace_emitter(&self) -> Arc<dyn TraceEmitter> {
+        let mut cell = self
+            .trace_dispatcher_cell
+            .lock()
+            .expect("trace dispatcher mutex poisoned");
+        let dispatcher = cell.get_or_insert_with(|| {
+            Arc::new(TraceDispatcher::with_capacity(
+                // A hardcoded, whitespace-free, well-under-the-length-limit
+                // literal -- `ThreadId::new`'s own validation can never
+                // reject it (identical in kind to the many `.unwrap()`
+                // call sites already in this crate's own test suite
+                // constructing a `ThreadId` from a literal).
+                ThreadId::new("pending").expect("static placeholder id is always valid"),
+                None,
+                self.trace_sink.clone(),
+                self.trace_capacity,
+            ))
+        });
+        Arc::clone(dispatcher) as Arc<dyn TraceEmitter>
     }
 
     /// Set the ordered `NodeInterceptor` chain (ENG-FR-22), replacing any
@@ -1847,10 +1931,14 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.trace_sink.clone(),
             self.trace_capacity,
         ));
+        self.remember_trace_dispatcher(&trace);
         trace.emit(TraceEvent::RunStarted {
             run_id: None,
             graph_fingerprint: graph.fingerprint().to_string(),
         });
+        // D-02: this call's own wall-clock start, for `RunFinished
+        // .duration_ms` below.
+        let run_started_at = tokio::time::Instant::now();
         let outcome = superstep::run(
             self.waypoint_port.as_ref(),
             self.durability,
@@ -1878,14 +1966,18 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.structured_executor.clone(),
         )
         .await;
-        // 28-03 fills `status`/totals from `outcome`; `trace_dropped_total`
-        // is stamped by `TraceDispatcher::emit` itself at enqueue time
-        // (D-07).
+        // D-02, D-04: `status` from the `RunOutcome`/`Err` this call itself
+        // matches on; `total_supersteps`/`total_tokens` from this run's own
+        // dispatcher, tallied synchronously as `SuperstepStarted`/
+        // `NodeFinished` records were stamped (never racing the async
+        // consumer, `TraceDispatcher::superstep_count`/`token_total`'s own
+        // doc comments); `trace_dropped_total` is stamped by
+        // `TraceDispatcher::emit` itself at enqueue time (D-07).
         trace.emit(TraceEvent::RunFinished {
-            status: RunFinishStatus::Completed,
-            total_supersteps: 0,
-            total_tokens: 0,
-            duration_ms: 0,
+            status: run_finish_status(&outcome),
+            total_supersteps: trace.superstep_count(),
+            total_tokens: trace.token_total(),
+            duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
         outcome
@@ -1982,17 +2074,27 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.trace_sink.clone(),
             self.trace_capacity,
         ));
+        self.remember_trace_dispatcher(&trace);
+        // D-02: this call's own wall-clock start, for both `RunFinished`
+        // sites below (the already-`Completed` early return and the real
+        // resumed run) -- one instant, captured once, covers either path.
+        let run_started_at = tokio::time::Instant::now();
 
         if matches!(latest.status, WaypointStatus::Completed) {
             trace.emit(TraceEvent::RunStarted {
                 run_id: None,
                 graph_fingerprint: expected.to_string(),
             });
+            // D-02, D-04: nothing executed on this call (the thread was
+            // already `Completed`), so `total_supersteps`/`total_tokens`
+            // are genuinely `0` here -- this dispatcher's own counters
+            // agree, since no `SuperstepStarted`/`NodeFinished` was ever
+            // stamped through it.
             trace.emit(TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
-                total_supersteps: 0,
-                total_tokens: 0,
-                duration_ms: 0,
+                total_supersteps: trace.superstep_count(),
+                total_tokens: trace.token_total(),
+                duration_ms: run_started_at.elapsed().as_millis() as u64,
                 trace_dropped_total: 0,
             });
             return Ok(RunOutcome::Completed {
@@ -2108,10 +2210,10 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         )
         .await;
         trace.emit(TraceEvent::RunFinished {
-            status: RunFinishStatus::Completed,
-            total_supersteps: 0,
-            total_tokens: 0,
-            duration_ms: 0,
+            status: run_finish_status(&outcome),
+            total_supersteps: trace.superstep_count(),
+            total_tokens: trace.token_total(),
+            duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
         outcome
@@ -2210,6 +2312,10 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.trace_sink.clone(),
             self.trace_capacity,
         ));
+        self.remember_trace_dispatcher(&trace);
+        // D-02: this call's own wall-clock start, for the `RunFinished`
+        // site below.
+        let run_started_at = tokio::time::Instant::now();
 
         let now = Utc::now();
         let already_answered: BTreeSet<ParleyId> =
@@ -2461,10 +2567,10 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         )
         .await;
         trace.emit(TraceEvent::RunFinished {
-            status: RunFinishStatus::Completed,
-            total_supersteps: 0,
-            total_tokens: 0,
-            duration_ms: 0,
+            status: run_finish_status(&outcome),
+            total_supersteps: trace.superstep_count(),
+            total_tokens: trace.token_total(),
+            duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
         outcome
@@ -2585,6 +2691,10 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.trace_sink.clone(),
             self.trace_capacity,
         ));
+        self.remember_trace_dispatcher(&trace);
+        // D-02: this call's own wall-clock start, for the `RunFinished`
+        // site below.
+        let run_started_at = tokio::time::Instant::now();
         trace.emit(TraceEvent::RunStarted {
             run_id: None,
             graph_fingerprint: expected.to_string(),
@@ -2629,10 +2739,10 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         )
         .await;
         trace.emit(TraceEvent::RunFinished {
-            status: RunFinishStatus::Completed,
-            total_supersteps: 0,
-            total_tokens: 0,
-            duration_ms: 0,
+            status: run_finish_status(&outcome),
+            total_supersteps: trace.superstep_count(),
+            total_tokens: trace.token_total(),
+            duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
         outcome
@@ -2695,10 +2805,13 @@ mod tests {
     };
     use paladin_core::platform::container::directive::{Directive, MusterTask, NextStep};
     use paladin_core::platform::container::paladin_error::PaladinError;
-    use paladin_core::platform::container::parley::{OnExpire, ParleyKind};
+    use paladin_core::platform::container::parley::{
+        OnExpire, ParleyId, ParleyKind, ParleyRequest,
+    };
     use paladin_core::platform::container::transience::Transience;
     use paladin_core::platform::container::waypoint::{NodeOutcomeKind, Waypoint};
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream};
+    use paladin_ports::output::trace_sink_port::MiddlewareAction;
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
     use crate::engine::graph::{EdgeSpec, GateRequestTemplate};
@@ -4068,6 +4181,13 @@ mod tests {
                 "NodeStarted",
                 "NodeFinished",
                 "DeltaMerged",
+                // Plan 28-03, D-04: `a`'s one outgoing edge (`a -> b`) is
+                // evaluated once `a` has run, between this superstep's
+                // `DeltaMerged` and `WaypointSaved` -- `b` (the second
+                // superstep's own node) has no outgoing edge of its own, so
+                // no second `EdgeEvaluated` follows the second
+                // `DeltaMerged` below.
+                "EdgeEvaluated",
                 "WaypointSaved",
                 "SuperstepStarted",
                 "NodeStarted",
@@ -9710,5 +9830,710 @@ mod tests {
                 }
             }
         }
+    }
+
+    // --- Plan 28-03: populated `RunFinished`, richer `NodeStarted`/
+    //     `NodeFinished`, the `DeltaMerged`-value opt-in, and
+    //     `WarEngine::trace_emitter()` (D-02, D-03, D-04, D-05) -----------
+
+    /// A [`StateNode`] that always raises a `NextStep::Parley` -- the
+    /// minimal shape `run_finished_reports_failed_and_halted_and_awaiting_input`'s
+    /// `AwaitingInput` table row needs.
+    struct ParleyingNode;
+
+    #[async_trait]
+    impl StateNode for ParleyingNode {
+        async fn run(
+            &self,
+            _state: &Battlefield,
+            _ctx: &NodeContext,
+        ) -> Result<Directive, StateNodeError> {
+            Ok(Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Parley(ParleyRequest {
+                    parley_id: ParleyId::new(),
+                    node_id: NodeId::new(""),
+                    kind: ParleyKind::Approval,
+                    prompt: "need input".to_string(),
+                    payload: serde_json::json!({}),
+                    choices: None,
+                    expires_at: None,
+                    created_at: Utc::now(),
+                    on_expire: OnExpire::FailRun,
+                }),
+            })
+        }
+    }
+
+    /// The first `TraceEvent::RunFinished` record in `sink`'s events so
+    /// far, or panics -- every table row below asserts exactly one exists.
+    async fn run_finished_status_of(sink: &Arc<RecordingTraceSink>) -> RunFinishStatus {
+        sink.events()
+            .await
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { status, .. } => Some(*status),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist")
+    }
+
+    /// D-02, D-04: a two-superstep successful run's `RunFinished` reports
+    /// `status: Completed`, `total_supersteps: 2`, `total_tokens` the sum
+    /// of both nodes' `NodeFinished.token_count`, and `duration_ms > 0`.
+    #[tokio::test]
+    async fn run_finished_reports_completed_with_totals() {
+        /// A minimal in-test `PaladinPort` reporting a caller-configured
+        /// token count per Paladin name, and sleeping 1ms per call so this
+        /// test's `duration_ms > 0` assertion is never a coin flip on fast
+        /// hardware.
+        struct TokenPaladinPort {
+            tokens: std::collections::HashMap<&'static str, u32>,
+        }
+        #[async_trait]
+        impl PaladinPort for TokenPaladinPort {
+            async fn execute(
+                &self,
+                paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                let tokens = self
+                    .tokens
+                    .get(paladin.node.name.as_str())
+                    .copied()
+                    .unwrap_or(0);
+                Ok(PaladinResult {
+                    output: "ok".to_string(),
+                    token_count: tokens,
+                    ..Default::default()
+                })
+            }
+            async fn execute_stream(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                unimplemented!("not exercised by this test")
+            }
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+        }
+
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(make_paladin("first"), InputMapping::new("go"), out.clone()),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(make_paladin("second"), InputMapping::new("go"), out.clone()),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n2.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1);
+
+        let mut tokens = std::collections::HashMap::new();
+        tokens.insert("first", 5u32);
+        tokens.insert("second", 7u32);
+        let port: Arc<dyn PaladinPort> = Arc::new(TokenPaladinPort { tokens });
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, Arc::new(InMemoryWaypointStore::new()))
+            .with_trace_sink(sink.clone());
+
+        let thread = ThreadId::new("run-finished-totals").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let run_finished = sink
+            .events()
+            .await
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished {
+                    status,
+                    total_supersteps,
+                    total_tokens,
+                    duration_ms,
+                    trace_dropped_total,
+                } => Some((
+                    *status,
+                    *total_supersteps,
+                    *total_tokens,
+                    *duration_ms,
+                    *trace_dropped_total,
+                )),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(run_finished.0, RunFinishStatus::Completed);
+        assert_eq!(run_finished.1, 2, "two supersteps: n1 then n2");
+        assert_eq!(
+            run_finished.2, 12,
+            "5 + 7 tokens across both NodeFinished records"
+        );
+        assert!(
+            run_finished.3 > 0,
+            "duration_ms must be > 0: {}",
+            run_finished.3
+        );
+        assert_eq!(run_finished.4, 0);
+    }
+
+    /// D-02, D-04: the other three `RunOutcome` shapes (`Failed`, `Halted`,
+    /// `AwaitingInput`) each map onto the matching `RunFinishStatus` -- a
+    /// table test over four independent runs, `Completed` included for
+    /// completeness (closes 27-CONTEXT D-25's correction, T-28-03-04).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn run_finished_reports_failed_and_halted_and_awaiting_input() {
+        // Completed.
+        {
+            let out = FieldName::new("out").unwrap();
+            let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+                out.clone(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            )]);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let id = NodeId::new("solo");
+            graph.add_node(
+                id.clone(),
+                NodeSpec::Function(CountingFunctionNode::fixed(out, serde_json::json!("v"))),
+            );
+            graph.add_entry(id);
+            let sink = RecordingTraceSink::new();
+            let engine = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_trace_sink(sink.clone());
+            let thread = ThreadId::new("table-completed").unwrap();
+            let outcome = engine
+                .start(&graph, thread, StateDelta::new())
+                .await
+                .unwrap();
+            assert!(matches!(outcome, RunOutcome::Completed { .. }));
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            assert_eq!(
+                run_finished_status_of(&sink).await,
+                RunFinishStatus::Completed
+            );
+        }
+
+        // Failed.
+        {
+            let out = FieldName::new("out").unwrap();
+            let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+                out,
+                DispatchRule::LastWrite,
+                None,
+                false,
+            )]);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let id = NodeId::new("failer");
+            graph.add_node(
+                id.clone(),
+                NodeSpec::Function(FailingFunctionNode::new("nope")),
+            );
+            graph.add_entry(id);
+            let sink = RecordingTraceSink::new();
+            let engine = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_trace_sink(sink.clone());
+            let thread = ThreadId::new("table-failed").unwrap();
+            let outcome = engine
+                .start(&graph, thread, StateDelta::new())
+                .await
+                .unwrap();
+            assert!(matches!(outcome, RunOutcome::Failed { .. }));
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            assert_eq!(run_finished_status_of(&sink).await, RunFinishStatus::Failed);
+        }
+
+        // Halted -- a token cancelled BEFORE the first superstep boundary,
+        // mirroring `cancellation_before_first_superstep_still_yields_a_halted_waypoint`.
+        {
+            let (graph, _ids) = four_node_chain_graph();
+            let token = CancellationToken::new();
+            token.cancel();
+            let sink = RecordingTraceSink::new();
+            let engine = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_cancellation_token(token)
+            .with_trace_sink(sink.clone());
+            let thread = ThreadId::new("table-halted").unwrap();
+            let outcome = engine
+                .start(&graph, thread, StateDelta::new())
+                .await
+                .unwrap();
+            assert!(matches!(outcome, RunOutcome::Halted { .. }));
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            assert_eq!(run_finished_status_of(&sink).await, RunFinishStatus::Halted);
+        }
+
+        // AwaitingInput.
+        {
+            let out = FieldName::new("out").unwrap();
+            let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+                out,
+                DispatchRule::LastWrite,
+                None,
+                false,
+            )]);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let id = NodeId::new("asker");
+            graph.add_node(id.clone(), NodeSpec::Function(Arc::new(ParleyingNode)));
+            graph.add_entry(id);
+            let sink = RecordingTraceSink::new();
+            let engine = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_trace_sink(sink.clone());
+            let thread = ThreadId::new("table-awaiting").unwrap();
+            let outcome = engine
+                .start(&graph, thread, StateDelta::new())
+                .await
+                .unwrap();
+            assert!(matches!(outcome, RunOutcome::AwaitingInput { .. }));
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            assert_eq!(
+                run_finished_status_of(&sink).await,
+                RunFinishStatus::AwaitingInput
+            );
+        }
+    }
+
+    /// D-02: a retried node's two `NodeFinished` records carry `attempt` 1
+    /// (failed) and 2 (succeeded), each with its own `duration_ms`/
+    /// `token_count` matching the SAME values the Waypoint's own
+    /// `NodeExecutionRecord` carries for that attempt -- trace and
+    /// Waypoint never disagree.
+    #[tokio::test]
+    async fn node_finished_carries_real_outcome_and_cost() {
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let id = NodeId::new("retrier");
+        let node = FailThenSucceedNode::new(2, "transient", out, serde_json::json!("ok"));
+        graph.add_node(id.clone(), NodeSpec::Function(node));
+        graph.add_entry(id.clone());
+        graph.set_aegis(
+            id.clone(),
+            Aegis {
+                retry: Some(RetryPolicy {
+                    max_attempts: 3,
+                    retry_on: RetryPredicate::TransientAndUnknown,
+                    jitter: false,
+                    initial_interval: std::time::Duration::from_millis(1),
+                    ..RetryPolicy::default()
+                }),
+                ..Default::default()
+            },
+        );
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+            .with_trace_sink(sink.clone());
+        let thread = ThreadId::new("node-finished-cost").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let mut finishes: Vec<(u32, NodeOutcomeKind, u64, u64)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|r| match &r.event {
+                TraceEvent::NodeFinished {
+                    node_id,
+                    attempt,
+                    outcome,
+                    duration_ms,
+                    token_count,
+                    ..
+                } if node_id == &id => {
+                    Some((*attempt, outcome.clone(), *duration_ms, *token_count))
+                }
+                _ => None,
+            })
+            .collect();
+        finishes.sort_by_key(|(attempt, ..)| *attempt);
+        assert_eq!(finishes.len(), 2, "two attempts: {finishes:?}");
+        assert_eq!(finishes[0].0, 1);
+        assert_ne!(
+            finishes[0].1,
+            NodeOutcomeKind::Succeeded,
+            "attempt 1 must have failed"
+        );
+        assert_eq!(finishes[1].0, 2);
+        assert_eq!(
+            finishes[1].1,
+            NodeOutcomeKind::Succeeded,
+            "attempt 2 must have succeeded"
+        );
+
+        let waypoints = ascending_history(&store, &thread).await;
+        let record = waypoints
+            .iter()
+            .flat_map(|w| w.completed.iter())
+            .find(|r| r.node_id == id && r.attempt == 2)
+            .expect("a NodeExecutionRecord for the succeeding attempt must exist");
+        assert_eq!(
+            finishes[1].2, record.duration_ms,
+            "trace and Waypoint duration_ms must agree"
+        );
+        assert_eq!(
+            finishes[1].3, record.token_count,
+            "trace and Waypoint token_count must agree"
+        );
+    }
+
+    /// D-02: a Muster worker's `NodeStarted` carries `muster_task_key:
+    /// Some(..)`; an ordinary (non-Muster) node's is `None`.
+    #[tokio::test]
+    async fn node_started_carries_muster_task_key() {
+        let results = FieldName::new("results").unwrap();
+        let plain_out = FieldName::new("plain").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(results.clone(), DispatchRule::Append, None, false),
+            FieldSpec::new(plain_out.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let plain = NodeId::new("plain");
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(vec![MusterTask {
+                    worker: worker.clone(),
+                    payload: serde_json::json!("x"),
+                    task_key: "only".to_string(),
+                }]),
+            })
+        };
+        let worker_node = {
+            let results = results.clone();
+            CountingFunctionNode::with_context_directive(move |_run, _state, ctx| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(
+                    results.clone(),
+                    ctx.muster_payload().cloned().unwrap_or_default(),
+                );
+                delta.into()
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node));
+        graph.add_node(
+            plain.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                plain_out,
+                serde_json::json!("p"),
+            )),
+        );
+        graph.add_entry(planner.clone());
+        graph.add_entry(plain.clone());
+
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone());
+        let thread = ThreadId::new("muster-task-key").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let records = sink.events().await;
+        let worker_started = records
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::NodeStarted {
+                    node_id,
+                    muster_task_key,
+                    ..
+                } if node_id == &worker => Some(muster_task_key.clone()),
+                _ => None,
+            })
+            .expect("worker's NodeStarted must exist");
+        assert_eq!(worker_started, Some("only".to_string()));
+
+        let plain_started = records
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::NodeStarted {
+                    node_id,
+                    muster_task_key,
+                    ..
+                } if node_id == &plain => Some(muster_task_key.clone()),
+                _ => None,
+            })
+            .expect("plain node's NodeStarted must exist");
+        assert_eq!(plain_started, None);
+    }
+
+    /// D-05, T-28-03-01: `DeltaMerged.field_changes` carries names/sizes
+    /// only by default (`value: None`, `value_bytes` the serialized
+    /// length); with value inclusion enabled the value is the redacted,
+    /// truncated string, and an API-key-shaped token is redacted BEFORE
+    /// truncation is applied (the security-instructions ordering rule).
+    /// Drives `superstep::run` directly (`WarEngine` has no public knob
+    /// for this yet -- 28-06 wires `TraceConfig::state_values` through
+    /// `TraceDispatcher::with_state_values`), so this test constructs its
+    /// own dispatcher to exercise the opt-in path.
+    #[tokio::test]
+    async fn delta_merged_carries_names_not_values_by_default() {
+        let out = FieldName::new("secret").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        // A value carrying an API-key-shaped token, long enough that the
+        // redacted-and-capped assertion below is meaningfully distinct
+        // from "the whole thing fit".
+        let secret_value = format!("prefix sk-{} suffix {}", "a".repeat(40), "b".repeat(600));
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let id = NodeId::new("writer");
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                out.clone(),
+                serde_json::json!(secret_value),
+            )),
+        );
+        graph.add_entry(id);
+
+        let expected_bytes = serde_json::to_string(&serde_json::json!(secret_value))
+            .unwrap()
+            .len() as u64;
+
+        let store = RecordingWaypointStore::new();
+        let port: Arc<dyn PaladinPort> = Arc::new(UnimplementedPaladinPort);
+
+        // -- Default: names and sizes only, no value. --
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("delta-merged-default").unwrap();
+        let trace = Arc::new(TraceDispatcher::new(
+            thread.clone(),
+            None,
+            Some(sink.clone()),
+        ));
+        let outcome = crate::engine::superstep::run(
+            &store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::new(),
+            &graph,
+            thread,
+            Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            1,
+            &port,
+            &trace,
+            &[],
+            &None,
+            &None,
+            None,
+            std::time::Duration::from_secs(30),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let default_change = sink
+            .events()
+            .await
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::DeltaMerged { field_changes, .. } => {
+                    field_changes.iter().find(|fc| fc.field == out).cloned()
+                }
+                _ => None,
+            })
+            .expect("a DeltaMerged carrying the changed field must exist");
+        assert_eq!(default_change.value, None);
+        assert_eq!(default_change.value_bytes, expected_bytes);
+
+        // -- Value inclusion enabled: redacted, then capped. --
+        let cap = 64usize;
+        let sink2 = RecordingTraceSink::new();
+        let thread2 = ThreadId::new("delta-merged-included").unwrap();
+        let trace2 = Arc::new(
+            TraceDispatcher::new(thread2.clone(), None, Some(sink2.clone()))
+                .with_state_values(true, cap),
+        );
+        let outcome2 = crate::engine::superstep::run(
+            &store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::new(),
+            &graph,
+            thread2,
+            Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            1,
+            &port,
+            &trace2,
+            &[],
+            &None,
+            &None,
+            None,
+            std::time::Duration::from_secs(30),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(outcome2, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let included_change = sink2
+            .events()
+            .await
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::DeltaMerged { field_changes, .. } => {
+                    field_changes.iter().find(|fc| fc.field == out).cloned()
+                }
+                _ => None,
+            })
+            .expect("a DeltaMerged carrying the changed field must exist");
+        let value = included_change.value.expect("value inclusion was enabled");
+        // `redact_secret_patterns` keeps the MARKER ("sk-") visible and
+        // replaces only the secret token that follows it (module docs,
+        // `redact_token_after`) -- the assertion below is on the SECRET
+        // itself being gone, not the marker.
+        assert!(
+            !value.contains(&"a".repeat(40)),
+            "the API-key-shaped token's secret portion must be redacted: {value}"
+        );
+        assert!(
+            value.contains("[REDACTED]"),
+            "the redaction placeholder must be present: {value}"
+        );
+        assert!(
+            value.chars().count() <= cap + 64,
+            "the value must be truncated to roughly the configured cap (plus the elision \
+             marker): {value}"
+        );
+    }
+
+    /// D-03: records emitted through `engine.trace_emitter().emit(..)`
+    /// after a run interleave into the SAME `seq` sequence that run's own
+    /// records were stamped with -- no repeats, no gaps.
+    #[tokio::test]
+    async fn trace_emitter_shares_the_run_counter() {
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let id = NodeId::new("solo");
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(out, serde_json::json!("v"))),
+        );
+        graph.add_entry(id);
+
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone());
+        let thread = ThreadId::new("trace-emitter-shares").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let before = sink.events().await;
+        assert!(!before.is_empty(), "the run must have emitted records");
+        let max_seq_before = before.iter().map(|r| r.seq).max().unwrap();
+
+        // Chain three more records through the SAME dispatcher the run
+        // just used.
+        let emitter = engine.trace_emitter();
+        for _ in 0..3 {
+            emitter.emit(TraceEvent::MiddlewareEvent {
+                name: "post-run-probe".to_string(),
+                action: MiddlewareAction::Retry,
+            });
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let after = sink.events().await;
+        let mut seqs: Vec<u64> = after.iter().map(|r| r.seq).collect();
+        seqs.sort_unstable();
+        for pair in seqs.windows(2) {
+            assert_eq!(pair[1], pair[0] + 1, "seq must be gapless: {seqs:?}");
+        }
+        assert_eq!(seqs.first().copied(), Some(1));
+        assert_eq!(after.len(), before.len() + 3);
+        assert_eq!(
+            after.iter().filter(|r| r.seq > max_seq_before).count(),
+            3,
+            "the three post-run records must continue the SAME seq sequence, never restart"
+        );
     }
 }

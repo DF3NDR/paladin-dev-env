@@ -15,6 +15,16 @@ documentation = "https://docs.rs/paladin-battalion"
 [dependencies]
 paladin-core  = { package = "paladin-ai-core", version = "0.9.0", path = "../paladin-core" }
 paladin-ports = { version = "0.9.0", path = "../paladin-ports" }
+# `crates/paladin-llm/src/redaction.rs`'s `redact_secret_patterns`/
+# `bounded_excerpt` (D-05, T-28-03-01, plan 28-03): the engine's
+# `DeltaMerged.field_changes` opt-in value path redacts BEFORE truncating,
+# reusing the SAME redaction helper every LLM adapter already does, rather
+# than a second implementation. Was dev-dependencies-only (test-only
+# `MockLlmAdapter` usage) before this plan; promoted to a real dependency
+# EDGE since production engine code (never just tests) now calls into it.
+# No cycle: paladin-llm depends only on paladin-core + paladin-ports, never
+# on paladin-battalion.
+paladin-llm   = { version = "0.9.0", path = "../paladin-llm" }
 tokio         = { workspace = true }
 async-trait   = { workspace = true }
 serde         = { workspace = true }
@@ -60,9 +70,8 @@ tokio = { workspace = true, features = ["test-util"] }
 # paladin-ports only, never on paladin-battalion.
 paladin-storage = { version = "0.9.0", path = "../paladin-storage" }
 # MockLlmAdapter for LlmDecisionEvaluator / Commander StrategySelection::Semantic
-# tests (CF-05, Phase 23 Plan 03). No cycle: it depends only on paladin-core +
-# paladin-ports, never on paladin-battalion.
-paladin-llm = { version = "0.9.0", path = "../paladin-llm" }
+# tests (CF-05, Phase 23 Plan 03) now comes from the promoted `[dependencies]`
+# edge above (plan 28-03) -- no separate dev-dependency entry needed.
 
 [[bench]]
 name = "battalion_benchmarks"

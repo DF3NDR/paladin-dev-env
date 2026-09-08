@@ -64,7 +64,7 @@ use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::structured_executor_port::{StructuredExecutorPort, StructuredOptions};
-use paladin_ports::output::trace_sink_port::TraceEvent;
+use paladin_ports::output::trace_sink_port::{NodeProgressKind, TraceEvent};
 use paladin_ports::output::vault_confined::ConfinedVault;
 use paladin_ports::output::waypoint_port::WaypointPort;
 
@@ -396,21 +396,68 @@ async fn deadline_or_pending(deadline: Option<tokio::time::Instant>) {
     }
 }
 
+/// D-04, D-36: the default per-node `NodeProgress::Heartbeat` emission
+/// interval, used when no caller-configured value is threaded in --
+/// 28-06 passes `TraceConfig::heartbeat_interval_secs` through
+/// [`idle_or_pending`]/[`race_attempt`] in this constant's place. Not part
+/// of [`EngineLimits`] (23-CONTEXT D-18 keeps that struct out of the graph
+/// fingerprint, and this is a trace-rate knob, never a run limit).
+const DEFAULT_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Resolves when no beat has been observed on `heartbeat` for `idle`, or
 /// never when there is no idle window (a node without an `idle_timeout`
 /// never subscribes -- D-18's "heartbeat is a no-op" truth). Each observed
 /// beat restarts the window: the timer AWAITS the handle's `changed()`
 /// rather than polling a timestamp, so under `tokio::time::pause` it is
 /// driven purely by the virtual clock (RESEARCH.md's `watch` recommendation).
-async fn idle_or_pending(heartbeat: &HeartbeatHandle, idle: Option<std::time::Duration>) {
+///
+/// D-04, T-28-03-02: every beat observed also feeds a per-node,
+/// per-`heartbeat_interval` rate limit -- `heartbeat_last_emitted` (keyed
+/// by `node_id`, shared across this whole run, never reset per superstep)
+/// gates a `TraceEvent::NodeProgress { node_id, progress:
+/// NodeProgressKind::Heartbeat }` emission through `trace`: emitted only
+/// when no prior emission is recorded for `node_id`, or the elapsed time
+/// since the last one is at least `heartbeat_interval` -- so a node
+/// beating continuously cannot flood the bounded trace queue (T-28-03-02).
+#[allow(clippy::too_many_arguments)]
+async fn idle_or_pending(
+    heartbeat: &HeartbeatHandle,
+    idle: Option<std::time::Duration>,
+    node_id: &NodeId,
+    trace: &Arc<TraceDispatcher>,
+    heartbeat_last_emitted: &Arc<std::sync::Mutex<HashMap<NodeId, tokio::time::Instant>>>,
+    heartbeat_interval: std::time::Duration,
+) {
     let Some(idle) = idle else {
         return std::future::pending::<()>().await;
     };
     let mut beats = heartbeat.subscribe();
     loop {
         match tokio::time::timeout(idle, beats.changed()).await {
-            // A beat arrived inside the window: progress -- restart it.
-            Ok(Ok(())) => continue,
+            // A beat arrived inside the window: progress -- restart it,
+            // and consider it for a rate-limited liveness record.
+            Ok(Ok(())) => {
+                let now = tokio::time::Instant::now();
+                let should_emit = {
+                    let mut last = heartbeat_last_emitted
+                        .lock()
+                        .expect("heartbeat rate-limit mutex poisoned");
+                    let emit = last
+                        .get(node_id)
+                        .is_none_or(|&at| now.duration_since(at) >= heartbeat_interval);
+                    if emit {
+                        last.insert(node_id.clone(), now);
+                    }
+                    emit
+                };
+                if should_emit {
+                    trace.emit(TraceEvent::NodeProgress {
+                        node_id: node_id.clone(),
+                        progress: NodeProgressKind::Heartbeat,
+                    });
+                }
+                continue;
+            }
             // The handle was dropped: the attempt itself is gone (finished
             // or cancelled), so there is nothing left to bound.
             Ok(Err(_)) => return std::future::pending::<()>().await,
@@ -426,10 +473,15 @@ async fn idle_or_pending(heartbeat: &HeartbeatHandle, idle: Option<std::time::Du
 /// dropped here -- its partial work is discarded exactly as any other
 /// failed attempt's is (FT-FR-03, T-25-41) -- and the failure names the
 /// bound that fired by typed `TimeoutKind`, never by message text (T-25-42).
+#[allow(clippy::too_many_arguments)]
 async fn race_attempt(
     attempt: impl std::future::Future<Output = NodeDispatchResult>,
     bounds: &AttemptBounds,
     heartbeat: &HeartbeatHandle,
+    node_id: &NodeId,
+    trace: &Arc<TraceDispatcher>,
+    heartbeat_last_emitted: &Arc<std::sync::Mutex<HashMap<NodeId, tokio::time::Instant>>>,
+    heartbeat_interval: std::time::Duration,
 ) -> NodeDispatchResult {
     let (deadline, deadline_kind) = match bounds.deadline {
         Some((at, kind)) => (Some(at), kind),
@@ -441,7 +493,7 @@ async fn race_attempt(
         _ = deadline_or_pending(deadline) => {
             (None, 0, Err(NodeFailure::Timeout(deadline_kind)))
         }
-        _ = idle_or_pending(heartbeat, bounds.idle) => {
+        _ = idle_or_pending(heartbeat, bounds.idle, node_id, trace, heartbeat_last_emitted, heartbeat_interval) => {
             (None, 0, Err(NodeFailure::Timeout(TimeoutKind::Idle)))
         }
     }
@@ -2012,6 +2064,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
 
     let mut frontier = Frontier::for_run(graph, &frontier_snapshot);
 
+    // --- D-04, T-28-03-02: this run's own per-node heartbeat rate-limiter
+    // state, constructed ONCE per `run_with_namespace` call (never per
+    // superstep, so the limit holds across a re-entering node's later
+    // supersteps too) and cloned into every dispatched node's spawned task
+    // alongside `node_trace`, below. `DEFAULT_HEARTBEAT_INTERVAL` is this
+    // plan's own hardcoded default (no caller-facing knob exists yet); 28-06
+    // threads `TraceConfig::heartbeat_interval_secs` through in its place.
+    let heartbeat_last_emitted: Arc<std::sync::Mutex<HashMap<NodeId, tokio::time::Instant>>> =
+        Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let heartbeat_interval = DEFAULT_HEARTBEAT_INTERVAL;
+
     // --- CF-03 / CF-FR-12: a validated `NextStep::Muster(tasks)` accepted
     // in superstep N is carried in `pending_muster` (declared above, before
     // the entry-vanguard-empty check, so a mid-muster resume's restored
@@ -2402,6 +2465,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             // above.
             let node_structured_executor = structured_executor.clone();
             let node_trace = Arc::clone(trace);
+            // --- D-04, T-28-03-02: this run's shared heartbeat rate-limiter
+            // state, cloned into the spawned task alongside `node_trace`
+            // above; `heartbeat_interval` is `Copy` (a plain `Duration`), so
+            // it is captured by value with no clone needed.
+            let node_heartbeat_last_emitted = Arc::clone(&heartbeat_last_emitted);
             let node_interceptors = interceptors.to_vec();
             // --- D-18: the attempt-INVARIANT part of this dispatch's
             // context. `attempt` and `heartbeat` are per attempt (the retry
@@ -2587,6 +2655,10 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                         ),
                                         &attempt_bounds,
                                         &ctx.heartbeat,
+                                        &nid,
+                                        &node_trace,
+                                        &node_heartbeat_last_emitted,
+                                        heartbeat_interval,
                                     )
                                     .await;
                                     match result {
@@ -3476,24 +3548,44 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         trace.emit(TraceEvent::DeltaMerged {
             superstep: superstep_number,
             // `MergeReport` today carries only the changed field NAMES
-            // (`changed_fields`); the dispatch-rule name, writer list and
-            // value byte size D-05's `FieldChange` shape also carries are
-            // not yet threaded through `Battlefield::merge` -- left as
-            // placeholder defaults here, exactly like `RunFinished`'s
-            // not-yet-computed fields elsewhere in this plan, until a later
-            // plan enriches `MergeReport` itself.
+            // (`changed_fields`); the dispatch-rule name and writer list
+            // D-05's `FieldChange` shape also carries are not yet threaded
+            // through `Battlefield::merge` -- left as placeholder defaults
+            // here (28-01's own documented scope boundary), until a later
+            // plan enriches `MergeReport` itself. `value_bytes` and the
+            // opt-in, redacted-then-truncated `value` (D-05, T-28-03-01)
+            // ARE real as of this plan: read from the POST-merge
+            // `battlefield` (mutated in place by `Battlefield::merge`,
+            // above), never the other way round.
             field_changes: merge_report
                 .changed_fields
                 .into_iter()
-                .map(
-                    |field| paladin_core::platform::container::trace::FieldChange {
+                .map(|field| {
+                    let raw = battlefield
+                        .get_raw(&field)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    let serialized = serde_json::to_string(&raw).unwrap_or_default();
+                    let value_bytes = serialized.len() as u64;
+                    // D-05, T-28-03-01: redact BEFORE truncating -- the
+                    // security-instructions ordering rule. Truncating
+                    // first can slice a secret across the cap boundary and
+                    // leak the surviving fragment.
+                    let value = trace.state_values_enabled().then(|| {
+                        let redacted = paladin_llm::redaction::redact_secret_patterns(&serialized);
+                        paladin_llm::redaction::bounded_excerpt(
+                            &redacted,
+                            trace.state_value_cap_bytes(),
+                        )
+                    });
+                    paladin_core::platform::container::trace::FieldChange {
                         field,
                         dispatch: String::new(),
                         writers: Vec::new(),
-                        value_bytes: 0,
-                        value: None,
-                    },
-                )
+                        value_bytes,
+                        value,
+                    }
+                })
                 .collect(),
         });
 
@@ -3507,6 +3599,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     &registries.edge_evaluators,
                     &thread,
                     notfiring_nodes.contains(node_id),
+                    trace,
                 )
                 .await?;
         }
@@ -3613,6 +3706,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             parley_requests.sort_by(|a, b| a.node_id.cmp(&b.node_id));
             let parleying_nodes: Vec<NodeId> =
                 parley_requests.iter().map(|r| r.node_id.clone()).collect();
+            // --- D-04, T-28-03-03: one `ParleyRaised` per raised request,
+            // the moment this `AwaitingInput` outcome is built -- carrying
+            // `parley_id`/`node_id`/`kind` only, never `prompt` (no
+            // author-supplied context on the trace).
+            for request in &parley_requests {
+                trace.emit(TraceEvent::ParleyRaised {
+                    parley_id: request.parley_id,
+                    node_id: request.node_id.clone(),
+                    parley_kind: request.kind.clone(),
+                });
+            }
             let waypoint = build_waypoint(
                 &thread,
                 parent_waypoint_id,
@@ -3941,6 +4045,16 @@ impl Frontier {
     /// leave one `Pending` and strand a downstream join. Re-running a node
     /// (a cycle or self-loop) overwrites its edges' previous state with the
     /// fresh evaluation either way.
+    ///
+    /// D-04: every edge actually evaluated here (the `force_notfiring ==
+    /// false` branch, `None` "always" edges included) emits exactly one
+    /// `TraceEvent::EdgeEvaluated { from, to, condition_kind, fired }`
+    /// through `trace` -- whether or not it fired -- AFTER the evaluation
+    /// result is known and BEFORE `self.edge_state` is written, so the
+    /// record order is `NodeFinished` -> `EdgeEvaluated`* ->
+    /// `SuperstepStarted`(next). A `force_notfiring` edge is never
+    /// evaluated at all (this function's own doc comment above), so it
+    /// never emits one either.
     #[allow(clippy::too_many_arguments)]
     async fn record_execution(
         &mut self,
@@ -3951,6 +4065,7 @@ impl Frontier {
         evaluators: &EdgeEvaluatorRegistry,
         thread: &ThreadId,
         force_notfiring: bool,
+        trace: &Arc<TraceDispatcher>,
     ) -> Result<(), EngineError> {
         self.last_executed.insert(node.clone(), superstep);
         for (idx, edge) in graph.edges().iter().enumerate() {
@@ -3961,9 +4076,17 @@ impl Frontier {
                 false
             } else {
                 match &edge.condition {
-                    None => true,
+                    None => {
+                        trace.emit(TraceEvent::EdgeEvaluated {
+                            from: edge.from.clone(),
+                            to: edge.to.clone(),
+                            condition_kind: "always".to_string(),
+                            fired: true,
+                        });
+                        true
+                    }
                     Some(condition) => {
-                        evaluate_edge_condition(
+                        let fired = evaluate_edge_condition(
                             condition,
                             battlefield,
                             graph,
@@ -3973,7 +4096,14 @@ impl Frontier {
                             thread,
                             superstep,
                         )
-                        .await?
+                        .await?;
+                        trace.emit(TraceEvent::EdgeEvaluated {
+                            from: edge.from.clone(),
+                            to: edge.to.clone(),
+                            condition_kind: edge_condition_kind(condition).to_string(),
+                            fired,
+                        });
+                        fired
                     }
                 }
             };
@@ -4315,6 +4445,19 @@ fn starved_at_completion(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
         }
     }
     starved
+}
+
+/// The `EdgeCondition` discriminant name D-04's `TraceEvent::EdgeEvaluated
+/// .condition_kind` reports. A `match` with no wildcard arm -- a future
+/// `EdgeCondition` variant is a compile error here, never a silently
+/// mislabeled `"custom"`.
+fn edge_condition_kind(condition: &EdgeCondition) -> &'static str {
+    match condition {
+        EdgeCondition::Always => "always",
+        EdgeCondition::Contains(_) => "contains",
+        EdgeCondition::Regex(_) => "regex",
+        EdgeCondition::Custom(_) => "custom",
+    }
 }
 
 /// Evaluate an [`EdgeCondition`] for the edge `source -> target`, whose
@@ -14192,5 +14335,453 @@ mod tests {
             "no failed attempts on a hit"
         );
         assert!(records[0].cache_hit);
+    }
+
+    // --- Plan 28-03: `EdgeEvaluated`, `ParleyRaised` and rate-limited
+    //     `NodeProgress::Heartbeat` (D-04) -----------------------------------
+
+    /// Like `run_default`, but over a caller-supplied `Arc<TraceDispatcher>`
+    /// instead of `no_trace()`'s always-silent one -- every test below
+    /// needs to observe the trace stream a real run produces.
+    async fn run_with_trace(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        trace: &Arc<TraceDispatcher>,
+    ) -> RunOutcome {
+        run(
+            store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::default(),
+            graph,
+            thread,
+            Battlefield::initialize(
+                graph.schema().clone(),
+                &paladin_core::platform::container::battlefield::StateDelta::new(),
+            )
+            .unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            1,
+            &no_paladin_port(),
+            trace,
+            &no_interceptors(),
+            &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// A "check" node with two `Contains`-conditioned outgoing edges --
+    /// `check -> retry` (a substring never present in what `check` writes)
+    /// and `check -> done` (always present) -- so exactly one fires and one
+    /// does not, every run, deterministically.
+    fn branch_graph() -> (WarGraph, NodeId, NodeId, NodeId) {
+        let s = schema(vec![FieldSpec::new(
+            field("log"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let check = NodeId::new("check");
+        let retry = NodeId::new("retry");
+        let done = NodeId::new("done");
+        graph.add_node(
+            check.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("done"),
+            )),
+        );
+        graph.add_node(
+            retry.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("retry"),
+            )),
+        );
+        graph.add_node(
+            done.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("done-branch"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: check.clone(),
+            to: retry.clone(),
+            condition: Some(EdgeCondition::Contains("retry".to_string())),
+        });
+        graph.add_edge(EdgeSpec {
+            from: check.clone(),
+            to: done.clone(),
+            condition: Some(EdgeCondition::Contains("done".to_string())),
+        });
+        graph.add_entry(check.clone());
+        (graph, check, retry, done)
+    }
+
+    /// Task 1 (tracer): a two-way branch whose gate node's edges are both
+    /// `Contains`-conditioned produces exactly one `EdgeEvaluated` per
+    /// edge -- one `fired: true`, one `fired: false` -- both carrying
+    /// `condition_kind: "contains"` (D-04).
+    #[tokio::test]
+    async fn branch_emits_one_edge_evaluated_per_edge() {
+        let (graph, check, retry, done) = branch_graph();
+        let store = RecordingWaypointStore::new();
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("branch-edge-evaluated").unwrap();
+        let trace = Arc::new(TraceDispatcher::new(
+            thread.clone(),
+            None,
+            Some(sink.clone()),
+        ));
+        let outcome = run_with_trace(&graph, thread, &store, &trace).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        // Give the background trace consumer a chance to drain.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut edge_events: Vec<(NodeId, NodeId, String, bool)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::EdgeEvaluated {
+                    from,
+                    to,
+                    condition_kind,
+                    fired,
+                } if from == &check => {
+                    Some((from.clone(), to.clone(), condition_kind.clone(), *fired))
+                }
+                _ => None,
+            })
+            .collect();
+        edge_events.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(
+            edge_events.len(),
+            2,
+            "exactly one EdgeEvaluated per outgoing edge: {edge_events:?}"
+        );
+        assert!(
+            edge_events.iter().all(|(_, _, kind, _)| kind == "contains"),
+            "both edges are Contains-conditioned: {edge_events:?}"
+        );
+        let retry_event = edge_events
+            .iter()
+            .find(|(_, to, _, _)| to == &retry)
+            .expect("an EdgeEvaluated for check -> retry must exist");
+        assert!(!retry_event.3, "the retry edge must not fire");
+        let done_event = edge_events
+            .iter()
+            .find(|(_, to, _, _)| to == &done)
+            .expect("an EdgeEvaluated for check -> done must exist");
+        assert!(done_event.3, "the done edge must fire");
+    }
+
+    /// Task 1 (tracer): an unconditional edge (`condition: None`) produces
+    /// `condition_kind: "always"` with `fired: true` (D-04).
+    #[tokio::test]
+    async fn always_edge_reports_always() {
+        let s = schema(vec![FieldSpec::new(
+            field("log"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let a = NodeId::new("a");
+        let b = NodeId::new("b");
+        graph.add_node(
+            a.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("a"),
+            )),
+        );
+        graph.add_node(
+            b.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("b"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: b.clone(),
+            condition: None,
+        });
+        graph.add_entry(a.clone());
+
+        let store = RecordingWaypointStore::new();
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("always-edge").unwrap();
+        let trace = Arc::new(TraceDispatcher::new(
+            thread.clone(),
+            None,
+            Some(sink.clone()),
+        ));
+        let outcome = run_with_trace(&graph, thread, &store, &trace).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let always_events: Vec<(String, bool)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::EdgeEvaluated {
+                    from,
+                    to,
+                    condition_kind,
+                    fired,
+                } if from == &a && to == &b => Some((condition_kind.clone(), *fired)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(always_events, vec![("always".to_string(), true)]);
+    }
+
+    /// Task 2: two peer nodes both raise a `NextStep::Parley` in the SAME
+    /// superstep -- exactly two `ParleyRaised` records reach the trace,
+    /// each carrying the matching `parley_id`/`node_id`/`kind` (D-04).
+    /// Unlike a `WarEngine::start`/`resume*` call, this test drives `run`
+    /// directly (`superstep.rs`'s own low-level entry point, which never
+    /// itself emits `RunStarted`/`RunFinished` -- that bracket is
+    /// `engine::mod`'s job) -- so only the emission itself is proven here;
+    /// the "before `RunFinished`" half of the plan's truth is `engine::mod`
+    /// territory.
+    #[tokio::test]
+    async fn awaiting_input_emits_one_parley_raised_per_request() {
+        let field_a = field("a_field");
+        let field_b = field("b_field");
+        let s = schema(vec![
+            FieldSpec::new(field_a.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(field_b.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let a = NodeId::new("asker-a");
+        let b = NodeId::new("asker-b");
+        let parley_id_a = ParleyId::new();
+        let parley_id_b = ParleyId::new();
+        let a_node = {
+            let field_a = field_a.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(field_a.clone(), serde_json::json!("a"));
+                Directive {
+                    delta,
+                    next: NextStep::Parley(ParleyRequest {
+                        parley_id: parley_id_a,
+                        node_id: NodeId::new(""),
+                        kind: ParleyKind::Approval,
+                        prompt: "need a".to_string(),
+                        payload: serde_json::json!({}),
+                        choices: None,
+                        expires_at: None,
+                        created_at: Utc::now(),
+                        on_expire: OnExpire::FailRun,
+                    }),
+                }
+            })
+        };
+        let b_node = {
+            let field_b = field_b.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(field_b.clone(), serde_json::json!("b"));
+                Directive {
+                    delta,
+                    next: NextStep::Parley(ParleyRequest {
+                        parley_id: parley_id_b,
+                        node_id: NodeId::new(""),
+                        kind: ParleyKind::Choice,
+                        prompt: "need b".to_string(),
+                        payload: serde_json::json!({}),
+                        choices: Some(vec!["yes".to_string(), "no".to_string()]),
+                        expires_at: None,
+                        created_at: Utc::now(),
+                        on_expire: OnExpire::FailRun,
+                    }),
+                }
+            })
+        };
+        graph.add_node(a.clone(), NodeSpec::Function(a_node));
+        graph.add_node(b.clone(), NodeSpec::Function(b_node));
+        graph.add_entry(a.clone());
+        graph.add_entry(b.clone());
+
+        let store = RecordingWaypointStore::new();
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("two-parley-raised").unwrap();
+        let trace = Arc::new(TraceDispatcher::new(
+            thread.clone(),
+            None,
+            Some(sink.clone()),
+        ));
+        let outcome = run_with_trace(&graph, thread, &store, &trace).await;
+        assert!(matches!(outcome, RunOutcome::AwaitingInput { .. }));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut raised: Vec<(ParleyId, NodeId, ParleyKind)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::ParleyRaised {
+                    parley_id,
+                    node_id,
+                    parley_kind,
+                } => Some((*parley_id, node_id.clone(), parley_kind.clone())),
+                _ => None,
+            })
+            .collect();
+        raised.sort_by(|x, y| x.1.cmp(&y.1));
+        assert_eq!(
+            raised.len(),
+            2,
+            "exactly one ParleyRaised per raised request: {raised:?}"
+        );
+        assert_eq!(raised[0], (parley_id_a, a.clone(), ParleyKind::Approval));
+        assert_eq!(raised[1], (parley_id_b, b.clone(), ParleyKind::Choice));
+    }
+
+    /// Task 2: a node heartbeating every second for seven seconds (well
+    /// within a 30s idle timeout) produces exactly two rate-limited
+    /// `NodeProgress::Heartbeat` records for it under the 5s default
+    /// interval -- one at the first beat, one once the interval has
+    /// elapsed since -- never one per raw beat. Seven beats, not six: the
+    /// boundary-crossing 6th beat must NOT be the attempt's very last
+    /// action, or `race_attempt`'s `biased` `select!` can resolve via the
+    /// attempt branch (which has nothing left to await) before
+    /// `idle_or_pending` is ever polled again to observe that final
+    /// `changed()` notification -- the 7th beat gives the attempt one more
+    /// pending `sleep` after the boundary crossing, so the compound future
+    /// is still Pending on that poll and `idle_or_pending` reliably runs.
+    #[tokio::test(start_paused = true)]
+    async fn heartbeat_is_rate_limited_per_node() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(Duration::from_secs(7), serde_json::json!("done"))],
+            Some(Duration::from_secs(1)),
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node);
+        graph.set_aegis(
+            node_id.clone(),
+            timeout_aegis(None, Some(Duration::from_secs(30))),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("heartbeat-rate-limit").unwrap();
+        let trace = Arc::new(TraceDispatcher::new(
+            thread.clone(),
+            None,
+            Some(sink.clone()),
+        ));
+        let outcome = run_with_trace(&graph, thread, &store, &trace).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let heartbeats: Vec<NodeId> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeProgress {
+                    node_id,
+                    progress: NodeProgressKind::Heartbeat,
+                } => Some(node_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            heartbeats,
+            vec![node_id.clone(), node_id.clone()],
+            "exactly two rate-limited emissions: the first beat, and the \
+             first beat past the interval boundary"
+        );
+    }
+
+    /// Task 2: two nodes heartbeating concurrently, each well within one
+    /// interval of its OWN beats, each produce their own single rate-
+    /// limited record -- the limiter is keyed by node, not global.
+    #[tokio::test(start_paused = true)]
+    async fn heartbeat_rate_limit_is_per_node() {
+        let out_a = field("out_a");
+        let out_b = field("out_b");
+        let s = schema(vec![
+            FieldSpec::new(out_a.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out_b.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let id_a = NodeId::new("beater-a");
+        let id_b = NodeId::new("beater-b");
+        let node_a = TimedFunctionNode::new(
+            out_a.clone(),
+            vec![(Duration::from_millis(500), serde_json::json!("a"))],
+            Some(Duration::from_millis(100)),
+        );
+        let node_b = TimedFunctionNode::new(
+            out_b.clone(),
+            vec![(Duration::from_millis(500), serde_json::json!("b"))],
+            Some(Duration::from_millis(100)),
+        );
+        graph.add_node(id_a.clone(), NodeSpec::Function(node_a));
+        graph.add_node(id_b.clone(), NodeSpec::Function(node_b));
+        graph.set_aegis(
+            id_a.clone(),
+            timeout_aegis(None, Some(Duration::from_secs(30))),
+        );
+        graph.set_aegis(
+            id_b.clone(),
+            timeout_aegis(None, Some(Duration::from_secs(30))),
+        );
+        graph.add_entry(id_a.clone());
+        graph.add_entry(id_b.clone());
+
+        let store = RecordingWaypointStore::new();
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("heartbeat-per-node").unwrap();
+        let trace = Arc::new(TraceDispatcher::new(
+            thread.clone(),
+            None,
+            Some(sink.clone()),
+        ));
+        let outcome = run_with_trace(&graph, thread, &store, &trace).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut heartbeats: Vec<NodeId> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeProgress {
+                    node_id,
+                    progress: NodeProgressKind::Heartbeat,
+                } => Some(node_id.clone()),
+                _ => None,
+            })
+            .collect();
+        heartbeats.sort();
+        assert_eq!(
+            heartbeats,
+            vec![id_a.clone(), id_b.clone()],
+            "one rate-limited emission per node, keyed independently: {heartbeats:?}"
+        );
     }
 }

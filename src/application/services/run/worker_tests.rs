@@ -52,7 +52,7 @@ use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_storage::webhook::in_memory::InMemoryWebhookDeliveryRepository;
 
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
-use super::worker::{RunWorkerOptions, RunWorkerPool};
+use super::worker::{LeaseHeartbeat, RunWorkerOptions, RunWorkerPool};
 
 /// A [`PaladinPort`] that must never be called -- every graph in this
 /// module is Function/Gate-only, mirroring the `UnusedPaladinPort`
@@ -472,72 +472,114 @@ async fn resume_dispatch_uses_pending_responses() {
 
 // --- heartbeat_extends_at_lease_over_four --------------------------------
 
+/// A [`RunQueuePort`] wrapping [`InMemoryRunQueue`] that records every
+/// `extend_lease` call's timestamp -- shared by
+/// `heartbeat_extends_at_lease_over_four` (a positive lease keeps
+/// extending) and `lease_heartbeat_with_a_zero_lease_never_extends` (a
+/// zero lease extends zero times, WR-04).
+struct RecordingQueue {
+    inner: InMemoryRunQueue,
+    extend_calls: std::sync::Mutex<Vec<tokio::time::Instant>>,
+}
+
+impl RecordingQueue {
+    fn new() -> Self {
+        Self {
+            inner: InMemoryRunQueue::new(),
+            extend_calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl RunQueuePort for RecordingQueue {
+    async fn enqueue(
+        &self,
+        run: QueuedRun,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.inner.enqueue(run).await
+    }
+
+    async fn dequeue(
+        &self,
+        lease: Duration,
+    ) -> Result<
+        Option<paladin_ports::output::run_queue_port::LeasedRun>,
+        paladin_ports::output::run_queue_port::QueueError,
+    > {
+        self.inner.dequeue(lease).await
+    }
+
+    async fn extend_lease(
+        &self,
+        token: &paladin_ports::output::run_queue_port::LeaseToken,
+        lease: Duration,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.extend_calls
+            .lock()
+            .unwrap()
+            .push(tokio::time::Instant::now());
+        self.inner.extend_lease(token, lease).await
+    }
+
+    async fn ack(
+        &self,
+        token: &paladin_ports::output::run_queue_port::LeaseToken,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.inner.ack(token).await
+    }
+
+    async fn nack(
+        &self,
+        token: &paladin_ports::output::run_queue_port::LeaseToken,
+        requeue_delay: Duration,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.inner.nack(token, requeue_delay).await
+    }
+
+    async fn depth(&self) -> Result<u64, paladin_ports::output::run_queue_port::QueueError> {
+        self.inner.depth().await
+    }
+}
+
+/// (WR-04) Constructing a [`LeaseHeartbeat`] with a zero-duration lease
+/// must start no background task: a zero interval would make
+/// `tokio::time::sleep` resolve immediately, turning the extend-lease loop
+/// into a CPU-bound spin. This is the tripwire for that guard -- letting
+/// real time pass and asserting the recorded `extend_lease` count is
+/// EXACTLY zero (not merely bounded), so any future regression to a
+/// spinning heartbeat fails immediately.
+#[tokio::test(flavor = "multi_thread")]
+async fn lease_heartbeat_with_a_zero_lease_never_extends() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let recording = Arc::new(RecordingQueue::new());
+        let queue: Arc<dyn RunQueuePort> = recording.clone();
+        let token = paladin_ports::output::run_queue_port::LeaseToken::new("zero-lease-token");
+
+        let heartbeat = LeaseHeartbeat::spawn(queue, token, Duration::ZERO);
+
+        // Let enough real time pass that a spinning implementation would
+        // have made many `extend_lease` calls by now.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(heartbeat);
+
+        let calls = recording.extend_calls.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            0,
+            "a zero-duration lease must start no heartbeat task at all, got {} extend_lease calls",
+            calls.len()
+        );
+    })
+    .await
+    .expect("lease_heartbeat_with_a_zero_lease_never_extends must finish within 5s");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn heartbeat_extends_at_lease_over_four() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        struct RecordingQueue {
-            inner: InMemoryRunQueue,
-            extend_calls: std::sync::Mutex<Vec<tokio::time::Instant>>,
-        }
-
-        #[async_trait]
-        impl RunQueuePort for RecordingQueue {
-            async fn enqueue(
-                &self,
-                run: QueuedRun,
-            ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
-                self.inner.enqueue(run).await
-            }
-
-            async fn dequeue(
-                &self,
-                lease: Duration,
-            ) -> Result<
-                Option<paladin_ports::output::run_queue_port::LeasedRun>,
-                paladin_ports::output::run_queue_port::QueueError,
-            > {
-                self.inner.dequeue(lease).await
-            }
-
-            async fn extend_lease(
-                &self,
-                token: &paladin_ports::output::run_queue_port::LeaseToken,
-                lease: Duration,
-            ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
-                self.extend_calls
-                    .lock()
-                    .unwrap()
-                    .push(tokio::time::Instant::now());
-                self.inner.extend_lease(token, lease).await
-            }
-
-            async fn ack(
-                &self,
-                token: &paladin_ports::output::run_queue_port::LeaseToken,
-            ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
-                self.inner.ack(token).await
-            }
-
-            async fn nack(
-                &self,
-                token: &paladin_ports::output::run_queue_port::LeaseToken,
-                requeue_delay: Duration,
-            ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
-                self.inner.nack(token, requeue_delay).await
-            }
-
-            async fn depth(
-                &self,
-            ) -> Result<u64, paladin_ports::output::run_queue_port::QueueError> {
-                self.inner.depth().await
-            }
-        }
-
         let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
-        let recording = Arc::new(RecordingQueue {
-            inner: InMemoryRunQueue::new(),
-            extend_calls: std::sync::Mutex::new(Vec::new()),
-        });
+        let recording = Arc::new(RecordingQueue::new());
         let queue: Arc<dyn RunQueuePort> = recording.clone();
         let store = Arc::new(InMemoryWaypointStore::new());
         let (graph, _counters) = build_chain_graph(1, Duration::from_secs(1));

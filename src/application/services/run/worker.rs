@@ -119,15 +119,34 @@ pub struct RunWorkerOptions {
 /// Construct immediately before an engine call and drop immediately after
 /// it returns: `Drop` aborts the background task, so a dropped
 /// `LeaseHeartbeat` never extends a lease the run no longer needs.
+///
+/// (WR-04) A non-positive `lease` starts no background task at all. A zero
+/// interval (`lease / 4` for a zero lease) would make `tokio::time::sleep`
+/// resolve immediately, turning the extend-lease loop into a CPU-bound
+/// spin rather than a periodic heartbeat. `RunWorkerConfig::validate()`
+/// enforces a four-second floor for this crate's one production call
+/// site, but `spawn` is public API and must not depend on a caller having
+/// gone through the config layer to avoid this failure mode.
 pub struct LeaseHeartbeat {
-    handle: JoinHandle<()>,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl LeaseHeartbeat {
     /// Spawn a background task extending `token`'s lease by `lease` every
     /// `lease / 4`, until this handle is dropped.
+    ///
+    /// A non-positive `lease` starts no task at all (WR-04): a warning is
+    /// logged naming the misuse, and dropping the returned handle is a
+    /// no-op.
     pub fn spawn(queue: Arc<dyn RunQueuePort>, token: LeaseToken, lease: Duration) -> Self {
-        let interval = if lease.is_zero() { lease } else { lease / 4 };
+        if lease.is_zero() {
+            log::warn!(
+                "LeaseHeartbeat::spawn called with a non-positive lease ({lease:?}); \
+                 no heartbeat task will run for this lease token"
+            );
+            return Self { handle: None };
+        }
+        let interval = lease / 4;
         let handle = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(interval).await;
@@ -138,13 +157,17 @@ impl LeaseHeartbeat {
                 }
             }
         });
-        Self { handle }
+        Self {
+            handle: Some(handle),
+        }
     }
 }
 
 impl Drop for LeaseHeartbeat {
     fn drop(&mut self) {
-        self.handle.abort();
+        if let Some(handle) = &self.handle {
+            handle.abort();
+        }
     }
 }
 

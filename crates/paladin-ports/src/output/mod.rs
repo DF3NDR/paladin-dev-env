@@ -21,6 +21,12 @@ pub mod paladin_registry;
 pub mod queue_port;
 /// SQL database repository port traits.
 pub mod repository_port;
+/// Run queue port (D-06): lease-based work queue for dispatching runs to
+/// workers.
+pub mod run_queue_port;
+/// Run repository port (D-03): the persisted-`Run` contract every backend
+/// adapter (InMemory/SQLite/Postgres) implements.
+pub mod run_repository_port;
 /// Sanctum (vector store / RAG) port.
 pub mod sanctum_port;
 /// Scheduler port.

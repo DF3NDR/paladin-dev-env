@@ -13,3 +13,7 @@ pub mod nlp_port;
 /// `paladin-battalion` (ADR-0031).
 pub mod parley_port;
 pub mod rpc_port;
+/// Run submission port (D-12) — core-typed only, so `paladin-web` can
+/// depend on it without a default-build edge to `paladin-battalion`
+/// (ADR-0031).
+pub mod run_submission_port;

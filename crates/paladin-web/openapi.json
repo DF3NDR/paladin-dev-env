@@ -647,6 +647,177 @@
         ]
       }
     },
+    "/v1/runs": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`POST /runs` -- submit a run for execution.",
+        "description": "Returns:\n- `202 Accepted` with [`SubmitRunResponse`] on success;\n- `400 Bad Request` for an invalid `thread_id`;\n- `404 Not Found` for an unknown assistant or version;\n- `409 Conflict` (`code = \"thread_busy\"`) if the target thread already\n  has an active run;\n- `501 Not Implemented` if no run submission backend is configured.",
+        "operationId": "submit_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Run accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown assistant or version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Thread busy -- the remedy is POST /threads/{id}/resume",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run submission backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`GET /runs/{run_id}` -- the run's current status.",
+        "description": "Reads [`RunRepositoryPort`] directly (no submission port, no engine and\nno queue type named here -- ADR-0031, D-12).\n\nReturns:\n- `200 OK` with [`RunResponse`] on success;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` if no run exists with that id;\n- `501 Not Implemented` if no run store is configured.",
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid run id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run store backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/threads/{id}/history": {
       "get": {
         "tags": [
@@ -1336,6 +1507,126 @@
               "$ref": "#/components/schemas/ParleyResponseInput"
             },
             "description": "Every response to submit in this call."
+          }
+        }
+      },
+      "RunResponse": {
+        "type": "object",
+        "description": "Response body for `GET /runs/{run_id}`.",
+        "required": [
+          "run_id",
+          "thread_id",
+          "assistant_id",
+          "version",
+          "status",
+          "submitted_at"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The resolved assistant id."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The engine's error, if this run is `Failed`."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this run reached a terminal status, if it has."
+          },
+          "run_id": {
+            "type": "string",
+            "description": "The run's identity."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this run entered `Running`, if it has."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable, lowercase status label (the same strings `RunStatus::as_str`\nreturns)."
+          },
+          "submitted_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this run was submitted."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread this run executes against."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The resolved, frozen assistant version.",
+            "minimum": 0
+          }
+        }
+      },
+      "SubmitRunRequest": {
+        "type": "object",
+        "description": "Request body for `POST /runs`.\n\n`input` defaults to an empty object: submit-time validation checks only\nthe assistant reference and this body's shape, never `input`'s own\nschema -- a schema violation surfaces later as a `Failed` run.",
+        "required": [
+          "assistant_id"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The assistant to run."
+          },
+          "input": {
+            "type": "object",
+            "description": "The caller-supplied input."
+          },
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An existing thread to run against, or omitted to start a fresh one."
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A specific version, or omitted to resolve `latest` at submit time.",
+            "minimum": 0
+          }
+        }
+      },
+      "SubmitRunResponse": {
+        "type": "object",
+        "description": "Response body for a successful `POST /runs` (`202 Accepted`).",
+        "required": [
+          "run_id",
+          "thread_id",
+          "state_url"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "description": "The newly created run's identity."
+          },
+          "state_url": {
+            "type": "string",
+            "description": "The URL a client polls (`GET /runs/{run_id}`) to observe status."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread the run executes against."
           }
         }
       },

@@ -58,3 +58,14 @@ pub mod redis;
 /// `tokio-cron-scheduler` implementation of `SchedulerPort`.
 #[cfg(feature = "scheduler")]
 pub mod scheduler;
+
+/// `RunRepositoryPort` storage adapters (D-03). The in-memory backend is
+/// always available (no feature gate, mirroring `waypoint`'s D-01
+/// precedent); durable backends are added by later plans behind the
+/// existing `sqlite`/`postgres` features.
+pub mod run;
+
+/// `RunQueuePort` storage adapters (D-06). The in-memory backend is always
+/// available (no feature gate); the Redis ZSET+Lua lease backend is added
+/// by a later plan behind the existing `redis-queue` feature.
+pub mod run_queue;

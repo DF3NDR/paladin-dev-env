@@ -10,5 +10,7 @@ pub mod orchestration;
 pub mod paladin;
 pub mod parley;
 pub mod queue_orchestrator;
+/// Run submission, resolution and worker services (Platform API, PLAT-01/02).
+pub mod run;
 pub mod sanctum;
 pub mod waypoint_retention;

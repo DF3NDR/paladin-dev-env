@@ -1,5 +1,6 @@
 pub mod aegis;
 pub mod arsenal;
+pub mod assistant;
 pub mod autonomous_config;
 pub mod battalion;
 pub mod battlefield;

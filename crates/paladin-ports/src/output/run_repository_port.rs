@@ -125,6 +125,14 @@ pub enum RunRepositoryError {
         /// The schema version found on the stored data.
         found: String,
     },
+    /// [`RunRepositoryPort::insert_with_latest`] could not resolve
+    /// `latest` because `assistant_id` does not exist, or is soft-deleted
+    /// (D-30).
+    #[error("unknown or deleted assistant: {assistant_id}")]
+    UnknownAssistant {
+        /// The assistant reference that could not be resolved.
+        assistant_id: String,
+    },
 }
 
 /// Port trait for persisting and reading back [`Run`]s (D-03).
@@ -205,6 +213,38 @@ pub trait RunRepositoryPort: Send + Sync {
     /// Clear `run_id`'s parked `pending_responses` (after a worker consumes
     /// them).
     async fn clear_pending_responses(&self, run_id: &RunId) -> Result<(), RunRepositoryError>;
+
+    /// Insert `run`, resolving and freezing its `assistant.version` onto the
+    /// row from the referenced assistant's CURRENT `latest` inside the same
+    /// insert (D-30) — `run.assistant.version` as passed in is ignored for
+    /// this resolution. Returns the resolved version.
+    ///
+    /// A concrete adapter with an assistant repository wired in (all of
+    /// `InMemoryRunRepository::with_assistants`, `SqliteRunRepository`,
+    /// `PostgresRunRepository`) does this atomically: a concurrent
+    /// `AssistantRepositoryPort::append_version` call is observed either
+    /// strictly before or strictly after this call, never torn.
+    ///
+    /// # Default implementation
+    ///
+    /// Inserts `run` as-is, using its already-set `assistant.version`
+    /// verbatim rather than resolving `latest` — this is the correct
+    /// fallback for a test double or a repository with no assistant concept
+    /// wired in, and it means adding this method does not break any
+    /// pre-existing implementor of this trait (X-10.4). Override it to get
+    /// the real freeze-at-submit resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunRepositoryError::UnknownAssistant`] when
+    /// `run.assistant.assistant_id` does not exist or is soft-deleted (real
+    /// overrides only — the default never returns this), and
+    /// [`RunRepositoryError::ThreadBusy`] under the same condition
+    /// [`insert`](Self::insert) does.
+    async fn insert_with_latest(&self, run: &Run) -> Result<u32, RunRepositoryError> {
+        self.insert(run).await?;
+        Ok(run.assistant.version)
+    }
 }
 
 /// A no-op lease duration placeholder some call sites need — re-exported so
@@ -334,5 +374,26 @@ mod tests {
             version: 1,
         };
         assert_eq!(reference.version, 1);
+    }
+
+    #[tokio::test]
+    async fn default_impl_of_the_latest_freezing_insert_method_inserts_verbatim() {
+        // MockRepository does not override `insert_with_latest`, so this
+        // proves the DEFAULT method (X-10.4: adding a required method here
+        // would have broken every pre-existing implementor) inserts the run
+        // as-is and returns its already-set `assistant.version`, never
+        // resolving a `latest` it has no concept of.
+        let repo = MockRepository;
+        let run = Run::new(
+            RunId::new_v7(),
+            ThreadId::new("t-insert-with-latest-default").unwrap(),
+            AssistantRef {
+                assistant_id: "a1".to_string(),
+                version: 7,
+            },
+            serde_json::json!({}),
+        );
+        let resolved = repo.insert_with_latest(&run).await.unwrap();
+        assert_eq!(resolved, 7);
     }
 }

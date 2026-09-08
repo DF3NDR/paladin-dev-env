@@ -69,6 +69,22 @@ const LIST_SELECT_PREFIX: &str = "SELECT run_id, thread_id, assistant_id, assist
      webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version \
      FROM runs WHERE 1 = 1";
 
+/// D-30: resolves and freezes `assistant_version` onto the new row from the
+/// referenced assistant's CURRENT `latest` inside this ONE statement --
+/// mirrors `sqlite.rs`'s `INSERT_RUN_WITH_LATEST` exactly (see its doc
+/// comment for the full rationale), substituting `$N` placeholders and the
+/// `::jsonb` casts `INSERT_RUN` already uses.
+const INSERT_RUN_WITH_LATEST: &str = "INSERT INTO runs \
+     (run_id, thread_id, assistant_id, assistant_version, status, input, submitted_at, \
+      started_at, finished_at, attempt, cancel_requested, error, webhook, pending_responses, \
+      fork_from, output, final_waypoint_id, schema_version) \
+     SELECT $1, $2, $3, a.latest, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12::jsonb, \
+            $13::jsonb, $14::jsonb, $15::jsonb, $16, $17 \
+     FROM assistants a WHERE a.assistant_id = $18 AND a.deleted_at IS NULL";
+
+const SELECT_RESOLVED_ASSISTANT_VERSION: &str =
+    "SELECT assistant_version FROM runs WHERE run_id = $1";
+
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
 
 /// PostgreSQL `RunRepositoryPort` implementation, behind the `postgres`
@@ -621,6 +637,81 @@ impl RunRepositoryPort for PostgresRunRepository {
         }
         Ok(())
     }
+
+    async fn insert_with_latest(&self, run: &Run) -> Result<u32, RunRepositoryError> {
+        let input =
+            serde_json::to_string(&run.input).map_err(|e| RunRepositoryError::Serialization {
+                message: e.to_string(),
+            })?;
+        let webhook = run
+            .webhook
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| RunRepositoryError::Serialization {
+                message: e.to_string(),
+            })?;
+        let pending_responses = serde_json::to_string(&run.pending_responses).map_err(|e| {
+            RunRepositoryError::Serialization {
+                message: e.to_string(),
+            }
+        })?;
+        let fork_from = run
+            .fork_from
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| RunRepositoryError::Serialization {
+                message: e.to_string(),
+            })?;
+        let output = run
+            .output
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| RunRepositoryError::Serialization {
+                message: e.to_string(),
+            })?;
+
+        let result = sqlx::query(INSERT_RUN_WITH_LATEST)
+            .bind(run.run_id.as_str())
+            .bind(run.thread_id.as_str())
+            .bind(&run.assistant.assistant_id)
+            .bind(run.status.as_str())
+            .bind(input)
+            .bind(run.submitted_at)
+            .bind(run.started_at)
+            .bind(run.finished_at)
+            .bind(run.attempt as i32)
+            .bind(run.cancel_requested)
+            .bind(&run.error)
+            .bind(webhook)
+            .bind(pending_responses)
+            .bind(fork_from)
+            .bind(output)
+            .bind(&run.final_waypoint_id)
+            .bind(&run.schema_version)
+            .bind(&run.assistant.assistant_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| self.map_insert_error(e, &run.thread_id))?;
+
+        if result.rows_affected() == 0 {
+            return Err(RunRepositoryError::UnknownAssistant {
+                assistant_id: run.assistant.assistant_id.clone(),
+            });
+        }
+
+        let row = sqlx::query(SELECT_RESOLVED_ASSISTANT_VERSION)
+            .bind(run.run_id.as_str())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+        let version: i32 = row
+            .try_get("assistant_version")
+            .map_err(|e| RunRepositoryError::Backend { source: e.into() })?;
+        Ok(version as u32)
+    }
 }
 
 #[cfg(test)]
@@ -840,6 +931,87 @@ mod tests {
         };
         let store: Arc<dyn RunRepositoryPort> = Arc::new(store);
         contract_tests::ten_concurrent_inserts_one_thread_exactly_one_accepted(store).await;
+    }
+
+    // ── insert_with_latest / freeze-at-submit (D-30), plan 27-09 ─────────
+    // These four clauses need a `PostgresRunRepository` AND a
+    // `PostgresAssistantRepository` reading/writing the SAME database --
+    // both connect through `postgres_test_url()`, and `sqlx::migrate!`
+    // embeds every file under `migrations/postgres/` (so either
+    // constructor's own migration run already created both `runs` and
+    // `assistants` on this shared database).
+
+    /// Returns a connected, migrated assistant store, or `None` (after
+    /// printing a named reason) if `postgres-test` is not reachable --
+    /// mirrors `store_or_skip` for the sibling `AssistantRepositoryPort`.
+    async fn assistant_store_or_skip()
+    -> Option<crate::assistant::postgres::PostgresAssistantRepository> {
+        let url = postgres_test_url();
+        if !postgres_reachable(&url) {
+            println!(
+                "SKIP: postgres-test not reachable at {url} -- bring it up with \
+                 `docker compose -f docker/docker-compose.test.yml up -d postgres-test`"
+            );
+            return None;
+        }
+
+        match crate::assistant::postgres::PostgresAssistantRepository::new(&url).await {
+            Ok(store) => Some(store),
+            Err(e) => {
+                println!("SKIP: postgres-test connection failed at {url} ({e})");
+                None
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_with_latest_resolves_current_latest_and_freezes_it() {
+        let (Some(run_store), Some(assistant_store)) =
+            (store_or_skip().await, assistant_store_or_skip().await)
+        else {
+            return;
+        };
+        contract_tests::insert_with_latest_resolves_current_latest_and_freezes_it(
+            &run_store,
+            &assistant_store,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn insert_with_latest_unknown_assistant_fails() {
+        let Some(run_store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::insert_with_latest_unknown_assistant_fails(&run_store).await;
+    }
+
+    #[tokio::test]
+    async fn insert_with_latest_soft_deleted_assistant_fails() {
+        let (Some(run_store), Some(assistant_store)) =
+            (store_or_skip().await, assistant_store_or_skip().await)
+        else {
+            return;
+        };
+        contract_tests::insert_with_latest_soft_deleted_assistant_fails(
+            &run_store,
+            &assistant_store,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn assistant_version_freeze_at_submit() {
+        let (Some(run_store), Some(assistant_store)) =
+            (store_or_skip().await, assistant_store_or_skip().await)
+        else {
+            return;
+        };
+        let run_store: Arc<dyn RunRepositoryPort> = Arc::new(run_store);
+        let assistant_store: Arc<
+            dyn paladin_ports::output::assistant_repository_port::AssistantRepositoryPort,
+        > = Arc::new(assistant_store);
+        contract_tests::assistant_version_freeze_at_submit(run_store, assistant_store).await;
     }
 
     // No extra, non-contract `#[tokio::test]`s in this module by design: CI

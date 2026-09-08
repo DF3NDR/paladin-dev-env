@@ -1,5 +1,9 @@
 // Output port modules
 pub mod arsenal_port;
+/// Assistant repository port (D-28, D-29): the persisted, append-only
+/// immutable [`crate::output::assistant_repository_port::AssistantRepositoryPort`]
+/// contract every backend adapter (InMemory/SQLite/Postgres) implements.
+pub mod assistant_repository_port;
 /// Authentication port for issuing and verifying bearer tokens.
 pub mod auth_port;
 pub mod battalion_port;

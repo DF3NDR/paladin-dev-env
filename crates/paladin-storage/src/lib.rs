@@ -59,6 +59,12 @@ pub mod redis;
 #[cfg(feature = "scheduler")]
 pub mod scheduler;
 
+/// `AssistantRepositoryPort` storage adapters (D-28, D-29). The in-memory
+/// backend is always available (no feature gate, mirroring `waypoint`'s
+/// D-01 precedent); durable backends are added by plan 27-09 Task 3 behind
+/// the existing `sqlite`/`postgres` features.
+pub mod assistant;
+
 /// `RunRepositoryPort` storage adapters (D-03). The in-memory backend is
 /// always available (no feature gate, mirroring `waypoint`'s D-01
 /// precedent); durable backends are added by later plans behind the

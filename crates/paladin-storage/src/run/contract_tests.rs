@@ -15,14 +15,18 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
+use paladin_core::platform::container::assistant::AssistantId;
 use paladin_core::platform::container::parley::{ParleyId, ParleyKind, ParleyResponse};
 use paladin_core::platform::container::run::{
     AssistantRef, ForkSpec, Run, RunEventKind, RunId, RunStatus, WebhookSpec,
 };
 use paladin_core::platform::container::waypoint::ThreadId;
+use paladin_ports::output::assistant_repository_port::AssistantRepositoryPort;
 use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunQuery, RunRepositoryError, RunRepositoryPort,
 };
+
+use crate::assistant::contract_tests::sample_new_version as sample_assistant_new_version;
 
 /// Build a `Run` fixture for `thread`/`assistant_id`, stamped with the given
 /// `submitted_at`. Every contract function should build fixtures through
@@ -592,4 +596,165 @@ pub async fn ten_concurrent_inserts_one_thread_exactly_one_accepted(
         busy_count, 9,
         "the other nine must be rejected as ThreadBusy"
     );
+}
+
+// ── insert_with_latest / freeze-at-submit (D-30) ─────────────────────────
+//
+// These clauses require a REAL `insert_with_latest` override (D-30) --
+// they are not run against the port's own default (verbatim-insert)
+// implementation, which has no concept of an assistant repository and
+// therefore cannot demonstrate freeze-at-submit at all.
+
+/// `insert_with_latest` resolves and freezes the assistant's CURRENT
+/// `latest` onto the row, ignoring whatever `assistant.version` the caller
+/// already set on the `Run`; a later `append_version` is picked up by the
+/// next `insert_with_latest` call.
+pub async fn insert_with_latest_resolves_current_latest_and_freezes_it(
+    run_port: &dyn RunRepositoryPort,
+    assistant_port: &dyn AssistantRepositoryPort,
+) {
+    let assistant_id = AssistantId::new("contract-run-insert-with-latest").unwrap();
+    assistant_port
+        .create(&assistant_id, sample_assistant_new_version("v1"))
+        .await
+        .unwrap();
+
+    let thread1 = ThreadId::new("contract-run-insert-with-latest-t1").unwrap();
+    let mut run1 = sample_run(&thread1, assistant_id.as_str(), Utc::now());
+    run1.assistant.version = 999; // must be ignored -- resolved from `latest`, not the caller
+    let resolved1 = run_port.insert_with_latest(&run1).await.unwrap();
+    assert_eq!(resolved1, 1);
+    let loaded1 = run_port.get(&run1.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded1.assistant.version, 1);
+
+    assistant_port
+        .append_version(&assistant_id, sample_assistant_new_version("v2"))
+        .await
+        .unwrap();
+
+    let thread2 = ThreadId::new("contract-run-insert-with-latest-t2").unwrap();
+    let run2 = sample_run(&thread2, assistant_id.as_str(), Utc::now());
+    let resolved2 = run_port.insert_with_latest(&run2).await.unwrap();
+    assert_eq!(resolved2, 2);
+    let loaded2 = run_port.get(&run2.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded2.assistant.version, 2);
+}
+
+/// `insert_with_latest` against an assistant that does not exist fails
+/// `UnknownAssistant`.
+pub async fn insert_with_latest_unknown_assistant_fails(run_port: &dyn RunRepositoryPort) {
+    let thread = ThreadId::new("contract-run-insert-with-latest-unknown").unwrap();
+    let run = sample_run(&thread, "definitely-unknown-assistant", Utc::now());
+    let err = run_port.insert_with_latest(&run).await.unwrap_err();
+    assert!(matches!(err, RunRepositoryError::UnknownAssistant { .. }));
+}
+
+/// `insert_with_latest` against a soft-deleted assistant fails
+/// `UnknownAssistant` (a deleted assistant cannot resolve a fresh `latest`).
+pub async fn insert_with_latest_soft_deleted_assistant_fails(
+    run_port: &dyn RunRepositoryPort,
+    assistant_port: &dyn AssistantRepositoryPort,
+) {
+    let assistant_id = AssistantId::new("contract-run-insert-with-latest-deleted").unwrap();
+    assistant_port
+        .create(&assistant_id, sample_assistant_new_version("v1"))
+        .await
+        .unwrap();
+    assistant_port.soft_delete(&assistant_id).await.unwrap();
+
+    let thread = ThreadId::new("contract-run-insert-with-latest-deleted-thread").unwrap();
+    let run = sample_run(&thread, assistant_id.as_str(), Utc::now());
+    let err = run_port.insert_with_latest(&run).await.unwrap_err();
+    assert!(matches!(err, RunRepositoryError::UnknownAssistant { .. }));
+}
+
+/// Twenty alternating `append_version`/`insert_with_latest` calls on
+/// distinct threads: every run's resolved version exists and is `<=` the
+/// `latest` observed after the loop; no run resolves version `0` or a
+/// version greater than `latest` (PLAT-FR-08 as a database property, D-52).
+pub async fn assistant_version_freeze_at_submit(
+    run_port: Arc<dyn RunRepositoryPort>,
+    assistant_port: Arc<dyn AssistantRepositoryPort>,
+) {
+    let assistant_id = AssistantId::new("contract-run-freeze-at-submit").unwrap();
+    assistant_port
+        .create(&assistant_id, sample_assistant_new_version("v1"))
+        .await
+        .unwrap();
+
+    let mut append_handles = Vec::new();
+    for i in 0..10 {
+        let assistant_port = Arc::clone(&assistant_port);
+        let assistant_id = assistant_id.clone();
+        append_handles.push(tokio::spawn(async move {
+            assistant_port
+                .append_version(
+                    &assistant_id,
+                    sample_assistant_new_version(&format!("a{i}")),
+                )
+                .await
+        }));
+    }
+
+    let mut insert_handles = Vec::new();
+    for i in 0..10 {
+        let run_port = Arc::clone(&run_port);
+        let thread = ThreadId::new(format!("contract-run-freeze-thread-{i}")).unwrap();
+        let run = sample_run(&thread, assistant_id.as_str(), Utc::now());
+        let run_id = run.run_id.clone();
+        insert_handles.push(tokio::spawn(async move {
+            run_port
+                .insert_with_latest(&run)
+                .await
+                .map(|version| (run_id, version))
+        }));
+    }
+
+    tokio::time::timeout(Duration::from_secs(20), async {
+        for handle in append_handles {
+            handle
+                .await
+                .expect("append_version task must not panic")
+                .expect("append_version must succeed");
+        }
+    })
+    .await
+    .expect("append_version tasks must not hang");
+
+    let mut resolved = Vec::new();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        for handle in insert_handles {
+            resolved.push(
+                handle
+                    .await
+                    .expect("insert_with_latest task must not panic")
+                    .expect("insert_with_latest must succeed"),
+            );
+        }
+    })
+    .await
+    .expect("insert_with_latest tasks must not hang");
+
+    let final_latest = assistant_port
+        .get(&assistant_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .latest;
+    assert_eq!(final_latest, 11, "ten appends onto version 1 must reach 11");
+
+    for (run_id, version) in &resolved {
+        assert!(
+            *version >= 1 && *version <= final_latest,
+            "run {run_id} resolved version {version}, outside [1, {final_latest}]"
+        );
+        let exists = assistant_port
+            .get_version(&assistant_id, *version)
+            .await
+            .unwrap();
+        assert!(
+            exists.is_some(),
+            "run {run_id}'s resolved version {version} must exist"
+        );
+    }
 }

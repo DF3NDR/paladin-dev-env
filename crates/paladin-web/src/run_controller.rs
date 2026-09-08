@@ -36,6 +36,30 @@
 //! `allowed_roles` -- `paladin-web` has no visibility into them,
 //! ADR-0031). Every read (`GET /runs`, `GET /runs/{run_id}`, `GET
 //! /runs/{run_id}/webhook-deliveries`) needs authentication only.
+//!
+//! ## Read scope (WR-03) -- deployment-wide, not per-caller
+//!
+//! The three read routes above require only authentication:
+//! [`paladin_ports::output::run_repository_port::RunQuery`] carries no
+//! caller identity, and neither
+//! [`paladin_ports::output::run_repository_port::RunRepositoryPort::list`]/`get`
+//! nor
+//! [`paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort::list_for_run`]
+//! applies a requester-derived filter. **Any authenticated principal of any
+//! role can list and read every run in the deployment**, including the
+//! webhook target URL on `RunResponse::webhook` (secret redacted, URL
+//! not), the thread and assistant ids, and the error text of runs it did
+//! not submit. `run_id` is a time-ordered UUIDv7 (`RunId::new_v7`), so
+//! enumerating the id space by walking `GET /runs` -- or by guessing
+//! adjacent, time-clustered ids -- is materially easier than for a random
+//! identifier.
+//!
+//! This is the intended model for v0.10: a **single-tenant or
+//! mutually-trusted-principal deployment**, not a multi-tenant one. A
+//! per-tenant read scope (filtering `RunQuery`/`get`/`list_for_run` by
+//! requester identity) is the remediation, and is tracked as an open item
+//! in the project's broken-windows ledger (`.planning/WINDOWS.md`, row 32)
+//! rather than left as an implicit assumption.
 
 use std::convert::Infallible;
 use std::pin::Pin;

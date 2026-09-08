@@ -119,15 +119,34 @@ pub struct RunWorkerOptions {
 /// Construct immediately before an engine call and drop immediately after
 /// it returns: `Drop` aborts the background task, so a dropped
 /// `LeaseHeartbeat` never extends a lease the run no longer needs.
+///
+/// (WR-04) A non-positive `lease` starts no background task at all. A zero
+/// interval (`lease / 4` for a zero lease) would make `tokio::time::sleep`
+/// resolve immediately, turning the extend-lease loop into a CPU-bound
+/// spin rather than a periodic heartbeat. `RunWorkerConfig::validate()`
+/// enforces a four-second floor for this crate's one production call
+/// site, but `spawn` is public API and must not depend on a caller having
+/// gone through the config layer to avoid this failure mode.
 pub struct LeaseHeartbeat {
-    handle: JoinHandle<()>,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl LeaseHeartbeat {
     /// Spawn a background task extending `token`'s lease by `lease` every
     /// `lease / 4`, until this handle is dropped.
+    ///
+    /// A non-positive `lease` starts no task at all (WR-04): a warning is
+    /// logged naming the misuse, and dropping the returned handle is a
+    /// no-op.
     pub fn spawn(queue: Arc<dyn RunQueuePort>, token: LeaseToken, lease: Duration) -> Self {
-        let interval = if lease.is_zero() { lease } else { lease / 4 };
+        if lease.is_zero() {
+            log::warn!(
+                "LeaseHeartbeat::spawn called with a non-positive lease ({lease:?}); \
+                 no heartbeat task will run for this lease token"
+            );
+            return Self { handle: None };
+        }
+        let interval = lease / 4;
         let handle = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(interval).await;
@@ -138,13 +157,17 @@ impl LeaseHeartbeat {
                 }
             }
         });
-        Self { handle }
+        Self {
+            handle: Some(handle),
+        }
     }
 }
 
 impl Drop for LeaseHeartbeat {
     fn drop(&mut self) {
-        self.handle.abort();
+        if let Some(handle) = &self.handle {
+            handle.abort();
+        }
     }
 }
 
@@ -427,6 +450,16 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// the `RunOutcome` it already matches on, then `unbind`s. `None`
     /// (the default) preserves every prior plan's behavior verbatim -- no
     /// bind/publish/unbind call happens anywhere in `run_once`.
+    ///
+    /// **(WR-02) Excluded: the legacy `Runnable::Agent` path.** `run_once`
+    /// dispatches `Runnable::Agent` to [`RunWorkerPool::run_agent`] before
+    /// any `bind`/`publish`/`unbind` call on this bus -- a run against a
+    /// code-registered agent never binds a thread here, so `GET
+    /// /runs/{id}/stream` only ever takes the degraded polling path for
+    /// it. This is a recorded, tested limitation (ledger row 31,
+    /// `agent_kind_run_with_a_webhook_enqueues_no_delivery`), not an
+    /// oversight: only a stored `WarGraphDoc` workflow run gets the live
+    /// bus.
     event_bus: Option<Arc<RunEventBus>>,
     /// The D-40 durable delivery queue, when
     /// [`RunWorkerPool::with_webhook_deliveries`] wires one: `run_once`
@@ -437,6 +470,17 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// is logged and NEVER changes the run's own status (prohibition P2):
     /// it is enqueued strictly after the run's own status write/ack has
     /// already succeeded.
+    ///
+    /// **(WR-02) Excluded: the legacy `Runnable::Agent` path.** [`Self::run_agent`]
+    /// writes status/outcome and acks directly, never reaching the
+    /// `webhook_delivery_for_outcome` -> `deliveries.enqueue` block below --
+    /// so a run against a code-registered agent that carries a `webhook`
+    /// spec completes (or fails) with ZERO deliveries enqueued, no matter
+    /// which events it subscribed to. Recorded and pinned by
+    /// `agent_kind_run_with_a_webhook_enqueues_no_delivery` (ledger row
+    /// 31): if a future change wires this hook into `run_agent`'s two
+    /// return paths, that test goes red and this doc must move with it. A
+    /// caller needing webhook delivery today should poll the run instead.
     webhook_deliveries: Option<Arc<dyn WebhookDeliveryRepositoryPort>>,
 }
 
@@ -937,6 +981,22 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// redelivery simply restarts it. Without a wired `PaladinPort`, nacks
     /// for redelivery rather than executing (the 27-01 fallback, preserved
     /// until a later plan always wires one).
+    ///
+    /// **(WR-02) A documented, tested limitation: neither the D-24 live
+    /// event bus nor the PLAT-FR-14 webhook delivery hook run on this
+    /// path.** Both of this function's return points (the `Ok` branch
+    /// below and [`RunWorkerPool::record_engine_failure`] on the `Err`
+    /// branch) write status/outcome and ack/nack directly, with no
+    /// `event_bus.bind`/`publish` call and no `webhook_deliveries.enqueue`
+    /// call anywhere in between -- unlike the `Runnable::Workflow` path in
+    /// [`RunWorkerPool::run_once`], which does both. A run against a
+    /// code-registered agent therefore never fires a webhook and only
+    /// ever takes the degraded polling path on `GET /runs/{id}/stream`,
+    /// regardless of the `webhook` spec or event bus wiring the pool
+    /// carries. This is accepted and tracked (ledger row 31), not an
+    /// oversight -- see the `event_bus`/`webhook_deliveries` field docs
+    /// above and `agent_kind_run_with_a_webhook_enqueues_no_delivery` in
+    /// `worker_tests.rs`, the test that pins it.
     async fn run_agent(
         &self,
         leased: &LeasedRun,

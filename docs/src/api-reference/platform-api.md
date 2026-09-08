@@ -347,6 +347,21 @@ milestone. Naming this gap plainly is the point: PRD 06's own functional require
 permits documenting it rather than closing it, and claiming coverage that does not exist would be
 worse than the gap itself.
 
+### Known limitations
+
+**A run against a code-registered agent never fires a webhook.** Two assistant kinds resolve
+through this API: a stored `WarGraphDoc` workflow, and a **code-registered agent** (a single
+Paladin registered directly in the process, not backed by a Waypoint-tracked graph). The delivery
+hook documented above — enqueueing a `Pending` webhook delivery on a lifecycle transition — is
+wired only into the workflow path. A run submitted against a code-registered agent completes (or
+fails) with a `webhook` spec attached, but **zero deliveries are ever enqueued for it**, no matter
+which events it subscribed to; the same run's status is still correctly reported by
+`GET /runs/{run_id}` and by the degraded polling path on `GET /runs/{run_id}/stream` (the live
+SSE bus is excluded for this run kind too). If your integration depends on webhook delivery, poll
+the run instead of relying on a callback when its assistant is code-registered. This is a
+recorded, tested limitation, not a silent gap: it is pinned by a named test in the worker's own
+test suite and tracked in the project's broken-windows ledger.
+
 ## Pagination
 
 Every list endpoint (`/runs`, `/threads`, `/assistants`, `/assistants/{id}/versions`,
@@ -381,8 +396,16 @@ Every new route sits behind the same authentication middleware and the same rate
 | **Registry-shaped** | assistant create/publish-version/delete; schedule create/patch/delete; thread delete | `require_admin` — an admin-role credential |
 | **Reads** | every `GET` | authentication only |
 
-A finer-grained per-resource scope model (real per-tenant ownership) is an explicitly deferred
-idea, not a promise this phase makes.
+**What a `GET` can see today.** Every read route above needs authentication only — there is no
+per-resource ownership check. Any authenticated principal of any role can call `GET /runs` and
+`GET /runs/{run_id}` and see every run in the deployment, not just runs it submitted itself: the
+resolved assistant and thread ids, status, error text, and — via
+`GET /runs/{run_id}/webhook-deliveries` and the run's own `webhook` field — another caller's
+webhook target URL (the signing secret is always redacted, the URL is not). `run_id` values are
+time-ordered UUIDv7s, so walking `GET /runs` or guessing a nearby id is easier than for a random
+identifier. This is the intended model for a **single-tenant or mutually-trusted-principal
+deployment** — it is not a promise that one caller's runs are hidden from another. A
+finer-grained, per-tenant read scope is the tracked remediation, not yet built.
 
 ## Configuration
 

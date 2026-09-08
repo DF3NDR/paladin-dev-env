@@ -47,6 +47,15 @@ pub struct WebhookPayloadAssistant {
 ///
 /// This exact key set is a prohibition boundary (T-27-13-03): no run
 /// input, no Battlefield state, and no HMAC signing value ever appear here.
+///
+/// **(WR-02) Documented carve-out: a legacy `Runnable::Agent` run never
+/// produces this payload.** `RunWorkerPool::run_agent` (`worker.rs`)
+/// completes or fails a code-registered agent run without ever calling
+/// `webhook_deliveries.enqueue`, so PLAT-FR-14's delivery rule above
+/// applies only to `Runnable::Workflow` runs (stored `WarGraphDoc`
+/// assistants). Tracked as ledger row 31 and pinned by
+/// `agent_kind_run_with_a_webhook_enqueues_no_delivery` in
+/// `worker_tests.rs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookPayload {
     /// The run this event reports on.

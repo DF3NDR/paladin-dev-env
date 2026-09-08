@@ -227,7 +227,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   observed at superstep boundaries, and the one-active-run-per-thread `409 ThreadBusy` invariant
   holding under 10 concurrent submits (PLAT-FR-02…05; PRD 06 §2.2)
 
-- [ ] **PLAT-03**: Parley and streaming integrate with runs: `AwaitingInput` releases the worker,
+- [x] **PLAT-03**: Parley and streaming integrate with runs: `AwaitingInput` releases the worker,
   `POST /threads/{id}/resume` validates then re-enqueues under the same `run_id` (attempt++),
   and `GET /runs/{id}/stream` bridges live TraceSink events to SSE with a documented
   polling-backed degraded mode (terminal events always eventually delivered) and 15 s heartbeats
@@ -240,7 +240,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   registry-resolving `compile()`, and restart-stable fingerprint round-trip (PLAT-FR-08…12;
   PRD 06 §2.3)
 
-- [ ] **PLAT-05**: Schedules and webhooks are API-managed: cron (5-field + optional seconds, UTC,
+- [x] **PLAT-05**: Schedules and webhooks are API-managed: cron (5-field + optional seconds, UTC,
   thread strategies, skip/catch-up policies) surviving restart without duplicate or missed-then-
   double firing; webhook delivery on terminal + `AwaitingInput` events with HMAC
   `X-Paladin-Signature`, 5-attempt bounded retry on 5xx/timeout only, persisted queryable
@@ -248,7 +248,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   loopback, link-local, private and metadata targets at write and send time unless explicitly
   allowlisted (PLAT-FR-13…15; PRD 06 §2.4)
 
-- [ ] **PLAT-06**: The new API surface is production-shaped: existing auth + rate limiting on
+- [x] **PLAT-06**: The new API surface is production-shaped: existing auth + rate limiting on
   every new endpoint, admin/writer scopes on mutating routes, pagination everywhere (limit
   ≤ 100, opaque cursor), `openapi.json` regenerated and diff-reviewed, and a CI job generating
   Python + TypeScript clients from the spec and smoke-testing them against a test server
@@ -381,10 +381,10 @@ Which phases cover which requirements. Populated during roadmap creation.
 | RT-07 | Phase 26 | Complete |
 | PLAT-01 | Phase 27 | Pending |
 | PLAT-02 | Phase 27 | Complete |
-| PLAT-03 | Phase 27 | Pending |
+| PLAT-03 | Phase 27 | Complete |
 | PLAT-04 | Phase 27 | Pending |
-| PLAT-05 | Phase 27 | Pending |
-| PLAT-06 | Phase 27 | Pending |
+| PLAT-05 | Phase 27 | Complete |
+| PLAT-06 | Phase 27 | Complete |
 | OBS-01 | Phase 28 | Pending |
 | OBS-02 | Phase 28 | Pending |
 | OBS-03 | Phase 28 | Pending |

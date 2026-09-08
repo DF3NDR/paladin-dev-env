@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 21
+open_count: 23
 waived_count: 4
 fixed_count: 5
-total_count: 30
-last_updated: 2026-09-08T11:32:15.185Z
+total_count: 32
+last_updated: 2026-09-08T13:48:16.000Z
 ---
 
 # Broken Windows Ledger
@@ -45,6 +45,8 @@ last_updated: 2026-09-08T11:32:15.185Z
 | 28 | 25 | unrun-verify | crates/paladin-storage/src/node_cache/redis.rs |  | RedisNodeCache Tier-2 live-server contract suite (redis_node_cache_runs_the_full_contract_suite, redis_keys_are_namespaced_by_the_configured_prefix, redis_ttl_is_set_on_the_server_not_only_in_the_payload) never executed against a real Redis server in any authoring environment -- Docker/Redis absent from devcontainer; evidence is CI-only via the new redis-cache-integration job | open |  | 2026-09-05T21:18:05.117Z |  |
 | 29 | 27 | deviation | crates/paladin-web/src/assistant_controller.rs | 396 | GET /assistants merges synthetic code-registry entries only on the first page (cursor=None); a heterogeneous keyset merge across the stored repository and the in-process AgentRegistry across multiple pages is out of scope for 27-12 (documented in-code). | open |  | 2026-09-08T07:12:32.829Z |  |
 | 30 | 27 | deviation | scripts/sdk-smoke/smoke.ts |  | TypeScript generated-client field/method names (Configuration/AssistantsApi/RunsApi) could not be verified against the real openapi-generator-cli output locally (no Java, no Docker in this devcontainer) -- CI's own sdk-clients job is the first real proof; if the generated shape differs, the fix is localized to smoke.py/smoke.ts's field access. | open |  | 2026-09-08T11:32:15.185Z |  |
+| 31 | 27 | deviation | src/application/services/run/worker.rs |  | (WR-02) A run against a code-registered Runnable::Agent assistant is excluded from both the D-24 live event bus and the PLAT-FR-14 webhook delivery hook -- run_agent's two return paths write status/outcome and ack/nack directly, never reaching event_bus.bind/publish or webhook_deliveries.enqueue. Documented on the event_bus/webhook_deliveries field docs and on run_agent itself (worker.rs), mirrored in webhook/mod.rs's WebhookPayload docs and in docs/src/api-reference/platform-api.md's Webhooks Known limitations subsection, and pinned by agent_kind_run_with_a_webhook_enqueues_no_delivery (worker_tests.rs). Closing condition: wire both hooks into run_agent's two return paths (success and record_engine_failure) and invert the pinning test so it asserts a delivery IS enqueued. | open |  | 2026-09-08T13:48:16.000Z |  |
+| 32 | 27 | deviation | crates/paladin-web/src/run_controller.rs |  | (WR-03) The three run read routes (GET /runs, GET /runs/{run_id}, GET /runs/{run_id}/webhook-deliveries) require authentication only -- RunQuery carries no caller identity and neither RunRepositoryPort::list/get nor WebhookDeliveryRepositoryPort::list_for_run applies a requester-derived filter, so any authenticated principal of any role can read every run in the deployment, including another caller's webhook target URL (secret redacted, URL not) and run_id enumeration is easier than for a random identifier since run_id is a time-ordered UUIDv7. Documented in run_controller.rs's module docs (Read scope section) and in docs/src/api-reference/platform-api.md's Authentication and scopes section. Accepted for v0.10 as a single-tenant/mutually-trusted-principal deployment model (T-27-23-02). Closing condition: a per-caller/tenant filter on RunQuery/get/list_for_run across the controller and the repository adapters. | open |  | 2026-09-08T13:48:16.000Z |  |
 
 ````json
 [
@@ -406,6 +408,30 @@ last_updated: 2026-09-08T11:32:15.185Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-08T11:32:15.185Z",
+    "resolved_at": null
+  },
+  {
+    "id": 31,
+    "kind": "deviation",
+    "phase": "27",
+    "file": "src/application/services/run/worker.rs",
+    "line": null,
+    "description": "(WR-02) A run against a code-registered Runnable::Agent assistant is excluded from both the D-24 live event bus and the PLAT-FR-14 webhook delivery hook -- run_agent's two return paths write status/outcome and ack/nack directly, never reaching event_bus.bind/publish or webhook_deliveries.enqueue. Documented on the event_bus/webhook_deliveries field docs and on run_agent itself (worker.rs), mirrored in webhook/mod.rs's WebhookPayload docs and in docs/src/api-reference/platform-api.md's Webhooks Known limitations subsection, and pinned by agent_kind_run_with_a_webhook_enqueues_no_delivery (worker_tests.rs). Closing condition: wire both hooks into run_agent's two return paths (success and record_engine_failure) and invert the pinning test so it asserts a delivery IS enqueued.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T13:48:16.000Z",
+    "resolved_at": null
+  },
+  {
+    "id": 32,
+    "kind": "deviation",
+    "phase": "27",
+    "file": "crates/paladin-web/src/run_controller.rs",
+    "line": null,
+    "description": "(WR-03) The three run read routes (GET /runs, GET /runs/{run_id}, GET /runs/{run_id}/webhook-deliveries) require authentication only -- RunQuery carries no caller identity and neither RunRepositoryPort::list/get nor WebhookDeliveryRepositoryPort::list_for_run applies a requester-derived filter, so any authenticated principal of any role can read every run in the deployment, including another caller's webhook target URL (secret redacted, URL not) and run_id enumeration is easier than for a random identifier since run_id is a time-ordered UUIDv7. Documented in run_controller.rs's module docs (Read scope section) and in docs/src/api-reference/platform-api.md's Authentication and scopes section. Accepted for v0.10 as a single-tenant/mutually-trusted-principal deployment model (T-27-23-02). Closing condition: a per-caller/tenant filter on RunQuery/get/list_for_run across the controller and the repository adapters.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T13:48:16.000Z",
     "resolved_at": null
   }
 ]

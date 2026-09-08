@@ -191,3 +191,10 @@ None - no external service configuration required.
 
 _Phase: 27-platform-api_
 _Completed: 2026-09-08_
+
+## Self-Check: PASSED
+
+All 7 modified/created files verified present on disk (`worker.rs`, `worker_tests.rs`,
+`webhook/mod.rs`, `run_controller.rs`, `platform-api.md`, `WINDOWS.md`, this SUMMARY). All 4
+commit hashes verified present in `git log --oneline --all` (`845b7b8a`, `caf74d31`, `3f655471`,
+`d943fd25`). No missing items.

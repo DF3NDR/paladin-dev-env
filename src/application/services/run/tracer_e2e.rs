@@ -152,7 +152,7 @@ fn build_harness() -> Harness {
     let paladin_port: Arc<dyn PaladinPort> = Arc::new(PaladinPortAdapter(Arc::new(
         PaladinExecutionService::new(llm, circuit_breaker, None, None),
     )));
-    let engine = Arc::new(WarEngine::new(paladin_port, waypoints));
+    let engine = Arc::new(WarEngine::new(paladin_port, waypoints.clone()));
 
     let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
     let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
@@ -175,6 +175,7 @@ fn build_harness() -> Harness {
 
     let worker = RunWorkerPool::new(
         engine,
+        waypoints,
         repository,
         queue.clone(),
         resolver,

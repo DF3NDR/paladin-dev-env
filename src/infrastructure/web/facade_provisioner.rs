@@ -9,9 +9,15 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use paladin_core::platform::container::execution_result::PaladinResult;
+use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_llm::provider_factory::LlmProviderFactory;
+use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
+use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
 use paladin_web::{AgentProvisioner, AgentSpec, ProvisionError, ProvisionedAgent};
 
+use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
 use crate::config::agents::AgentDefinition;
 use crate::config::settings::Settings;
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
@@ -41,6 +47,68 @@ impl FacadeProvisioner {
     pub fn from_settings(settings: &Settings) -> Self {
         Self::new(default_provider_name(settings), default_circuit_breaker())
     }
+}
+
+/// Adapts a [`PaladinExecutionService`] to the engine-facing [`PaladinPort`] seam
+/// `WarEngine::new` expects (Phase 27, PLAT-01/02): the same shape
+/// `src/application/services/run/tracer_e2e.rs`'s own `PaladinPortAdapter` establishes for
+/// tests, promoted here as the production adapter since none existed outside that test
+/// module before this phase.
+struct EngineExecutionPort(Arc<PaladinExecutionService>);
+
+#[async_trait]
+impl PaladinPort for EngineExecutionPort {
+    async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
+        self.0.execute(paladin, input).await
+    }
+
+    async fn execute_stream(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        self.0.execute_stream(paladin, input).await
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// Build the run engine's real [`PaladinPort`] from `settings` (Phase 27, PLAT-01/02),
+/// using the SAME default-provider resolution [`FacadeProvisioner`]/[`build_agent`] use: no
+/// per-node provider hint exists on [`paladin_core::platform::container::paladin::PaladinData`]
+/// (a `WarGraphDoc`-defined `Paladin` node carries only a `model` string, never a
+/// `provider`), so the single resolved default provider backs every `NodeSpec::Paladin` node
+/// the run engine dispatches, mirroring `spec_to_definition`'s own `provider: None` choice
+/// for a runtime-provisioned agent.
+///
+/// Constructed once at boot and shared by the whole run engine's lifetime -- see
+/// `src/infrastructure/web/run_api_wiring.rs::build_run_api`, the sole production caller.
+///
+/// # Errors
+///
+/// Returns a [`HostBuildError::Provider`] if the resolved default provider cannot be
+/// constructed (an unknown provider name, or a missing API key).
+pub fn paladin_port_from_settings(
+    settings: &Settings,
+) -> Result<Arc<dyn PaladinPort>, HostBuildError> {
+    let factory = LlmProviderFactory::new();
+    let provider = default_provider_name(settings);
+    let llm = factory
+        .create(&provider)
+        .map_err(|source| HostBuildError::Provider {
+            id: "run-engine".to_string(),
+            provider,
+            source,
+        })?;
+    let service = Arc::new(PaladinExecutionService::new(
+        llm,
+        default_circuit_breaker(),
+        None,
+        None,
+    ));
+    Ok(Arc::new(EngineExecutionPort(service)))
 }
 
 /// Map a runtime [`AgentSpec`] onto the config-shaped [`AgentDefinition`] so both paths
@@ -121,6 +189,28 @@ mod tests {
         // Spec carries neither; defaults apply.
         assert!(def.provider.is_none());
         assert!(def.max_loops.is_none());
+    }
+
+    #[test]
+    fn paladin_port_from_settings_unknown_provider_errors() {
+        // Force resolution to fail at the provider factory (hermetic — no API keys, no
+        // network): the same failure shape `FacadeProvisioner::provision` maps to
+        // `ProvisionError::Failed`, surfaced here as `HostBuildError::Provider`.
+        let settings = Settings {
+            llm: Some(paladin_llm::config::llm::LlmConfig {
+                default_provider: Some("no-such-provider".to_string()),
+                ..Default::default()
+            }),
+            ..Settings::default()
+        };
+
+        let err = paladin_port_from_settings(&settings)
+            .err()
+            .expect("unknown provider must error");
+        assert!(
+            matches!(err, HostBuildError::Provider { .. }),
+            "unknown provider must map to HostBuildError::Provider, got {err:?}"
+        );
     }
 
     #[tokio::test]

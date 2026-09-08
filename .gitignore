@@ -27,3 +27,11 @@ k8s/secret.yaml
 
 # GSD research web-fetch cache — transient artifacts, not project record
 .planning/research/.cache/
+
+# sdk-clients CI job (scripts/sdk-smoke/) — npm ci / tsc leave generated
+# output here; the committed package-lock.json is the only tracked npm
+# artifact in this directory. __pycache__ is Python's own bytecode cache,
+# left behind by running/self-testing mock-llm.py or smoke.py.
+scripts/sdk-smoke/node_modules/
+scripts/sdk-smoke/dist/
+scripts/sdk-smoke/__pycache__/

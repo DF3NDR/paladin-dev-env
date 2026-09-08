@@ -596,11 +596,11 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 27-02-PLAN.md — `runs` migrations, run-repository contract suite, SQLite + Postgres adapters, partial unique index (PLAT-01, PLAT-02)
-- [ ] 27-03-PLAN.md — `RunQueuePort` contract suite, Redis ZSET+Lua lease adapter, `redis-queue` CI job, generalised Postgres job (PLAT-02)
-- [ ] 27-04-PLAN.md — Worker pool hardening: heartbeat, resume-not-restart dispatch, drain, kill-mid-run twin of acceptance 2 (PLAT-02, PLAT-03)
-- [ ] 27-05-PLAN.md — `WarGraphDoc` + `compile()`, schemars golden schema, fixture corpus, two-process fingerprint proof (PLAT-04)
-- [ ] 27-06-PLAN.md — Seven X-09 config structs, all off/today by default (PLAT-01…05)
+- [x] 27-02-PLAN.md — `runs` migrations, run-repository contract suite, SQLite + Postgres adapters, partial unique index (PLAT-01, PLAT-02)
+- [x] 27-03-PLAN.md — `RunQueuePort` contract suite, Redis ZSET+Lua lease adapter, `redis-queue` CI job, generalised Postgres job (PLAT-02)
+- [x] 27-04-PLAN.md — Worker pool hardening: heartbeat, resume-not-restart dispatch, drain, kill-mid-run twin of acceptance 2 (PLAT-02, PLAT-03)
+- [x] 27-05-PLAN.md — `WarGraphDoc` + `compile()`, schemars golden schema, fixture corpus, two-process fingerprint proof (PLAT-04)
+- [x] 27-06-PLAN.md — Seven X-09 config structs, all off/today by default (PLAT-01…05)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

@@ -647,6 +647,642 @@
         ]
       }
     },
+    "/v1/assistants": {
+      "get": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`GET /assistants` -- paginated list, merged with synthetic code-registry entries\n(D-32). Authenticated, any role.",
+        "description": "Returns `200 OK` with [`AssistantListResponse`] on success, or `501 Not Implemented`\nif no assistant admin backend is configured.",
+        "operationId": "list_assistants",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return (at most 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of assistants, merged with synthetic code-registry entries when expose_code_registry is on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "limit exceeds 100",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`POST /assistants` -- create a brand-new assistant (admin).",
+        "description": "Returns:\n- `201 Created` with [`AssistantVersionResponse`] on success;\n- `400 Bad Request` for an invalid `assistant_id`, an unknown `kind`, or a definition\n  that fails validation (D-31) -- `error.details.violations` is a non-empty,\n  machine-readable list; nothing is persisted;\n- `401`/`403` per the module-level authorization docs;\n- `409 Conflict` (`already_exists`, or `code_registered_immutable` if `assistant_id`\n  is code-registered);\n- `501 Not Implemented` if no assistant admin backend is configured.",
+        "operationId": "create_assistant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAssistantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Assistant created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantVersionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assistant id, unknown kind, or a definition that fails validation -- violations in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_exists, or code_registered_immutable if the id is code-registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/assistants/{assistant_id}": {
+      "get": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`GET /assistants/{id}` -- one assistant, falling back to a synthetic code-registry\nentry (D-32) when not found in the stored repository. Authenticated, any role.",
+        "description": "Returns:\n- `200 OK` with [`AssistantResponse`] on success;\n- `400 Bad Request` for an invalid id;\n- `404 Not Found` if `id` is neither stored nor code-registered;\n- `501 Not Implemented` if no assistant admin backend is configured.",
+        "operationId": "get_assistant",
+        "parameters": [
+          {
+            "name": "assistant_id",
+            "in": "path",
+            "description": "Assistant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assistant id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`DELETE /assistants/{id}` -- soft-delete (admin).",
+        "description": "Returns:\n- `204 No Content` on success;\n- `400 Bad Request` for an invalid id;\n- `401`/`403` per the module-level authorization docs;\n- `404 Not Found` if `id` does not exist;\n- `409 Conflict` (`code_registered_immutable`) if `id` is code-registered;\n- `501 Not Implemented` if no assistant admin backend is configured.",
+        "operationId": "delete_assistant",
+        "parameters": [
+          {
+            "name": "assistant_id",
+            "in": "path",
+            "description": "Assistant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "Invalid assistant id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "code_registered_immutable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/assistants/{assistant_id}/versions": {
+      "get": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`GET /assistants/{id}/versions` -- paginated version history, ascending by `version`\n(PLAT-FR-10 changelog). Authenticated, any role.",
+        "operationId": "list_versions",
+        "parameters": [
+          {
+            "name": "assistant_id",
+            "in": "path",
+            "description": "Assistant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return (at most 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of versions, ascending by version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantVersionListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assistant id, or limit exceeds 100",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`POST /assistants/{id}/versions` -- publish a new version (admin).",
+        "description": "Returns:\n- `201 Created` with [`AssistantVersionResponse`] on success;\n- `400 Bad Request` for an invalid id or a definition that fails validation (D-31);\n- `401`/`403` per the module-level authorization docs;\n- `404 Not Found` if `assistant_id` does not exist;\n- `409 Conflict` (`code_registered_immutable`, or `version_conflict` if the\n  repository's own retry budget for a concurrent-publish race is exhausted);\n- `501 Not Implemented` if no assistant admin backend is configured.",
+        "operationId": "create_version",
+        "parameters": [
+          {
+            "name": "assistant_id",
+            "in": "path",
+            "description": "Assistant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Version published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantVersionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assistant id or a definition that fails validation -- violations in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "code_registered_immutable, or version_conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/assistants/{assistant_id}/versions/{version}": {
+      "get": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`GET /assistants/{id}/versions/{version}` -- one version, falling back to a synthetic\nversion-1 response (D-32) for a code-registered id when `version == 1`. Authenticated,\nany role.",
+        "description": "Returns:\n- `200 OK` with [`AssistantVersionResponse`] on success;\n- `400 Bad Request` for an invalid id;\n- `404 Not Found` for `version == 0`, `version` above `latest`, or an unknown\n  assistant (D-29: versions are 1-based and monotonically increasing -- the router\n  itself cannot express a `PUT`, so this is the only way a client ever \"misses\");\n- `501 Not Implemented` if no assistant admin backend is configured.",
+        "operationId": "get_version",
+        "parameters": [
+          {
+            "name": "assistant_id",
+            "in": "path",
+            "description": "Assistant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "1-based version number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantVersionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assistant id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "version 0, version above latest, or unknown assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/runs": {
       "post": {
         "tags": [
@@ -1304,6 +1940,201 @@
           "message": {
             "type": "string",
             "description": "Human-readable message."
+          }
+        }
+      },
+      "AssistantListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /assistants`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantResponse"
+            },
+            "description": "The page of assistants, in the documented order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, `None` on the last page."
+          }
+        }
+      },
+      "AssistantResponse": {
+        "type": "object",
+        "description": "Response body for `GET /assistants/{id}` and one item of `GET /assistants`.",
+        "required": [
+          "assistant_id",
+          "latest",
+          "source",
+          "created_at"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The assistant's identity."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this assistant was first created."
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this assistant was soft-deleted, if it has been."
+          },
+          "latest": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The most recently published version number.",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string",
+            "description": "`\"stored\"` or `\"code\"` (D-32)."
+          }
+        }
+      },
+      "AssistantVersionListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /assistants/{id}/versions`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantVersionResponse"
+            },
+            "description": "The page of versions, ascending by `version`."
+          },
+          "next_cursor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Opaque cursor for the next page, `None` on the last page.",
+            "minimum": 0
+          }
+        }
+      },
+      "AssistantVersionResponse": {
+        "type": "object",
+        "description": "Response body for `GET/POST` on a single version.",
+        "required": [
+          "assistant_id",
+          "version",
+          "definition",
+          "created_at"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The assistant this version belongs to."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this version was created."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who published this version, if known."
+          },
+          "definition": {
+            "type": "object",
+            "description": "The definition this version carries."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An optional publish-time note."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "This version's 1-based sequence number.",
+            "minimum": 0
+          }
+        }
+      },
+      "CreateAssistantRequest": {
+        "type": "object",
+        "description": "Request body for `POST /assistants`.",
+        "required": [
+          "assistant_id",
+          "definition"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The new assistant's id (a `[a-z0-9][a-z0-9_-]{0,63}` slug)."
+          },
+          "definition": {
+            "$ref": "#/components/schemas/DefinitionDto",
+            "description": "The first version's definition."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An optional publish-time note."
+          }
+        }
+      },
+      "CreateVersionRequest": {
+        "type": "object",
+        "description": "Request body for `POST /assistants/{id}/versions`.",
+        "required": [
+          "definition"
+        ],
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/DefinitionDto",
+            "description": "The new version's definition."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An optional publish-time note."
+          }
+        }
+      },
+      "DefinitionDto": {
+        "type": "object",
+        "description": "The wire shape of an assistant definition: `{ kind: \"agent\" | \"workflow\", body }`.",
+        "required": [
+          "kind",
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "object",
+            "description": "The opaque, kind-specific definition payload."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`\"agent\"` or `\"workflow\"`."
           }
         }
       },

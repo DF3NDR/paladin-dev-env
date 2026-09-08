@@ -94,6 +94,16 @@ pub struct RunApiState {
     /// Authentication configuration -- the SAME [`crate::agent_auth::AgentAuthConfig`]
     /// shape every other stateful router in this crate carries.
     pub auth: crate::agent_auth::AgentAuthConfig,
+    /// Validates and publishes assistant definitions (`/assistants*`, PLAT-04, D-31,
+    /// D-46). `None` when unwired.
+    pub assistants: Option<Arc<dyn paladin_ports::input::assistant_admin_port::AssistantAdminPort>>,
+    /// The code-registered agent registry `GET /assistants` merges synthetic entries
+    /// from, and every mutating assistant route consults for the `code_registered_immutable`
+    /// 409 (D-32). `None` when unwired.
+    pub code_registry: Option<Arc<crate::agent_registry::AgentRegistry>>,
+    /// Whether `GET /assistants` merges in synthetic code-registry entries (D-32).
+    /// Defaults to `true`.
+    pub expose_code_registry: bool,
 }
 
 impl RunApiState {
@@ -105,7 +115,36 @@ impl RunApiState {
             run_repository: None,
             run_events: None,
             auth: crate::agent_auth::AgentAuthConfig::default(),
+            assistants: None,
+            code_registry: None,
+            expose_code_registry: true,
         }
+    }
+
+    /// Wire an [`paladin_ports::input::assistant_admin_port::AssistantAdminPort`],
+    /// enabling `/assistants*`.
+    pub fn with_assistants(
+        mut self,
+        assistants: Arc<dyn paladin_ports::input::assistant_admin_port::AssistantAdminPort>,
+    ) -> Self {
+        self.assistants = Some(assistants);
+        self
+    }
+
+    /// Wire the code-registered agent registry (D-32).
+    pub fn with_code_registry(
+        mut self,
+        code_registry: Arc<crate::agent_registry::AgentRegistry>,
+    ) -> Self {
+        self.code_registry = Some(code_registry);
+        self
+    }
+
+    /// Override whether `GET /assistants` merges in synthetic code-registry entries
+    /// (D-32, default `true`).
+    pub fn with_expose_code_registry(mut self, expose: bool) -> Self {
+        self.expose_code_registry = expose;
+        self
     }
 
     /// Wire a [`RunSubmissionPort`], enabling `POST /runs`.
@@ -474,6 +513,7 @@ pub fn run_openapi_router(state: RunApiState) -> OpenApiRouter {
         .routes(routes!(submit_run))
         .routes(routes!(get_run))
         .routes(routes!(stream_run))
+        .merge(crate::assistant_controller::assistant_routes())
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::agent_auth::require_authentication::<RunApiState>,

@@ -609,8 +609,8 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 27-09-PLAN.md — Assistant storage: core types (D-28/D-29 checkpoint), update-less port, migrations, three adapters, freeze-at-submit (PLAT-04)
-- [ ] 27-10-PLAN.md — Run streaming: `RunEventBus`, TraceSink adapter, degraded mode, SSE route with 15 s keep-alive (PLAT-03)
+- [x] 27-09-PLAN.md — Assistant storage: core types (D-28/D-29 checkpoint), update-less port, migrations, three adapters, freeze-at-submit (PLAT-04)
+- [x] 27-10-PLAN.md — Run streaming: `RunEventBus`, TraceSink adapter, degraded mode, SSE route with 15 s keep-alive (PLAT-03)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

@@ -51,5 +51,13 @@ http-body-util = "0.1"
 # Register/remove this suppression only in the same commit as the matching
 # MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml` entry (kept
 # set-equal by CI's `semver` job).
+#
+# `struct_marked_non_exhaustive` (D-21, PLAT-03, Plan 27-08): `ResumeAcceptedResponse`
+# is new in 0.10 (Phase 24, absent at the v0.9.0 baseline) and gained
+# `#[non_exhaustive]` alongside its additive `run_id` field. Not a deliberate
+# X-10 break -- the type did not exist at the baseline -- but the crate-level
+# lint suppression covers the case regardless. No `.cargo/semver-checks-allowlist.toml`
+# entry is required (MIGRATION.md §9.2 marks this row N/A, not `Y`).
 [package.metadata.cargo-semver-checks.lints]
 function_requires_different_generic_type_params = "allow"
+struct_marked_non_exhaustive = "allow"

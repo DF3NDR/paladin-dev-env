@@ -66,6 +66,7 @@
 - [Feature Flags](api-reference/feature-flags.md)
 - [Migration Guide](api-reference/migration-guide.md)
 - [Stable API](api-reference/stable-api.md)
+- [WarGraphDoc — Workflow Assistant Document Format](api-reference/wargraph-doc-schema.md)
 
 # Contributing
 

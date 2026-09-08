@@ -138,7 +138,7 @@ pub struct WarGraphDoc {
     #[serde(default)]
     pub limits: LimitsDoc,
     /// The graph-wide fallback [`Aegis`], if any.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_aegis: Option<AegisDoc>,
 }
 
@@ -284,7 +284,7 @@ pub struct NodeDoc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<WorkflowNodeDoc>,
     /// This node's own `Aegis` override, if any.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aegis: Option<AegisDoc>,
     /// Whether this node is registered deferred (`WarGraph::add_deferred_node`).
     #[serde(default)]
@@ -352,12 +352,19 @@ pub struct PaladinNodeDoc {
     pub model: String,
     /// The Paladin's system prompt.
     pub system_prompt: String,
-    /// Response randomness; defaults to `0.7` when absent.
-    #[serde(default)]
-    pub temperature: Option<f32>,
+    /// Response randomness; defaults to `0.7` when absent. `f64` rather
+    /// than `PaladinData.temperature`'s own `f32` (cast down in `compile`):
+    /// a JSON literal like `0.7` round-trips exactly through `serde_json`'s
+    /// `f64`-only number representation, but the SAME literal narrowed to
+    /// `f32` first and then widened back for serialisation prints as
+    /// `0.699999988079071` -- breaking the fixture corpus's byte-for-byte
+    /// round-trip guarantee for no benefit (the narrowing to `PaladinData`'s
+    /// `f32` still happens, just once, at `compile` time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
     /// Maximum reasoning loops (`MaxLoops::Fixed`); defaults to `3` when
     /// absent.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_loops: Option<u32>,
     /// Tokens that signal the Paladin should stop.
     #[serde(default)]
@@ -368,7 +375,7 @@ pub struct PaladinNodeDoc {
     pub output_field: String,
     /// When `Some`, this node dispatches through the structured executor
     /// and the parsed JSON value is written to `output_field` (RT-05).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<SchemaRefDoc>,
 }
 
@@ -382,13 +389,13 @@ pub struct GateNodeDoc {
     pub prompt_template: String,
     /// Renders the raised request's payload from the Battlefield, if
     /// declared.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload_template: Option<String>,
     /// Valid choices, for [`ParleyKindDoc::Choice`].
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<String>>,
     /// How long after raising this request expires, if ever.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_in_secs: Option<u64>,
     /// What happens if this request expires unanswered.
     #[serde(default)]
@@ -396,7 +403,7 @@ pub struct GateNodeDoc {
     /// The field the delivered value is written to; required for every
     /// [`ParleyKindDoc`] except `StateEdit`, which must leave this `None`
     /// (`WarGraph::validate` enforces the pairing, D-05).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_field: Option<String>,
 }
 
@@ -466,7 +473,7 @@ pub struct EdgeDoc {
     /// The target node id.
     pub to: String,
     /// The edge's traversal condition; `None` behaves like `Always`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition: Option<EdgeConditionDoc>,
 }
 
@@ -518,17 +525,17 @@ pub enum SchemaRefDoc {
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub struct AegisDoc {
     /// Retry policy, if this node retries a failed attempt.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<RetryPolicyDoc>,
     /// Timeout policy, if this node is time-bounded.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<TimeoutPolicyDoc>,
     /// Typed error handler, if a failure should be compensated instead of
     /// failing the run.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_error: Option<ErrorHandlerSpecDoc>,
     /// Cache policy, if this node's result may be served from a cache.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<CachePolicyDoc>,
 }
 
@@ -592,10 +599,10 @@ pub enum RetryPredicateDoc {
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub struct TimeoutPolicyDoc {
     /// A hard wall-clock cap on each attempt, in seconds.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_timeout_secs: Option<u64>,
     /// The longest an attempt may go without progress, in seconds.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_timeout_secs: Option<u64>,
 }
 
@@ -662,7 +669,7 @@ pub struct FieldDoc {
     /// The merge strategy applied to deltas targeting this field.
     pub reducer: ReducerDoc,
     /// Default value used when the field is absent.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
     /// Whether the engine must refuse to start a run that cannot resolve
     /// this field.
@@ -1058,7 +1065,7 @@ fn compile_node(
                 name: p.name.clone(),
                 user_name: String::new(),
                 model: p.model.clone(),
-                temperature: p.temperature.unwrap_or(0.7),
+                temperature: p.temperature.unwrap_or(0.7) as f32,
                 max_loops: MaxLoops::Fixed(p.max_loops.unwrap_or(3)),
                 stop_words: p.stop_words.clone(),
                 status: PaladinStatus::Idle,

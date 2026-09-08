@@ -135,3 +135,10 @@ vision:
     max_tokens: 1024            # Smaller token limit for tests
   anthropic:
     max_tokens: 1024            # Smaller token limit for tests
+
+# Runtime trace pipeline configuration for testing (X-09, D-36). Only
+# channel_capacity is overridden here so this file's own round-trip test
+# proves partial-section deserialization; every other field is left absent
+# and resolves to TraceConfig::default().
+trace:
+  channel_capacity: 32          # Non-default, so the override is provable

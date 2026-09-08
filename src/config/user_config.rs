@@ -280,6 +280,7 @@ mod tests {
             timeouts: None,
             http: None,
             agent_runtime: crate::config::AgentRuntimeConfig::default(),
+            trace: crate::config::TraceConfig::default(),
         }
     }
 

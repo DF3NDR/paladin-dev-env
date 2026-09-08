@@ -40,6 +40,8 @@ pub mod settings;
 #[allow(missing_docs)]
 pub mod setup;
 #[allow(missing_docs)]
+pub mod trace;
+#[allow(missing_docs)]
 pub mod user_config;
 #[allow(missing_docs)]
 pub mod waypoint_retention;
@@ -77,6 +79,7 @@ pub use crate::config::run_stream::RunStreamConfig;
 pub use crate::config::run_worker::RunWorkerConfig;
 pub use crate::config::scheduler::SchedulerConfig;
 pub use crate::config::schedules::SchedulesConfig;
+pub use crate::config::trace::{OtelConfig, TraceConfig};
 pub use crate::config::waypoint_retention::WaypointRetentionConfig;
 pub use crate::config::waypoint_store::{WaypointStoreBackend, WaypointStoreConfig};
 pub use crate::config::web_server::{MessageServiceSettings, ServerConfig, SourceConfig};

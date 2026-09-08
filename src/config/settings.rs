@@ -3,6 +3,7 @@
 
 use crate::config::agent_runtime::AgentRuntimeConfig;
 use crate::config::env_utils::EnvOverridable;
+use crate::config::trace::TraceConfig;
 #[cfg(feature = "s3-storage")]
 use crate::infrastructure::adapters::file_storage::minio::MinioConfig;
 use config::{Config, ConfigError, Environment, File, FileFormat};
@@ -63,6 +64,12 @@ pub struct Settings {
     /// identical behavior to a v0.9 configuration.
     #[serde(default)]
     pub agent_runtime: AgentRuntimeConfig,
+    /// Runtime trace pipeline configuration (X-09, D-36). Every field
+    /// defaults to today's behavior, so an absent `trace:` key resolves to
+    /// [`TraceConfig::default()`] and boots identically to a v0.9
+    /// configuration.
+    #[serde(default)]
+    pub trace: TraceConfig,
 }
 
 impl Settings {
@@ -82,11 +89,13 @@ impl Settings {
 
     /// Validates this configuration's own cross-cutting invariants.
     ///
-    /// Currently validates [`AgentRuntimeConfig`] only (X-09); other
+    /// Validates [`AgentRuntimeConfig`] and [`TraceConfig`] (X-09); other
     /// domain configs perform their own validation through their
     /// individual `get_*_config()` accessors.
     pub fn validate(&self) -> Result<(), String> {
-        self.agent_runtime.validate()
+        self.agent_runtime.validate()?;
+        self.trace.validate()?;
+        Ok(())
     }
 
     /// Load settings from a file at the given path.
@@ -368,6 +377,7 @@ impl Default for Settings {
             timeouts: Some(AgentTimeoutsConfig::default()),
             http: Some(WebHttpConfig::default()),
             agent_runtime: AgentRuntimeConfig::default(),
+            trace: TraceConfig::default(),
         }
     }
 }

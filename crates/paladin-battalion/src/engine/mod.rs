@@ -57,6 +57,11 @@ pub mod cache_key;
 pub mod directive_parser;
 pub mod dispatch_registry;
 pub mod graph;
+/// `WarGraphDoc` -- the serde/schemars document form of a [`graph::WarGraph`]
+/// (PLAT-FR-12, D-31/D-33/D-34): what an assistant version persists, and
+/// [`graph_doc::WarGraphDoc::compile`] turns into an executable, validated
+/// `WarGraph`.
+pub mod graph_doc;
 pub mod heartbeat;
 pub mod hooks;
 pub mod input_mapping;
@@ -107,6 +112,7 @@ pub use bridges::{CAMPAIGN_FAN_IN_SEPARATOR, campaign_node_ids, dedicated_output
 pub use directive_parser::{DirectiveParseError, DirectiveParser, OnParseError};
 pub use dispatch_registry::DispatchRegistry;
 pub use graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
+pub use graph_doc::{CompileError, WARGRAPH_DOC_SCHEMA_VERSION, WarGraphDoc};
 pub use heartbeat::HeartbeatHandle;
 pub use hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 pub use input_mapping::{InputMapping, InputMappingError};

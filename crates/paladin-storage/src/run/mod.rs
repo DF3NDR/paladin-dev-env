@@ -16,3 +16,7 @@ pub mod contract_tests;
 /// SQLite implementation, behind the `sqlite` feature (D-03).
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+
+/// PostgreSQL implementation, behind the `postgres` feature (D-03, Tier 2).
+#[cfg(feature = "postgres")]
+pub mod postgres;

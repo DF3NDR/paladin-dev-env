@@ -40,16 +40,14 @@ pub struct DevUiConfig {
     /// The Mermaid ESM bundle URL the inspector page's module script
     /// imports (D-26). Defaults to the jsDelivr `mermaid@11` CDN bundle;
     /// settable so an air-gapped operator can point it at a local mirror.
-    ///
-    /// RED-phase stub (Task 3): deliberately wrong (empty) so the new
-    /// tests fail. The GREEN commit sets the real jsDelivr URL.
     pub mermaid_url: String,
 }
 
 impl Default for DevUiConfig {
     fn default() -> Self {
         Self {
-            mermaid_url: String::new(),
+            mermaid_url: "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
+                .to_string(),
         }
     }
 }
@@ -67,6 +65,12 @@ pub struct WebServerConfig {
     pub dev_ui: DevUiConfig,
 }
 
+// A manual impl (not #[derive(Default)]) even though it happens to equal
+// `#[derive(Default)]`'s output today -- deliberately explicit and
+// colocated with `validate()`'s own house-shape convention, mirroring
+// `WaypointRetentionConfig`'s identical justification. `#[allow]` because
+// clippy can't see the intent.
+#[allow(clippy::derivable_impls)]
 impl Default for WebServerConfig {
     fn default() -> Self {
         Self {

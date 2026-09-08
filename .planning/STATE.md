@@ -5,12 +5,12 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 28
 current_phase_name: Observability & Tooling
 status: planning
-stopped_at: "Phase 27 complete (2026-09-08): 26/26 plans (18 + 8 gap-closure) merged; verification passed 6/6; CI evidence run 34245093476 @ 2bf43cd2 all green (coverage 89.98%); code review 0 critical / 1 warning (WR-27-01 Ok(None) signing-key arm) / 1 info; no 27-SECURITY.md yet. Next: /gsd-discuss-phase 28 (or /gsd-secure-phase 27 first)."
-last_updated: "2026-09-08T16:26:46.694Z"
+stopped_at: Phase 28 context gathered
+last_updated: "2026-09-08T20:17:35.074Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 27 complete, transitioned to Phase 28
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 7
   total_plans: 111
   completed_plans: 111
@@ -846,14 +846,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 27 gap closure complete: 26/26 plans merged; CI evidence run 34245093476 @ 2bf43cd2 all green (coverage 89.98%); 27-25 human gate approved 2026-09-08; next: code review, regression gate, phase verification.
+**Stopped at:** Phase 28 context gathered
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-08T16:15:48.248Z
-Resume file: .planning/phases/27-platform-api/27-CI-EVIDENCE.md
+Last session: 2026-09-08T20:17:34.999Z
+Resume file: .planning/phases/28-observability-tooling/28-CONTEXT.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

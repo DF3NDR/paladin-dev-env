@@ -100,6 +100,7 @@ use paladin_core::platform::container::vault::Namespace;
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, ThreadId, WaypointId, WaypointStatus,
 };
+use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::NodeCachePort;
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::structured_executor_port::StructuredExecutorPort;
@@ -1427,6 +1428,16 @@ pub struct WarEngine<W: WaypointPort> {
     /// (ENG-FR-23). `None` behaves identically to a token that is never
     /// cancelled.
     cancellation_token: Option<CancellationToken>,
+    /// The optional durable, possibly cross-instance cancellation probe
+    /// consulted at every superstep boundary BESIDE --  never instead of --
+    /// `cancellation_token` above (D-14, PLAT-FR-04), wired via
+    /// [`WarEngine::with_cancellation_probe`]. `None` behaves identically to
+    /// a probe that never reports cancellation
+    /// ([`paladin_ports::output::cancellation_probe::NeverCancelled`]).
+    /// Forwarded wholesale into every `NodeSpec::Battalion` child engine
+    /// run, like every other engine resource, so a cancelled parent
+    /// thread's children observe it too.
+    cancellation_probe: Option<Arc<dyn CancellationProbe>>,
     /// The grace window a mid-superstep cancellation races the in-flight
     /// batch of spawned node tasks against (HITL-04, D-19, D-20). A runtime
     /// setting, never part of `EngineLimits` and never hashed into the
@@ -1486,6 +1497,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             trace_dispatcher: Arc::new(TraceDispatcher::new(None)),
             interceptors: Vec::new(),
             cancellation_token: None,
+            cancellation_probe: None,
             shutdown_grace: std::time::Duration::from_secs(30),
             node_cache: None,
             vault: None,
@@ -1590,6 +1602,18 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
     /// behavior identical to no token configured at all.
     pub fn with_cancellation_token(mut self, token: CancellationToken) -> Self {
         self.cancellation_token = Some(token);
+        self
+    }
+
+    /// Attach a [`CancellationProbe`] this engine consults at every
+    /// superstep boundary, BESIDE -- never instead of -- any
+    /// `CancellationToken` configured via
+    /// [`WarEngine::with_cancellation_token`] (D-14, PLAT-FR-04): either one
+    /// answering "cancelled" halts the run identically. A probe that never
+    /// reports cancellation produces behavior identical to no probe
+    /// configured at all.
+    pub fn with_cancellation_probe(mut self, probe: Arc<dyn CancellationProbe>) -> Self {
+        self.cancellation_probe = Some(probe);
         self
     }
 
@@ -1826,6 +1850,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.trace_dispatcher,
             &self.interceptors,
             &self.cancellation_token,
+            &self.cancellation_probe,
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
             self.node_cache.clone(),
@@ -2030,6 +2055,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.trace_dispatcher,
             &self.interceptors,
             &self.cancellation_token,
+            &self.cancellation_probe,
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
             self.node_cache.clone(),
@@ -2357,6 +2383,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.trace_dispatcher,
             &self.interceptors,
             &self.cancellation_token,
+            &self.cancellation_probe,
             Some(Arc::clone(&self.waypoint_port)),
             None,
             // --- HITL-03, D-14: the resumed run's own Waypoints stay on the
@@ -2511,6 +2538,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.trace_dispatcher,
             &self.interceptors,
             &self.cancellation_token,
+            &self.cancellation_probe,
             Some(Arc::clone(&self.waypoint_port)),
             waypoint.checkpoint_ns,
             // --- HITL-03, D-14/D-16: `from` becomes the branch ROOT --
@@ -4913,6 +4941,241 @@ mod tests {
                 },
             ) => assert_eq!(state_a, state_b),
             other => panic!("expected both runs to complete, got {other:?}"),
+        }
+    }
+
+    // --- D-14, PLAT-FR-04: CancellationProbe -> Halted, beside the token --
+    // Nested in its own `mod` (rather than flat in `tests`) so
+    // `cargo test -p paladin-battalion --lib cancellation_probe` selects
+    // exactly this group by module-path substring match, mirroring how
+    // `vault_tests`/`llm_decision::tests` are already scoped elsewhere in
+    // this crate.
+    mod cancellation_probe_tests {
+        use super::*;
+
+        /// Counts every `is_cancelled` call and answers `true` from the
+        /// configured call number onward (never `false` again afterward).
+        struct CountingProbe {
+            calls: std::sync::atomic::AtomicUsize,
+            cancel_at_call: usize,
+        }
+
+        #[async_trait]
+        impl CancellationProbe for CountingProbe {
+            async fn is_cancelled(&self, _thread: &ThreadId) -> bool {
+                let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                call >= self.cancel_at_call
+            }
+        }
+
+        /// A probe that always answers `false` -- proves an attached-but-
+        /// never-cancelling probe changes nothing about a run's outcome.
+        struct NeverCancellingProbe;
+
+        #[async_trait]
+        impl CancellationProbe for NeverCancellingProbe {
+            async fn is_cancelled(&self, _thread: &ThreadId) -> bool {
+                false
+            }
+        }
+
+        #[tokio::test]
+        async fn probe_cancelling_on_the_second_boundary_halts_after_one_completed_superstep() {
+            let (graph, ids) = four_node_chain_graph();
+            let probe = Arc::new(CountingProbe {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                cancel_at_call: 2,
+            });
+            let store = Arc::new(RecordingWaypointStore::new());
+            let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+                .with_cancellation_probe(probe.clone());
+            let thread = ThreadId::new("probe-cancel-second-boundary").unwrap();
+
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                engine.start(&graph, thread.clone(), StateDelta::new()),
+            )
+            .await
+            .expect("probe cancellation must not hang the run")
+            .unwrap();
+
+            let waypoint_id = match outcome {
+                RunOutcome::Halted { waypoint } => waypoint,
+                other => panic!("expected Halted, got {other:?}"),
+            };
+
+            let waypoints = ascending_history(&store, &thread).await;
+            let halted = waypoints
+                .iter()
+                .find(|w| w.waypoint_id == waypoint_id)
+                .expect("the returned waypoint id must exist in the thread's history");
+            assert_eq!(halted.status, WaypointStatus::Halted);
+            assert_eq!(
+                halted.vanguard,
+                vec![ids[1].clone()],
+                "the Halted waypoint's vanguard must be exactly the node that would run next (n2), \
+                 identical to the token path"
+            );
+
+            // Exactly one superstep's worth of work happened -- n1 ran, n2 never did.
+            let all_node_ids: std::collections::HashSet<String> = waypoints
+                .iter()
+                .flat_map(|w| w.completed.iter().map(|r| r.node_id.as_str().to_string()))
+                .collect();
+            assert!(all_node_ids.contains(ids[0].as_str()));
+            assert!(!all_node_ids.contains(ids[1].as_str()));
+        }
+
+        #[tokio::test]
+        async fn probe_that_never_cancels_changes_nothing() {
+            let (graph_a, _ids_a) = four_node_chain_graph();
+            let engine_no_probe = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            );
+            let outcome_a = engine_no_probe
+                .start(
+                    &graph_a,
+                    ThreadId::new("no-probe").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+
+            let (graph_b, _ids_b) = four_node_chain_graph();
+            let engine_with_probe = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_cancellation_probe(Arc::new(NeverCancellingProbe));
+            let outcome_b = engine_with_probe
+                .start(
+                    &graph_b,
+                    ThreadId::new("with-never-cancelling-probe").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+
+            match (outcome_a, outcome_b) {
+                (
+                    RunOutcome::Completed {
+                        final_state: state_a,
+                        ..
+                    },
+                    RunOutcome::Completed {
+                        final_state: state_b,
+                        ..
+                    },
+                ) => assert_eq!(state_a, state_b),
+                other => panic!("expected both runs to complete, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn probe_is_consulted_exactly_once_per_superstep_boundary() {
+            // A 3-node sequential chain (one node per superstep): n1 -> n2 -> n3.
+            let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+                FieldName::new("trace").unwrap(),
+                DispatchRule::Append,
+                None,
+                false,
+            )]);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let ids: Vec<NodeId> = (1..=3).map(|i| NodeId::new(format!("n{i}"))).collect();
+            for id in &ids {
+                graph.add_node(
+                    id.clone(),
+                    NodeSpec::Function(CountingFunctionNode::fixed(
+                        FieldName::new("trace").unwrap(),
+                        serde_json::json!(id.as_str()),
+                    )),
+                );
+            }
+            for pair in ids.windows(2) {
+                graph.add_edge(EdgeSpec {
+                    from: pair[0].clone(),
+                    to: pair[1].clone(),
+                    condition: None,
+                });
+            }
+            graph.add_entry(ids[0].clone());
+
+            let probe = Arc::new(CountingProbe {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                cancel_at_call: usize::MAX, // never actually cancels
+            });
+            let engine = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_cancellation_probe(probe.clone());
+
+            let outcome = engine
+                .start(
+                    &graph,
+                    ThreadId::new("probe-call-count").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+            assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+            // --- D-14: the boundary check runs at the TOP of the loop, before
+            // that iteration's own dispatch. The loop's own inline
+            // "next_vanguard empty -> Completed" short-circuit
+            // (`engine::superstep::run_with_namespace`) returns WITHOUT looping
+            // back to the top for one more boundary check once the LAST
+            // superstep's dispatch computes an empty `next_vanguard` -- so a
+            // 3-superstep chain consults the probe exactly 3 times (once
+            // before n1, once before n2, once before n3), never a 4th time
+            // after n3 completes.
+            assert_eq!(
+                probe.calls.load(std::sync::atomic::Ordering::SeqCst),
+                3,
+                "the probe must be consulted exactly once per superstep boundary, no more, no less"
+            );
+        }
+
+        #[tokio::test]
+        async fn either_token_or_probe_cancelling_halts_the_run() {
+            // The token is attached but never cancelled; only the probe fires --
+            // proves either signal alone is sufficient to halt.
+            let token = CancellationToken::new();
+            let probe = Arc::new(CountingProbe {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                cancel_at_call: 2,
+            });
+            let (graph, ids) = four_node_chain_graph();
+            let store = Arc::new(RecordingWaypointStore::new());
+            let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+                .with_cancellation_token(token)
+                .with_cancellation_probe(probe.clone());
+            let thread = ThreadId::new("token-and-probe-either-halts").unwrap();
+
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                engine.start(&graph, thread.clone(), StateDelta::new()),
+            )
+            .await
+            .expect("cancellation must not hang the run")
+            .unwrap();
+
+            let waypoint_id = match outcome {
+                RunOutcome::Halted { waypoint } => waypoint,
+                other => panic!("expected Halted, got {other:?}"),
+            };
+            let waypoints = ascending_history(&store, &thread).await;
+            let halted = waypoints
+                .iter()
+                .find(|w| w.waypoint_id == waypoint_id)
+                .expect("the returned waypoint id must exist in the thread's history");
+            assert_eq!(halted.status, WaypointStatus::Halted);
+            assert_eq!(
+                halted.vanguard,
+                vec![ids[1].clone()],
+                "the never-cancelled token coexists with the cancelling probe; either signal halts"
+            );
         }
     }
 

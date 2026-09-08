@@ -60,6 +60,7 @@ use paladin_core::platform::container::waypoint::{
     NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus,
     canonical_edge_condition,
 };
+use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::structured_executor_port::{StructuredExecutorPort, StructuredOptions};
@@ -86,7 +87,7 @@ use crate::llm_failure;
 /// the whole `EngineRegistries` bundle (edge evaluators, retry predicates
 /// and error handlers -- a child inherits the parent's registries
 /// wholesale, Phase 23 D-21 / Phase 25 D-13), the trace sink, the
-/// interceptor chain and the shared `CancellationToken`. `PaladinPort` is forwarded separately
+/// interceptor chain and the shared `CancellationToken`/`CancellationProbe`. `PaladinPort` is forwarded separately
 /// (already `Arc<dyn PaladinPort>` at every call site, no bundling
 /// needed). Gathered ONCE per [`run`] call -- never per-dispatch -- and
 /// `Arc`-wrapped so every per-superstep node's `tokio::spawn`'d task can
@@ -105,6 +106,10 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     trace: Arc<TraceDispatcher>,
     interceptors: Vec<Arc<dyn NodeInterceptor>>,
     cancellation: Option<CancellationToken>,
+    /// THIS run's own cancellation probe (D-14, PLAT-FR-04) -- inherited by
+    /// a nested `NodeSpec::Battalion` child run wholesale, like the token
+    /// above, so a cancelled parent thread's children observe it too.
+    cancellation_probe: Option<Arc<dyn CancellationProbe>>,
     /// THIS run's own `checkpoint_ns` (CF-FR-15, D-20) -- captured once
     /// here so a NESTED `NodeSpec::Battalion` dispatch (a grandchild, from
     /// this run's own perspective) can derive the next namespace segment
@@ -1328,6 +1333,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     &resources.trace,
                     &resources.interceptors,
                     &resources.cancellation,
+                    &resources.cancellation_probe,
                     Some(Arc::clone(&resources.waypoint_port)),
                     child_checkpoint_ns,
                     // --- HITL-03, D-14: the child run inherits the SAME
@@ -1637,6 +1643,11 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     trace: &Arc<TraceDispatcher>,
     interceptors: &[Arc<dyn NodeInterceptor>],
     cancellation: &Option<CancellationToken>,
+    // --- D-14, PLAT-FR-04: the optional durable, possibly cross-instance
+    // cancellation probe, consulted at every superstep boundary BESIDE --
+    // never instead of -- `cancellation` above. `None` behaves identically
+    // to a probe that never reports cancellation.
+    probe: &Option<Arc<dyn CancellationProbe>>,
     waypoint_port_arc: Option<Arc<W>>,
     // --- HITL-04, D-19, D-20: unlike `checkpoint_ns`/`fork_of`/
     // `initial_parley_responses` below (each fixed to a top-level-only
@@ -1696,6 +1707,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         trace,
         interceptors,
         cancellation,
+        probe,
         waypoint_port_arc,
         None,
         // --- HITL-03, D-14: a top-level `start`/`resume_with_options` call
@@ -1754,6 +1766,13 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     trace: &Arc<TraceDispatcher>,
     interceptors: &[Arc<dyn NodeInterceptor>],
     cancellation: &Option<CancellationToken>,
+    // --- D-14, PLAT-FR-04: the optional durable, possibly cross-instance
+    // cancellation probe, consulted at every superstep boundary BESIDE --
+    // never instead of -- `cancellation` above. `None` behaves identically
+    // to a probe that never reports cancellation. Inherited wholesale by a
+    // nested `NodeSpec::Battalion` child run via
+    // `ChildEngineResources::cancellation_probe`.
+    probe: &Option<Arc<dyn CancellationProbe>>,
     waypoint_port_arc: Option<Arc<W>>,
     // --- CF-FR-15, D-20: the namespace path THIS run's own Waypoints are
     // stamped with (`Waypoint.checkpoint_ns`) -- `None` for a top-level
@@ -1858,6 +1877,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 trace: Arc::clone(trace),
                 interceptors: interceptors.to_vec(),
                 cancellation: cancellation.clone(),
+                cancellation_probe: probe.clone(),
                 checkpoint_ns: checkpoint_ns.clone(),
                 fork_of,
                 shutdown_grace,
@@ -1996,10 +2016,23 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         // otherwise), so persisting it verbatim on a `Halted` Waypoint is
         // what makes `resume` able to continue from exactly where this run
         // was asked to stop.
-        if cancellation
+        //
+        // --- D-14, PLAT-FR-04: `probe`, if attached, is consulted here
+        // BESIDE -- never instead of -- `cancellation` above, exactly once
+        // per boundary (including the very first iteration). Either
+        // signal answering "cancelled" takes the SAME `Halted` path below;
+        // the probe is infallible by construction (it returns a plain
+        // `bool`, never a `Result`), so there is nothing here to handle on
+        // failure -- an adapter that cannot determine the answer has
+        // already decided internally to answer `false`.
+        let token_cancelled = cancellation
             .as_ref()
-            .is_some_and(CancellationToken::is_cancelled)
-        {
+            .is_some_and(CancellationToken::is_cancelled);
+        let probe_cancelled = match probe {
+            Some(p) => p.is_cancelled(&thread).await,
+            None => false,
+        };
+        if token_cancelled || probe_cancelled {
             let waypoint = build_waypoint(
                 &thread,
                 parent_waypoint_id,
@@ -4490,6 +4523,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
             None,
             default_shutdown_grace(),
             None,
@@ -4531,6 +4565,7 @@ mod tests {
             port,
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             None,
             default_shutdown_grace(),
@@ -4579,6 +4614,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             None,
             default_shutdown_grace(),
@@ -5374,6 +5410,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             None,
             default_shutdown_grace(),
@@ -6838,6 +6875,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
             None,
             default_shutdown_grace(),
             None,
@@ -6891,6 +6929,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             None,
             default_shutdown_grace(),
@@ -7477,6 +7516,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
             None,
             default_shutdown_grace(),
             None,
@@ -7513,6 +7553,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             None,
             default_shutdown_grace(),
@@ -7576,6 +7617,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             None,
             default_shutdown_grace(),
@@ -9081,6 +9123,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             cancellation,
+            &None,
             Some(Arc::clone(store)),
             default_shutdown_grace(),
             None,
@@ -10483,6 +10526,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             cancellation,
+            &None,
             None,
             shutdown_grace,
             None,
@@ -10527,6 +10571,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             None,
             shutdown_grace,
@@ -11956,6 +12001,7 @@ mod tests {
             port,
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             None,
             default_shutdown_grace(),

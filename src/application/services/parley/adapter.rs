@@ -50,7 +50,7 @@
 //! When [`ParleyPortAdapter::with_run_repository`] and
 //! [`ParleyPortAdapter::with_run_queue`] are both wired AND the thread has an
 //! active run row (`RunRepositoryPort::active_run_for_thread`), a
-//! [`ShadowOutcome::Complete`] submission no longer spawns the continuation
+//! `ShadowOutcome::Complete` submission no longer spawns the continuation
 //! in-process: it calls `record_resume` (attempt `n` -> `n+1`, responses
 //! parked on the row) and re-enqueues a [`QueuedRun`] under the SAME
 //! `run_id`, returning immediately with `run_id: Some(..)`. The queued

@@ -27,7 +27,6 @@
  * `27-18-SUMMARY.md`) to pin the exact generated shape.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 import { AssistantsApi, Configuration, RunsApi } from "paladin-sdk";
 
 const BASE_URL = process.env.PALADIN_SMOKE_BASE_URL ?? "http://127.0.0.1:18080";

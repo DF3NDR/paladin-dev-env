@@ -21,7 +21,7 @@ use paladin_core::platform::container::parley::ParleyRequest;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
 use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
-use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink, TraceSinkError};
+use paladin_ports::output::trace_sink_port::{TraceRecord, TraceSink, TraceSinkError};
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
@@ -622,11 +622,11 @@ impl PaladinPort for FailingPaladinPort {
 
 // --- Phase 22 Plan 09: TraceSink test doubles -----------------------------
 
-/// A [`TraceSink`] test double recording every event it receives, in the
+/// A [`TraceSink`] test double recording every record it receives, in the
 /// exact order it received them.
 #[derive(Default)]
 pub struct RecordingTraceSink {
-    events: tokio::sync::Mutex<Vec<TraceEvent>>,
+    events: tokio::sync::Mutex<Vec<TraceRecord>>,
 }
 
 impl RecordingTraceSink {
@@ -635,16 +635,16 @@ impl RecordingTraceSink {
         Arc::new(Self::default())
     }
 
-    /// The events recorded so far, in receipt order.
-    pub async fn events(&self) -> Vec<TraceEvent> {
+    /// The records recorded so far, in receipt order.
+    pub async fn events(&self) -> Vec<TraceRecord> {
         self.events.lock().await.clone()
     }
 }
 
 #[async_trait]
 impl TraceSink for RecordingTraceSink {
-    async fn on_event(&self, event: TraceEvent) -> Result<(), TraceSinkError> {
-        self.events.lock().await.push(event);
+    async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+        self.events.lock().await.push(record);
         Ok(())
     }
 }
@@ -669,7 +669,7 @@ impl BlockingTraceSink {
 
 #[async_trait]
 impl TraceSink for BlockingTraceSink {
-    async fn on_event(&self, _event: TraceEvent) -> Result<(), TraceSinkError> {
+    async fn on_event(&self, _record: TraceRecord) -> Result<(), TraceSinkError> {
         self.entered.store(true, Ordering::SeqCst);
         std::future::pending::<()>().await;
         unreachable!("std::future::pending() never resolves")
@@ -697,7 +697,7 @@ impl AlwaysErroringTraceSink {
 
 #[async_trait]
 impl TraceSink for AlwaysErroringTraceSink {
-    async fn on_event(&self, _event: TraceEvent) -> Result<(), TraceSinkError> {
+    async fn on_event(&self, _record: TraceRecord) -> Result<(), TraceSinkError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Err(TraceSinkError::Failed("simulated failure".to_string()))
     }
@@ -711,7 +711,7 @@ impl TraceSink for AlwaysErroringTraceSink {
 /// -- proving drop-OLDEST (not drop-newest) precisely (T-22-31), rather than
 /// only proving the drop counter incremented.
 pub struct GatedTraceSink {
-    events: tokio::sync::Mutex<Vec<TraceEvent>>,
+    events: tokio::sync::Mutex<Vec<TraceRecord>>,
     gate: Arc<tokio::sync::Notify>,
     gated_once: AtomicBool,
 }
@@ -727,20 +727,61 @@ impl GatedTraceSink {
         })
     }
 
-    /// The events recorded so far (including the gated first one, once
+    /// The records recorded so far (including the gated first one, once
     /// released), in receipt order.
-    pub async fn events(&self) -> Vec<TraceEvent> {
+    pub async fn events(&self) -> Vec<TraceRecord> {
         self.events.lock().await.clone()
     }
 }
 
 #[async_trait]
 impl TraceSink for GatedTraceSink {
-    async fn on_event(&self, event: TraceEvent) -> Result<(), TraceSinkError> {
+    async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
         if !self.gated_once.swap(true, Ordering::SeqCst) {
             self.gate.notified().await;
         }
-        self.events.lock().await.push(event);
+        self.events.lock().await.push(record);
+        Ok(())
+    }
+}
+
+/// A [`TraceSink`] test double that PANICS on its `panic_on_nth`-th call
+/// (1-indexed) and records every call it actually reaches (D-08): proves a
+/// panicking sink is caught by `TraceDispatcher`'s `catch_unwind`, counted in
+/// `sink_panics`, and never kills the consumer task -- records after the
+/// panic still arrive.
+pub struct PanickingTraceSink {
+    panic_on_nth: usize,
+    calls: AtomicUsize,
+    events: tokio::sync::Mutex<Vec<TraceRecord>>,
+}
+
+impl PanickingTraceSink {
+    /// Construct a sink that panics on its `panic_on_nth`-th call
+    /// (1-indexed); every other call records normally.
+    pub fn new(panic_on_nth: usize) -> Arc<Self> {
+        Arc::new(Self {
+            panic_on_nth,
+            calls: AtomicUsize::new(0),
+            events: tokio::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The records this sink actually recorded (excludes the panicking
+    /// call), in receipt order.
+    pub async fn events(&self) -> Vec<TraceRecord> {
+        self.events.lock().await.clone()
+    }
+}
+
+#[async_trait]
+impl TraceSink for PanickingTraceSink {
+    async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if call == self.panic_on_nth {
+            panic!("PanickingTraceSink: simulated panic on call {call}");
+        }
+        self.events.lock().await.push(record);
         Ok(())
     }
 }

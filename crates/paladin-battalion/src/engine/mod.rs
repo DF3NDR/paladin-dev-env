@@ -104,7 +104,7 @@ use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::NodeCachePort;
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::structured_executor_port::StructuredExecutorPort;
-use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink};
+use paladin_ports::output::trace_sink_port::{RunFinishStatus, TraceEvent, TraceSink};
 use paladin_ports::output::vault_confined::ConfinedVault;
 use paladin_ports::output::vault_port::VaultPort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
@@ -1415,11 +1415,21 @@ pub struct WarEngine<W: WaypointPort> {
     /// `WarGraph::validate` and `superstep::run` (its `edge_evaluators`
     /// field only, for now) at `start`/`resume` as an `&EngineRegistries`.
     registries: EngineRegistries,
-    /// The bounded, drop-oldest `TraceSink` forwarder (ENG-FR-21). Always
-    /// present -- constructed with no sink (`TraceDispatcher::new(None)`) by
-    /// default, in which case `emit` is a no-op and no channel is
-    /// allocated.
-    trace_dispatcher: Arc<TraceDispatcher>,
+    /// The `TraceSink` this engine forwards to, if any (ENG-FR-21, D-03).
+    /// `None` by default. A fresh, thread-scoped `TraceDispatcher` is
+    /// constructed from this (and `trace_capacity`) at the top of every
+    /// entry point (`start`/`resume`/`resume_with`/`replay`/`fork`) rather
+    /// than held as one engine-lifetime dispatcher: `TraceDispatcher` stamps
+    /// `seq` per its own `thread_id` (D-03), and this engine's own entry
+    /// points each take a `thread: ThreadId` argument that can differ call
+    /// to call (most concretely in this crate's own unit tests, which reuse
+    /// one `WarEngine` across many threads) -- the production shape (the
+    /// Phase 27 worker builds one engine per run) makes this equivalent to
+    /// "one dispatcher per run" in the served path either way.
+    trace_sink: Option<Arc<dyn TraceSink>>,
+    /// The queue capacity every per-call `TraceDispatcher` above is
+    /// constructed with. Defaults to `TraceDispatcher`'s own default.
+    trace_capacity: usize,
     /// The ordered `NodeInterceptor` chain (ENG-FR-22). Empty by default: an
     /// empty chain is proven (in `engine::hooks`'s own tests) to change
     /// nothing about a run's node executions or final state.
@@ -1494,7 +1504,8 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             parallelism: None,
             dispatch_registry: DispatchRegistry::new(),
             registries: EngineRegistries::new(),
-            trace_dispatcher: Arc::new(TraceDispatcher::new(None)),
+            trace_sink: None,
+            trace_capacity: crate::engine::hooks::DEFAULT_CAPACITY,
             interceptors: Vec::new(),
             cancellation_token: None,
             cancellation_probe: None,
@@ -1585,7 +1596,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
     /// previously configured sink; events are forwarded fire-and-forget over
     /// a bounded, drop-oldest queue -- see `engine::hooks::TraceDispatcher`.
     pub fn with_trace_sink(mut self, sink: Arc<dyn TraceSink>) -> Self {
-        self.trace_dispatcher = Arc::new(TraceDispatcher::new(Some(sink)));
+        self.trace_sink = Some(sink);
         self
     }
 
@@ -1828,8 +1839,17 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         let battlefield = Battlefield::initialize(graph.schema().clone(), &initial)?;
         battlefield.validate_required()?;
 
-        self.trace_dispatcher.emit(TraceEvent::RunStarted {
-            thread_id: thread.clone(),
+        // D-03: a fresh, thread-scoped dispatcher stamps `seq`/`at` for
+        // every trace record this call (and everything it calls) emits.
+        let trace = Arc::new(TraceDispatcher::with_capacity(
+            thread.clone(),
+            None,
+            self.trace_sink.clone(),
+            self.trace_capacity,
+        ));
+        trace.emit(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: graph.fingerprint().to_string(),
         });
         let outcome = superstep::run(
             self.waypoint_port.as_ref(),
@@ -1847,7 +1867,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             None,
             1,
             &self.paladin_port,
-            &self.trace_dispatcher,
+            &trace,
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
@@ -1858,8 +1878,16 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.structured_executor.clone(),
         )
         .await;
-        self.trace_dispatcher
-            .emit(TraceEvent::RunFinished { thread_id: thread });
+        // 28-03 fills `status`/totals from `outcome`; `trace_dropped_total`
+        // is stamped by `TraceDispatcher::emit` itself at enqueue time
+        // (D-07).
+        trace.emit(TraceEvent::RunFinished {
+            status: RunFinishStatus::Completed,
+            total_supersteps: 0,
+            total_tokens: 0,
+            duration_ms: 0,
+            trace_dropped_total: 0,
+        });
         outcome
     }
 
@@ -1946,12 +1974,27 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             });
         }
 
+        // D-03: a fresh, thread-scoped dispatcher for this call and
+        // everything it calls (including the early-return branch below).
+        let trace = Arc::new(TraceDispatcher::with_capacity(
+            thread.clone(),
+            None,
+            self.trace_sink.clone(),
+            self.trace_capacity,
+        ));
+
         if matches!(latest.status, WaypointStatus::Completed) {
-            self.trace_dispatcher.emit(TraceEvent::RunStarted {
-                thread_id: thread.clone(),
+            trace.emit(TraceEvent::RunStarted {
+                run_id: None,
+                graph_fingerprint: expected.to_string(),
             });
-            self.trace_dispatcher
-                .emit(TraceEvent::RunFinished { thread_id: thread });
+            trace.emit(TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 0,
+                total_tokens: 0,
+                duration_ms: 0,
+                trace_dropped_total: 0,
+            });
             return Ok(RunOutcome::Completed {
                 final_state: latest.battlefield,
                 waypoint: latest.waypoint_id,
@@ -2023,8 +2066,9 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         graph.validate_node_cache_backend(self.node_cache.is_some())?;
         graph.validate_structured_executor_backend(self.structured_executor.is_some())?;
 
-        self.trace_dispatcher.emit(TraceEvent::RunStarted {
-            thread_id: thread.clone(),
+        trace.emit(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: expected.to_string(),
         });
         // --- CF-FR-12, D-14: a mid-muster progress Waypoint re-enters the
         // SAME superstep it was written at (never `+ 1`, unlike an ordinary
@@ -2052,7 +2096,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             Some(latest.waypoint_id),
             resume_superstep,
             &self.paladin_port,
-            &self.trace_dispatcher,
+            &trace,
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
@@ -2063,8 +2107,13 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.structured_executor.clone(),
         )
         .await;
-        self.trace_dispatcher
-            .emit(TraceEvent::RunFinished { thread_id: thread });
+        trace.emit(TraceEvent::RunFinished {
+            status: RunFinishStatus::Completed,
+            total_supersteps: 0,
+            total_tokens: 0,
+            duration_ms: 0,
+            trace_dropped_total: 0,
+        });
         outcome
     }
 
@@ -2153,6 +2202,15 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         graph.validate_node_cache_backend(self.node_cache.is_some())?;
         graph.validate_structured_executor_backend(self.structured_executor.is_some())?;
 
+        // D-03: a fresh, thread-scoped dispatcher for this call and every
+        // early-return branch inside it.
+        let trace = Arc::new(TraceDispatcher::with_capacity(
+            thread.clone(),
+            None,
+            self.trace_sink.clone(),
+            self.trace_capacity,
+        ));
+
         let now = Utc::now();
         let already_answered: BTreeSet<ParleyId> =
             existing_responses.iter().map(|r| r.parley_id).collect();
@@ -2211,7 +2269,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
                         self.waypoint_port.as_ref(),
                         self.durability,
                         &waypoint,
-                        &self.trace_dispatcher,
+                        &trace,
                     )
                     .await?;
                     return Err(EngineError::ParleyExpired {
@@ -2324,7 +2382,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
                 self.waypoint_port.as_ref(),
                 self.durability,
                 &waypoint,
-                &self.trace_dispatcher,
+                &trace,
             )
             .await?;
             return Ok(RunOutcome::AwaitingInput {
@@ -2355,8 +2413,9 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             }
         }
 
-        self.trace_dispatcher.emit(TraceEvent::RunStarted {
-            thread_id: thread.clone(),
+        trace.emit(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: expected.to_string(),
         });
         // --- D-08: the persisted `AwaitingInput` Waypoint's OWN `vanguard`
         // is exactly the parleying nodes -- passed through unchanged as
@@ -2380,7 +2439,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             Some(latest.waypoint_id),
             latest.superstep + 1,
             &self.paladin_port,
-            &self.trace_dispatcher,
+            &trace,
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
@@ -2401,8 +2460,13 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.structured_executor.clone(),
         )
         .await;
-        self.trace_dispatcher
-            .emit(TraceEvent::RunFinished { thread_id: thread });
+        trace.emit(TraceEvent::RunFinished {
+            status: RunFinishStatus::Completed,
+            total_supersteps: 0,
+            total_tokens: 0,
+            duration_ms: 0,
+            trace_dropped_total: 0,
+        });
         outcome
     }
 
@@ -2514,8 +2578,16 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             )?;
         }
 
-        self.trace_dispatcher.emit(TraceEvent::RunStarted {
-            thread_id: thread.clone(),
+        // D-03: a fresh, thread-scoped dispatcher for this call.
+        let trace = Arc::new(TraceDispatcher::with_capacity(
+            thread.clone(),
+            None,
+            self.trace_sink.clone(),
+            self.trace_capacity,
+        ));
+        trace.emit(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: expected.to_string(),
         });
         let outcome = superstep::run_with_namespace(
             self.waypoint_port.as_ref(),
@@ -2535,7 +2607,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             Some(from),
             resume_superstep,
             &self.paladin_port,
-            &self.trace_dispatcher,
+            &trace,
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
@@ -2556,8 +2628,12 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.structured_executor.clone(),
         )
         .await;
-        self.trace_dispatcher.emit(TraceEvent::RunFinished {
-            thread_id: thread.clone(),
+        trace.emit(TraceEvent::RunFinished {
+            status: RunFinishStatus::Completed,
+            total_supersteps: 0,
+            total_tokens: 0,
+            duration_ms: 0,
+            trace_dropped_total: 0,
         });
         outcome
     }
@@ -3946,10 +4022,15 @@ mod tests {
             TraceEvent::RunStarted { .. } => "RunStarted",
             TraceEvent::SuperstepStarted { .. } => "SuperstepStarted",
             TraceEvent::NodeStarted { .. } => "NodeStarted",
+            TraceEvent::NodeProgress { .. } => "NodeProgress",
             TraceEvent::NodeFinished { .. } => "NodeFinished",
+            TraceEvent::EdgeEvaluated { .. } => "EdgeEvaluated",
             TraceEvent::DeltaMerged { .. } => "DeltaMerged",
             TraceEvent::WaypointSaved { .. } => "WaypointSaved",
+            TraceEvent::ParleyRaised { .. } => "ParleyRaised",
             TraceEvent::RunFinished { .. } => "RunFinished",
+            TraceEvent::FallbackHop { .. } => "FallbackHop",
+            TraceEvent::MiddlewareEvent { .. } => "MiddlewareEvent",
             _ => "unknown",
         }
     }
@@ -3973,7 +4054,12 @@ mod tests {
 
         // Give the background trace consumer a chance to drain.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let names: Vec<&str> = sink.events().await.iter().map(trace_event_name).collect();
+        let names: Vec<&str> = sink
+            .events()
+            .await
+            .iter()
+            .map(|record| trace_event_name(&record.event))
+            .collect();
         assert_eq!(
             names,
             vec![
@@ -8025,7 +8111,7 @@ mod tests {
             .events()
             .await
             .iter()
-            .filter_map(|event| match event {
+            .filter_map(|record| match &record.event {
                 TraceEvent::NodeStarted { attempt, .. } => Some(("NodeStarted", *attempt)),
                 TraceEvent::NodeFinished { attempt, .. } => Some(("NodeFinished", *attempt)),
                 _ => None,
@@ -8082,7 +8168,7 @@ mod tests {
             .events()
             .await
             .iter()
-            .filter_map(|event| match event {
+            .filter_map(|record| match &record.event {
                 TraceEvent::NodeFinished { cache_hit, .. } => Some(*cache_hit),
                 _ => None,
             })

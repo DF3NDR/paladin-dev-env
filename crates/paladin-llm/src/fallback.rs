@@ -60,10 +60,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt};
 use paladin_core::platform::container::transience::Transience;
+use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
 };
-use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink};
+use paladin_ports::output::trace_sink_port::{TraceEvent, TraceRecord, TraceSink};
 use thiserror::Error;
 
 /// The `LlmResponse.metadata` key under which the adapter records the
@@ -172,6 +173,15 @@ impl FallbackLlmAdapter {
 
     /// Record one hop from `from` to `to`: a `warn!` naming both providers
     /// plus a [`TraceEvent::FallbackHop`] if a sink is attached.
+    ///
+    /// This adapter sits below the superstep engine and has no `ThreadId`
+    /// of its own (D-03) -- `with_trace_sink` here is a placeholder shape
+    /// this plan keeps compiling as-is; the `with_trace_sink` ->
+    /// `with_trace_emitter` rename that lets a caller wire the SAME
+    /// per-run `TraceEmitter` handle the engine uses (so this hop stamps
+    /// from the run's own `seq` counter, under the run's own `thread_id`)
+    /// is 28-06's (D-03). Until then, a bare placeholder thread id is
+    /// stamped so the record still satisfies `TraceRecord`'s shape.
     async fn record_hop(&self, from: &'static str, to: &'static str, err: &LlmError) {
         log::warn!(
             "Fallback chain hopping from provider '{from}' to '{to}' after {transience:?} error: {err}",
@@ -185,7 +195,14 @@ impl FallbackLlmAdapter {
             from_provider: from.to_string(),
             to_provider: to.to_string(),
         };
-        if let Err(sink_err) = sink.on_event(event).await {
+        let record = TraceRecord {
+            thread_id: ThreadId::new("fallback-adapter").expect("valid thread id"),
+            run_id: None,
+            seq: 0,
+            at: chrono::Utc::now(),
+            event,
+        };
+        if let Err(sink_err) = sink.on_event(record).await {
             log::debug!("trace sink rejected FallbackHop event: {sink_err}");
         }
     }
@@ -333,14 +350,14 @@ mod tests {
     use paladin_ports::output::trace_sink_port::TraceSinkError;
     use std::time::Duration;
 
-    /// A [`TraceSink`] that records every event it receives, in order.
+    /// A [`TraceSink`] that records every record it receives, in order.
     #[derive(Default)]
     struct RecordingSink {
-        events: tokio::sync::Mutex<Vec<TraceEvent>>,
+        events: tokio::sync::Mutex<Vec<TraceRecord>>,
     }
 
     impl RecordingSink {
-        async fn events(&self) -> Vec<TraceEvent> {
+        async fn events(&self) -> Vec<TraceRecord> {
             self.events.lock().await.clone()
         }
 
@@ -348,7 +365,7 @@ mod tests {
             self.events()
                 .await
                 .into_iter()
-                .filter_map(|event| match event {
+                .filter_map(|record| match record.event {
                     TraceEvent::FallbackHop {
                         node_id,
                         from_provider,
@@ -362,8 +379,8 @@ mod tests {
 
     #[async_trait]
     impl TraceSink for RecordingSink {
-        async fn on_event(&self, event: TraceEvent) -> Result<(), TraceSinkError> {
-            self.events.lock().await.push(event);
+        async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+            self.events.lock().await.push(record);
             Ok(())
         }
     }
@@ -737,7 +754,7 @@ mod tests {
             .iter()
             .zip([("openai", "anthropic"), ("anthropic", "deepseek")])
         {
-            match event {
+            match &event.event {
                 TraceEvent::FallbackHop {
                     node_id,
                     from_provider,

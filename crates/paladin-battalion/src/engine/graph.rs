@@ -4818,7 +4818,11 @@ mod tests {
         let store = RecordingWaypointStore::new();
         let paladin_port: StdArc<dyn paladin_ports::output::paladin_port::PaladinPort> =
             StdArc::new(RecordingPaladinPort::new());
-        let trace = StdArc::new(TraceDispatcher::new(None));
+        let trace = StdArc::new(TraceDispatcher::new(
+            ThreadId::new("reachability-regression").unwrap(),
+            None,
+            None,
+        ));
         let interceptors: Vec<StdArc<dyn crate::engine::hooks::NodeInterceptor>> = Vec::new();
 
         crate::engine::superstep::run(

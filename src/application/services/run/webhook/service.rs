@@ -9,6 +9,12 @@
 //! a delivery failure is persisted on the delivery row and never touches
 //! the run.
 //!
+//! The only path anywhere in this module that reads a response body at all
+//! is the non-2xx branch of `process`, and that read is capped during the
+//! read itself via `client::read_bounded_body` (CR-01) -- the 2xx path
+//! never inspects the body, and a timeout/connect error never receives a
+//! response to read from.
+//!
 //! # The injected clock
 //!
 //! Mirrors `schedule::service`'s own documented rationale:
@@ -29,7 +35,7 @@ use paladin_core::platform::container::webhook::{
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
-use super::client::build_webhook_client;
+use super::client::{MAX_ERROR_BODY_BYTES, build_webhook_client, read_bounded_body};
 use super::signature::WEBHOOK_SIGNATURE_HEADER;
 use super::ssrf::SsrfGuard;
 
@@ -221,7 +227,14 @@ impl WebhookDeliveryService {
                         error: None,
                     }
                 } else {
-                    let body = response.text().await.unwrap_or_default();
+                    // CR-01: the body is capped as it is read, never
+                    // buffered whole -- see `read_bounded_body`'s docs for
+                    // the threat this closes. This is the only path in the
+                    // whole webhook-delivery module that reads a response
+                    // body at all: the 2xx branch above never inspects the
+                    // body, and the timeout/connect-error branch below never
+                    // receives a response to read from.
+                    let body = read_bounded_body(response, MAX_ERROR_BODY_BYTES).await;
                     let error = Some(bounded_error(&format!("http {status}: {body}")));
                     if (500..600).contains(&status) {
                         self.retry_or_dead(&delivery, new_attempt, Some(status), error)

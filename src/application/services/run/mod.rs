@@ -19,7 +19,7 @@ pub use resolver::{
     AssistantResolver, CodeWorkflowResolver, ResolveError, ResolvedAssistant, Runnable,
 };
 pub use submission::RunSubmissionService;
-pub use worker::{RunWorkerPool, WorkerError};
+pub use worker::{LeaseHeartbeat, RunWorkerOptions, RunWorkerPool, WorkerDispatch, WorkerError};
 
 /// The end-to-end tracer test proving the whole path: HTTP -> repository ->
 /// queue -> worker -> engine -> `Completed` (Task 3, D-11). A `#[cfg(test)]`
@@ -27,3 +27,10 @@ pub use worker::{RunWorkerPool, WorkerError};
 /// (D-54).
 #[cfg(test)]
 mod tracer_e2e;
+
+/// Kill-mid-run redelivery, `AwaitingInput` ack, resume-with-pending-responses,
+/// heartbeat cadence and shutdown-drain tests -- the InMemory twin of PRD 06
+/// acceptance 2 (27-04 Task 2). A `#[cfg(test)]` module rather than a
+/// `tests/` target so it counts toward `cargo llvm-cov` (D-54).
+#[cfg(test)]
+mod worker_tests;

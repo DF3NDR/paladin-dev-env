@@ -699,6 +699,13 @@ repository's own source or `Cargo.lock` in this session.
 
 1. **Should `AgentSpec` (existing, `agent_registry.rs`) be extended/reused as `PaladinConfigDoc`, or
    should a new, richer type be authored?**
+   - **RESOLVED (planning, 2026-09-08 — 27-12):** a new facade type `AgentDefinition`, deliberately
+     *diverging* from the extend-`AgentSpec` recommendation. Rationale: `AgentSpec` is a `paladin-web`
+     DTO (`agent_registry.rs`, `utoipa::ToSchema`), while D-31 puts the validator in the facade and D-28
+     keeps the stored body as opaque JSON in core — extending `AgentSpec` would make the facade depend
+     on a web-layer type and would grow a struct Milestone-12 provisioning already depends on (X-10.3).
+     `AgentDefinition` mirrors `AgentSpec`'s JSON field names (minus `id`, plus `#[serde(default)]
+     tools`) so the wire shape stays familiar; validation mirrors `ProvisionError::InvalidSpec`'s rules.
    - What we know: `AgentSpec` already carries `id, name, model, system_prompt, temperature,
      stop_words, timeout_seconds, allowed_roles` and is already `Serialize`/`Deserialize`/
      `utoipa::ToSchema`. `AgentProvisioner::provision()` already performs exactly the kind of
@@ -716,6 +723,9 @@ repository's own source or `Cargo.lock` in this session.
 2. **Where exactly does `RunEventStreamPort` live, and does `paladin-ports`' existing `input`/
    `output` module split accommodate a port whose direction is "the facade produces, the web layer
    consumes"?**
+   - **RESOLVED (planning, 2026-09-08 — 27-10):** `crates/paladin-ports/src/input/`, beside
+     `RunSubmissionPort` — exactly the recommendation (facade-implemented, web-consumed, same shape as
+     `ParleyPort`).
    - What we know: D-27 states `paladin-web` "consumes" the port and it "returns a `Stream` of core
      `RunStreamEvent` values" — this is shaped like other input ports in this codebase (`paladin-web`
      depends on ports that the facade implements).

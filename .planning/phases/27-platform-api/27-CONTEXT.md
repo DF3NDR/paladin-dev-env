@@ -70,8 +70,7 @@ plainly reversible.
 
 ### Run identity, the status machine & persistence (PLAT-01; PLAT-FR-01)
 
-- **D-01: `RunId`, `Run`, `RunStatus` and `AssistantRef` are core types, in a new
-  `crates/paladin-core/src/platform/container/run.rs`.** `ThreadId` already lives in core
+- **D-01: `RunId`, `Run`, `RunStatus` and `AssistantRef` are core types, in a new `crates/paladin-core/src/platform/container/run.rs`.** `ThreadId` already lives in core
   (`crates/paladin-core/src/platform/container/waypoint.rs:43`) and every port that carries a run
   must take core types (ADR-0016, ADR-0038). `Run` is `#[non_exhaustive]` with a `Default`/builder
   construction path, carries `schema_version: String` (X-04), and every field added later gets
@@ -86,9 +85,7 @@ plainly reversible.
   `AwaitingInput → {Running, Cancelled, Failed}` (the third is parley expiry, HITL-FR-06). The four
   terminals (`Completed`, `Failed`, `Halted`, `Cancelled`) are absorbing — "monotonic" means no
   edge leaves a terminal. PRD 06 §5's test-plan item 1 is therefore the first plan's first test.
-- **D-03: `RunRepositoryPort` in `paladin-ports/src/output/run_repository_port.rs`; SQLite +
-  Postgres + InMemory adapters in `paladin-storage`, behind the *existing* `sqlite` / `postgres`
-  features.** `sqlx 0.8` already carries both drivers
+- **D-03: `RunRepositoryPort` in `paladin-ports/src/output/run_repository_port.rs`; SQLite + Postgres + InMemory adapters in `paladin-storage`, behind the _existing_ `sqlite` / `postgres` features.** `sqlx 0.8` already carries both drivers
   (`crates/paladin-storage/Cargo.toml:19-26`), so no new crate name enters the tree (X-07, X-11.4).
   The three adapters share one contract suite at `crates/paladin-storage/src/run/contract_tests.rs`,
   mirroring `crates/paladin-storage/src/waypoint/contract_tests.rs` — the house pattern Phase 22/24
@@ -155,12 +152,10 @@ plainly reversible.
 
 ### Worker pool placement and shutdown (PLAT-FR-02)
 
-- **D-11: The worker pool lives in the facade (`src/application/services/run/…`), never in
-  `paladin-web`.** ADR-0031 forbids a `paladin-web → paladin-battalion` edge in the default build,
+- **D-11: The worker pool lives in the facade (`src/application/services/run/…`), never in `paladin-web`.** ADR-0031 forbids a `paladin-web → paladin-battalion` edge in the default build,
   and driving `WarEngine` needs battalion. The root crate is the only assembly point that sees the
   engine, the queue adapter and the repository — precisely the Phase 24 D-24/D-25 arrangement.
-- **D-12: `paladin-web` writes through a new input port and reads through the repository port
-  directly.** `RunSubmissionPort` (`crates/paladin-ports/src/input/run_submission_port.rs`) carries
+- **D-12: `paladin-web` writes through a new input port and reads through the repository port directly.** `RunSubmissionPort` (`crates/paladin-ports/src/input/run_submission_port.rs`) carries
   `submit`, `cancel`, `resume`-adjacent operations in core types; `GET /runs/{id}` and the list
   endpoints read `RunRepositoryPort` directly. This is exactly Phase 24's split — `GET …/state` and
   `GET …/history` read `WaypointPort` directly while resume goes through `ParleyPort` (24-CONTEXT
@@ -175,8 +170,7 @@ plainly reversible.
 
 ### Cross-instance cancellation (PLAT-FR-04)
 
-- **D-14: The engine gains a `CancellationProbe` as an optional trait object consulted at superstep
-  boundaries, beside — not instead of — the existing token.** New builder method
+- **D-14: The engine gains a `CancellationProbe` as an optional trait object consulted at superstep boundaries, beside — not instead of — the existing token.** New builder method
   `WarEngine::with_cancellation_probe(Arc<dyn CancellationProbe>)` alongside
   `with_cancellation_token` (`crates/paladin-battalion/src/engine/mod.rs:1585`): an added builder
   method changes no existing signature and adds no required trait method (X-10.4). The trait lives
@@ -199,8 +193,7 @@ plainly reversible.
 
 ### Thread serialization — the `409 ThreadBusy` invariant (PLAT-FR-05)
 
-- **D-17: The one-active-run-per-thread invariant is a database uniqueness constraint, not an
-  application check.** A partial unique index — `CREATE UNIQUE INDEX … ON runs(thread_id) WHERE
+- **D-17: The one-active-run-per-thread invariant is a database uniqueness constraint, not an application check.** A partial unique index — `CREATE UNIQUE INDEX … ON runs(thread_id) WHERE
   status IN ('queued','running','awaiting_input')` — supported by both SQLite and Postgres. The
   insert's constraint violation maps to `RunRepositoryError::ThreadBusy` → `409`. A check-then-insert
   in the handler cannot hold under PRD acceptance 3's ten concurrent submits, and holds even less
@@ -218,8 +211,7 @@ plainly reversible.
 
 ### Parley integration and resume (PLAT-03; PLAT-FR-06)
 
-- **D-20: Phase 24's published resume contract is kept verbatim; only the mechanism behind
-  `ParleyPort` changes.** `POST /v1/threads/{id}/resume` keeps its `202`, its `{ thread_id,
+- **D-20: Phase 24's published resume contract is kept verbatim; only the mechanism behind `ParleyPort` changes.** `POST /v1/threads/{id}/resume` keeps its `202`, its `{ thread_id,
   state_url }` body and its whole status-code table (404 `ThreadNotFound`; 409 for
   `ThreadNotAwaitingInput` / `GraphNotRegistered`; 400 for the four validation variants; 501
   unwired) exactly as 24-CONTEXT D-25 published them. The facade adapter still validates
@@ -283,8 +275,7 @@ plainly reversible.
 
 ### Assistants — storage, immutability, validation (PLAT-04; PLAT-FR-08…11)
 
-- **D-28: `AssistantDefinition` is a tagged envelope over opaque JSON in core; only the facade knows
-  how to interpret it.** `AssistantDefinition { kind: AssistantKind /* Agent | Workflow */, body:
+- **D-28: `AssistantDefinition` is a tagged envelope over opaque JSON in core; only the facade knows how to interpret it.** `AssistantDefinition { kind: AssistantKind /* Agent | Workflow */, body:
   serde_json::Value }`. `paladin-ports`, `paladin-storage` and `paladin-web` must carry, persist and
   echo a definition without depending on `paladin-battalion` (X-01, ADR-0031); the facade is the only
   crate that can compile one. Rejected: a typed `Workflow(WarGraphDoc)` arm — it would drag
@@ -305,23 +296,20 @@ plainly reversible.
   lands strictly before (the new run sees it) or strictly after (the run keeps the old) —
   PLAT-FR-08's freeze-at-submit becomes a database property provable by a concurrency test, rather
   than a timing hope in application code.
-- **D-31: Validation is a facade service returning a machine-readable violation list; nothing is
-  persisted on failure.** `Vec<ValidationViolation { path, code, message }>` renders into the
+- **D-31: Validation is a facade service returning a machine-readable violation list; nothing is persisted on failure.** `Vec<ValidationViolation { path, code, message }>` renders into the
   existing error envelope's `details` slot (`ApiError::with_details`,
   `crates/paladin-web/src/error.rs:65`) as `400`. `Agent` bodies validate through the existing
   Paladin config validation; `Workflow` bodies deserialize to `WarGraphDoc` and then `compile()`
   against the server's registries — **compile is the validation**, so a version that exists is
   always a version that runs.
-- **D-32: Code-registered agents are exposed as read-only synthetic assistants, config flag default
-  ON.** PLAT-FR-11's "one discovery surface" is only true if it is on by default:
+- **D-32: Code-registered agents are exposed as read-only synthetic assistants, config flag default ON.** PLAT-FR-11's "one discovery surface" is only true if it is on by default:
   `assistants.expose_code_registry: bool = true`, entries rendered as `{ source: "code", version: 1 }`,
   and every mutating route rejects them with `409 conflict` / code `code_registered_immutable`. The
   existing `AgentRegistry` (`crates/paladin-web/src/agent_registry.rs`) is untouched (X-03).
 
 ### `WarGraphDoc` (PLAT-FR-12)
 
-- **D-33: `WarGraphDoc` lives in `paladin-battalion` beside `WarGraph`, with the PRD's literal
-  inherent `compile()`.** New `crates/paladin-battalion/src/engine/graph_doc.rs`;
+- **D-33: `WarGraphDoc` lives in `paladin-battalion` beside `WarGraph`, with the PRD's literal inherent `compile()`.** New `crates/paladin-battalion/src/engine/graph_doc.rs`;
   `WarGraphDoc::compile(&EngineRegistries) -> Result<WarGraph, CompileError>` resolving named edge
   evaluators, aegis handlers, dispatch rules and tools through the existing registries
   (`engine/registries.rs`, `engine/dispatch_registry.rs`). It cannot live in core (it names node
@@ -341,8 +329,7 @@ plainly reversible.
   assistant with a `Gate`) is still expressible, and a node registry stays available later as a
   purely additive change. The unsupported kind must produce a **typed `CompileError` naming the
   limitation**, never a silent drop, and the limitation is documented on the JSON Schema page.
-- **D-34 (REVISED after research, 2026-09-08): The JSON Schema is DERIVED with `schemars` and
-  checked in as a golden file.** The original decision hand-authored the schema to avoid adding a
+- **D-34: (REVISED after research, 2026-09-08) The JSON Schema is DERIVED with `schemars` and checked in as a golden file.** The original decision hand-authored the schema to avoid adding a
   runtime dependency — **that rationale was factually wrong and is withdrawn**: `schemars = "1.2"`
   is already a **direct workspace dependency** (`Cargo.toml:143`), added in Phase 26 plan 26-17
   precisely for `schemars::schema_for!`, while `jsonschema` — the crate the hand-authored guard
@@ -375,8 +362,7 @@ plainly reversible.
   on_missed, last_tick, next_tick, skipped_ticks }`, driven by one facade `ScheduleService`.
   Rejected: persisting alongside `tokio-cron-scheduler` and re-registering jobs at boot — the
   duplicate-or-missed-double-fire guarantee would then live in two places.
-- **D-37: A tick is *claimed* by a conditional update, which makes multi-replica safe without leader
-  election.** `UPDATE schedules SET last_tick = ?next, next_tick = ?after WHERE schedule_id = ?
+- **D-37: A tick is _claimed_ by a conditional update, which makes multi-replica safe without leader election.** `UPDATE schedules SET last_tick = ?next, next_tick = ?after WHERE schedule_id = ?
   AND next_tick = ?next` — exactly one replica's update affects a row, and that replica submits the
   run. Restart safety falls out of the same mechanism: `next_tick` is persisted, so a restart
   neither double-fires (the claim already advanced it) nor missed-then-double-fires (`on_missed:
@@ -410,8 +396,7 @@ plainly reversible.
   over the serialized body **buffer that is then handed to the client** — never re-serialized for
   sending. Re-serialization between signing and sending is the classic signature-mismatch bug, and
   the test asserts a receiver-side verification against the raw captured body (mockito).
-- **D-42: The SSRF guard is a standalone table-tested function applied at BOTH write time and send
-  time, and the webhook client follows no redirects.** Rejects non-`http(s)` schemes and any host
+- **D-42: The SSRF guard is a standalone table-tested function applied at BOTH write time and send time, and the webhook client follows no redirects.** Rejects non-`http(s)` schemes and any host
   resolving to loopback, link-local (`169.254.0.0/16`, `fe80::/10`), RFC1918, unique-local,
   unspecified, or the metadata address `169.254.169.254`. Overridable only by
   `webhooks.allow_private: bool` (default `false`, X-09). Redirect-following is **disabled** on the
@@ -421,28 +406,24 @@ plainly reversible.
   DNS rebinding: resolve-then-connect pinning is **documented as a known limitation** in rustdoc and
   the security docs rather than implemented — PRD 06 PLAT-FR-15 explicitly permits that, and
   claiming coverage we do not have is worse than naming the gap.
-- **D-43: `4xx` dead-letters immediately; `5xx` / timeout / connect-error retries 5 times with 1 s…
-  60 s exponential backoff; the clock is injectable.** The retry-schedule test runs under
+- **D-43: `4xx` dead-letters immediately; `5xx` / timeout / connect-error retries 5 times with 1 s… 60 s exponential backoff; the clock is injectable.** The retry-schedule test runs under
   `tokio::time::pause` — no test sleeps for a minute. `2xx` is delivered. A dead-lettered delivery
   stays queryable with its final status and response code.
 
 ### HTTP surface, scopes and pagination (PLAT-06; PLAT-FR-16, FR-17)
 
-- **D-44: One new `RunApiState` + `run_router`, mirroring Phase 24's `ThreadApiState`; the
-  pre-existing `AgentApiState` stays untouched.** Nested under `API_V1_PREFIX` (ADR-0037), merged by
+- **D-44: One new `RunApiState` + `run_router`, mirroring Phase 24's `ThreadApiState`; the pre-existing `AgentApiState` stays untouched.** Nested under `API_V1_PREFIX` (ADR-0037), merged by
   `paladin-server` behind the same auth middleware as `/v1/agents/*` and `/v1/threads/*`. Runs,
   assistants, schedules and webhook-delivery routes share the one state rather than spawning four
   states with the same three fields. An unwired deployment answers **501 `not_implemented`** naming
   the config to set, while the spec still lists the paths — the D-24 precedent exactly.
-- **D-45: `ThreadApiState` gains fields for the new thread routes and is marked
-  `#[non_exhaustive]` in the same change.** `POST /threads/{id}/fork` and `DELETE /threads/{id}`
+- **D-45: `ThreadApiState` gains fields for the new thread routes and is marked `#[non_exhaustive]` in the same change.** `POST /threads/{id}/fork` and `DELETE /threads/{id}`
   belong on the existing thread router, which needs the run-submission seam. `ThreadApiState`
   already has a builder (`with_waypoints` / `with_parley` / `with_auth`,
   `crates/paladin-web/src/thread_controller.rs:107-119`), so construction stays builder-only and the
   X-10.3 mitigation is free; registered in `MIGRATION.md` §9.2. Rejected: a parallel fork/delete
   router — two routers over one resource is worse than one registered struct change.
-- **D-46: "Admin/writer scope" maps onto the existing two roles by *shape of operation*, with no
-  new role variant.** `UserRole` is `{Admin, User}`
+- **D-46: "Admin/writer scope" maps onto the existing two roles by _shape of operation_, with no new role variant.** `UserRole` is `{Admin, User}`
   (`crates/paladin-core/src/platform/container/user.rs:72`); adding a `Writer` variant is an X-10.2
   break on a core public enum for no FR. PLAT-FR-16 asks for consistency with `agent_controller`'s
   conventions, and those conventions are two-tier: *invocation* is gated by `authorize_invoke`
@@ -458,11 +439,9 @@ plainly reversible.
   breaking change. It now applies to `/runs`, `/threads`, `/assistants`, `/assistants/{id}/versions`,
   `/schedules` and `/runs/{id}/webhook-deliveries`. One shape is what lets PLAT-FR-16 be a
   one-sentence claim instead of six separate ones.
-- **D-48: `openapi.json` is regenerated and diff-reviewed on every PR that touches routes; the
-  golden-diff *gate* remains SHIP-02's.** `crates/paladin-web/openapi.json` (1,453 lines today) is
+- **D-48: `openapi.json` is regenerated and diff-reviewed on every PR that touches routes; the golden-diff _gate_ remains SHIP-02's.** `crates/paladin-web/openapi.json` (1,453 lines today) is
   the drift baseline (ADR-0037). DTOs stay `utoipa::ToSchema` types in `paladin-web` (ADR-0038).
-- **D-49: Client generation uses one pinned `openapi-generator-cli` for both Python and TypeScript,
-  in a `sdk-clients` CI job that runs on every PR.** One pinned tool covering both languages keeps
+- **D-49: Client generation uses one pinned `openapi-generator-cli` for both Python and TypeScript, in a `sdk-clients` CI job that runs on every PR.** One pinned tool covering both languages keeps
   the job's real purpose in view — proving the *spec* is complete enough to generate against, not
   shipping an idiomatic SDK (hand-polished SDKs are explicitly out of scope). Smoke test: boot the
   test server on the all-InMemory profile, then list assistants → submit a run → poll status from
@@ -483,8 +462,7 @@ plainly reversible.
   `max_attempts: 5`, `timeout`). Defaulting off is not caution for its own sake — it is what makes
   SHIP-02's "v0.9 config boots v0.10 with all new subsystems disabled" test pass by construction
   rather than by patch.
-- **D-51: Test tiers — Docker is unavailable in this devcontainer, so Redis and Postgres suites are
-  Tier 2 and are never marked passed locally.** Carried forward verbatim from 24-CONTEXT D-28 and
+- **D-51: Test tiers — Docker is unavailable in this devcontainer, so Redis and Postgres suites are Tier 2 and are never marked passed locally.** Carried forward verbatim from 24-CONTEXT D-28 and
   reaffirmed in Phase 25/26. Tier 1 (local, always run): InMemory queue, SQLite run store on a temp
   file, `MockLlmAdapter`, `CountingFunctionNode`, mockito for webhooks, `tokio::time::pause` for
   backoff. Tier 2 (CI / UAT): the Redis queue contract suite, the Postgres run-repository and
@@ -507,8 +485,7 @@ plainly reversible.
   it. Every "verify at 1.85" instruction in this phase reads 1.88. §9.4: the `runs`, `assistants`,
   `assistant_versions`, `schedules` and `webhook_deliveries` migrations. §9.5: every struct in
   D-50. §9.6: every new endpoint plus the resume-response field.
-- **D-54: Coverage stays at the 82% workspace floor (ADR-0006), and tests land inside each plan
-  rather than in a trailing test plan.** This phase adds a large surface across five crates; a
+- **D-54: Coverage stays at the 82% workspace floor (ADR-0006), and tests land inside each plan rather than in a trailing test plan.** This phase adds a large surface across five crates; a
   trailing catch-up plan is how a floor gets missed. Note for planners: **doc tests do not count
   toward `cargo llvm-cov` and are skipped by `--tests`** — public-API doc tests are still required
   (X-02) but must not be relied on for the coverage number.

@@ -23,8 +23,8 @@ created: 2026-09-08
 |----------|-------|
 | **Framework** | `cargo test` (with `#[tokio::test]` for async), `cargo llvm-cov` for coverage |
 | **Config file** | none dedicated — `scripts/coverage.sh` is the single source of truth for the coverage invocation, shared by `make coverage` and CI's `coverage` job |
-| **Quick run command** | `cargo test -p paladin-core -p paladin-ports -p paladin-battalion -p paladin-storage -p paladin-web` |
-| **Full suite command** | `bash scripts/coverage.sh` |
+| **Quick run command** | `cargo test -p paladin-ai-core -p paladin-ports -p paladin-battalion -p paladin-storage -p paladin-web` (the core crate's *package* name is `paladin-ai-core`; `-p paladin-core` exits 101) |
+| **Full suite command** | `cargo llvm-cov --workspace --features integration-tests,llm-all --fail-under-lines 82 -- --test-threads=1` (CI's invocation; `scripts/coverage.sh` wraps the same command but **hard-fails locally** when Redis/MinIO are unreachable, so it is a CI/UAT command, not a devcontainer one) |
 | **Estimated runtime** | ~180 seconds (Tier 1, no Docker services) |
 
 ---
@@ -32,7 +32,7 @@ created: 2026-09-08
 ## Sampling Rate
 
 - **After every task commit:** Run `cargo test -p <crate touched by the task>` (Tier 1 only — no Docker required)
-- **After every plan wave:** Run `bash scripts/coverage.sh`
+- **After every plan wave:** Run `cargo llvm-cov --workspace --features integration-tests,llm-all --fail-under-lines 82 -- --test-threads=1` (not `scripts/coverage.sh`, which hard-fails without Redis/MinIO)
 - **Before `/gsd-verify-work`:** Full CI green — `coverage`, `msrv` (**1.88**), `semver`, `postgres-integration`, and the new Redis-queue job
 - **Max feedback latency:** 180 seconds
 
@@ -53,7 +53,7 @@ Task IDs are assigned when plans are written; rows are keyed by requirement unti
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| TBD | TBD | 1 | PLAT-01 | — | Monotonic status machine; no edge leaves a terminal | unit | `cargo test -p paladin-core run_status_transition` | ❌ W0 | ⬜ pending |
+| TBD | TBD | 1 | PLAT-01 | — | Monotonic status machine; no edge leaves a terminal | unit | `cargo test -p paladin-ai-core run_status_transition` | ❌ W0 | ⬜ pending |
 | TBD | TBD | 1 | PLAT-01 | — | CAS transition rejects illegal `from` state | integration | `cargo test -p paladin-storage --features sqlite run_repository_contract` | ❌ W0 | ⬜ pending |
 | TBD | TBD | 1 | PLAT-02 | — | Lease-expiry redelivery to a second worker | integration | `cargo test -p paladin-storage run_queue_contract` | ❌ W0 | ⬜ pending |
 | TBD | TBD | 2 | PLAT-02 | — | Exactly one completion after worker death; no node re-executes past the interrupted superstep | `#[tokio::test(flavor = "multi_thread")]` | `cargo test worker_pool_lease_expiry_exactly_once` | ❌ W0 | ⬜ pending |
@@ -83,7 +83,7 @@ Task IDs are assigned when plans are written; rows are keyed by requirement unti
 
 ## Wave 0 Requirements
 
-- [ ] `crates/paladin-core/src/platform/container/run.rs` + its `#[cfg(test)]` status-machine tests — the phase's literal first test (PRD 06 §5 item 1)
+- [ ] `crates/paladin-core/src/platform/container/run.rs` (package `paladin-ai-core`) + its `#[cfg(test)]` status-machine tests — the phase's literal first test (PRD 06 §5 item 1)
 - [ ] `crates/paladin-storage/src/run/contract_tests.rs` — new shared contract suite, mirroring `waypoint/contract_tests.rs`
 - [ ] `crates/paladin-storage/src/run_queue/{in_memory,redis}.rs` + its contract suite — **no existing Lua/`EVAL` fixture to extend** (D-08 is greenfield)
 - [ ] A facade-crate test module for `RunWorkerPool` / `ScheduleService` / `WebhookDeliveryService` stress tests, following the X-05 exact-count + timeout-guard house pattern in `src/application/services/orchestration/listener.rs`

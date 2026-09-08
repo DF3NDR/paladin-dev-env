@@ -13,6 +13,14 @@ is_unique_violation()-before-generic-wrap mapping to `ThreadBusy` (D-17,
 native `BOOLEAN` for `cancel_requested`, and native `TIMESTAMPTZ` for the
 three timestamp columns. Every statement uses bound parameters; no query
 string is ever built by formatting a caller-supplied value into it.
+
+Precision contract (D-01, D-03, D-04): `TIMESTAMPTZ` holds microsecond
+resolution, so every `chrono::DateTime<Utc>` bound into `submitted_at`,
+`started_at` or `finished_at` -- in `INSERT_RUN`, `INSERT_RUN_WITH_LATEST`
+and `update_status`'s `QueryBuilder` pushes -- is normalised through
+`crate::run::storage_timestamp` first. That function's own rustdoc is the
+single source of truth for the contract (truncation toward zero, not
+rounding); this module never reimplements it.
 */
 
 use async_trait::async_trait;
@@ -29,6 +37,7 @@ use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunPage, RunQuery, RunRepositoryError, RunRepositoryPort,
 };
 
+use crate::run::storage_timestamp;
 use crate::waypoint::redact::redact_database_url_password;
 
 // Every top-level query string below is a plain `&'static str` literal (or,
@@ -329,9 +338,9 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(run.assistant.version as i32)
             .bind(run.status.as_str())
             .bind(input)
-            .bind(run.submitted_at)
-            .bind(run.started_at)
-            .bind(run.finished_at)
+            .bind(storage_timestamp(run.submitted_at))
+            .bind(run.started_at.map(storage_timestamp))
+            .bind(run.finished_at.map(storage_timestamp))
             .bind(run.attempt as i32)
             .bind(run.cancel_requested)
             .bind(&run.error)
@@ -370,6 +379,11 @@ impl RunRepositoryPort for PostgresRunRepository {
         // CAS predicate is evaluated.
         RunStatus::try_transition(from, to)
             .map_err(|_| RunRepositoryError::IllegalTransition { from, to })?;
+
+        // Normalised once (D-01): both `started_at` and `finished_at` bind
+        // this same normalised instant when both branches below fire on a
+        // single terminal-and-just-started transition.
+        let at = storage_timestamp(at);
 
         let mut builder: sqlx::QueryBuilder<sqlx::Postgres> =
             sqlx::QueryBuilder::new("UPDATE runs SET status = ");
@@ -679,9 +693,9 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(&run.assistant.assistant_id)
             .bind(run.status.as_str())
             .bind(input)
-            .bind(run.submitted_at)
-            .bind(run.started_at)
-            .bind(run.finished_at)
+            .bind(storage_timestamp(run.submitted_at))
+            .bind(run.started_at.map(storage_timestamp))
+            .bind(run.finished_at.map(storage_timestamp))
             .bind(run.attempt as i32)
             .bind(run.cancel_requested)
             .bind(&run.error)
@@ -692,6 +706,7 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(&run.final_waypoint_id)
             .bind(&run.schema_version)
             .bind(&run.assistant.assistant_id)
+            // (INSERT_RUN_WITH_LATEST's trailing $18 predicate bind, unchanged)
             .execute(&self.pool)
             .await
             .map_err(|e| self.map_insert_error(e, &run.thread_id))?;
@@ -717,7 +732,9 @@ impl RunRepositoryPort for PostgresRunRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::run::STORAGE_TIMESTAMP_SUBSEC_DIGITS;
     use crate::run::contract_tests;
+    use chrono::SubsecRound;
     use std::sync::Arc;
 
     // Docker-gated Tier 2 suite (D-51): every test independently probes the
@@ -1014,12 +1031,91 @@ mod tests {
         contract_tests::assistant_version_freeze_at_submit(run_store, assistant_store).await;
     }
 
-    // No extra, non-contract `#[tokio::test]`s in this module by design: CI
-    // asserts this module's `#[tokio::test]` count equals
-    // `contract_tests`'s `pub async fn` count exactly (Task 3's own
-    // acceptance criterion), so a password-redaction smoke test analogous
-    // to `sqlite.rs`'s and `waypoint::postgres`'s would break that
-    // assertion. `map_insert_error`/`wrap`/`wrap_error` reuse the same
+    // ── Gap-closure plan 27-20: timestamp precision contract ────────────
+    //
+    // Deliberate, single exception to the "no extra, non-contract
+    // `#[tokio::test]`s in this module" rule below: this clause pins the
+    // `storage_timestamp` truncation contract specifically against a real
+    // Postgres `TIMESTAMPTZ` column, which no shared `contract_tests`
+    // function can do (a fixture built through `contract_timestamp` is
+    // ALREADY normalised to microsecond resolution before it reaches any
+    // backend, by design -- that is what keeps every backend's
+    // `assert_eq!` exact. Proving *this specific* backend performs the
+    // truncation itself needs a fixture that deliberately carries
+    // sub-microsecond digits, built independently of `sample_run`'s
+    // `contract_timestamp` convention).
+    //
+    // This clause proves NOTHING in a devcontainer with no reachable
+    // Postgres -- `store_or_skip` makes it self-skip and print `SKIP:`,
+    // exactly like every other clause in this module (D-51). The
+    // `postgres-integration` CI job is where it actually speaks.
+    #[tokio::test]
+    async fn postgres_run_timestamps_round_trip_at_microsecond_precision() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+
+        // A microsecond boundary plus 999ns: deliberately NOT run through
+        // `contract_timestamp` (which would normalise it before this test
+        // ever saw it), so `insert` then `get` is the thing doing the
+        // truncation, not the fixture.
+        let boundary = chrono::Utc::now().trunc_subsecs(STORAGE_TIMESTAMP_SUBSEC_DIGITS);
+        let sub_microsecond_submitted_at = boundary + chrono::Duration::nanoseconds(999);
+        assert_ne!(
+            sub_microsecond_submitted_at,
+            storage_timestamp(sub_microsecond_submitted_at),
+            "fixture must carry sub-microsecond digits for this test to prove anything"
+        );
+
+        let thread = ThreadId::new("contract-run-postgres-timestamp-precision-submitted").unwrap();
+        let run = contract_tests::sample_run(&thread, "assistant-a", sub_microsecond_submitted_at);
+        store.insert(&run).await.unwrap();
+        let loaded = store.get(&run.run_id).await.unwrap().unwrap();
+
+        assert_eq!(
+            loaded.submitted_at,
+            storage_timestamp(sub_microsecond_submitted_at),
+            "submitted_at must round-trip truncated to microsecond resolution"
+        );
+        assert_ne!(
+            loaded.submitted_at, sub_microsecond_submitted_at,
+            "submitted_at must NOT silently widen to persist the full nanosecond value"
+        );
+
+        // Same proof for `started_at`, written through `update_status`
+        // rather than `insert`.
+        let sub_microsecond_started_at = boundary + chrono::Duration::nanoseconds(999);
+        store
+            .update_status(
+                &run.run_id,
+                RunStatus::Queued,
+                RunStatus::Running,
+                sub_microsecond_started_at,
+            )
+            .await
+            .unwrap();
+        let loaded_after_start = store.get(&run.run_id).await.unwrap().unwrap();
+
+        assert_eq!(
+            loaded_after_start.started_at,
+            Some(storage_timestamp(sub_microsecond_started_at)),
+            "started_at must round-trip truncated to microsecond resolution"
+        );
+        assert_ne!(
+            loaded_after_start.started_at,
+            Some(sub_microsecond_started_at),
+            "started_at must NOT silently widen to persist the full nanosecond value"
+        );
+    }
+
+    // No extra, non-contract `#[tokio::test]`s in this module BEYOND the
+    // one immediately above (by design, and its own doc comment explains
+    // why it is the sanctioned exception): CI asserts this module's
+    // `#[tokio::test]` count equals `contract_tests`'s `pub async fn` count
+    // plus exactly one (Task 3's own acceptance criterion, amended by plan
+    // 27-20), so a password-redaction smoke test analogous to `sqlite.rs`'s
+    // and `waypoint::postgres`'s would break that assertion.
+    // `map_insert_error`/`wrap`/`wrap_error` reuse the same
     // `redact_database_url_password` helper the Waypoint adapters already
     // prove redacts correctly (`waypoint::postgres::tests::connection_error_redacts_password_from_database_url`).
 }

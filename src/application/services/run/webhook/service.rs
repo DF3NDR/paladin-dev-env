@@ -191,7 +191,36 @@ impl WebhookDeliveryService {
                 .as_ref()
                 .and_then(|webhook| webhook.secret.clone())
                 .unwrap_or_default(),
-            Ok(None) => String::new(),
+            Ok(None) => {
+                log::warn!(
+                    "webhook delivery service: run {} not found for delivery {delivery_id}; \
+                     rescheduling rather than sending with a fallback empty key",
+                    delivery.run_id
+                );
+                // WR-27-01 (27-REVIEW.md): the sibling of the WR-01 fix
+                // above -- the run row that supplies this delivery's OWN
+                // signing secret does not exist. Signing with a fallback
+                // empty key and sending anyway carries the exact same
+                // hazard WR-01 closed for the `Err` arm, so this is
+                // rescheduled identically rather than sent.
+                let delay = chrono::Duration::from_std(backoff_for(new_attempt))
+                    .unwrap_or_else(|_| chrono::Duration::zero());
+                self.finish(
+                    &delivery_id,
+                    WebhookAttemptResult {
+                        outcome: WebhookAttemptOutcome::Retrying {
+                            next_attempt_at: (self.options.now)() + delay,
+                        },
+                        response_status: None,
+                        error: Some(bounded_error(&format!(
+                            "run {} not found while loading signing key",
+                            delivery.run_id
+                        ))),
+                    },
+                )
+                .await;
+                return;
+            }
             Err(error) => {
                 log::warn!(
                     "webhook delivery service: failed to load run {} for delivery {delivery_id}: {error}",

@@ -194,6 +194,84 @@ impl RunRepositoryPort for FailingRunRepository {
     }
 }
 
+/// A `RunRepositoryPort` double whose `get` always succeeds with `Ok(None)`
+/// -- proves WR-27-01 (`27-REVIEW.md`): a signing-key load that finds no run
+/// row must reschedule the delivery rather than send it signed with a
+/// fallback empty key, mirroring `FailingRunRepository`'s `Err` sibling
+/// above. Every other method returns the same minimal value
+/// `FailingRunRepository` returns; none of them are exercised by
+/// `webhook_signing_key_missing_run_reschedules_without_sending`.
+struct MissingRunRepository;
+
+#[async_trait::async_trait]
+impl RunRepositoryPort for MissingRunRepository {
+    async fn insert(&self, _run: &Run) -> Result<(), RunRepositoryError> {
+        Ok(())
+    }
+
+    async fn get(&self, _run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
+        Ok(None)
+    }
+
+    async fn update_status(
+        &self,
+        _run_id: &RunId,
+        _from: RunStatus,
+        _to: RunStatus,
+        _at: DateTime<Utc>,
+    ) -> Result<(), RunRepositoryError> {
+        Ok(())
+    }
+
+    async fn record_outcome(
+        &self,
+        _run_id: &RunId,
+        _outcome: RunOutcomeRecord,
+    ) -> Result<(), RunRepositoryError> {
+        Ok(())
+    }
+
+    async fn list(&self, _query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+        Ok(RunPage {
+            items: vec![],
+            next_cursor: None,
+        })
+    }
+
+    async fn active_run_for_thread(
+        &self,
+        _thread_id: &ThreadId,
+    ) -> Result<Option<Run>, RunRepositoryError> {
+        Ok(None)
+    }
+
+    async fn request_cancel(&self, run_id: &RunId) -> Result<RunStatus, RunRepositoryError> {
+        Err(RunRepositoryError::NotFound {
+            run_id: run_id.clone(),
+        })
+    }
+
+    async fn is_cancel_requested(&self, _thread_id: &ThreadId) -> Result<bool, RunRepositoryError> {
+        Ok(false)
+    }
+
+    async fn bump_attempt(&self, _run_id: &RunId) -> Result<u32, RunRepositoryError> {
+        Ok(1)
+    }
+
+    async fn record_resume(
+        &self,
+        _run_id: &RunId,
+        _responses: Vec<ParleyResponse>,
+    ) -> Result<u32, RunRepositoryError> {
+        Ok(1)
+    }
+
+    async fn clear_pending_responses(&self, _run_id: &RunId) -> Result<(), RunRepositoryError> {
+        Ok(())
+    }
+}
+
 async fn service_with(
     deliveries: Arc<dyn WebhookDeliveryRepositoryPort>,
     runs: Arc<dyn RunRepositoryPort>,
@@ -568,6 +646,79 @@ async fn webhook_signing_key_load_failure_reschedules_without_sending() {
 
     // The delivery references a run id `FailingRunRepository` never looks
     // up successfully -- its `get` always errs regardless of the id.
+    let run_id = RunId::new_v7();
+    let thread_id = ThreadId::new(format!("t-{}", uuid::Uuid::now_v7())).unwrap();
+    let payload = serde_json::to_string(&WebhookPayload {
+        run_id: run_id.clone(),
+        thread_id: thread_id.clone(),
+        assistant: WebhookPayloadAssistant {
+            assistant_id: "a1".to_string(),
+            version: 1,
+        },
+        status: paladin_core::platform::container::run::RunStatus::Completed,
+        event: RunEventKind::Completed,
+        timestamp: Utc::now(),
+        attempt: 0,
+        parleys: None,
+    })
+    .unwrap();
+
+    let now = base_time();
+    let url = format!("{}/hook", server.url());
+    let delivery = WebhookDelivery::new(
+        WebhookDeliveryId::new_v7(),
+        run_id,
+        thread_id,
+        RunEventKind::Completed,
+        &url,
+        &payload,
+        now,
+    );
+    let delivery_id = delivery.delivery_id.clone();
+    deliveries.enqueue(delivery).await.unwrap();
+
+    let clock = AtomicClock::new(now);
+    let service = service_with(Arc::clone(&deliveries), Arc::clone(&runs), &clock).await;
+    let claimed = service.run_once(now).await;
+    assert_eq!(claimed, 1);
+
+    target.expect(0).assert_async().await;
+
+    let loaded = deliveries.get(&delivery_id).await.unwrap().unwrap();
+    assert!(matches!(loaded.status, WebhookDeliveryStatus::Retrying));
+    assert!(
+        loaded.next_attempt_at > now,
+        "next_attempt_at must be strictly after the clock's current value, got {:?}",
+        loaded.next_attempt_at
+    );
+    assert!(loaded.last_error.is_some());
+    assert!(loaded.last_response_status.is_none());
+}
+
+// ── webhook_signing_key_missing_run_reschedules_without_sending (WR-27-01) ──
+
+/// When the run lookup that supplies the signing secret succeeds but finds
+/// no row (`Ok(None)`), NO HTTP request is issued -- proven by a mock with
+/// `expect(0)` -- and the delivery ends `Retrying` with a `next_attempt_at`
+/// strictly after the clock's current value, mirroring
+/// `webhook_signing_key_load_failure_reschedules_without_sending`'s `Err`
+/// case (`27-REVIEW.md` WR-27-01).
+#[tokio::test]
+async fn webhook_signing_key_missing_run_reschedules_without_sending() {
+    let mut server = mockito::Server::new_async().await;
+    let target = server
+        .mock("POST", "/hook")
+        .with_status(200)
+        .expect(0)
+        .create_async()
+        .await;
+
+    let runs: Arc<dyn RunRepositoryPort> = Arc::new(MissingRunRepository);
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+
+    // The delivery references a run id `MissingRunRepository` never finds
+    // -- its `get` always returns `Ok(None)` regardless of the id.
     let run_id = RunId::new_v7();
     let thread_id = ThreadId::new(format!("t-{}", uuid::Uuid::now_v7())).unwrap();
     let payload = serde_json::to_string(&WebhookPayload {

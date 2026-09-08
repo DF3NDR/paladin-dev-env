@@ -33,6 +33,16 @@ regex         = "1.11.1"
 # the same pinned version -- a new dependency EDGE on an already-resolved
 # workspace package, never a new package in the lock file.
 blake3        = "1.8.2"
+# `WarGraphDoc`'s schemars derive (`engine::graph_doc`, plan 27-05, D-34
+# revised): the root `paladin-ai` facade crate already pins `schemars = "1.2"`
+# directly (Cargo.toml:143, resolved to 1.2.1 in Cargo.lock via both `rmcp`
+# and that direct edge) -- this is NOT declared under `[workspace.dependencies]`
+# there, so `{ workspace = true }` is unavailable here; pinning the identical
+# version string is a new dependency EDGE on the already-resolved package,
+# mirroring `blake3`'s own precedent immediately above, never a new package
+# in the lock file (`cargo tree -i schemars` still shows exactly two
+# versions: 0.9.0 via serde_with, 1.2.1 via rmcp/paladin-ai/paladin-battalion).
+schemars      = "1.2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }

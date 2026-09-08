@@ -1,20 +1,21 @@
 ---
 phase: 27
 slug: platform-api
-status: blocked
+status: verified
 # threats_open = count of OPEN threats at or above workflow.security_block_on severity (high)
-threats_open: 1
+threats_open: 0
 asvs_level: 1
 created: 2026-09-08
+last_audit: 2026-09-08
 ---
 
 # Phase 27 — Security
 
 > Per-phase security contract: threat register, accepted risks, and audit trail.
 
-**Verdict: BLOCKED.** 106 of 107 threats closed. One `high` threat (T-27-22-02) is open at
-the `high` blocking threshold. Phase advancement is blocked until it is closed or formally
-accepted.
+**Verdict: THREAT-SECURE.** All 107 threats closed. The one `high` threat that blocked the
+previous audit (T-27-22-02) was remediated in commit `4b6592de` and re-verified here; no open
+threat remains at or above the `high` blocking threshold.
 
 Register origin: `register_authored_at_plan_time: true` — 25 of the 26 plans in this phase
 carried a parseable `<threat_model>` block (27-26 is a test-only gap-closure plan). The
@@ -44,7 +45,8 @@ auditor therefore verified mitigations rather than building a retroactive regist
 
 107 threats across plans 27-01..27-25. Verified by `gsd-security-auditor` at ASVS L1 depth;
 the two orchestrator-flagged items (the `signature.rs` fallback and dual-site SSRF placement)
-received L2-depth data-flow tracing.
+received L2-depth data-flow tracing. T-27-22-02 was re-verified at L2 depth in the 2026-09-08
+re-audit after commit `4b6592de` — see *Closed Threat — T-27-22-02* below.
 
 | Threat ID | Plan | Category | Component | Severity | Disposition | Mitigation | Status |
 |-----------|------|----------|-----------|----------|-------------|------------|--------|
@@ -139,7 +141,7 @@ received L2-depth data-flow tracing.
 | T-27-21-03 | 27-21 | Information disclosure | a real credential leaking through the committed config | medium | mitigate | The config's key is a fixed placeholder and the endpoint is loopback, so a copied config cannot carry or exercise a real secret. | closed |
 | T-27-21-04 | 27-21 | Denial of service | stub or server left running after a failure | low | mitigate | Both processes are started and stopped by one library with an `EXIT` trap in every caller. | closed |
 | T-27-22-01 | 27-22 | Denial of service | unbounded response-body read on the failure path (CR-01) | critical | mitigate | `read_bounded_body` caps the read at `MAX_ERROR_BODY_BYTES` as it streams; `Content-Length` is not trusted; a mockito body an order of magnitude over the cap proves the stop. | closed |
-| T-27-22-02 | 27-22 | Tampering / Repudiation | delivery sent with a signature from an unloadable key (WR-01) | high | mitigate | The error arm reschedules and returns before any request is issued; a receiver mock with `expect(0)` proves no send. | **open** |
+| T-27-22-02 | 27-22 | Tampering / Repudiation | delivery sent with a signature from an unloadable key (WR-01 / WR-27-01) | high | mitigate | **Both** non-sending arms now reschedule before any request: the `Err` arm (WR-01, `c2fe4afd`) and the `Ok(None)` arm (WR-27-01, `4b6592de`) each `log::warn!` and finish `Retrying`. Receiver mocks with `expect(0)` prove no send on either path. | closed |
 | T-27-22-03 | 27-22 | Information disclosure | a credential inside a receiver's error page persisted in `last_error` | high | mitigate | Redact-then-truncate order preserved: the bounded body still passes through `redact_secret_patterns` before `bounded_excerpt`. | closed |
 | T-27-22-04 | 27-22 | Information disclosure | credential header forwarded to a redirect target | high | mitigate | Unchanged and re-asserted: the client's no-redirect policy and its existing test stay in place; 3xx dead-letters. | closed |
 | T-27-22-05 | 27-22 | Denial of service | retry budget consumed by a rescheduled attempt | medium | accept | `record_attempt` always increments; suppressing it needs a new port method across three adapters, out of scope for gap closure and recorded as a deliberate non-goal in the code.... | closed |
@@ -156,62 +158,79 @@ received L2-depth data-flow tracing.
 | T-27-25-03 | 27-25 | Tampering | the bar being lowered after seeing results | medium | mitigate | The thresholds and log strings are written into the evidence file before the run, with empty result columns. | closed |
 | T-27-25-04 | 27-25 | Information disclosure | CI logs quoted into the record carrying secrets | medium | mitigate | Only the named result lines and counts are quoted, never environment dumps or raw request/response bodies. | closed |
 
-*Status: open · closed · open — below `high` threshold (non-blocking)*
+*Status: closed · open — all 107 rows are `closed` as of the 2026-09-08 re-audit*
 *Severity: critical > high > medium > low — only open threats at or above `workflow.security_block_on` (`high`) count toward `threats_open`*
 *Disposition: mitigate (implementation required) · accept (documented risk) · transfer (third-party)*
 
 ---
 
-## Open Threat — T-27-22-02 (BLOCKING)
+## Closed Threat — T-27-22-02 (was BLOCKING)
 
 **Category:** Tampering / Repudiation · **Severity:** high · **Disposition:** mitigate ·
-**Plan:** 27-22 · **Threshold:** at `block_on: high`
+**Plan:** 27-22 · **Threshold:** at `block_on: high` · **Status: CLOSED 2026-09-08**
 
-**Claim in the register:** "delivery sent with a signature from an unloadable key (WR-01)" is
-mitigated — "the error arm reschedules and returns before any request is issued."
+**What was open at the previous audit.** The WR-01 fix (`c2fe4afd`) rescheduled only the `Err`
+arm of the signing-key lookup. The sibling `Ok(None)` arm — the run row supplying the
+delivery's own signing secret is absent — still fell through to sign-and-send with an
+empty-string key, shipping a payload a receiver must reject as mis-signed while charging one
+of the delivery's five budgeted attempts, with no warning logged.
 
-**Finding:** that is true only of the `Err` arm. The sibling `Ok(None)` arm — the run row is
-absent — still falls through to sign-and-send with an empty-string key:
+**Remediation verified.** Commit `4b6592de` (*"fix(27): reschedule webhook delivery when run
+row is missing (WR-27-01)"*) mirrors the `Err` arm exactly:
 
 ```rust
-// src/application/services/run/webhook/service.rs:188-194
-let signing_key = match self.runs.get(&delivery.run_id).await {
-    Ok(Some(run)) => run.webhook.as_ref().and_then(|w| w.secret.clone()).unwrap_or_default(),
-    Ok(None) => String::new(),   // falls through: no reschedule, no log::warn!
-    Err(error) => { /* reschedules with Retrying, returns — this arm IS fixed */ }
-};
+// src/application/services/run/webhook/service.rs:188-221
+Ok(None) => {
+    log::warn!("webhook delivery service: run {} not found for delivery {delivery_id}; \
+                rescheduling rather than sending with a fallback empty key", delivery.run_id);
+    let delay = chrono::Duration::from_std(backoff_for(new_attempt))
+        .unwrap_or_else(|_| chrono::Duration::zero());
+    self.finish(&delivery_id, WebhookAttemptResult {
+        outcome: WebhookAttemptOutcome::Retrying {
+            next_attempt_at: (self.options.now)() + delay,
+        },
+        response_status: None,
+        error: Some(bounded_error(&format!(
+            "run {} not found while loading signing key", delivery.run_id))),
+    }).await;
+    return;   // <- returns before any request is issued
+}
 ```
 
-The delivery is then signed at `service.rs:240-243` and posted. A receiver gets a payload
-carrying a `X-Paladin-Signature` computed under an empty key, which it must reject as
-mis-signed — while the attempt is still charged against the delivery's five-attempt budget,
-with no diagnosable `last_error` and no warning logged.
+The `return` precedes `sign_webhook_body` (`service.rs:240-243`) and the send, so no signed
+request can leave the process on this path.
 
-**This is a known, self-documented gap, not a discovery:**
+**Evidence — the exact gaps the previous audit named, each now filled:**
 
-| Artifact | Evidence |
+| Previous finding | Resolution |
 |---|---|
-| `27-REVIEW.md:105-162` | Finding `WR-27-01` names this exact code as "the same underlying hazard WR-01's own doc comment names" and proposes the fix |
-| `27-22-PLAN.md:196-207` | Explicitly scopes the fix to exclude it — "Keep the `Ok(Some(_))` and `Ok(None)` arms exactly as they are" |
-| `27-22-SUMMARY.md:126-128` | "plan executed exactly as written" — confirms the gap was not incidentally closed |
-| `git log` | One commit for plan 27-22 (`c2fe4afd`), touching only the `Err` arm |
-| `tests.rs` / `worker_tests.rs` | No test exercises the `Ok(None)` arm |
+| `Ok(None)` falls through to sign-and-send | Arm returns after `finish(..., Retrying)`; the sign call is unreachable from it |
+| No `log::warn!` on the arm | `log::warn!` naming the run id, the delivery id, and the reason |
+| No diagnosable `last_error` | `bounded_error("run {id} not found while loading signing key")` persisted — redact-then-truncate order preserved (T-27-22-03 unaffected) |
+| No test exercises the `Ok(None)` arm | `webhook_signing_key_missing_run_reschedules_without_sending` (`tests.rs:707`) drives a `MissingRunRepository` against a `mockito` target asserted with `expect(0)`, then asserts `Retrying`, `next_attempt_at > now`, `last_error.is_some()`, `last_response_status.is_none()` |
 
-**Reachability (mitigating, but not closing):** `RunRepositoryPort` exposes no `delete`
-method (`run_repository_port.rs:153-215`), so `Ok(None)` is not reachable through any
-currently-wired API. However, no foreign key ties `webhook_deliveries.run_id` to
-`runs.run_id` in either backend's migration, so an orphaned row — arising from a future
-delete feature, cross-backend inconsistency, or a data-repair script — would silently ship a
-mis-signed payload.
+**Test run (this audit, 2026-09-08):**
 
-**Remediation:** mirror the `Err` arm in the `Ok(None)` arm — emit `log::warn!` and finish
-with `WebhookAttemptOutcome::Retrying` rather than falling through — and add a test covering
-the arm. Then re-run `/gsd-secure-phase 27`.
+```
+cargo test --lib webhook_signing_key
+test ...::webhook_signing_key_load_failure_reschedules_without_sending ... ok
+test ...::webhook_signing_key_missing_run_reschedules_without_sending ... ok
+test result: ok. 2 passed; 0 failed
+```
 
-**Related, non-blocking:** `src/application/services/run/webhook/signature.rs:33` returns a
-zero-key digest (`hex_encode(&[0u8; 32])`) when HMAC key construction fails. Reached only
-from the same sign path; closing T-27-22-02 removes the one caller that can arrive there with
-an unusable key.
+Two tests selected, not zero — the workspace's documented 0-selecting-filter trap
+(`27-24-01` / T-27-24-03) does not apply to this result.
+
+**Related item, now unreachable:** `signature.rs:33` still returns a zero-key digest
+(`hex_encode(&[0u8; 32])`) if HMAC key construction fails. Its own rustdoc records that
+`Hmac<Sha256>` accepts a key of any length (RFC 2104), so the branch is unreachable in
+practice; with both non-sending arms rescheduling, no caller can now reach the sign path
+carrying an unusable key. Retained as a panic-free degradation, not a finding.
+
+**Scope check.** Four other commits landed after the previous audit — `b5ee33d4` (removes a
+stale `eslint-disable` directive in `scripts/sdk-smoke/smoke.ts`) and three `.planning/`
+documentation commits (`80341635`, `5dd49a59`, `d4e4a2ca`). None touches security-relevant
+Rust, so the remaining 106 closures carry forward unchanged.
 
 ---
 
@@ -276,20 +295,26 @@ router composition (`run_openapi_router`, `thread_controller::fork_thread`) foun
 
 ## Security Audit Trail
 
-## Security Audit 2026-09-08
+## Security Audit 2026-09-08 (re-audit after WR-27-01)
 
 | Metric | Count |
 |--------|-------|
 | Threats found | 107 |
-| Closed | 106 |
-| Open | 1 |
-| Open at or above `high` | 1 |
+| Closed | 107 |
+| Open | 0 |
+| Open at or above `high` | 0 |
+
+Verified T-27-22-02's remediation directly (code path, covering test, green run) rather than
+re-deriving it. `register_authored_at_plan_time: true` and `asvs_level: 1`, so with
+`threats_open: 0` the workflow's L1 short-circuit applies and no deeper re-verification of the
+106 already-closed threats was required.
 
 | Audit Date | Threats Total | Closed | Open | Run By |
 |------------|---------------|--------|------|--------|
 | 2026-09-08 | 107 | 106 | 1 | gsd-security-auditor (ASVS L1, block_on high) |
+| 2026-09-08 | 107 | 107 | 0 | /gsd-secure-phase re-audit (ASVS L1, block_on high) |
 
-Severity breakdown: 3 critical (3 closed) · 41 high (40 closed, 1 open) · 47 medium (47 closed) · 16 low (16 closed).
+Severity breakdown: 3 critical (3 closed) · 41 high (41 closed) · 47 medium (47 closed) · 16 low (16 closed).
 
 ---
 
@@ -297,7 +322,7 @@ Severity breakdown: 3 critical (3 closed) · 41 high (40 closed, 1 open) · 47 m
 
 - [x] All threats have a disposition (mitigate / accept / transfer)
 - [x] Accepted risks documented in Accepted Risks Log
-- [ ] `threats_open: 0` confirmed — **1 open (T-27-22-02, high)**
-- [ ] `status: verified` set in frontmatter — currently `blocked`
+- [x] `threats_open: 0` confirmed — T-27-22-02 closed by `4b6592de`, re-verified 2026-09-08
+- [x] `status: verified` set in frontmatter
 
-**Approval:** pending — blocked on T-27-22-02
+**Approval:** granted — no blocking threats remain.

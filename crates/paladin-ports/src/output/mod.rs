@@ -67,6 +67,9 @@ pub mod vault_confined;
 pub mod vault_port;
 /// Waypoint (superstep checkpoint) persistence port.
 pub mod waypoint_port;
+/// Webhook delivery repository port (D-40): the persisted, durable retry
+/// queue every backend adapter (InMemory/SQLite/Postgres) implements.
+pub mod webhook_delivery_port;
 /// Workflow persistence repository port.
 pub mod workflow_repository_port;
 // Vision ports are unconditional in paladin-ports; the root `paladin` crate

@@ -40,11 +40,12 @@ use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_battalion::engine::{EngineError, RunOutcome, WarEngine};
 use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_core::platform::container::paladin::Paladin;
-use paladin_core::platform::container::parley::ParleyResponse;
+use paladin_core::platform::container::parley::{ParleyRequest, ParleyResponse};
 use paladin_core::platform::container::run::{
-    Run, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
+    Run, RunEventKind, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
 };
 use paladin_core::platform::container::waypoint::Waypoint;
+use paladin_core::platform::container::webhook::{WebhookDelivery, WebhookDeliveryId};
 use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::run_queue_port::{LeaseToken, LeasedRun, RunQueuePort};
@@ -52,10 +53,12 @@ use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunRepositoryError, RunRepositoryPort,
 };
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
+use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
 use super::cancel::{DbCancellationProbe, LocalRunTokens};
 use super::events::{RunEventBus, RunEventBusSink};
 use super::resolver::{AssistantResolver, ResolveError, Runnable};
+use super::webhook::{WebhookPayload, WebhookPayloadAssistant};
 
 /// How long [`RunWorkerPool::run_once`] waits, after a dispatch's own
 /// repository/queue write completes, before unbinding it from the D-24
@@ -193,6 +196,62 @@ enum OutcomeAction {
     LeaveRunningAndRequeue,
 }
 
+/// Map a terminal/suspension [`RunStatus`] to the [`RunEventKind`] a
+/// webhook subscribes to, or `None` for a non-terminal, non-suspension
+/// status this hook never fires for (`Queued`/`Running`).
+fn run_status_to_event_kind(status: RunStatus) -> Option<RunEventKind> {
+    match status {
+        RunStatus::AwaitingInput => Some(RunEventKind::AwaitingInput),
+        RunStatus::Completed => Some(RunEventKind::Completed),
+        RunStatus::Failed => Some(RunEventKind::Failed),
+        RunStatus::Halted => Some(RunEventKind::Halted),
+        RunStatus::Cancelled => Some(RunEventKind::Cancelled),
+        RunStatus::Queued | RunStatus::Running => None,
+    }
+}
+
+/// Build the `Pending` [`WebhookDelivery`] this outcome implies, or `None`
+/// if the run carries no webhook or its `events` list does not subscribe to
+/// `kind` (PLAT-FR-14, D-23). Pure and unit-tested independent of any
+/// repository -- the caller enqueues the result.
+fn webhook_delivery_for_outcome(
+    run: &Run,
+    kind: RunEventKind,
+    status: RunStatus,
+    parleys: Option<&[ParleyRequest]>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<WebhookDelivery> {
+    let webhook = run.webhook.as_ref()?;
+    if !webhook.events.contains(&kind) {
+        return None;
+    }
+
+    let payload = WebhookPayload {
+        run_id: run.run_id.clone(),
+        thread_id: run.thread_id.clone(),
+        assistant: WebhookPayloadAssistant {
+            assistant_id: run.assistant.assistant_id.clone(),
+            version: run.assistant.version,
+        },
+        status,
+        event: kind,
+        timestamp: now,
+        attempt: run.attempt,
+        parleys: parleys.map(|p| p.to_vec()),
+    };
+    let payload_json = serde_json::to_string(&payload).ok()?;
+
+    Some(WebhookDelivery::new(
+        WebhookDeliveryId::new_v7(),
+        run.run_id.clone(),
+        run.thread_id.clone(),
+        kind,
+        webhook.url.clone(),
+        payload_json,
+        now,
+    ))
+}
+
 /// Map a [`RunOutcome`] to the status transition (or requeue) it implies,
 /// given whether the run's cancellation flag is set and whether the pool
 /// itself is shutting down (D-16, D-22, D-13).
@@ -308,6 +367,16 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// (the default) preserves every prior plan's behavior verbatim -- no
     /// bind/publish/unbind call happens anywhere in `run_once`.
     event_bus: Option<Arc<RunEventBus>>,
+    /// The D-40 durable delivery queue, when
+    /// [`RunWorkerPool::with_webhook_deliveries`] wires one: `run_once`
+    /// enqueues a `Pending` [`WebhookDelivery`] on every terminal/suspension
+    /// transition whose run subscribes to that event (PLAT-FR-14). `None`
+    /// (the default) preserves every prior plan's behavior verbatim -- no
+    /// enqueue call happens anywhere in `run_once`. A repository error here
+    /// is logged and NEVER changes the run's own status (prohibition P2):
+    /// it is enqueued strictly after the run's own status write/ack has
+    /// already succeeded.
+    webhook_deliveries: Option<Arc<dyn WebhookDeliveryRepositoryPort>>,
 }
 
 impl<W: WaypointPort + 'static> RunWorkerPool<W> {
@@ -344,6 +413,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             local_tokens: LocalRunTokens::new(),
             cancellation_probe: None,
             event_bus: None,
+            webhook_deliveries: None,
         }
     }
 
@@ -414,6 +484,20 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// not depend on which engine instance is used.
     pub fn with_event_bus(mut self, bus: Arc<RunEventBus>) -> Self {
         self.event_bus = Some(bus);
+        self
+    }
+
+    /// Wire the D-40 durable webhook delivery queue: `run_once` enqueues a
+    /// `Pending` [`WebhookDelivery`] on every terminal/suspension
+    /// transition whose run subscribes to that event, straight from the
+    /// `RunOutcome`/`RunStatus` this pool already computes. A repository
+    /// error enqueueing is logged and NEVER affects the run's own status
+    /// (prohibition P2, PLAT-FR-14).
+    pub fn with_webhook_deliveries(
+        mut self,
+        webhook_deliveries: Arc<dyn WebhookDeliveryRepositoryPort>,
+    ) -> Self {
+        self.webhook_deliveries = Some(webhook_deliveries);
         self
     }
 
@@ -704,6 +788,29 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     .await?;
                 self.repository.record_outcome(&run.run_id, record).await?;
                 self.queue.ack(&leased.token).await?;
+
+                // D-40, PLAT-FR-14: enqueue a webhook delivery for this
+                // transition, strictly AFTER the run's own status write and
+                // ack have already succeeded -- a delivery-repository
+                // failure here is logged and never rolls back or changes
+                // the run's own status (prohibition P2).
+                if let Some(deliveries) = &self.webhook_deliveries
+                    && let Some(kind) = run_status_to_event_kind(to)
+                {
+                    let parleys = match &outcome {
+                        RunOutcome::AwaitingInput { parleys, .. } => Some(parleys.as_slice()),
+                        _ => None,
+                    };
+                    if let Some(delivery) =
+                        webhook_delivery_for_outcome(&run, kind, to, parleys, chrono::Utc::now())
+                        && let Err(error) = deliveries.enqueue(delivery).await
+                    {
+                        log::warn!(
+                            "run worker: failed to enqueue webhook delivery for run {}: {error}",
+                            run.run_id
+                        );
+                    }
+                }
             }
             OutcomeAction::LeaveRunningAndRequeue => {
                 self.queue.nack(&leased.token, Duration::ZERO).await?;
@@ -1033,6 +1140,107 @@ mod tests {
                 },
             }
         );
+    }
+
+    // --- webhook_delivery_for_outcome / run_status_to_event_kind ---------
+
+    fn sample_run_with_webhook(events: Vec<RunEventKind>) -> Run {
+        use paladin_core::platform::container::run::{AssistantRef, WebhookSpec};
+        Run::new(
+            RunId::new_v7(),
+            ThreadId::new("wh-t1").unwrap(),
+            AssistantRef {
+                assistant_id: "a1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+        .with_webhook(WebhookSpec {
+            url: "https://example.com/hook".to_string(),
+            secret: None,
+            events,
+        })
+    }
+
+    #[test]
+    fn run_status_to_event_kind_maps_terminal_and_awaiting_input() {
+        assert_eq!(
+            run_status_to_event_kind(RunStatus::AwaitingInput),
+            Some(RunEventKind::AwaitingInput)
+        );
+        assert_eq!(
+            run_status_to_event_kind(RunStatus::Completed),
+            Some(RunEventKind::Completed)
+        );
+        assert_eq!(
+            run_status_to_event_kind(RunStatus::Failed),
+            Some(RunEventKind::Failed)
+        );
+        assert_eq!(
+            run_status_to_event_kind(RunStatus::Halted),
+            Some(RunEventKind::Halted)
+        );
+        assert_eq!(
+            run_status_to_event_kind(RunStatus::Cancelled),
+            Some(RunEventKind::Cancelled)
+        );
+        assert_eq!(run_status_to_event_kind(RunStatus::Queued), None);
+        assert_eq!(run_status_to_event_kind(RunStatus::Running), None);
+    }
+
+    #[test]
+    fn webhook_delivery_for_outcome_none_when_run_has_no_webhook() {
+        let run = Run::new(
+            RunId::new_v7(),
+            ThreadId::new("no-hook").unwrap(),
+            paladin_core::platform::container::run::AssistantRef {
+                assistant_id: "a1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        let delivery = webhook_delivery_for_outcome(
+            &run,
+            RunEventKind::Completed,
+            RunStatus::Completed,
+            None,
+            chrono::Utc::now(),
+        );
+        assert!(delivery.is_none());
+    }
+
+    #[test]
+    fn webhook_delivery_for_outcome_none_when_event_not_subscribed() {
+        let run = sample_run_with_webhook(vec![RunEventKind::Failed]);
+        let delivery = webhook_delivery_for_outcome(
+            &run,
+            RunEventKind::Completed,
+            RunStatus::Completed,
+            None,
+            chrono::Utc::now(),
+        );
+        assert!(delivery.is_none());
+    }
+
+    #[test]
+    fn webhook_delivery_for_outcome_builds_pending_delivery_when_subscribed() {
+        let run = sample_run_with_webhook(vec![RunEventKind::Completed]);
+        let delivery = webhook_delivery_for_outcome(
+            &run,
+            RunEventKind::Completed,
+            RunStatus::Completed,
+            None,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(delivery.run_id, run.run_id);
+        assert_eq!(delivery.url, "https://example.com/hook");
+        assert!(matches!(
+            delivery.status,
+            paladin_core::platform::container::webhook::WebhookDeliveryStatus::Pending
+        ));
+        assert!(delivery.payload.contains(run.run_id.as_str()));
+        assert!(!delivery.payload.to_lowercase().contains("secret"));
     }
 
     // --- LeaseHeartbeat --------------------------------------------------

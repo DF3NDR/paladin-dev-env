@@ -28,9 +28,14 @@ use paladin_core::platform::container::execution_result::PaladinResult;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::ParleyResponse;
-use paladin_core::platform::container::run::{AssistantRef, Run, RunId, RunStatus};
+use paladin_core::platform::container::run::{
+    AssistantRef, Run, RunEventKind, RunId, RunStatus, WebhookSpec,
+};
 use paladin_core::platform::container::waypoint::{
     NodeId, ThreadId, Waypoint, WaypointId, WaypointStatus,
+};
+use paladin_core::platform::container::webhook::{
+    WebhookAttemptResult, WebhookDelivery, WebhookDeliveryId,
 };
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::run_queue_port::{QueuedRun, RunQueuePort};
@@ -38,9 +43,13 @@ use paladin_ports::output::run_repository_port::RunRepositoryPort;
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
+use paladin_ports::output::webhook_delivery_port::{
+    WebhookDeliveryPage, WebhookDeliveryRepositoryError, WebhookDeliveryRepositoryPort,
+};
 use paladin_storage::run::in_memory::InMemoryRunRepository;
 use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+use paladin_storage::webhook::in_memory::InMemoryWebhookDeliveryRepository;
 
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
 use super::worker::{RunWorkerOptions, RunWorkerPool};
@@ -644,4 +653,169 @@ async fn shutdown_drains_in_flight_run() {
     })
     .await
     .expect("shutdown_drains_in_flight_run must finish within 15s");
+}
+
+// --- webhook delivery hook (27-13, D-40, PLAT-FR-14) --------------------
+
+/// Insert a fresh `Queued` run carrying `webhook`, enqueue its pointer, and
+/// return the run/thread ids -- mirrors `submit` but for the webhook-hook
+/// tests.
+async fn submit_with_webhook(
+    repository: &Arc<dyn RunRepositoryPort>,
+    queue: &Arc<dyn RunQueuePort>,
+    assistant_id: &str,
+    webhook: WebhookSpec,
+) -> (RunId, ThreadId) {
+    let run_id = RunId::new_v7();
+    let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+    let run = Run::new(
+        run_id.clone(),
+        thread_id.clone(),
+        AssistantRef {
+            assistant_id: assistant_id.to_string(),
+            version: 1,
+        },
+        serde_json::json!({}),
+    )
+    .with_webhook(webhook);
+    repository.insert(&run).await.unwrap();
+    queue
+        .enqueue(QueuedRun {
+            run_id: run_id.clone(),
+            thread_id: thread_id.clone(),
+            attempt: 1,
+            enqueued_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    (run_id, thread_id)
+}
+
+/// A [`WebhookDeliveryRepositoryPort`] test double whose `enqueue` always
+/// fails -- proves a delivery-repository error is logged and NEVER changes
+/// the run's own status (prohibition P2).
+struct AlwaysErrorWebhookDeliveries;
+
+#[async_trait]
+impl WebhookDeliveryRepositoryPort for AlwaysErrorWebhookDeliveries {
+    async fn enqueue(
+        &self,
+        _delivery: WebhookDelivery,
+    ) -> Result<(), WebhookDeliveryRepositoryError> {
+        Err(WebhookDeliveryRepositoryError::Backend {
+            source: "always fails".into(),
+        })
+    }
+
+    async fn get(
+        &self,
+        delivery_id: &WebhookDeliveryId,
+    ) -> Result<Option<WebhookDelivery>, WebhookDeliveryRepositoryError> {
+        Err(WebhookDeliveryRepositoryError::NotFound {
+            delivery_id: delivery_id.clone(),
+        })
+    }
+
+    async fn claim_due(
+        &self,
+        _now: chrono::DateTime<chrono::Utc>,
+        _limit: u32,
+    ) -> Result<Vec<WebhookDelivery>, WebhookDeliveryRepositoryError> {
+        Ok(vec![])
+    }
+
+    async fn record_attempt(
+        &self,
+        delivery_id: &WebhookDeliveryId,
+        _result: WebhookAttemptResult,
+    ) -> Result<(), WebhookDeliveryRepositoryError> {
+        Err(WebhookDeliveryRepositoryError::NotFound {
+            delivery_id: delivery_id.clone(),
+        })
+    }
+
+    async fn list_for_run(
+        &self,
+        _run_id: &RunId,
+        _limit: u32,
+        _cursor: Option<WebhookDeliveryId>,
+    ) -> Result<WebhookDeliveryPage, WebhookDeliveryRepositoryError> {
+        Ok(WebhookDeliveryPage::default())
+    }
+}
+
+#[tokio::test]
+async fn webhook_delivery_enqueued_on_completed_event() {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let (graph, _counters) = build_chain_graph(1, Duration::ZERO);
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("chain-webhook", graph));
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let worker = RunWorkerPool::new(
+        engine,
+        store,
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_webhook_deliveries(Arc::clone(&deliveries));
+
+    let webhook = WebhookSpec {
+        url: "https://example.com/hook".to_string(),
+        secret: None,
+        events: vec![RunEventKind::Completed],
+    };
+    let (run_id, _thread_id) =
+        submit_with_webhook(&repository, &queue, "chain-webhook", webhook).await;
+
+    assert!(worker.run_once().await.unwrap());
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+
+    let page = deliveries.list_for_run(&run_id, 10, None).await.unwrap();
+    assert_eq!(page.items.len(), 1, "exactly one delivery must be enqueued");
+    assert!(matches!(page.items[0].event, RunEventKind::Completed));
+    assert!(page.items[0].payload.contains(run_id.as_str()));
+}
+
+#[tokio::test]
+async fn webhook_delivery_repository_error_never_affects_run_status() {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let (graph, _counters) = build_chain_graph(1, Duration::ZERO);
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("chain-webhook-err", graph));
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> = Arc::new(AlwaysErrorWebhookDeliveries);
+    let worker = RunWorkerPool::new(
+        engine,
+        store,
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_webhook_deliveries(deliveries);
+
+    let webhook = WebhookSpec {
+        url: "https://example.com/hook".to_string(),
+        secret: None,
+        events: vec![RunEventKind::Completed],
+    };
+    let (run_id, _thread_id) =
+        submit_with_webhook(&repository, &queue, "chain-webhook-err", webhook).await;
+
+    assert!(worker.run_once().await.unwrap());
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(
+        run.status,
+        RunStatus::Completed,
+        "a webhook delivery repository error must never change the run's own status"
+    );
 }

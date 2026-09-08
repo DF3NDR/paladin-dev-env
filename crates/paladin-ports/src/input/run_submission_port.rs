@@ -122,6 +122,14 @@ pub enum RunSubmissionError {
         /// Description of the backend failure.
         message: String,
     },
+    /// The request's `webhook.url` failed the write-time SSRF guard
+    /// (D-42). `paladin-web`'s HTTP surface (plan 27-15) renders this as
+    /// `400 webhook_url_rejected`.
+    #[error("webhook URL rejected: {reason}")]
+    WebhookRejected {
+        /// Why the URL was rejected (the `SsrfRejection`'s own message).
+        reason: String,
+    },
     /// No run store/queue is configured (the D-24 501 precedent).
     #[error("run submission is not wired: configure run_store and run_queue")]
     NotWired,

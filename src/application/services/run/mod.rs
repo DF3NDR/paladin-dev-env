@@ -22,6 +22,9 @@ pub mod schedule;
 /// `RunSubmissionService` — the facade `RunSubmissionPort` implementation
 /// (D-12).
 pub mod submission;
+/// Durable webhook delivery (PLAT-FR-14/15, D-40..D-43): `SsrfGuard`,
+/// `sign_webhook_body`, `build_webhook_client`, `WebhookDeliveryService`.
+pub mod webhook;
 /// `RunWorkerPool` — dequeues, drives the engine, and applies the terminal
 /// transition (D-11, D-13).
 pub mod worker;

@@ -23,6 +23,7 @@ use paladin_ports::output::run_repository_port::{RunRepositoryError, RunReposito
 
 use super::cancel::LocalRunTokens;
 use super::resolver::{AssistantResolver, ResolveError};
+use super::webhook::SsrfGuard;
 
 /// Generate a fresh [`ThreadId`] from a UUIDv7 string.
 ///
@@ -104,6 +105,12 @@ pub struct RunSubmissionService {
     queue: Arc<dyn RunQueuePort>,
     resolver: Arc<dyn AssistantResolver>,
     local_tokens: LocalRunTokens,
+    /// The write-time SSRF guard (D-42) `submit` runs a caller-supplied
+    /// `webhook.url` through before ever persisting the run. Defaults to
+    /// `SsrfGuard::new(false)` -- private/loopback/link-local addresses
+    /// rejected unless a deployment explicitly opts in via
+    /// [`RunSubmissionService::with_ssrf_guard`].
+    ssrf_guard: SsrfGuard,
 }
 
 impl RunSubmissionService {
@@ -124,6 +131,7 @@ impl RunSubmissionService {
             queue,
             resolver,
             local_tokens: LocalRunTokens::new(),
+            ssrf_guard: SsrfGuard::new(false),
         }
     }
 
@@ -135,11 +143,30 @@ impl RunSubmissionService {
         self.local_tokens = local_tokens;
         self
     }
+
+    /// Override the default write-time [`SsrfGuard`] (D-42) -- e.g. to
+    /// enable `allow_private` for an internal-network deployment, or to
+    /// inject a stubbed resolver in tests.
+    pub fn with_ssrf_guard(mut self, ssrf_guard: SsrfGuard) -> Self {
+        self.ssrf_guard = ssrf_guard;
+        self
+    }
 }
 
 #[async_trait]
 impl RunSubmissionPort for RunSubmissionService {
     async fn submit(&self, request: SubmitRun) -> Result<RunAccepted, RunSubmissionError> {
+        // D-42: the write-time half of the SSRF guard -- checked BEFORE
+        // any resolve/insert/enqueue work, so a rejected URL never
+        // persists a run at all.
+        if let Some(webhook) = &request.webhook
+            && let Err(rejection) = self.ssrf_guard.check_url(&webhook.url).await
+        {
+            return Err(RunSubmissionError::WebhookRejected {
+                reason: rejection.to_string(),
+            });
+        }
+
         let resolved = self
             .resolver
             .resolve(&request.assistant_id, request.version)
@@ -275,6 +302,62 @@ mod tests {
         let stored = repository.get(&accepted.run_id).await.unwrap();
         assert!(stored.is_some());
         assert_eq!(queue.depth().await.unwrap(), 1);
+    }
+
+    // --- D-42: write-time SSRF guard ---------------------------------------
+
+    #[tokio::test]
+    async fn submit_with_a_loopback_webhook_url_is_rejected_and_touches_nothing() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, _repository, queue) = service_with(resolver);
+
+        let err = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: Some(paladin_core::platform::container::run::WebhookSpec {
+                    url: "http://127.0.0.1/hook".to_string(),
+                    secret: None,
+                    events: vec![],
+                }),
+                requested_by: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, RunSubmissionError::WebhookRejected { .. }));
+        assert_eq!(
+            queue.depth().await.unwrap(),
+            0,
+            "a rejected webhook URL must never enqueue a run"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_with_allow_private_guard_accepts_a_loopback_webhook_url() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+        let service = service.with_ssrf_guard(super::super::webhook::SsrfGuard::new(true));
+
+        let accepted = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: Some(paladin_core::platform::container::run::WebhookSpec {
+                    url: "http://127.0.0.1/hook".to_string(),
+                    secret: None,
+                    events: vec![],
+                }),
+                requested_by: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(repository.get(&accepted.run_id).await.unwrap().is_some());
     }
 
     #[tokio::test]

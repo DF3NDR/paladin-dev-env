@@ -170,6 +170,12 @@ regex = "1.11.1"
 urlencoding = "2.1.3"
 sqlx = { workspace = true }
 sha2 = "0.10.9"
+# HMAC-SHA256 webhook delivery signing (PLAT-FR-15, D-41). Already resolved
+# transitively at 0.12.1 in Cargo.lock (pulled in via an existing crypto
+# dependency) -- this promotes it to a direct facade dependency with no new
+# package entering the graph, mirroring `sha2`'s own placement immediately
+# above (facade-only, not a `[workspace.dependencies]` entry).
+hmac = "0.12"
 blake3 = "1.8.2"
 toml = "0.8.23"
 md5 = "0.8.0"

@@ -65,6 +65,7 @@ use chrono::{DateTime, Utc};
 use thiserror::Error;
 
 use paladin_core::platform::container::parley::{ParleyId, ParleyResponse};
+use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::waypoint::{GraphFingerprint, ThreadId};
 
 /// The accepted-and-running handle [`ParleyPort::resume_with`] returns on
@@ -73,9 +74,19 @@ use paladin_core::platform::container::waypoint::{GraphFingerprint, ThreadId};
 /// current state) since HTTP-layer concerns like a `state_url` string
 /// belong to `paladin-web` (ADR-0038), not to this core-typed port.
 ///
+/// `#[non_exhaustive]` (D-21, PLAT-03): [`Self::run_id`] was added after this
+/// type shipped in Phase 24 — a resume routed through the durable run-server
+/// path (`src/application/services/parley/adapter.rs`, PLAT-FR-06) carries
+/// the re-enqueued run's id; a resume that fell back to Phase 24's
+/// in-process spawn (no run row for the thread, X-03) carries `None`. Marking
+/// this `#[non_exhaustive]` keeps the NEXT field free without a semver-major
+/// bump; construction stays possible only through [`Self::new`] plus
+/// [`Self::with_run_id`] (X-10.3).
+///
 /// # Examples
 ///
 /// ```
+/// use paladin_core::platform::container::run::RunId;
 /// use paladin_core::platform::container::waypoint::ThreadId;
 /// use paladin_ports::input::parley_port::ResumeAccepted;
 ///
@@ -83,21 +94,45 @@ use paladin_core::platform::container::waypoint::{GraphFingerprint, ThreadId};
 /// let accepted = ResumeAccepted::new(thread.clone());
 /// assert_eq!(accepted.thread_id(), &thread);
 /// assert_eq!(accepted.state_handle(), &thread);
+/// assert_eq!(accepted.run_id(), None);
+///
+/// let run_id = RunId::new_v7();
+/// let accepted = accepted.with_run_id(run_id.clone());
+/// assert_eq!(accepted.run_id(), Some(&run_id));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ResumeAccepted {
     thread_id: ThreadId,
+    run_id: Option<RunId>,
 }
 
 impl ResumeAccepted {
-    /// Construct a handle for `thread_id`.
+    /// Construct a handle for `thread_id`, with no `run_id` (Phase 24's
+    /// legacy in-process spawn shape). Call [`Self::with_run_id`] to attach
+    /// the re-enqueued run's id on the durable path.
     pub fn new(thread_id: ThreadId) -> Self {
-        Self { thread_id }
+        Self {
+            thread_id,
+            run_id: None,
+        }
+    }
+
+    /// Attach the run this resume re-enqueued (PLAT-FR-06, D-21).
+    pub fn with_run_id(mut self, run_id: RunId) -> Self {
+        self.run_id = Some(run_id);
+        self
     }
 
     /// The thread whose resume was accepted.
     pub fn thread_id(&self) -> &ThreadId {
         &self.thread_id
+    }
+
+    /// The run this resume re-enqueued, if the durable run-server path
+    /// handled it (`None` for Phase 24's in-process-spawn fallback, X-03).
+    pub fn run_id(&self) -> Option<&RunId> {
+        self.run_id.as_ref()
     }
 
     /// The handle a client polls to observe the run's outcome. Identical to
@@ -386,5 +421,18 @@ mod tests {
         let accepted = ResumeAccepted::new(thread.clone());
         assert_eq!(accepted.thread_id(), &thread);
         assert_eq!(accepted.state_handle(), &thread);
+        assert_eq!(accepted.run_id(), None);
+    }
+
+    /// Test 5 (D-21, PLAT-03): `with_run_id` attaches a run id, and `new`
+    /// alone leaves it `None` (the Phase 24 in-process-spawn fallback shape,
+    /// X-03).
+    #[test]
+    fn resume_accepted_with_run_id_attaches_the_run() {
+        let thread = ThreadId::new("resume-accepted-run-id").unwrap();
+        let run_id = RunId::new_v7();
+        let accepted = ResumeAccepted::new(thread.clone()).with_run_id(run_id.clone());
+        assert_eq!(accepted.thread_id(), &thread);
+        assert_eq!(accepted.run_id(), Some(&run_id));
     }
 }

@@ -1481,12 +1481,19 @@
       },
       "ResumeAcceptedResponse": {
         "type": "object",
-        "description": "Response body for a successful `POST /threads/{id}/resume` (`202 Accepted`).",
+        "description": "Response body for a successful `POST /threads/{id}/resume` (`202 Accepted`).\n\n`#[non_exhaustive]` (D-21, PLAT-03): `run_id` was added after this type\nshipped in Phase 24, mirroring\n[`ResumeAccepted`](paladin_ports::input::parley_port::ResumeAccepted)'s\nown field of the same name and meaning one level down the stack.\nConstruction stays possible only through [`Self::new`] (X-10.3), so the\nnext field stays free without a semver-major bump.",
         "required": [
           "thread_id",
           "state_url"
         ],
         "properties": {
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The run this resume re-enqueued, if the durable run-server path\nhandled it (`None` for Phase 24's in-process-spawn fallback, X-03)."
+          },
           "state_url": {
             "type": "string",
             "description": "The URL a client polls (`GET .../state`) to observe the outcome."

@@ -356,12 +356,36 @@ pub struct ResumeRequest {
 }
 
 /// Response body for a successful `POST /threads/{id}/resume` (`202 Accepted`).
+///
+/// `#[non_exhaustive]` (D-21, PLAT-03): `run_id` was added after this type
+/// shipped in Phase 24, mirroring
+/// [`ResumeAccepted`](paladin_ports::input::parley_port::ResumeAccepted)'s
+/// own field of the same name and meaning one level down the stack.
+/// Construction stays possible only through [`Self::new`] (X-10.3), so the
+/// next field stays free without a semver-major bump.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[non_exhaustive]
 pub struct ResumeAcceptedResponse {
     /// The thread whose resume was accepted.
     pub thread_id: String,
     /// The URL a client polls (`GET .../state`) to observe the outcome.
     pub state_url: String,
+    /// The run this resume re-enqueued, if the durable run-server path
+    /// handled it (`None` for Phase 24's in-process-spawn fallback, X-03).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+}
+
+impl ResumeAcceptedResponse {
+    /// Construct a response body (D-21, PLAT-03) -- the only construction
+    /// path now that this struct is `#[non_exhaustive]`.
+    pub fn new(thread_id: String, state_url: String, run_id: Option<String>) -> Self {
+        Self {
+            thread_id,
+            state_url,
+            run_id,
+        }
+    }
 }
 
 /// Wire projection of a [`WaypointSummary`].
@@ -580,16 +604,14 @@ pub async fn resume_thread(
         .map_err(map_parley_error)?;
 
     let thread_id = accepted.thread_id().as_str().to_string();
+    let run_id = accepted.run_id().map(|id| id.to_string());
     let state_url = format!(
         "{}/threads/{thread_id}/state",
         crate::agent_controller::API_V1_PREFIX
     );
     Ok((
         StatusCode::ACCEPTED,
-        ok_body(&ResumeAcceptedResponse {
-            thread_id,
-            state_url,
-        }),
+        ok_body(&ResumeAcceptedResponse::new(thread_id, state_url, run_id)),
     ))
 }
 

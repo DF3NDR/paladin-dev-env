@@ -44,6 +44,26 @@
 //! spawned task's own call is what actually runs, and any divergence
 //! surfaces only through the thread's own state on a later poll -- the
 //! same eventually-consistent contract any background-job system offers.
+//!
+//! # Durable re-enqueue supersedes the in-process spawn (PLAT-FR-06, D-19..D-23)
+//!
+//! When [`ParleyPortAdapter::with_run_repository`] and
+//! [`ParleyPortAdapter::with_run_queue`] are both wired AND the thread has an
+//! active run row (`RunRepositoryPort::active_run_for_thread`), a
+//! `ShadowOutcome::Complete` submission no longer spawns the continuation
+//! in-process: it calls `record_resume` (attempt `n` -> `n+1`, responses
+//! parked on the row) and re-enqueues a [`QueuedRun`] under the SAME
+//! `run_id`, returning immediately with `run_id: Some(..)`. The queued
+//! message carries only the pointer -- never the responses themselves (D-07)
+//! -- and any worker instance picks it up, dispatching through
+//! `WorkerDispatch::decide` exactly like any other redelivery (27-04). Resume
+//! never inserts a row and never consults the busy-thread index (D-19): it is
+//! always an `UPDATE` of the run that is already there.
+//!
+//! A thread with NO run row (a Phase 24 thread suspended before the run
+//! server existed, or an adapter with neither collaborator wired) keeps
+//! Phase 24's exact in-process spawn behaviour, and `run_id` is `None`
+//! (X-03).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -58,6 +78,8 @@ use paladin_core::platform::container::waypoint::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse, ThreadId, WaypointStatus,
 };
 use paladin_ports::input::parley_port::{ParleyError, ParleyPort, ResumeAccepted};
+use paladin_ports::output::run_queue_port::{QueueError, QueuedRun, RunQueuePort};
+use paladin_ports::output::run_repository_port::{RunRepositoryError, RunRepositoryPort};
 use paladin_ports::output::waypoint_port::WaypointPort;
 
 use super::registry::GraphRegistry;
@@ -70,12 +92,19 @@ pub struct ParleyPortAdapter<W: WaypointPort + 'static> {
     waypoint_port: Arc<W>,
     registry: Arc<GraphRegistry>,
     coordinator: ShutdownCoordinator,
+    run_repository: Option<Arc<dyn RunRepositoryPort>>,
+    run_queue: Option<Arc<dyn RunQueuePort>>,
 }
 
 impl<W: WaypointPort + 'static> ParleyPortAdapter<W> {
     /// Construct an adapter over `engine` (constructed with the SAME
     /// `waypoint_port` instance), resolving graphs through `registry` and
     /// registering every spawned continuation with `coordinator`.
+    ///
+    /// Neither run-server collaborator is wired by this constructor (X-03):
+    /// every existing call site keeps Phase 24's exact in-process spawn
+    /// behaviour unless [`Self::with_run_repository`] and
+    /// [`Self::with_run_queue`] are both added via the builder methods.
     pub fn new(
         engine: Arc<WarEngine<W>>,
         waypoint_port: Arc<W>,
@@ -87,7 +116,26 @@ impl<W: WaypointPort + 'static> ParleyPortAdapter<W> {
             waypoint_port,
             registry,
             coordinator,
+            run_repository: None,
+            run_queue: None,
         }
+    }
+
+    /// Wire a [`RunRepositoryPort`] so a resume against a thread with an
+    /// active run row re-enqueues durably (PLAT-FR-06, D-19..D-23) instead of
+    /// spawning in-process. Both this and [`Self::with_run_queue`] must be
+    /// set for the durable path to activate; with either absent,
+    /// `resume_with` keeps Phase 24's in-process spawn behaviour unchanged.
+    pub fn with_run_repository(mut self, run_repository: Arc<dyn RunRepositoryPort>) -> Self {
+        self.run_repository = Some(run_repository);
+        self
+    }
+
+    /// Wire a [`RunQueuePort`] -- see [`Self::with_run_repository`]'s own
+    /// rustdoc for the pairing requirement.
+    pub fn with_run_queue(mut self, run_queue: Arc<dyn RunQueuePort>) -> Self {
+        self.run_queue = Some(run_queue);
+        self
     }
 }
 
@@ -139,6 +187,41 @@ impl<W: WaypointPort + 'static> ParleyPort for ParleyPortAdapter<W> {
                     .map_err(map_engine_error)
             }
             ShadowOutcome::Complete => {
+                // PLAT-FR-06 (D-19..D-23): if both run-server collaborators
+                // are wired AND the thread has an active run row, re-enqueue
+                // durably under the SAME run_id instead of spawning
+                // in-process. `record_resume` is itself the CAS -- it only
+                // succeeds from `AwaitingInput` -- so a losing race (a
+                // concurrent cancel, or a second resume for the same thread)
+                // surfaces here as a typed error, never a silent no-op.
+                if let (Some(run_repository), Some(run_queue)) =
+                    (self.run_repository.as_ref(), self.run_queue.as_ref())
+                {
+                    let active_run = run_repository
+                        .active_run_for_thread(thread)
+                        .await
+                        .map_err(|err| map_run_repository_error(err, thread))?;
+                    if let Some(run) = active_run {
+                        let attempt = run_repository
+                            .record_resume(&run.run_id, responses)
+                            .await
+                            .map_err(|err| map_run_repository_error(err, thread))?;
+                        run_queue
+                            .enqueue(QueuedRun {
+                                run_id: run.run_id.clone(),
+                                thread_id: thread.clone(),
+                                attempt,
+                                enqueued_at: Utc::now(),
+                            })
+                            .await
+                            .map_err(map_run_queue_error)?;
+                        return Ok(ResumeAccepted::new(thread.clone()).with_run_id(run.run_id));
+                    }
+                    // No run row for this thread (X-03: a Phase 24 thread
+                    // suspended before the run server existed) -- fall
+                    // through to the legacy in-process spawn below.
+                }
+
                 // Every parley now has a response: this call WOULD invoke
                 // the continuation. Register with the ShutdownCoordinator
                 // and spawn the real, authoritative call as a background
@@ -384,6 +467,37 @@ fn shadow_normalize_approval_value(value: &serde_json::Value) -> Option<bool> {
     }
 }
 
+/// Maps a [`RunRepositoryError`] surfaced by the durable resume path
+/// (`active_run_for_thread`/`record_resume`) onto a [`ParleyError`]
+/// (PLAT-FR-06). `IllegalTransition` is the CAS losing a race against a
+/// concurrent cancel or a second resume for the same thread -- the run row
+/// is no longer `AwaitingInput`, which is exactly the caller-facing
+/// `ThreadNotAwaitingInput` condition the legacy (Waypoint-based) path
+/// already reports for the analogous case. Every other variant is a genuine
+/// backend failure, never a caller-input rejection, and fails closed into
+/// `Rejected` rather than being silently dropped or panicking (mirrors
+/// [`map_engine_error`]'s own fail-closed discipline).
+fn map_run_repository_error(err: RunRepositoryError, thread: &ThreadId) -> ParleyError {
+    match err {
+        RunRepositoryError::IllegalTransition { from, .. } => ParleyError::ThreadNotAwaitingInput {
+            thread: thread.clone(),
+            status: from.to_string(),
+        },
+        other => ParleyError::Rejected {
+            reason: other.to_string(),
+        },
+    }
+}
+
+/// Maps a [`QueueError`] surfaced while re-enqueueing a resume (PLAT-FR-06)
+/// onto a [`ParleyError`]. See [`map_run_repository_error`]'s own rustdoc for
+/// why this fails closed into `Rejected` rather than being silently dropped.
+fn map_run_queue_error(err: QueueError) -> ParleyError {
+    ParleyError::Rejected {
+        reason: err.to_string(),
+    }
+}
+
 /// Maps every `EngineError` variant the real `WarEngine::resume_with`
 /// validation path can produce onto its `ParleyError` counterpart
 /// explicitly (D-25) -- a catch-all mapping that collapsed distinct
@@ -429,21 +543,28 @@ fn map_engine_error(err: EngineError) -> ParleyError {
 mod tests {
     use super::*;
     use async_trait::async_trait as async_trait_attr;
+    use paladin_battalion::engine::graph::GateRequestTemplate;
     use paladin_battalion::engine::node::{NodeContext, StateNode, StateNodeError};
-    use paladin_battalion::engine::{EngineLimits, NodeSpec, WaypointDurability};
+    use paladin_battalion::engine::{EngineLimits, InputMapping, NodeSpec, WaypointDurability};
     use paladin_core::platform::container::battlefield::{
         Battlefield, BattlefieldSchema, CacheMarker, DispatchRule, FieldName, FieldSpec,
     };
     use paladin_core::platform::container::directive::{Directive, NextStep};
     use paladin_core::platform::container::paladin::Paladin;
     use paladin_core::platform::container::paladin_error::PaladinError;
+    use paladin_core::platform::container::run::{AssistantRef, Run, RunId, RunStatus};
     use paladin_core::platform::container::waypoint::{GraphFingerprint, NodeId, ParleyId};
     use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
     use paladin_ports::output::waypoint_port::{ThreadSummary, WaypointError, WaypointSummary};
+    use paladin_storage::run::in_memory::InMemoryRunRepository;
+    use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
     use paladin_storage::waypoint::contract_tests::sample_waypoint_at;
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    use crate::application::services::run::resolver::{AssistantResolver, CodeWorkflowResolver};
+    use crate::application::services::run::worker::RunWorkerPool;
 
     struct UnimplementedPaladinPort;
 
@@ -1132,5 +1253,347 @@ mod tests {
             }),
             ParleyError::Rejected { .. }
         ));
+    }
+
+    // --- Task 1 (PLAT-FR-06, D-19..D-23): durable re-enqueue supersedes
+    // the in-process spawn ------------------------------------------------
+
+    fn build_adapter_with_run_server(
+        store: Arc<InMemoryWaypointStore>,
+        registry: Arc<GraphRegistry>,
+        run_repository: Arc<dyn RunRepositoryPort>,
+        run_queue: Arc<dyn RunQueuePort>,
+    ) -> (
+        ParleyPortAdapter<InMemoryWaypointStore>,
+        ShutdownCoordinator,
+    ) {
+        let engine = Arc::new(
+            WarEngine::new(Arc::new(UnimplementedPaladinPort), Arc::clone(&store))
+                .with_durability(WaypointDurability::Strict),
+        );
+        let coordinator = ShutdownCoordinator::new();
+        let adapter = ParleyPortAdapter::new(engine, store, registry, coordinator.clone())
+            .with_run_repository(run_repository)
+            .with_run_queue(run_queue);
+        (adapter, coordinator)
+    }
+
+    /// Both collaborators wired but NO run row exists for the thread: the
+    /// legacy Phase 24 in-process spawn runs unchanged and `run_id` is
+    /// `None` (X-03).
+    #[tokio::test]
+    async fn wired_adapter_without_active_run_falls_back_to_legacy_spawn() {
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let registry = Arc::new(GraphRegistry::new());
+        let graph = approval_graph();
+        let t = thread("wired-no-active-run");
+        let request = sample_request(ParleyKind::Approval, None);
+        let parley_id = request.parley_id;
+        seed_awaiting_input(&store, &t, &graph, vec![request], Vec::new()).await;
+        registry.register(graph);
+
+        let run_repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let run_queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let (adapter, coordinator) = build_adapter_with_run_server(
+            Arc::clone(&store),
+            registry,
+            Arc::clone(&run_repository),
+            Arc::clone(&run_queue),
+        );
+
+        let response = approve_response(parley_id);
+        let accepted = adapter.resume_with(&t, vec![response]).await.unwrap();
+        assert_eq!(accepted.thread_id(), &t);
+        assert_eq!(
+            accepted.run_id(),
+            None,
+            "no run row exists for this thread -- run_id must be None (X-03)"
+        );
+
+        for _ in 0..50 {
+            if coordinator.in_flight() == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(coordinator.in_flight(), 0, "the spawned run must complete");
+        assert_eq!(run_queue.depth().await.unwrap(), 0, "nothing was enqueued");
+
+        let after = store.latest(&t).await.unwrap().unwrap();
+        assert_eq!(
+            after.status,
+            WaypointStatus::Completed,
+            "the legacy in-process spawn must still run the graph to completion"
+        );
+    }
+
+    /// An active `AwaitingInput` run row exists for the thread: the adapter
+    /// records the resume onto the run row (`attempt` -> `n+1`) and
+    /// re-enqueues the SAME `run_id`, WITHOUT spawning anything in-process
+    /// (PLAT-FR-06, D-19, D-23).
+    #[tokio::test]
+    async fn wired_adapter_with_active_run_reenqueues_instead_of_spawning() {
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let registry = Arc::new(GraphRegistry::new());
+        let graph = approval_graph();
+        let t = thread("wired-active-run-reenqueue");
+        let request = sample_request(ParleyKind::Approval, None);
+        let parley_id = request.parley_id;
+        seed_awaiting_input(&store, &t, &graph, vec![request], Vec::new()).await;
+        registry.register(graph);
+
+        let run_repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let run_queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let run_id = RunId::new_v7();
+        let run = Run::new(
+            run_id.clone(),
+            t.clone(),
+            AssistantRef {
+                assistant_id: "wired-adapter".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        run_repository.insert(&run).await.unwrap();
+        run_repository
+            .update_status(&run_id, RunStatus::Queued, RunStatus::Running, Utc::now())
+            .await
+            .unwrap();
+        run_repository
+            .update_status(
+                &run_id,
+                RunStatus::Running,
+                RunStatus::AwaitingInput,
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+
+        let (adapter, coordinator) = build_adapter_with_run_server(
+            Arc::clone(&store),
+            registry,
+            Arc::clone(&run_repository),
+            Arc::clone(&run_queue),
+        );
+
+        let response = approve_response(parley_id);
+        let accepted = adapter.resume_with(&t, vec![response]).await.unwrap();
+        assert_eq!(
+            accepted.run_id(),
+            Some(&run_id),
+            "the resumed run's id must be returned"
+        );
+
+        // No background task was spawned for the durable enqueue path.
+        assert_eq!(coordinator.in_flight(), 0);
+
+        let after_resume = run_repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(
+            after_resume.attempt, 2,
+            "record_resume must bump the shared attempt counter (D-23)"
+        );
+        assert_eq!(
+            after_resume.status,
+            RunStatus::AwaitingInput,
+            "record_resume itself does not change status -- the worker's own CAS on dequeue does"
+        );
+
+        assert_eq!(
+            run_queue.depth().await.unwrap(),
+            1,
+            "the resume must re-enqueue exactly one pointer"
+        );
+        let leased = run_queue
+            .dequeue(Duration::from_secs(30))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            leased.queued.run_id, run_id,
+            "the re-enqueued pointer must carry the SAME run_id (D-19)"
+        );
+        assert_eq!(leased.queued.attempt, 2);
+
+        // The underlying Waypoint is untouched by this call -- no engine
+        // call was ever made on this path (D-19: resume never touches the
+        // engine directly, only the run row and the queue).
+        let waypoint_after = store.latest(&t).await.unwrap().unwrap();
+        assert!(
+            matches!(waypoint_after.status, WaypointStatus::AwaitingInput { .. }),
+            "the durable path never calls the engine -- the Waypoint stays AwaitingInput"
+        );
+    }
+
+    /// `record_resume`'s CAS losing a race (the run row is not
+    /// `AwaitingInput`, e.g. it has already moved to `Running` by the time
+    /// this call reaches the repository) maps to `ThreadNotAwaitingInput`,
+    /// never a panic or a silently-dropped write.
+    #[tokio::test]
+    async fn record_resume_illegal_transition_maps_to_thread_not_awaiting_input() {
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let registry = Arc::new(GraphRegistry::new());
+        let graph = approval_graph();
+        let t = thread("wired-illegal-transition");
+        let request = sample_request(ParleyKind::Approval, None);
+        let parley_id = request.parley_id;
+        seed_awaiting_input(&store, &t, &graph, vec![request], Vec::new()).await;
+        registry.register(graph);
+
+        let run_repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let run_queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let run_id = RunId::new_v7();
+        let run = Run::new(
+            run_id.clone(),
+            t.clone(),
+            AssistantRef {
+                assistant_id: "wired-adapter".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        run_repository.insert(&run).await.unwrap();
+        // Leave the run row at `Running` (its own Waypoint independently
+        // says `AwaitingInput` -- simulating the run repository lagging
+        // behind, or a concurrent worker mid-flight) so `record_resume`'s
+        // own CAS rejects it.
+        run_repository
+            .update_status(&run_id, RunStatus::Queued, RunStatus::Running, Utc::now())
+            .await
+            .unwrap();
+
+        let (adapter, coordinator) = build_adapter_with_run_server(
+            Arc::clone(&store),
+            registry,
+            Arc::clone(&run_repository),
+            Arc::clone(&run_queue),
+        );
+
+        let response = approve_response(parley_id);
+        let err = adapter.resume_with(&t, vec![response]).await.unwrap_err();
+        assert!(matches!(err, ParleyError::ThreadNotAwaitingInput { .. }));
+        assert_eq!(coordinator.in_flight(), 0);
+        assert_eq!(
+            run_queue.depth().await.unwrap(),
+            0,
+            "a rejected resume must not enqueue anything"
+        );
+    }
+
+    /// End-to-end (PLAT-FR-06): submit a run, let a worker suspend it
+    /// (`AwaitingInput`, queue depth 0), resume through the adapter (queue
+    /// depth 1, SAME `run_id`, `attempt == 2`), then a second worker
+    /// iteration completes the run -- proving the enqueue path this task
+    /// adds actually feeds 27-04's `RunWorkerPool` dispatch, not just the
+    /// repository/queue ports in isolation.
+    #[tokio::test]
+    async fn resume_reenqueues_same_run_id() {
+        fn gate_graph() -> WarGraph {
+            let field = FieldName::new("approved").unwrap();
+            let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+                field.clone(),
+                DispatchRule::LastWrite,
+                Some(serde_json::json!(false)),
+                false,
+            )]);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let gate_id = NodeId::new("gate");
+            graph.add_node(
+                gate_id.clone(),
+                NodeSpec::gate(
+                    GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("Proceed?")),
+                    Some(field),
+                ),
+            );
+            graph.add_entry(gate_id);
+            graph
+        }
+
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let registry = Arc::new(GraphRegistry::new());
+        registry.register(gate_graph());
+
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("gate", Arc::new(gate_graph())));
+        let engine = Arc::new(WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            store.clone(),
+        ));
+        let worker = RunWorkerPool::new(
+            Arc::clone(&engine),
+            store.clone(),
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        );
+
+        let run_id = RunId::new_v7();
+        let t = ThreadId::new(format!("resume-reenqueue-{run_id}")).unwrap();
+        let run = Run::new(
+            run_id.clone(),
+            t.clone(),
+            AssistantRef {
+                assistant_id: "gate".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        repository.insert(&run).await.unwrap();
+        queue
+            .enqueue(QueuedRun {
+                run_id: run_id.clone(),
+                thread_id: t.clone(),
+                attempt: 1,
+                enqueued_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        // First worker iteration: the gate raises a parley and the run
+        // suspends AwaitingInput; the queue message is ACKed (D-22).
+        assert!(worker.run_once().await.unwrap());
+        let suspended = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(suspended.status, RunStatus::AwaitingInput);
+        assert_eq!(queue.depth().await.unwrap(), 0);
+
+        let coordinator = ShutdownCoordinator::new();
+        let adapter =
+            ParleyPortAdapter::new(Arc::clone(&engine), store.clone(), registry, coordinator)
+                .with_run_repository(Arc::clone(&repository))
+                .with_run_queue(Arc::clone(&queue));
+
+        let latest = store.latest(&t).await.unwrap().unwrap();
+        let parleys = match latest.status {
+            WaypointStatus::AwaitingInput { parleys, .. } => parleys,
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        };
+        let parley = parleys.first().expect("gate raised exactly one parley");
+        let response = approve_response(parley.parley_id);
+
+        let accepted = adapter.resume_with(&t, vec![response]).await.unwrap();
+        assert_eq!(
+            accepted.run_id(),
+            Some(&run_id),
+            "resume through the adapter must report the SAME run_id"
+        );
+
+        assert_eq!(
+            queue.depth().await.unwrap(),
+            1,
+            "resume must re-enqueue exactly one pointer"
+        );
+        let after_resume = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(after_resume.run_id, run_id, "same run_id (D-19)");
+        assert_eq!(after_resume.attempt, 2, "attempt++ (D-23)");
+        assert_eq!(after_resume.status, RunStatus::AwaitingInput);
+
+        // Second worker iteration: dispatches ResumeWith (pending responses
+        // are present) and completes the run.
+        assert!(worker.run_once().await.unwrap());
+        let completed = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(completed.status, RunStatus::Completed);
+        assert!(completed.pending_responses.is_empty());
     }
 }

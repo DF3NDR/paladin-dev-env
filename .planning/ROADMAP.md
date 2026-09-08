@@ -624,8 +624,8 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 27-15-PLAN.md — HTTP surface completion: runs list/cancel/deliveries, threads list/get/fork/delete, scopes, pagination, 429 proof, ten-concurrent-submits (PLAT-06, PLAT-02)
-- [ ] 27-16-PLAN.md — mdBook platform-api page, queue/worker + k8s worker-replica example, parley page links (PLAT-05, PLAT-06)
+- [x] 27-15-PLAN.md — HTTP surface completion: runs list/cancel/deliveries, threads list/get/fork/delete, scopes, pagination, 429 proof, ten-concurrent-submits (PLAT-06, PLAT-02)
+- [x] 27-16-PLAN.md — mdBook platform-api page, queue/worker + k8s worker-replica example, parley page links (PLAT-05, PLAT-06)
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

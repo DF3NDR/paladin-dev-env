@@ -75,6 +75,22 @@ struct TraceQueue {
     /// Total sink panics caught so far (D-08) — readable via
     /// [`TraceDispatcher::sink_panics`].
     sink_panics: AtomicU64,
+    /// Total `TraceEvent::SuperstepStarted` records this dispatcher has
+    /// stamped so far (D-02, D-04) — readable via
+    /// [`TraceDispatcher::superstep_count`], and what
+    /// `TraceEvent::RunFinished.total_supersteps` is populated from at this
+    /// run's `WarEngine::start`/`resume*` call site. Counted synchronously
+    /// inside [`TraceDispatcher::emit`] (never by the async consumer task),
+    /// so the final value is accurate the instant `emit` returns — no race
+    /// with the background sink drain.
+    superstep_count: AtomicU64,
+    /// Total `token_count` this dispatcher has seen across every
+    /// `TraceEvent::NodeFinished` record stamped so far (D-02, D-04) —
+    /// readable via [`TraceDispatcher::token_total`], and what
+    /// `TraceEvent::RunFinished.total_tokens` is populated from. Counted
+    /// synchronously inside [`TraceDispatcher::emit`], for the same reason
+    /// `superstep_count` above is.
+    token_total: AtomicU64,
 }
 
 /// The engine-owned trace event dispatcher (ENG-FR-21, D-03): sits between
@@ -105,7 +121,22 @@ pub struct TraceDispatcher {
     /// The Platform API run every record this dispatcher stamps belongs to,
     /// when known.
     run_id: Option<RunId>,
+    /// Whether `DeltaMerged.field_changes` carries redacted, truncated
+    /// values (D-05). `false` by default — see
+    /// [`TraceDispatcher::with_state_values`].
+    state_values: bool,
+    /// The cap a `FieldChange.value` is truncated to when value inclusion
+    /// is enabled (D-05). Meaningless (never read) while `state_values` is
+    /// `false`.
+    state_value_cap_bytes: usize,
 }
+
+/// The default cap [`TraceDispatcher::state_value_cap_bytes`] reports
+/// before [`TraceDispatcher::with_state_values`] is ever called — matches
+/// `TraceConfig::value_cap_bytes`'s own default (`src/config/trace.rs`,
+/// plan 28-02); 28-06 passes the configured value through
+/// `with_state_values` in this constant's place.
+const DEFAULT_STATE_VALUE_CAP_BYTES: usize = 256;
 
 impl TraceDispatcher {
     /// Construct a dispatcher stamping every record for `thread_id`
@@ -131,6 +162,8 @@ impl TraceDispatcher {
                 inner: None,
                 thread_id,
                 run_id,
+                state_values: false,
+                state_value_cap_bytes: DEFAULT_STATE_VALUE_CAP_BYTES,
             };
         };
 
@@ -140,6 +173,8 @@ impl TraceDispatcher {
             dropped: AtomicU64::new(0),
             seq: AtomicU64::new(0),
             sink_panics: AtomicU64::new(0),
+            superstep_count: AtomicU64::new(0),
+            token_total: AtomicU64::new(0),
         });
         // Capacity 1: the doorbell only ever needs to prove "there is at
         // least one more thing to check for" -- the consumer always drains
@@ -195,6 +230,8 @@ impl TraceDispatcher {
             inner: Some((queue, doorbell_tx)),
             thread_id,
             run_id,
+            state_values: false,
+            state_value_cap_bytes: DEFAULT_STATE_VALUE_CAP_BYTES,
         }
     }
 
@@ -218,6 +255,23 @@ impl TraceDispatcher {
             return;
         };
         let seq = queue.seq.fetch_add(1, Ordering::SeqCst) + 1;
+        // D-02, D-04: tally this run's own `total_supersteps`/`total_tokens`
+        // synchronously, here, at the moment the event is stamped -- never
+        // in the async consumer task, which drains on its own schedule and
+        // could still be behind when `WarEngine::start`/`resume*` reads
+        // these back to populate `RunFinished` (T-28-03, `RunTotals`
+        // deviation note). Mirrors `dropped`/`sink_panics` above: a
+        // dedicated atomic on this dispatcher's own queue, readable via
+        // `TraceDispatcher::superstep_count`/`token_total`.
+        match &event {
+            TraceEvent::SuperstepStarted { .. } => {
+                queue.superstep_count.fetch_add(1, Ordering::SeqCst);
+            }
+            TraceEvent::NodeFinished { token_count, .. } => {
+                queue.token_total.fetch_add(*token_count, Ordering::SeqCst);
+            }
+            _ => {}
+        }
         let mut event = event;
         {
             let mut buf = queue.buffer.lock().expect("trace queue mutex poisoned");
@@ -269,6 +323,62 @@ impl TraceDispatcher {
         self.inner
             .as_ref()
             .map_or(0, |(queue, _)| queue.sink_panics.load(Ordering::SeqCst))
+    }
+
+    /// Total `TraceEvent::SuperstepStarted` records this dispatcher has
+    /// stamped so far (D-02, D-04) — what `WarEngine::start`/`resume*`
+    /// reads to populate `RunFinished.total_supersteps`. Always `0` with no
+    /// sink configured (mirroring `dropped_count`/`sink_panics` above).
+    pub fn superstep_count(&self) -> u64 {
+        self.inner
+            .as_ref()
+            .map_or(0, |(queue, _)| queue.superstep_count.load(Ordering::SeqCst))
+    }
+
+    /// Total `token_count` this dispatcher has seen across every
+    /// `TraceEvent::NodeFinished` record stamped so far (D-02, D-04) — what
+    /// `WarEngine::start`/`resume*` reads to populate
+    /// `RunFinished.total_tokens`. Always `0` with no sink configured.
+    pub fn token_total(&self) -> u64 {
+        self.inner
+            .as_ref()
+            .map_or(0, |(queue, _)| queue.token_total.load(Ordering::SeqCst))
+    }
+
+    /// Enable opt-in value inclusion on `TraceEvent::DeltaMerged
+    /// .field_changes` (D-05): the default (`false`, set at construction)
+    /// carries field names, dispatch metadata and byte sizes only;
+    /// `enabled: true` additionally carries each changed field's
+    /// serialized value, redacted through
+    /// [`paladin_llm::redaction::redact_secret_patterns`] and truncated to
+    /// `cap_bytes` — in that order, never reversed (the
+    /// security-instructions redact-then-truncate rule, T-28-03-01).
+    /// `cap_bytes` is handed to
+    /// [`paladin_llm::redaction::bounded_excerpt`] as a CHARACTER budget
+    /// (that helper's own contract) — an approximation of a byte cap that
+    /// is exact for ASCII-dominant JSON values and conservative (fewer
+    /// bytes than `cap_bytes`) for anything with multi-byte UTF-8; 28-06
+    /// wires this from `TraceConfig::state_values`/`value_cap_bytes` in
+    /// place of this direct setter, matching that config's own naming.
+    pub fn with_state_values(mut self, enabled: bool, cap_bytes: usize) -> Self {
+        self.state_values = enabled;
+        self.state_value_cap_bytes = cap_bytes;
+        self
+    }
+
+    /// Whether `DeltaMerged.field_changes` should carry redacted, truncated
+    /// values (D-05) — `false` unless
+    /// [`TraceDispatcher::with_state_values`] was called with `true`.
+    pub fn state_values_enabled(&self) -> bool {
+        self.state_values
+    }
+
+    /// The cap a `FieldChange.value` is truncated to when value inclusion
+    /// is enabled (D-05), via [`paladin_llm::redaction::bounded_excerpt`]
+    /// (see [`TraceDispatcher::with_state_values`]'s own doc comment for
+    /// the character-vs-byte approximation this implies).
+    pub fn state_value_cap_bytes(&self) -> usize {
+        self.state_value_cap_bytes
     }
 
     /// The thread every record this dispatcher stamps belongs to.

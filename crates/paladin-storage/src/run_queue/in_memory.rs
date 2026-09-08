@@ -275,6 +275,19 @@ mod tests {
         contract_tests::depth_counts_ready_plus_leased(&InMemoryRunQueue::new()).await;
     }
 
+    // RED: `run_all` runs every clause back-to-back on ONE
+    // `InMemoryRunQueue`, so leases left behind by the fifo, lease-expiry
+    // and extend-lease clauses are still visible when
+    // `ack_removes_message_permanently` asserts `depth() == 1` -- the same
+    // suite-isolation defect CI's `redis_run_queue_full_contract_suite_via_run_all`
+    // hit at `contract_tests.rs:188` (`left: 6 right: 1`), reproduced here
+    // without Redis. This proves the defect is not Redis-specific before
+    // `run_all` is changed to take a fresh-queue factory.
+    #[tokio::test]
+    async fn in_memory_run_queue_full_contract_suite_via_run_all() {
+        contract_tests::run_all(&InMemoryRunQueue::new()).await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn concurrent_workers_each_message_exactly_once() {
         let queue: StdArc<dyn RunQueuePort> = StdArc::new(InMemoryRunQueue::new());

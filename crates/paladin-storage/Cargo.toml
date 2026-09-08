@@ -64,3 +64,9 @@ tokio-cron-scheduler = { version = "0.13", optional = true }
 
 # url is used for parsing source URLs stored in content rows.
 url = "2"
+
+[dev-dependencies]
+# tempfile is used by SqliteRunRepository's on-disk (not sqlite::memory:)
+# multi-thread stress test (D-52) -- pinned to the same "3.10.1" the
+# workspace root and paladin-memory already resolve.
+tempfile = "3.10.1"

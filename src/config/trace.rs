@@ -11,8 +11,11 @@
 //! other field (X-03 backward compatibility).
 //!
 //! `otel.headers` holds credential-shaped values (e.g. an OTLP collector's
-//! `authorization` bearer token) -- see [`OtelConfig`]'s own docs (Task 2)
-//! for the redaction contract.
+//! `authorization` bearer token). [`OtelConfig`] therefore never derives
+//! `Debug`: it carries a hand-written impl that prints header KEYS only,
+//! with every value replaced by a fixed redaction marker (security
+//! instructions; mirrors `HeartbeatHandle`'s manual-`Debug` precedent in
+//! `crates/paladin-core/src/platform/container/heartbeat.rs`).
 //!
 //! # Env prefix: `PALADIN_TRACE_*`, not `APP_*`
 //!
@@ -25,8 +28,12 @@
 //! convention.
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use url::Url;
+
+use crate::config::env_utils::{EnvOverridable, read_env};
 
 /// Configuration for the runtime trace pipeline (X-09, D-36). See the
 /// module-level documentation for the backward-compatibility and env-prefix
@@ -95,6 +102,11 @@ impl TraceConfig {
     /// uses (X-03 -- `Settings::validate()`'s own signature must not
     /// change).
     ///
+    /// Delegates to [`Self::validate_typed`] and stringifies the typed
+    /// error, so callers that only need a human-readable message (like
+    /// `Settings::validate()`) don't have to match on
+    /// [`TraceConfigError`]'s variants.
+    ///
     /// # Examples
     ///
     /// ```
@@ -107,19 +119,13 @@ impl TraceConfig {
     /// assert!(config.validate().is_err());
     /// ```
     pub fn validate(&self) -> Result<(), String> {
-        if self.channel_capacity == 0 {
-            return Err("trace.channel_capacity must be greater than 0".to_string());
-        }
-        Ok(())
+        self.validate_typed().map_err(|e| e.to_string())
     }
 }
 
-/// OTLP export configuration (D-36, X-09). Task 2 replaces the derived
-/// `Debug` below with a manual, header-redacting impl and adds
-/// `TraceConfigError`/`EnvOverridable`/the full `validate_typed` rule set --
-/// this Task-1 shape exists only so [`TraceConfig`] has a concrete `otel`
-/// field to carry.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// OTLP export configuration (D-36, X-09). See the module-level
+/// documentation for why this type never derives `Debug`.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OtelConfig {
     /// Whether OTLP export is wired at all. Defaults to `false`.
@@ -149,11 +155,33 @@ impl Default for OtelConfig {
     }
 }
 
+/// The fixed marker printed in place of every header value in
+/// [`OtelConfig`]'s manual `Debug` impl.
+const REDACTED_HEADER_VALUE: &str = "<redacted>";
+
+// A manual impl -- NEVER `#[derive(Debug)]` on this type (security
+// instructions, D-36): `headers` holds credential-shaped values, so this
+// prints the header KEYS only, with every value replaced by a fixed
+// redaction marker. Mirrors `HeartbeatHandle`'s manual-`Debug` precedent in
+// `crates/paladin-core/src/platform/container/heartbeat.rs`.
+impl fmt::Debug for OtelConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let redacted_headers: BTreeMap<&str, &str> = self
+            .headers
+            .keys()
+            .map(|k| (k.as_str(), REDACTED_HEADER_VALUE))
+            .collect();
+        f.debug_struct("OtelConfig")
+            .field("enabled", &self.enabled)
+            .field("endpoint", &self.endpoint)
+            .field("headers", &redacted_headers)
+            .field("service_name", &self.service_name)
+            .finish()
+    }
+}
+
 /// Structured validation errors for [`TraceConfig`] (X-06). `#[non_exhaustive]`
 /// so a future variant is not a breaking change for downstream matchers.
-///
-/// RED-phase stub (Task 2): variants exist so the new tests compile;
-/// `TraceConfig::validate_typed` does not raise any of them yet.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum TraceConfigError {
@@ -180,18 +208,81 @@ pub enum TraceConfigError {
 }
 
 impl TraceConfig {
-    /// RED-phase stub (Task 2): always succeeds. The GREEN commit
-    /// implements the four rules documented on [`TraceConfigError`].
+    /// Validates the trace configuration, returning the typed
+    /// [`TraceConfigError`] (X-06 -- structured fields, never a stringly
+    /// variant).
+    ///
+    /// Rejects, in order:
+    /// - `channel_capacity == 0`
+    /// - `value_cap_bytes == 0`
+    /// - `otel.enabled` on a build compiled without the `otel` feature
+    ///   (checked BEFORE the endpoint scheme, so a disabled-feature build
+    ///   never silently no-ops even if the endpoint also happens to be
+    ///   malformed)
+    /// - `otel.enabled` with an `otel.endpoint` whose scheme is neither
+    ///   `http` nor `https`
     pub fn validate_typed(&self) -> Result<(), TraceConfigError> {
+        if self.channel_capacity == 0 {
+            return Err(TraceConfigError::ZeroChannelCapacity);
+        }
+        if self.value_cap_bytes == 0 {
+            return Err(TraceConfigError::ZeroValueCapBytes);
+        }
+        if self.otel.enabled {
+            // The `otel` Cargo feature itself is 28-09's scope to declare
+            // in `Cargo.toml`; until then `cfg!(feature = "otel")`
+            // correctly and unconditionally evaluates to `false` (there is
+            // no such build), but rustc's `--check-cfg` lint doesn't yet
+            // know `otel` as a *possible* feature name, so it flags the
+            // reference as unexpected. Silencing it here (not
+            // workspace-wide) documents that this is expected until 28-09
+            // registers the feature, not a typo.
+            #[allow(unexpected_cfgs)]
+            let otel_feature_compiled = cfg!(feature = "otel");
+            if !otel_feature_compiled {
+                return Err(TraceConfigError::FeatureNotCompiled { feature: "otel" });
+            }
+            let scheme = Url::parse(&self.otel.endpoint)
+                .map(|u| u.scheme().to_string())
+                .unwrap_or_default();
+            if scheme != "http" && scheme != "https" {
+                return Err(TraceConfigError::EndpointNotHttp { scheme });
+            }
+        }
         Ok(())
     }
 }
 
-// RED-phase stub (Task 2): a no-op `EnvOverridable` impl so
-// `trace_env_overrides_apply` compiles and fails on its assertions. The
-// GREEN commit reads the nine `PALADIN_TRACE_*` variables.
-impl crate::config::env_utils::EnvOverridable for TraceConfig {
-    fn apply_env_overrides(&mut self) {}
+impl EnvOverridable for TraceConfig {
+    fn apply_env_overrides(&mut self) {
+        if let Some(v) = read_env::<bool>("PALADIN_TRACE_LOG_SINK") {
+            self.log_sink = v;
+        }
+        if let Some(v) = read_env::<usize>("PALADIN_TRACE_CHANNEL_CAPACITY") {
+            self.channel_capacity = v;
+        }
+        if let Some(v) = read_env::<bool>("PALADIN_TRACE_PERSIST") {
+            self.persist = v;
+        }
+        if let Some(v) = read_env::<bool>("PALADIN_TRACE_STATE_VALUES") {
+            self.state_values = v;
+        }
+        if let Some(v) = read_env::<usize>("PALADIN_TRACE_VALUE_CAP_BYTES") {
+            self.value_cap_bytes = v;
+        }
+        if let Some(v) = read_env::<u64>("PALADIN_TRACE_HEARTBEAT_INTERVAL_SECS") {
+            self.heartbeat_interval_secs = v;
+        }
+        if let Some(v) = read_env::<bool>("PALADIN_TRACE_OTEL_ENABLED") {
+            self.otel.enabled = v;
+        }
+        if let Some(v) = read_env::<String>("PALADIN_TRACE_OTEL_ENDPOINT") {
+            self.otel.endpoint = v;
+        }
+        if let Some(v) = read_env::<String>("PALADIN_TRACE_OTEL_SERVICE_NAME") {
+            self.otel.service_name = v;
+        }
+    }
 }
 
 #[cfg(test)]

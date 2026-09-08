@@ -668,7 +668,27 @@ Plans:
   3. Golden-tested `WarGraphDoc → Mermaid/DOT` exporters and an execution-overlay export let a human answer "which branch fired and why did node X run 3 times" via `paladin-cli graph export`/`run export` and a minimal auth-gated `dev-ui` inspector page (OBS-03)
   4. The new `paladin-eval` crate runs scripted mock-LLM scenario files through a `cargo test`-integrable runner macro and `paladin-cli eval run --repeat`/`--bless`, with the three program E2E fixtures dogfooded as eval scenarios (OBS-04)
 
-**Plans**: TBD
+**Plans:** 17 plans
+
+Plans:
+- [ ] 28-01-PLAN.md — Core trace types, `TraceRecord` envelope, `TraceEmitter`, `CompositeSink`, dispatcher stamping, panic isolation, drop accounting, ordering + X-05 stress tests (OBS-01)
+- [ ] 28-02-PLAN.md — `TraceConfig`/`OtelConfig` config structs, `web_server.dev_ui.mermaid_url`, both YAML files (OBS-01, OBS-02)
+- [ ] 28-03-PLAN.md — Engine producers: `EdgeEvaluated`, `ParleyRaised`, rate-limited heartbeats, populated `RunFinished`, `WarEngine::trace_emitter()` (OBS-01)
+- [ ] 28-04-PLAN.md — `RunTracePort`, three storage adapters, `run_traces` migrations, contract suite, retention join (OBS-02)
+- [ ] 28-05-PLAN.md — `paladin-eval` crate, scenario file format, `ScenarioLlm`, golden JSON Schema (OBS-04)
+- [ ] 28-06-PLAN.md — Log sink, facade telemetry module, per-run composition, below-engine producers, bench + overhead evidence (OBS-02)
+- [ ] 28-07-PLAN.md — `GraphShape`, Mermaid/DOT exporters, five golden fixtures, `make bless-golden` (OBS-03)
+- [ ] 28-08-PLAN.md — Eval assertion library (twelve kinds) with snapshot-frozen failure rendering (OBS-04)
+- [ ] 28-09-PLAN.md — OTel sink: `otel` feature, span-per-attempt model, in-memory shape test, axum OTLP stub (OBS-02)
+- [ ] 28-10-PLAN.md — `ExecutionOverlay`, observed-only fallback, overlay Mermaid goldens (OBS-03)
+- [ ] 28-11-PLAN.md — SSE collapse to one producer, `trace_seq`, `RunStreamMode::Replay`, `PersistingTraceSink` (OBS-02)
+- [ ] 28-12-PLAN.md — Eval runner (`libtest-mimic` harness), `paladin-cli eval run` with repeat/bless/gated live mode (OBS-04)
+- [ ] 28-13-PLAN.md — CLI `graph export` and `run export` with snapshot tests (OBS-03)
+- [ ] 28-14-PLAN.md — `RunInspectorPort` and the facade inspector service (OBS-03)
+- [ ] 28-15-PLAN.md — `dev-ui` inspector page: first `paladin-web` feature, route, template, oneshot smoke test (OBS-03)
+- [ ] 28-16-PLAN.md — E2E fixture extraction and the three dogfood eval scenarios (OBS-04)
+- [ ] 28-17-PLAN.md — Docs, ADR-0048, `MIGRATION.md` rows, crate-list registration, close-out gates + CI evidence (all)
+
 **UI hint**: yes
 
 ### Phase 29: Program Gates & Release

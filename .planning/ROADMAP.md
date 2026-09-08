@@ -646,7 +646,7 @@ Plans:
 
 **Gap closure — Wave 2** *(blocked on Wave 1: the public-API baseline is taken after every code change)*
 
-- [ ] 27-24-PLAN.md — Toolchain-order-independent API-surface extraction + regenerated baseline; `e2e-platform-api` CI job (PLAT-06)
+- [x] 27-24-PLAN.md — Toolchain-order-independent API-surface extraction + regenerated baseline; `e2e-platform-api` CI job (PLAT-06)
 
 **Gap closure — Wave 3** *(blocked on Wave 2)*
 

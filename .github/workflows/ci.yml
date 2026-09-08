@@ -1172,6 +1172,48 @@ jobs:
       - name: Run the SDK smoke (both clients against a live server)
         run: scripts/sdk-smoke/run.sh
 
+  # PRD 06 acceptance criterion 1 (PLAT-06, gap 5 / 27-VERIFICATION.md): the
+  # full assistant -> run -> SSE -> AwaitingInput -> webhook -> resume ->
+  # complete -> history -> fork lifecycle. The binary carries
+  # `required-features = ["web-server"]` in Cargo.toml, which no other job
+  # supplies -- `test` runs `--lib --bins`, `integration-tests` does not imply
+  # `web-server`, and feature-flags.yml's `web-server` leg is `--lib` only --
+  # so this phase's flagship acceptance test was previously proven only
+  # locally, never by CI. No `needs:` edge: this job neither gates nor is
+  # gated by another job. The selected-count assertion below is what gives
+  # this job its meaning -- this workspace's own documented trap is that a
+  # filter selecting zero tests still exits 0, so a rename or feature-gate
+  # change could otherwise turn this into a silent no-op that reads green.
+  e2e-platform-api:
+    name: E2E Platform API (PRD 06 acceptance-1 lifecycle)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: e2e-platform-api
+
+      - name: Run the e2e_platform_api test binary
+        run: |
+          set -o pipefail
+          cargo test --features web-server --test e2e_platform_api \
+            2>&1 | tee /tmp/e2e-platform-api-test.log
+
+      - name: Fail if the run selected zero tests
+        run: |
+          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/e2e-platform-api-test.log | tail -1)
+          echo "Passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt 1 ]; then
+            echo "::error::e2e_platform_api selected zero tests -- a stale filter, a rename, or a feature-gate change would otherwise report green having run nothing."
+            exit 1
+          fi
+
   # Coverage measurement (PIPE-02) — MEASURE-ONLY as of this commit: no minimum-
   # threshold flag. D-04 requires the figure to be measured before the floor
   # derived from it can be set; plan 15-03 adds the threshold once this job has

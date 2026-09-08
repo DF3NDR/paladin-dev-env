@@ -5,6 +5,10 @@
 //! worker pool drives a real `WarEngine`; `paladin-web` never does
 //! (ADR-0031).
 
+/// Cross-instance cancellation: `DbCancellationProbe` (the debounced
+/// `CancellationProbe` adapter) and `LocalRunTokens` (the same-instance
+/// fast-path registry), D-14/D-15/D-16.
+pub mod cancel;
 /// The seam every assistant source plugs into, plus this slice's
 /// code-registered implementation (D-32).
 pub mod resolver;
@@ -15,6 +19,7 @@ pub mod submission;
 /// transition (D-11, D-13).
 pub mod worker;
 
+pub use cancel::{DbCancellationProbe, LocalRunTokens};
 pub use resolver::{
     AssistantResolver, CodeWorkflowResolver, ResolveError, ResolvedAssistant, Runnable,
 };
@@ -34,3 +39,11 @@ mod tracer_e2e;
 /// `tests/` target so it counts toward `cargo llvm-cov` (D-54).
 #[cfg(test)]
 mod worker_tests;
+
+/// `DbCancellationProbe` debounce/error behavior, `LocalRunTokens`, and the
+/// cross-instance cancellation proof (`cross_instance_cancel_probe`,
+/// `local_cancel_signals_token`) -- 27-07 Task 2, D-14/D-15/D-16. A
+/// `#[cfg(test)]` module rather than a `tests/` target so it counts toward
+/// `cargo llvm-cov` (D-54).
+#[cfg(test)]
+mod cancel_tests;

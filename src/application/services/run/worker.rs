@@ -34,14 +34,16 @@ use std::time::Duration;
 
 use thiserror::Error;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_battalion::engine::{EngineError, RunOutcome, WarEngine};
 use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::ParleyResponse;
-use paladin_core::platform::container::run::{Run, RunStatus};
+use paladin_core::platform::container::run::{Run, RunId, RunStatus};
 use paladin_core::platform::container::waypoint::Waypoint;
+use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::run_queue_port::{LeaseToken, LeasedRun, RunQueuePort};
 use paladin_ports::output::run_repository_port::{
@@ -49,6 +51,7 @@ use paladin_ports::output::run_repository_port::{
 };
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 
+use super::cancel::{DbCancellationProbe, LocalRunTokens};
 use super::resolver::{AssistantResolver, ResolveError, Runnable};
 
 /// Errors a single [`RunWorkerPool::run_once`] iteration can surface.
@@ -256,6 +259,34 @@ pub struct RunWorkerPool<W: WaypointPort> {
     lease: Duration,
     coordinator: ShutdownCoordinator,
     paladin_port: Option<Arc<dyn PaladinPort>>,
+    // --- D-14, D-16, PLAT-FR-04: when wired (`with_engine_factory`),
+    // `run_once` builds a FRESH per-run engine through this factory instead
+    // of using `self.engine` directly, so a per-run `CancellationToken`
+    // (never shared across concurrent runs) can be attached beside
+    // whatever `CancellationProbe` the factory's own closure wires in.
+    // `WarEngine::with_cancellation_token` is by-value and this pool holds
+    // only ONE shared `Arc<WarEngine<W>>` for the "no factory" path --
+    // rebuilding a cheap, all-`Arc`-fields engine per run is the smaller
+    // change (documented deviation) rather than adding a
+    // `WarEngine::with_run_token` mutator to `paladin-battalion`, a crate
+    // outside this task's declared file scope. `None` (the default)
+    // preserves 27-04's exact behavior verbatim: every run shares the ONE
+    // engine configured at pool construction, and `LocalRunTokens` is never
+    // populated for it (a caller relying only on the cross-instance DB flag
+    // still works correctly, just without the instant local fast-path).
+    engine_factory: Option<Arc<dyn Fn(CancellationToken) -> WarEngine<W> + Send + Sync>>,
+    /// Registry [`RunSubmissionService`](super::submission::RunSubmissionService)
+    /// shares (via `with_local_tokens`) to observe whether THIS instance is
+    /// dispatching a given run right now (D-16). Populated only while
+    /// `engine_factory` is `Some` -- see [`RunWorkerPool::local_tokens`].
+    local_tokens: LocalRunTokens,
+    /// The D-14 cross-instance probe, when [`RunWorkerPool::with_cancellation_probing`]
+    /// wires one: attached to every per-run engine `engine_factory`
+    /// produces via [`WarEngine::with_cancellation_probe`] BESIDE the
+    /// per-run token, so the caller's own factory closure never needs to
+    /// know about probes at all -- this pool owns that wiring, reading its
+    /// own `repository` field.
+    cancellation_probe: Option<Arc<dyn CancellationProbe>>,
 }
 
 impl<W: WaypointPort + 'static> RunWorkerPool<W> {
@@ -288,7 +319,63 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             lease,
             coordinator: ShutdownCoordinator::new(),
             paladin_port: None,
+            engine_factory: None,
+            local_tokens: LocalRunTokens::new(),
+            cancellation_probe: None,
         }
+    }
+
+    /// Wire a per-run engine factory (D-14, D-16): instead of dispatching
+    /// every run through the ONE shared engine passed to
+    /// [`RunWorkerPool::new`], `run_once` calls `factory(child_token)` to
+    /// build a fresh engine for THIS run, where `child_token` is a
+    /// [`CancellationToken::child_token`] of the pool's own
+    /// [`ShutdownCoordinator`] token (so a process shutdown still cascades
+    /// to every in-flight per-run engine, exactly as the shared-engine path
+    /// already does) -- registered in [`RunWorkerPool::local_tokens`] for
+    /// the duration of dispatch, so
+    /// [`RunSubmissionService::cancel`](super::submission::RunSubmissionService::cancel)
+    /// can fire it directly when this same instance holds the run.
+    ///
+    /// The caller's closure is responsible for wiring whatever
+    /// `CancellationProbe` (typically a shared
+    /// [`DbCancellationProbe`](super::cancel::DbCancellationProbe)), node
+    /// cache, vault, etc. the production engine needs -- this pool has no
+    /// visibility into `WarEngine`'s private construction fields beyond
+    /// what the closure itself captures.
+    pub fn with_engine_factory(
+        mut self,
+        factory: Arc<dyn Fn(CancellationToken) -> WarEngine<W> + Send + Sync>,
+    ) -> Self {
+        self.engine_factory = Some(factory);
+        self
+    }
+
+    /// This pool's [`LocalRunTokens`] registry -- share the SAME clone with
+    /// [`RunSubmissionService::with_local_tokens`](super::submission::RunSubmissionService::with_local_tokens)
+    /// so `cancel` can observe local dispatch. A clone made before
+    /// [`RunWorkerPool::with_engine_factory`] is ever called observes an
+    /// always-empty map (correct: nothing is EVER registered on the
+    /// no-factory path).
+    pub fn local_tokens(&self) -> LocalRunTokens {
+        self.local_tokens.clone()
+    }
+
+    /// Enable D-14 cross-instance cancellation: build the pool's own
+    /// [`DbCancellationProbe`], reading THIS pool's `repository` and
+    /// debounced by `min_probe_interval` (D-15), and attach it to every
+    /// per-run engine [`RunWorkerPool::with_engine_factory`] produces via
+    /// [`WarEngine::with_cancellation_probe`]. Has no effect unless
+    /// `with_engine_factory` is ALSO wired -- the shared-engine ("no
+    /// factory") path attaches a probe directly on that engine at
+    /// construction instead, exactly like an ordinary
+    /// `WarEngine::with_cancellation_probe` call.
+    pub fn with_cancellation_probing(mut self, min_probe_interval: Duration) -> Self {
+        self.cancellation_probe = Some(Arc::new(DbCancellationProbe::new(
+            self.repository.clone(),
+            min_probe_interval,
+        )));
+        self
     }
 
     /// Share an existing [`ShutdownCoordinator`] rather than the pool's own
@@ -419,17 +506,42 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         let latest = self.waypoint_port.latest(&run.thread_id).await?;
         let dispatch = WorkerDispatch::decide(latest.as_ref(), &run.pending_responses);
 
+        // --- D-14, D-16: when an `engine_factory` is wired, build a FRESH
+        // per-run engine carrying its own child `CancellationToken`,
+        // registered in `local_tokens` for the duration of this dispatch --
+        // see `RunWorkerPool::with_engine_factory`'s own rustdoc. When
+        // `with_cancellation_probing` was ALSO called, this pool attaches
+        // its own `DbCancellationProbe` to that same per-run engine here
+        // (`with_cancellation_probe`), beside the per-run token -- the
+        // caller's factory closure never needs to know about probes at
+        // all. Otherwise (the default), fall back to the ONE shared engine
+        // exactly as 27-04 left it, with no local-token registration.
+        let (run_engine, local_token_guard): (Arc<WarEngine<W>>, Option<RunId>) =
+            match &self.engine_factory {
+                Some(factory) => {
+                    let child_token = self.coordinator.token().child_token();
+                    self.local_tokens
+                        .register(run.run_id.clone(), child_token.clone())
+                        .await;
+                    let mut engine = factory(child_token);
+                    if let Some(probe) = &self.cancellation_probe {
+                        engine = engine.with_cancellation_probe(Arc::clone(probe));
+                    }
+                    (Arc::new(engine), Some(run.run_id.clone()))
+                }
+                None => (Arc::clone(&self.engine), None),
+            };
+
         let heartbeat = LeaseHeartbeat::spawn(self.queue.clone(), leased.token.clone(), self.lease);
         let outcome_result = match dispatch {
             WorkerDispatch::Start => {
-                self.engine
+                run_engine
                     .start(&graph, run.thread_id.clone(), StateDelta::new())
                     .await
             }
-            WorkerDispatch::Resume => self.engine.resume(&graph, run.thread_id.clone()).await,
+            WorkerDispatch::Resume => run_engine.resume(&graph, run.thread_id.clone()).await,
             WorkerDispatch::ResumeWith(responses) => {
-                let result = self
-                    .engine
+                let result = run_engine
                     .resume_with(&graph, run.thread_id.clone(), responses)
                     .await;
                 if result.is_ok() {
@@ -440,6 +552,12 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         };
         // D-10: stop heartbeating the moment the run returns.
         drop(heartbeat);
+        // The run engine's own dispatch has finished one way or another --
+        // this instance is no longer the one to signal, so its local
+        // registration (if any) is stale from here on.
+        if let Some(run_id) = local_token_guard {
+            self.local_tokens.remove(&run_id).await;
+        }
 
         let outcome = match outcome_result {
             Ok(outcome) => outcome,

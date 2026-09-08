@@ -15,11 +15,12 @@ use chrono::Utc;
 use paladin_core::platform::container::run::{Run, RunId};
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::input::run_submission_port::{
-    RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
+    CancelOutcome, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
 };
 use paladin_ports::output::run_queue_port::{QueueError, QueuedRun, RunQueuePort};
 use paladin_ports::output::run_repository_port::{RunRepositoryError, RunRepositoryPort};
 
+use super::cancel::LocalRunTokens;
 use super::resolver::{AssistantResolver, ResolveError};
 
 /// Generate a fresh [`ThreadId`] from a UUIDv7 string.
@@ -76,16 +77,39 @@ fn map_queue_error(err: QueueError) -> RunSubmissionError {
     }
 }
 
+/// Map a [`RunRepositoryPort::request_cancel`] failure specifically:
+/// [`RunRepositoryError::NotFound`] and [`RunRepositoryError::AlreadyTerminal`]
+/// carry their own typed [`RunSubmissionError`] counterparts (the terminal
+/// case is the documented `cancel` behavior, not a generic backend failure);
+/// everything else falls through to the same generic `Backend` wrap
+/// [`map_repository_error`] uses.
+fn map_cancel_error(err: RunRepositoryError) -> RunSubmissionError {
+    match err {
+        RunRepositoryError::NotFound { run_id } => RunSubmissionError::NotFound { run_id },
+        RunRepositoryError::AlreadyTerminal { run_id, status } => {
+            RunSubmissionError::AlreadyTerminal { run_id, status }
+        }
+        other => map_repository_error(other),
+    }
+}
+
 /// Implements [`RunSubmissionPort`] over a [`RunRepositoryPort`], a
 /// [`RunQueuePort`] and an [`AssistantResolver`] (D-11, D-12).
 pub struct RunSubmissionService {
     repository: Arc<dyn RunRepositoryPort>,
     queue: Arc<dyn RunQueuePort>,
     resolver: Arc<dyn AssistantResolver>,
+    local_tokens: LocalRunTokens,
 }
 
 impl RunSubmissionService {
     /// Construct a service over the given repository, queue and resolver.
+    ///
+    /// `cancel`'s `was_local` always reports `false` until
+    /// [`RunSubmissionService::with_local_tokens`] shares the SAME
+    /// [`LocalRunTokens`] registry a [`super::worker::RunWorkerPool`]
+    /// dispatching this service's runs also holds -- correct default for a
+    /// service instance that never itself runs a worker pool.
     pub fn new(
         repository: Arc<dyn RunRepositoryPort>,
         queue: Arc<dyn RunQueuePort>,
@@ -95,7 +119,17 @@ impl RunSubmissionService {
             repository,
             queue,
             resolver,
+            local_tokens: LocalRunTokens::new(),
         }
+    }
+
+    /// Share `local_tokens` with the [`super::worker::RunWorkerPool`]
+    /// instance(s) executing runs this service submits/cancels (D-16), so
+    /// `cancel` can observe whether THIS process instance is locally
+    /// dispatching the target run.
+    pub fn with_local_tokens(mut self, local_tokens: LocalRunTokens) -> Self {
+        self.local_tokens = local_tokens;
+        self
     }
 }
 
@@ -135,6 +169,29 @@ impl RunSubmissionPort for RunSubmissionService {
         Ok(RunAccepted {
             run_id: run.run_id,
             thread_id: run.thread_id,
+        })
+    }
+
+    /// D-16: durability first. `request_cancel` persists the flag through
+    /// the repository BEFORE `cancel_if_local` ever runs -- so a crash
+    /// between the two steps still leaves the durable flag written, which
+    /// is all a [`super::cancel::DbCancellationProbe`] on any instance
+    /// needs to see the run halt at its next superstep boundary. The local
+    /// signal below is a latency optimization only, never load-bearing for
+    /// correctness.
+    async fn cancel(&self, run_id: &RunId) -> Result<CancelOutcome, RunSubmissionError> {
+        let status = self
+            .repository
+            .request_cancel(run_id)
+            .await
+            .map_err(map_cancel_error)?;
+
+        let was_local = self.local_tokens.cancel_if_local(run_id).await;
+
+        Ok(CancelOutcome {
+            run_id: run_id.clone(),
+            status,
+            was_local,
         })
     }
 }

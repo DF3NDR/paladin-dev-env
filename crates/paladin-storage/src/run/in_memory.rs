@@ -17,12 +17,15 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tokio::sync::RwLock;
 
+use paladin_core::platform::container::assistant::AssistantId;
 use paladin_core::platform::container::parley::ParleyResponse;
 use paladin_core::platform::container::run::{RUN_SCHEMA_VERSION, Run, RunId, RunStatus};
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunPage, RunQuery, RunRepositoryError, RunRepositoryPort,
 };
+
+use crate::assistant::in_memory::InMemoryAssistantRepository;
 
 /// In-memory `RunRepositoryPort` implementation.
 ///
@@ -31,12 +34,35 @@ use paladin_ports::output::run_repository_port::{
 #[derive(Clone, Default)]
 pub struct InMemoryRunRepository {
     runs: Arc<RwLock<HashMap<RunId, Run>>>,
+    /// Wired by [`InMemoryRunRepository::with_assistants`]; when present,
+    /// [`RunRepositoryPort::insert_with_latest`] resolves the real D-30
+    /// freeze-at-submit behavior instead of the port's default (verbatim
+    /// insert) implementation.
+    assistants: Option<Arc<InMemoryAssistantRepository>>,
 }
 
 impl InMemoryRunRepository {
-    /// Construct a new, empty repository.
+    /// Construct a new, empty repository, with no assistant repository
+    /// wired in (so `insert_with_latest` falls back to the port's default,
+    /// verbatim-insert implementation).
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Wire in an assistant repository so `insert_with_latest` resolves and
+    /// freezes the real `latest` version at submit time (D-30), rather than
+    /// falling back to the port's default implementation.
+    ///
+    /// Lock order: the assistants repository's own read lock is always
+    /// acquired and released BEFORE this repository's write lock is taken
+    /// in [`RunRepositoryPort::insert_with_latest`] — never the reverse —
+    /// so a concurrent `AssistantRepositoryPort::append_version` call
+    /// (which takes the assistants write lock for its whole mutation) is
+    /// observed either strictly before or strictly after `latest` is read
+    /// here, never torn.
+    pub fn with_assistants(mut self, assistants: Arc<InMemoryAssistantRepository>) -> Self {
+        self.assistants = Some(assistants);
+        self
     }
 }
 
@@ -249,6 +275,40 @@ impl RunRepositoryPort for InMemoryRunRepository {
             })?;
         run.pending_responses.clear();
         Ok(())
+    }
+
+    async fn insert_with_latest(&self, run: &Run) -> Result<u32, RunRepositoryError> {
+        let Some(assistants) = self.assistants.as_ref() else {
+            // No assistants repository wired in: fall back to the port's
+            // own default (verbatim insert), rather than duplicating it
+            // here.
+            self.insert(run).await?;
+            return Ok(run.assistant.version);
+        };
+
+        let assistant_id = AssistantId::new(run.assistant.assistant_id.clone()).map_err(|e| {
+            RunRepositoryError::Serialization {
+                message: format!("invalid assistant_id {:?}: {e}", run.assistant.assistant_id),
+            }
+        })?;
+
+        // Lock order: assistants read -> runs write (documented on
+        // `with_assistants`). Resolving `latest` happens entirely before
+        // `insert`'s own write-lock acquisition, so a concurrent
+        // `append_version` (which holds the assistants write lock for its
+        // whole mutation) is observed strictly before or strictly after
+        // this read, never torn.
+        let resolved_version = assistants
+            .latest_version_if_active(&assistant_id)
+            .await
+            .ok_or_else(|| RunRepositoryError::UnknownAssistant {
+                assistant_id: run.assistant.assistant_id.clone(),
+            })?;
+
+        let mut resolved_run = run.clone();
+        resolved_run.assistant.version = resolved_version;
+        self.insert(&resolved_run).await?;
+        Ok(resolved_version)
     }
 }
 
@@ -510,5 +570,56 @@ mod contract_suite {
     async fn ten_concurrent_inserts_one_thread_exactly_one_accepted() {
         let repo: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
         contract_tests::ten_concurrent_inserts_one_thread_exactly_one_accepted(repo).await;
+    }
+
+    // ── insert_with_latest / freeze-at-submit (D-30) ─────────────────────
+    // These four clauses require the assistants repository wired in via
+    // `with_assistants` -- the plain `InMemoryRunRepository::new()` used
+    // above falls back to the port's default (verbatim-insert)
+    // implementation, which has no concept of `latest` to freeze.
+
+    fn repo_with_assistants() -> (
+        InMemoryRunRepository,
+        Arc<crate::assistant::in_memory::InMemoryAssistantRepository>,
+    ) {
+        let assistants = Arc::new(crate::assistant::in_memory::InMemoryAssistantRepository::new());
+        let repo = InMemoryRunRepository::new().with_assistants(Arc::clone(&assistants));
+        (repo, assistants)
+    }
+
+    #[tokio::test]
+    async fn insert_with_latest_resolves_current_latest_and_freezes_it() {
+        let (run_repo, assistant_repo) = repo_with_assistants();
+        contract_tests::insert_with_latest_resolves_current_latest_and_freezes_it(
+            &run_repo,
+            assistant_repo.as_ref(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn insert_with_latest_unknown_assistant_fails() {
+        let (run_repo, _assistant_repo) = repo_with_assistants();
+        contract_tests::insert_with_latest_unknown_assistant_fails(&run_repo).await;
+    }
+
+    #[tokio::test]
+    async fn insert_with_latest_soft_deleted_assistant_fails() {
+        let (run_repo, assistant_repo) = repo_with_assistants();
+        contract_tests::insert_with_latest_soft_deleted_assistant_fails(
+            &run_repo,
+            assistant_repo.as_ref(),
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn assistant_version_freeze_at_submit() {
+        let (run_repo, assistant_repo) = repo_with_assistants();
+        let run_repo: Arc<dyn RunRepositoryPort> = Arc::new(run_repo);
+        let assistant_repo: Arc<
+            dyn paladin_ports::output::assistant_repository_port::AssistantRepositoryPort,
+        > = assistant_repo;
+        contract_tests::assistant_version_freeze_at_submit(run_repo, assistant_repo).await;
     }
 }

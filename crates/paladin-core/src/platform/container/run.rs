@@ -459,6 +459,117 @@ impl Run {
     }
 }
 
+/// The seven frozen wire event names `GET /v1/runs/{run_id}/stream` emits
+/// (PLAT-FR-07, D-25): the string this serializes to (`snake_case`) IS the
+/// SSE `event:` line `paladin-web`'s framing function (`run_controller.rs`)
+/// uses. `#[non_exhaustive]`: Phase 28's authoritative trace enum may extend
+/// this set later without breaking a downstream `match`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RunStreamEventKind {
+    /// A superstep began (live) or was newly observed (degraded, possibly
+    /// coalescing several).
+    Superstep,
+    /// A node began executing.
+    NodeStarted,
+    /// A node finished executing.
+    NodeFinished,
+    /// A superstep's deltas were merged -- field NAMES and byte counts only,
+    /// never a changed field's value (T-27-10-01).
+    StateDelta,
+    /// The run suspended awaiting a parley response.
+    Parley,
+    /// The run reached a terminal, non-error status.
+    Done,
+    /// The run reached a terminal, error status.
+    Error,
+}
+
+impl RunStreamEventKind {
+    /// The wire name this variant serializes as -- the same string the SSE
+    /// `event:` line carries.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RunStreamEventKind::Superstep => "superstep",
+            RunStreamEventKind::NodeStarted => "node_started",
+            RunStreamEventKind::NodeFinished => "node_finished",
+            RunStreamEventKind::StateDelta => "state_delta",
+            RunStreamEventKind::Parley => "parley",
+            RunStreamEventKind::Done => "done",
+            RunStreamEventKind::Error => "error",
+        }
+    }
+}
+
+/// Whether a [`RunStreamEvent`] was bridged live from the executing engine,
+/// or synthesized by polling persisted Waypoints because the run executes on
+/// another instance (or is already terminal) (D-26).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStreamMode {
+    /// Bridged live from the executing engine via the per-run broadcast bus.
+    Live,
+    /// Synthesized by polling `WaypointPort` + `RunRepositoryPort`; gives no
+    /// ordering guarantee relative to the live path and may coalesce
+    /// supersteps (D-26).
+    Degraded,
+}
+
+/// One event on `GET /v1/runs/{run_id}/stream` (PLAT-FR-07, D-24..D-27).
+///
+/// `payload` carries only the fields each [`RunStreamEventKind`] variant's
+/// own docs describe -- `state_delta` in particular never carries a changed
+/// field's VALUE (T-27-10-01), and this run's `input` is never echoed on the
+/// stream at all. `#[non_exhaustive]`: construct only through [`Self::new`]
+/// (X-10.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct RunStreamEvent {
+    /// The run this event belongs to.
+    pub run_id: RunId,
+    /// The thread the run executes against.
+    pub thread_id: ThreadId,
+    /// Which of the seven wire events this is.
+    pub kind: RunStreamEventKind,
+    /// Monotonically increasing per-run sequence number, starting at `1`.
+    pub seq: u64,
+    /// When this event was produced.
+    pub at: DateTime<Utc>,
+    /// Live or degraded (D-26).
+    pub mode: RunStreamMode,
+    /// How many events a lagging live subscriber missed before this one
+    /// (D-24) -- always `0` on the degraded path, which has no notion of a
+    /// full channel.
+    pub dropped: u64,
+    /// This event kind's own payload fields.
+    pub payload: serde_json::Value,
+}
+
+impl RunStreamEvent {
+    /// Construct a `RunStreamEvent`, stamping `at` with the current time.
+    pub fn new(
+        run_id: RunId,
+        thread_id: ThreadId,
+        kind: RunStreamEventKind,
+        seq: u64,
+        mode: RunStreamMode,
+        dropped: u64,
+        payload: serde_json::Value,
+    ) -> Self {
+        Self {
+            run_id,
+            thread_id,
+            kind,
+            seq,
+            at: Utc::now(),
+            mode,
+            dropped,
+            payload,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -717,5 +828,57 @@ mod tests {
         let json = serde_json::to_string(&cursor).unwrap();
         let restored: RunCursor = serde_json::from_str(&json).unwrap();
         assert_eq!(cursor, restored);
+    }
+
+    const ALL_STREAM_KINDS: [RunStreamEventKind; 7] = [
+        RunStreamEventKind::Superstep,
+        RunStreamEventKind::NodeStarted,
+        RunStreamEventKind::NodeFinished,
+        RunStreamEventKind::StateDelta,
+        RunStreamEventKind::Parley,
+        RunStreamEventKind::Done,
+        RunStreamEventKind::Error,
+    ];
+
+    /// D-25: the seven wire names are frozen -- `as_str` and the `Serialize`
+    /// impl must agree, since a client may read either the SSE `event:` line
+    /// or the JSON `kind` field.
+    #[test]
+    fn run_stream_event_kind_as_str_matches_serde_wire_name() {
+        for kind in ALL_STREAM_KINDS {
+            let json = serde_json::to_string(&kind).unwrap();
+            assert_eq!(json, format!("\"{}\"", kind.as_str()));
+        }
+    }
+
+    #[test]
+    fn run_stream_event_round_trips_through_serde_json() {
+        let event = RunStreamEvent::new(
+            RunId::new_v7(),
+            ThreadId::new("t-stream").unwrap(),
+            RunStreamEventKind::Superstep,
+            1,
+            RunStreamMode::Live,
+            0,
+            serde_json::json!({ "superstep": 1 }),
+        );
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: RunStreamEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.run_id, event.run_id);
+        assert_eq!(restored.kind, event.kind);
+        assert_eq!(restored.mode, event.mode);
+        assert_eq!(restored.payload, event.payload);
+    }
+
+    #[test]
+    fn run_stream_mode_serde_uses_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&RunStreamMode::Live).unwrap(),
+            "\"live\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RunStreamMode::Degraded).unwrap(),
+            "\"degraded\""
+        );
     }
 }

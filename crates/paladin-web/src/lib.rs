@@ -16,6 +16,9 @@ pub mod agent_controller;
 pub mod agent_registry;
 /// Application router composition for the user REST API.
 pub mod app;
+/// Assistant definitions -- `/v1/assistants*` routes on the shared `RunApiState`
+/// (PLAT-04, D-28..D-33, D-44, D-46).
+pub mod assistant_controller;
 /// Authentication and RBAC middleware for the user REST API.
 pub mod auth_middleware;
 /// Content-delivery controller handlers (axum).

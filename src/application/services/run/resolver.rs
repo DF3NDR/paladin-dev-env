@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use paladin_battalion::engine::WarGraph;
+use paladin_core::platform::container::assistant::AssistantSource;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::run::AssistantRef;
 use paladin_core::platform::container::user::UserRole;
@@ -49,6 +50,15 @@ pub struct ResolvedAssistant {
     /// Roles permitted to invoke this assistant; empty means any
     /// authenticated caller (D-46).
     pub allowed_roles: Vec<UserRole>,
+    /// Whether this resolution came from the stored assistant repository or
+    /// the code registry (D-30, D-32) -- `RunSubmissionService::submit`
+    /// routes a `version: None` submission through
+    /// `RunRepositoryPort::insert_with_latest` only when this is
+    /// [`AssistantSource::Stored`]; a code-registered assistant is always
+    /// frozen at version 1 by [`CodeWorkflowResolver`] itself, so a plain
+    /// `insert` is correct and `insert_with_latest` would only fail with
+    /// `UnknownAssistant` (no `assistants` row for a code id).
+    pub source: AssistantSource,
 }
 
 impl std::fmt::Debug for ResolvedAssistant {
@@ -57,6 +67,7 @@ impl std::fmt::Debug for ResolvedAssistant {
             .field("reference", &self.reference)
             .field("runnable", &self.runnable)
             .field("allowed_roles", &self.allowed_roles)
+            .field("source", &self.source)
             .finish()
     }
 }
@@ -143,6 +154,7 @@ impl AssistantResolver for CodeWorkflowResolver {
             },
             runnable: Runnable::Workflow(graph),
             allowed_roles: Vec::new(),
+            source: AssistantSource::Code,
         })
     }
 }
@@ -167,6 +179,7 @@ mod tests {
         assert_eq!(resolved.reference.assistant_id, "wf1");
         assert_eq!(resolved.reference.version, 1);
         assert!(matches!(resolved.runnable, Runnable::Workflow(_)));
+        assert_eq!(resolved.source, AssistantSource::Code);
     }
 
     #[tokio::test]

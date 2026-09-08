@@ -75,14 +75,45 @@ use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_battalion::engine::{EngineError, WarEngine, WarGraph};
 use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_core::platform::container::waypoint::{
-    OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse, ThreadId, WaypointStatus,
+    GraphFingerprint, OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse, ThreadId,
+    WaypointStatus,
 };
 use paladin_ports::input::parley_port::{ParleyError, ParleyPort, ResumeAccepted};
 use paladin_ports::output::run_queue_port::{QueueError, QueuedRun, RunQueuePort};
 use paladin_ports::output::run_repository_port::{RunRepositoryError, RunRepositoryPort};
 use paladin_ports::output::waypoint_port::WaypointPort;
 
+#[cfg(test)]
 use super::registry::GraphRegistry;
+
+/// The seam [`ParleyPortAdapter`] resolves a thread's runnable graph through
+/// (D-33): [`super::registry::GraphRegistry`] implements it by fingerprint
+/// (ignoring `thread` -- X-03, `paladin-server`'s existing empty registry
+/// keeps compiling unchanged), and
+/// `src/application/services/assistant/doc_registry.rs`'s `DocGraphRegistry`
+/// implements it by reading the thread's active run's frozen
+/// `(assistant_id, version)` through an `AssistantResolver` (ignoring
+/// `fingerprint` -- a stored/code-registered graph is looked up by the run's
+/// OWN reference, not by re-deriving a fingerprint).
+///
+/// Both parameters are passed because [`ParleyPortAdapter::resume_with`]
+/// already has both in hand (the thread id it was called with, and the
+/// fingerprint on the thread's latest Waypoint) -- a single trait accepting
+/// both lets either implementation ignore the one it does not need, with no
+/// second `WaypointPort`/`RunRepositoryPort` dependency threaded into
+/// [`super::registry::GraphRegistry`] itself.
+#[async_trait]
+pub trait GraphResolver: Send + Sync {
+    /// Resolve a runnable [`WarGraph`] for `thread`'s current suspension,
+    /// whose latest Waypoint carries `fingerprint`. `None` if this
+    /// implementation has nothing registered for the given thread/fingerprint
+    /// (D-26: never a default or "nearest" graph).
+    async fn resolve(
+        &self,
+        thread: &ThreadId,
+        fingerprint: &GraphFingerprint,
+    ) -> Option<Arc<WarGraph>>;
+}
 
 /// Facade [`ParleyPort`] implementation over a real `WarEngine` (D-25,
 /// D-26). Generic over the same `W: WaypointPort` a `WarEngine<W>` is
@@ -90,7 +121,7 @@ use super::registry::GraphRegistry;
 pub struct ParleyPortAdapter<W: WaypointPort + 'static> {
     engine: Arc<WarEngine<W>>,
     waypoint_port: Arc<W>,
-    registry: Arc<GraphRegistry>,
+    registry: Arc<dyn GraphResolver>,
     coordinator: ShutdownCoordinator,
     run_repository: Option<Arc<dyn RunRepositoryPort>>,
     run_queue: Option<Arc<dyn RunQueuePort>>,
@@ -108,7 +139,7 @@ impl<W: WaypointPort + 'static> ParleyPortAdapter<W> {
     pub fn new(
         engine: Arc<WarEngine<W>>,
         waypoint_port: Arc<W>,
-        registry: Arc<GraphRegistry>,
+        registry: Arc<dyn GraphResolver>,
         coordinator: ShutdownCoordinator,
     ) -> Self {
         Self {
@@ -155,7 +186,8 @@ impl<W: WaypointPort + 'static> ParleyPort for ParleyPortAdapter<W> {
 
         let graph = self
             .registry
-            .resolve(&latest.graph_fingerprint)
+            .resolve(thread, &latest.graph_fingerprint)
+            .await
             .ok_or_else(|| ParleyError::GraphNotRegistered {
                 fingerprint: latest.graph_fingerprint.clone(),
             })?;

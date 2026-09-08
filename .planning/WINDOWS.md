@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 19
+open_count: 20
 waived_count: 4
 fixed_count: 5
-total_count: 28
-last_updated: 2026-09-05T21:18:05.117Z
+total_count: 29
+last_updated: 2026-09-08T07:12:32.829Z
 ---
 
 # Broken Windows Ledger
@@ -43,6 +43,7 @@ last_updated: 2026-09-05T21:18:05.117Z
 | 26 | 24 | unrun-verify | crates/paladin-storage/src/waypoint/contract_tests.rs |  | Phase 24's new Postgres Tier-2 contract-suite cases (awaiting_input_payload_round_trips, fork_of_round_trips, latest_prefers_most_recently_created_across_branches, D-02/D-14/D-15) self-skip locally (no Docker in this devcontainer) and are provable only via CI's postgres-integration job; never recorded as passed locally (D-28). | open |  | 2026-09-05T08:06:14.731Z |  |
 | 27 | 24 | unrun-verify | Makefile |  | Phase 24's gate-evidence coverage measurement used cargo llvm-cov --workspace --features web-server (87.11% line coverage, above the 82% ADR-0006 floor) rather than the canonical make coverage/scripts/coverage.sh invocation (--features integration-tests,llm-all), because Redis and MinIO are unreachable -- no Docker daemon in this devcontainer, matching the Phase 17 precedent (row 13). Not recorded as CI's official figure. | open |  | 2026-09-05T08:06:30.095Z |  |
 | 28 | 25 | unrun-verify | crates/paladin-storage/src/node_cache/redis.rs |  | RedisNodeCache Tier-2 live-server contract suite (redis_node_cache_runs_the_full_contract_suite, redis_keys_are_namespaced_by_the_configured_prefix, redis_ttl_is_set_on_the_server_not_only_in_the_payload) never executed against a real Redis server in any authoring environment -- Docker/Redis absent from devcontainer; evidence is CI-only via the new redis-cache-integration job | open |  | 2026-09-05T21:18:05.117Z |  |
+| 29 | 27 | deviation | crates/paladin-web/src/assistant_controller.rs | 396 | GET /assistants merges synthetic code-registry entries only on the first page (cursor=None); a heterogeneous keyset merge across the stored repository and the in-process AgentRegistry across multiple pages is out of scope for 27-12 (documented in-code). | open |  | 2026-09-08T07:12:32.829Z |  |
 
 ````json
 [
@@ -380,6 +381,18 @@ last_updated: 2026-09-05T21:18:05.117Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-05T21:18:05.117Z",
+    "resolved_at": null
+  },
+  {
+    "id": 29,
+    "kind": "deviation",
+    "phase": "27",
+    "file": "crates/paladin-web/src/assistant_controller.rs",
+    "line": 396,
+    "description": "GET /assistants merges synthetic code-registry entries only on the first page (cursor=None); a heterogeneous keyset merge across the stored repository and the in-process AgentRegistry across multiple pages is out of scope for 27-12 (documented in-code).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T07:12:32.829Z",
     "resolved_at": null
   }
 ]

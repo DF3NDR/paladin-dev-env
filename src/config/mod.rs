@@ -6,6 +6,8 @@ pub mod agents;
 #[allow(missing_docs)]
 pub mod arsenal;
 #[allow(missing_docs)]
+pub mod assistants;
+#[allow(missing_docs)]
 pub mod citadel;
 #[allow(missing_docs)]
 pub mod engine;
@@ -32,6 +34,8 @@ pub mod run_worker;
 #[allow(missing_docs)]
 pub mod scheduler;
 #[allow(missing_docs)]
+pub mod schedules;
+#[allow(missing_docs)]
 pub mod settings;
 #[allow(missing_docs)]
 pub mod setup;
@@ -43,6 +47,8 @@ pub mod waypoint_retention;
 pub mod waypoint_store;
 #[allow(missing_docs)]
 pub mod web_server;
+#[allow(missing_docs)]
+pub mod webhooks;
 
 // ── Re-exports ─────────────────────────────────────────────────────────────────
 // Kept for backwards compatibility — consumers can write
@@ -57,6 +63,7 @@ pub use crate::config::agents::{
     DocsConfig, RateLimitConfig, WebHttpConfig,
 };
 pub use crate::config::arsenal::{ArsenalConfig, MCPServerConfig};
+pub use crate::config::assistants::AssistantsConfig;
 pub use crate::config::citadel::CitadelConfig;
 pub use crate::config::engine::EngineConfig;
 pub use crate::config::file_storage::FileStorageConfig;
@@ -69,9 +76,11 @@ pub use crate::config::run_store::{RunStoreBackend, RunStoreConfig};
 pub use crate::config::run_stream::RunStreamConfig;
 pub use crate::config::run_worker::RunWorkerConfig;
 pub use crate::config::scheduler::SchedulerConfig;
+pub use crate::config::schedules::SchedulesConfig;
 pub use crate::config::waypoint_retention::WaypointRetentionConfig;
 pub use crate::config::waypoint_store::{WaypointStoreBackend, WaypointStoreConfig};
 pub use crate::config::web_server::{MessageServiceSettings, ServerConfig, SourceConfig};
+pub use crate::config::webhooks::WebhooksConfig;
 pub use paladin_llm::config::vision::{VisionConfig, VisionProviderConfig, VisionRetryConfig};
 // Garrison, Sanctum, RAG and MemoryExtraction config types live in the paladin-memory crate (Task 6.0)
 pub use paladin_memory::config::garrison::GarrisonSettings;

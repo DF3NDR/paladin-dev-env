@@ -638,11 +638,11 @@ Plans:
 
 **Gap closure — Wave 1** *(from 27-VERIFICATION.md's 5 CI-evidenced gaps + 27-REVIEW.md CR-01/WR-01…04; parallel, disjoint files)*
 
-- [ ] 27-19-PLAN.md — Redis claim/nack scripts increment `attempt` only on a reclaim; Tier-1 marker guards (PLAT-02)
-- [ ] 27-20-PLAN.md — Postgres run-timestamp microsecond precision contract; contract fixtures at storage resolution (PLAT-01)
-- [ ] 27-21-PLAN.md — Hermetic `sdk-clients` smoke: loopback LLM stub, committed lockfile, exact `completed` assertion (PLAT-06)
-- [ ] 27-22-PLAN.md — Webhook hardening: bounded response-body read (CR-01), no send on signing-key load failure (WR-01) (PLAT-05)
-- [ ] 27-23-PLAN.md — Heartbeat zero-lease guard (WR-04); `Agent`-kind delivery carve-out and unscoped-read model documented, tested, ledgered (WR-02, WR-03) (PLAT-02, PLAT-03, PLAT-05, PLAT-06)
+- [x] 27-19-PLAN.md — Redis claim/nack scripts increment `attempt` only on a reclaim; Tier-1 marker guards (PLAT-02)
+- [x] 27-20-PLAN.md — Postgres run-timestamp microsecond precision contract; contract fixtures at storage resolution (PLAT-01)
+- [x] 27-21-PLAN.md — Hermetic `sdk-clients` smoke: loopback LLM stub, committed lockfile, exact `completed` assertion (PLAT-06)
+- [x] 27-22-PLAN.md — Webhook hardening: bounded response-body read (CR-01), no send on signing-key load failure (WR-01) (PLAT-05)
+- [x] 27-23-PLAN.md — Heartbeat zero-lease guard (WR-04); `Agent`-kind delivery carve-out and unscoped-read model documented, tested, ledgered (WR-02, WR-03) (PLAT-02, PLAT-03, PLAT-05, PLAT-06)
 
 **Gap closure — Wave 2** *(blocked on Wave 1: the public-API baseline is taken after every code change)*
 

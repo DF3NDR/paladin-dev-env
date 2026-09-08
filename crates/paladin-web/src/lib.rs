@@ -32,6 +32,8 @@ pub mod job_store;
 pub mod openapi;
 /// Request-logging middleware with request-id correlation.
 pub mod request_log;
+/// Run submission/status HTTP controller (wire types, state, handlers, router; PLAT-01, D-44).
+pub mod run_controller;
 /// Thread inspection/resume/history HTTP controller (wire types, state, handlers, router).
 pub mod thread_controller;
 /// Execution timeout policy and resolution.
@@ -50,5 +52,6 @@ pub use agent_registry::{
 pub use error::ApiError;
 pub use http_layers::{HttpLayersConfig, RateLimitConfig, with_http_layers};
 pub use job_store::{JobRecord, JobStatus, JobStore};
+pub use run_controller::{RunApiState, run_router};
 pub use thread_controller::{ThreadApiState, thread_router};
 pub use timeout::TimeoutPolicy;

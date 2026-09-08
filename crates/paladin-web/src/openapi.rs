@@ -20,6 +20,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::agent_controller::{AgentApiState, versioned_agent_parts};
 use crate::agent_registry::AgentRegistry;
+use crate::run_controller::{RunApiState, versioned_run_parts};
 use crate::thread_controller::{ThreadApiState, versioned_thread_parts};
 
 /// Security-scheme name for the `X-API-Key` header credential (matches the handler annotations).
@@ -66,6 +67,12 @@ pub fn build_openapi(state: AgentApiState) -> OpenApi {
     let (_router, mut api) = versioned_agent_parts(state);
     let (_thread_router, thread_api) = versioned_thread_parts(ThreadApiState::new());
     api.merge(thread_api);
+    // The run paths (`crate::run_controller`, PLAT-01, D-44) are always
+    // merged in from a throwaway, unwired `RunApiState` -- same D-24
+    // precedent `thread_api` above already follows: the spec lists these
+    // paths even when no run store/queue is actually configured.
+    let (_run_router, run_api) = versioned_run_parts(RunApiState::new());
+    api.merge(run_api);
     decorate(&mut api);
     api
 }

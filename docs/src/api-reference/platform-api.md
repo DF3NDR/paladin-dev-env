@@ -347,6 +347,21 @@ milestone. Naming this gap plainly is the point: PRD 06's own functional require
 permits documenting it rather than closing it, and claiming coverage that does not exist would be
 worse than the gap itself.
 
+### Known limitations
+
+**A run against a code-registered agent never fires a webhook.** Two assistant kinds resolve
+through this API: a stored `WarGraphDoc` workflow, and a **code-registered agent** (a single
+Paladin registered directly in the process, not backed by a Waypoint-tracked graph). The delivery
+hook documented above — enqueueing a `Pending` webhook delivery on a lifecycle transition — is
+wired only into the workflow path. A run submitted against a code-registered agent completes (or
+fails) with a `webhook` spec attached, but **zero deliveries are ever enqueued for it**, no matter
+which events it subscribed to; the same run's status is still correctly reported by
+`GET /runs/{run_id}` and by the degraded polling path on `GET /runs/{run_id}/stream` (the live
+SSE bus is excluded for this run kind too). If your integration depends on webhook delivery, poll
+the run instead of relying on a callback when its assistant is code-registered. This is a
+recorded, tested limitation, not a silent gap: it is pinned by a named test in the worker's own
+test suite and tracked in the project's broken-windows ledger.
+
 ## Pagination
 
 Every list endpoint (`/runs`, `/threads`, `/assistants`, `/assistants/{id}/versions`,

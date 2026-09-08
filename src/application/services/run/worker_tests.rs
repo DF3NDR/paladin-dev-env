@@ -861,3 +861,121 @@ async fn webhook_delivery_repository_error_never_affects_run_status() {
         "a webhook delivery repository error must never change the run's own status"
     );
 }
+
+// --- agent_kind_run_with_a_webhook_enqueues_no_delivery (WR-02) ---------
+
+/// An [`AssistantResolver`] resolving every id to a code-registered
+/// `Runnable::Agent` -- the legacy dispatch path `run_once` routes to
+/// [`super::worker::RunWorkerPool::run_agent`] BEFORE any event-bus
+/// bind/publish or webhook-delivery enqueue call.
+struct AgentOnlyResolver;
+
+#[async_trait]
+impl AssistantResolver for AgentOnlyResolver {
+    async fn resolve(
+        &self,
+        assistant_id: &str,
+        version: Option<u32>,
+    ) -> Result<super::resolver::ResolvedAssistant, super::resolver::ResolveError> {
+        use paladin_core::base::entity::node::Node;
+        use paladin_core::platform::container::paladin::PaladinData;
+
+        Ok(super::resolver::ResolvedAssistant {
+            reference: AssistantRef {
+                assistant_id: assistant_id.to_string(),
+                version: version.unwrap_or(1),
+            },
+            runnable: super::resolver::Runnable::Agent(Arc::new(Node::new(
+                PaladinData::default(),
+                Some(assistant_id.to_string()),
+            ))),
+            allowed_roles: vec![],
+            source: paladin_core::platform::container::assistant::AssistantSource::Code,
+        })
+    }
+}
+
+/// A [`PaladinPort`] that always succeeds with a fixed output, standing in
+/// for a real LLM call -- this test only cares about the webhook/event-bus
+/// carve-out, not agent execution semantics.
+struct AlwaysSucceedsPaladinPort;
+
+#[async_trait]
+impl PaladinPort for AlwaysSucceedsPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        Ok(PaladinResult {
+            output: "agent completed".to_string(),
+            ..Default::default()
+        })
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unreachable!("this test never calls execute_stream")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// (WR-02) An `Agent`-kind run carrying a `webhook` spec subscribed to
+/// `completed` must complete normally and enqueue ZERO webhook deliveries
+/// -- `run_agent`'s dispatch never reaches the `webhook_delivery_for_outcome`
+/// -> `deliveries.enqueue` block that the `Runnable::Workflow` path uses
+/// (`webhook_delivery_enqueued_on_completed_event`, above). This is the
+/// tripwire for the documented carve-out on `RunWorkerPool`'s
+/// `event_bus`/`webhook_deliveries` field docs and on `run_agent` itself:
+/// if a future change wires the hook into `run_agent`, this test goes red
+/// and those docs must move with it.
+#[tokio::test]
+async fn agent_kind_run_with_a_webhook_enqueues_no_delivery() {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let resolver: Arc<dyn AssistantResolver> = Arc::new(AgentOnlyResolver);
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let worker = RunWorkerPool::new(
+        engine,
+        store,
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_paladin_port(Arc::new(AlwaysSucceedsPaladinPort))
+    .with_webhook_deliveries(Arc::clone(&deliveries));
+
+    let webhook = WebhookSpec {
+        url: "https://example.com/hook".to_string(),
+        secret: None,
+        events: vec![RunEventKind::Completed],
+    };
+    let (run_id, _thread_id) =
+        submit_with_webhook(&repository, &queue, "code-agent", webhook).await;
+
+    assert!(worker.run_once().await.unwrap());
+
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(
+        run.status,
+        RunStatus::Completed,
+        "the agent-kind run's status transitions are unaffected by the carve-out"
+    );
+
+    let page = deliveries.list_for_run(&run_id, 10, None).await.unwrap();
+    assert!(
+        page.items.is_empty(),
+        "an Agent-kind run must enqueue zero webhook deliveries, got {}",
+        page.items.len()
+    );
+}

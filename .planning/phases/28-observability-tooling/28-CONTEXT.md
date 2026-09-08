@@ -101,8 +101,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   — **Reversibility:** one-way once persisted (D-17) — `run_traces` rows carry this shape under
   `TRACE_SCHEMA_VERSION = "1"`; reshaping later needs a data migration, exactly as 23-CONTEXT D-14
   records for `MusterProgress`.
-- **D-03: One per-run `seq` authority — the engine's `TraceDispatcher` — reached by every producer
-  through a `TraceEmitter` handle, never a raw sink.** `seq` starts at 1 per run and is stamped,
+- **D-03: One per-run `seq` authority (the engine's `TraceDispatcher`) reached by every producer through a `TraceEmitter` handle, never a raw sink.** `seq` starts at 1 per run and is stamped,
   together with `at` and `thread_id`/`run_id`, inside `TraceDispatcher::emit` at enqueue time
   (so `seq` order *is* causal order, and `at` is when the event happened, not when a sink saw it).
   A new object-safe `TraceEmitter: Send + Sync { fn emit(&self, event: TraceEvent) }` (sync,
@@ -173,16 +172,14 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   house convention names the *module* `*_port.rs` and the trait without the suffix
   (`WaypointPort` is the exception, not the rule — cf. `TraceSink`, `LlmPort`). Recorded as a
   deliberate naming deviation from PRD text, not a gap.
-- **D-10: Capacity is configurable from `TraceConfig.channel_capacity` (default 1024, D-36);
-  the engine API is unchanged.** `WarEngine::with_trace_sink` stays; the facade passes capacity
+- **D-10: Capacity is configurable from `TraceConfig.channel_capacity` (default 1024, D-36); the engine API is unchanged.** `WarEngine::with_trace_sink` stays; the facade passes capacity
   through the existing `TraceDispatcher::with_capacity`. The untraced path (no sink) stays
   zero-cost — Phase 22's must-have — which is why "default-on" for the log sink is a facade
   composition decision (D-11), not an engine default.
 
 ### Log & OTel sinks (OBS-02; OBS-FR-04, FR-05)
 
-- **D-11: The log sink uses the `log` crate under target `paladin::trace`, one JSON line per
-  record, `info` level, default-on in the facade's composition root only.**
+- **D-11: The log sink uses the `log` crate under a dedicated trace log target, one JSON line per record at `info` level, default-on in the facade's composition root only.**
   `src/infrastructure/telemetry/log_sink.rs` (PRD 07 names `infrastructure/telemetry` as the
   facade home) — `log::info!(target: "paladin::trace", "{}", serde_json::to_string(&record))`.
   The house stack is `log` + `env_logger` (57 files use `log::`, zero use `tracing::`; the
@@ -192,8 +189,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   `RUST_LOG=paladin::trace=off` or the config flag. `WarEngine` itself keeps no default sink
   (D-10). Rejected: `tracing` — it would be the first `tracing` consumer in the tree and a second
   logging stack for one sink.
-- **D-12: The OTel exporter is `src/infrastructure/telemetry/otel_sink.rs` behind the umbrella
-  feature `otel`, OTLP over HTTP/protobuf only.** Dependencies `opentelemetry`,
+- **D-12: The OTel exporter is `src/infrastructure/telemetry/otel_sink.rs` behind the umbrella feature `otel`, OTLP over HTTP/protobuf only.** Dependencies `opentelemetry`,
   `opentelemetry_sdk` and `opentelemetry-otlp` (`http-proto` + `reqwest-client` features; **no**
   `tonic`/gRPC — it roughly doubles the dependency graph for a transport nobody has asked for),
   all `optional = true`, gated by `otel`, absent from `default` and from `full`'s implicit set
@@ -210,7 +206,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   `service.name` and OTLP `endpoint`/`headers` come from `OtelConfig` (D-36, X-09). A record
   arriving for a span that was never opened (a dropped `NodeStarted`) opens a synthetic span
   flagged `paladin.trace.partial = true` rather than being discarded.
-- **D-13: Two-layer verification: tree shape in-process, transport against an axum stub.**
+- **D-13: Two-layer verification, tree shape in-process and transport against an axum stub.**
   (a) Shape — the sink is constructed over `opentelemetry_sdk`'s `InMemorySpanExporter`
   (its `testing` feature) and the branch + retry + muster fixture run is asserted as a span
   tree: one root, N attempt children, retried node has sibling spans with `attempt = 1, 2`,
@@ -253,8 +249,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   additive, and the enum is marked `#[non_exhaustive]` in the same change (X-10.2 spirit). The
   OpenAPI enum, the mdBook run-streaming page and the `sdk-clients` smoke test are updated
   together.
-- **D-17: A new `RunTracePort` in `paladin-ports`, three adapters in `paladin-storage`
-  mirroring `waypoint/`, batched per superstep, pruned with Waypoint retention.**
+- **D-17: A new `RunTracePort` in `paladin-ports`, three adapters in `paladin-storage` mirroring `waypoint/`, batched per superstep, pruned with Waypoint retention.**
   `RunTracePort: Send + Sync { async fn append(&self, records: &[TraceRecord]) -> Result<(),
   RunTraceError>; async fn read(&self, thread: &ThreadId, after_seq: u64, limit: u32) ->
   Result<Vec<TraceRecord>, RunTraceError>; async fn prune_thread(&self, thread: &ThreadId,
@@ -305,15 +300,13 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   order, no `HashMap` iteration). The existing Maneuver `FlowVisualizer` (`flowchart LR`,
   `crates/paladin-battalion/src/maneuver/visualizer.rs`) is a different surface and stays
   untouched (X-03).
-- **D-20: Goldens under `crates/paladin-battalion/tests/golden/export/` with an
-  `UPDATE_GOLDEN=1` bless idiom** mirroring `UPDATE_OPENAPI=1` (`crates/paladin-web/openapi.rs`,
+- **D-20: Goldens under `crates/paladin-battalion/tests/golden/export/` with an `UPDATE_GOLDEN=1` bless idiom** mirroring `UPDATE_OPENAPI=1` (`crates/paladin-web/openapi.rs`,
   `Makefile:370`) and the schema bless in `graph_doc_round_trip.rs`; a `make bless-golden`
   target. Fixtures: linear, branch+join, loop, muster, subgraph — the first three and the
   subgraph as `WarGraphDoc` files under the existing `tests/fixtures/graph_docs/` (both
   `from_doc` and `from_graph` of the compiled doc must produce the same shape — asserted), muster
   as a code-built `WarGraph`. The overlay golden is the branching fixture with a scripted run.
-- **D-21: The overlay is `GraphShape` + `ExecutionOverlay`, Mermaid only, with Waypoint history
-  as the always-available source and the persisted trace as the upgrade.** `ExecutionOverlay {
+- **D-21: The overlay is `GraphShape` + `ExecutionOverlay`, Mermaid only, with Waypoint history as the always-available source and the persisted trace as the upgrade.** `ExecutionOverlay {
   visits: BTreeMap<NodeId, Vec<Visit { superstep, attempt, outcome, duration_ms, tokens,
   cache_hit }>>, fired_edges: BTreeSet<(NodeId, NodeId)>, evaluated_edges: BTreeSet<(NodeId,
   NodeId)>, source: Waypoints | Trace, observed_only: bool }`. From Waypoints
@@ -326,16 +319,14 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   &GraphShape, &ExecutionOverlay)` colors nodes by last outcome via `classDef` (`success`,
   `failed`, `parleyed`, `skipped`, `cache_hit`), appends `×N` visit counts to loop nodes and
   `<duration>ms · <tokens>tok` to labels. A DOT overlay is deferred (PRD names Mermaid only).
-- **D-22: When no static graph is available for a thread, `run export` renders the observed
-  subgraph and says so.** Waypoints carry only a `graph_fingerprint`, not the graph. Resolution
+- **D-22: When no static graph is available for a thread, `run export` renders the observed subgraph and says so.** Waypoints carry only a `graph_fingerprint`, not the graph. Resolution
   order: `--graph <doc file>` on the CLI → the run's assistant version's `WarGraphDoc` when the
   thread belongs to a run (via `RunRepositoryPort` + the assistant store) → `observed_only =
   true`, building the shape from the nodes and derived edges actually seen, with the diagram
   title `(observed nodes only — no graph document available)`. The three E2E threads fall in
   the third bucket, which is acceptable: the acceptance question is answered by the overlay,
   not by unexecuted nodes.
-- **D-23: CLI commands are in-process, under the existing `cli` feature and command module
-  layout.** `src/application/cli/commands/graph.rs` — `paladin-cli graph export --format
+- **D-23: CLI commands are in-process, under the existing `cli` feature and command module layout.** `src/application/cli/commands/graph.rs` — `paladin-cli graph export --format
   mermaid|dot (<FILE> | --assistant <id>[@<version>]) [--out <path>]`, `<FILE>` a `WarGraphDoc`
   JSON/YAML; `--assistant` resolves through the store the loaded config names (SQLite locally,
   Postgres by URL) exactly as the server would. `src/application/cli/commands/run.rs` —
@@ -348,8 +339,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
 
 ### The `dev-ui` inspector (OBS-FR-10)
 
-- **D-24: `paladin-web` renders what a new input port hands it; it never learns the graph
-  vocabulary.** ADR-0031 forbids `paladin-web → paladin-battalion` in the default build and
+- **D-24: `paladin-web` renders what a new input port hands it; it never learns the graph vocabulary.** ADR-0031 forbids `paladin-web → paladin-battalion` in the default build and
   27-CONTEXT D-27 set the pattern: a core-typed input port. New
   `crates/paladin-ports/src/input/run_inspector_port.rs` — `RunInspectorPort: Send + Sync {
   async fn inspect(&self, thread: &ThreadId) -> Result<InspectorView, InspectorError> }` with
@@ -371,8 +361,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   gate stay feature-independent — a dev tool page is not API surface. Response `text/html`;
   errors reuse the `{ error: { code, message, details } }` envelope (`404` unknown thread, `501`
   when no `RunInspectorPort` is wired, matching the `NotWired` precedent).
-- **D-26: The page is one static HTML template with the data embedded, no fetches, no build
-  pipeline.** `crates/paladin-web/src/dev_ui/inspector.html` via `include_str!`, the
+- **D-26: The page is one static HTML template with the data embedded, no fetches, no build pipeline.** `crates/paladin-web/src/dev_ui/inspector.html` via `include_str!`, the
   `InspectorView` JSON injected into `<script id="inspector-data" type="application/json">`
   (HTML-escaped `</` and `<!--`), inline vanilla JS rendering: the Mermaid overlay diagram, a
   per-node visits panel ("node X ran 3 times: supersteps 2, 4, 6 — entered via `loop → X`
@@ -389,8 +378,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
 
 ### The `paladin-eval` crate (OBS-04; OBS-FR-11…15)
 
-- **D-27: `crates/paladin-eval` is a facade-tier tool crate — it depends downward on the leaf
-  crates, nothing depends on it except as a dev-dependency.** Dependencies: `paladin-core`,
+- **D-27: `crates/paladin-eval` is a facade-tier tool crate that depends downward on the leaf crates; nothing depends on it except as a dev-dependency.** Dependencies: `paladin-core`,
   `paladin-ports`, `paladin-battalion`, `paladin-llm` (`mock` feature, already default),
   `paladin-storage` (`sqlite`, for the E2E fixtures' temp-file stores), `serde`, `serde_yaml`,
   `serde_json`, `regex`, `glob`, `libtest-mimic` (D-32). It never depends on the facade
@@ -406,8 +394,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   `PROMOTION.md`) records the classification so a future reader of ADR-0031 does not read the
   dependency edges as a violation. — **Reversibility:** one-way once published to crates.io
   under that name and dependency shape.
-- **D-28: Scenario file = YAML (`.eval.yaml`, JSON accepted), `schema_version: "1"`, one
-  target, many cases.** Shape:
+- **D-28: Scenario file = YAML (`.eval.yaml`, JSON accepted) carrying `schema_version` "1", one target, many cases.** Shape:
   `target: { graph_doc: <path> } | { registered: <name> }` (D-33); `store: in_memory |
   sqlite_temp` (default `in_memory`); `llm:` a global script and/or per-node scripts keyed by
   the Paladin node id, each a list of `{ text | tool_call: {name, arguments} | error: <LlmError
@@ -425,8 +412,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   `schemars` and golden-checked exactly like `wargraph-doc.schema.json` (27-CONTEXT D-34).
   — **Reversibility:** costly — a file format users write by hand; additive evolution under
   `schema_version` only.
-- **D-29: Assertions read the captured `TraceRecord`s and the final Battlefield, nothing
-  else.** The runner installs a `CapturingSink` (a `TraceSink` collecting `Vec<TraceRecord>`)
+- **D-29: Assertions read the captured `TraceRecord`s and the final Battlefield, nothing else.** The runner installs a `CapturingSink` (a `TraceSink` collecting `Vec<TraceRecord>`)
   through `WarEngine::with_trace_sink`, runs the case, then evaluates every assertion against
   `(records, final_battlefield, outcome)`. `edge_fired` needs `EdgeEvaluated` (D-04), `parley_
   raised` needs `ParleyRaised`, `total_tokens_max` reads `RunFinished.total_tokens` — the
@@ -443,8 +429,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   pre-existing at `v0.9.0`; touching them would be an X-10 register event for a capability the
   harness can own outright. The researcher confirms whether they are pre-existing; either way
   they stay untouched.
-- **D-31: `graph_doc` targets compile through `EngineRegistries` the scenario declares by
-  name; `registered` targets are Rust closures.** A file target names the doc path and an
+- **D-31: `graph_doc` targets compile through `EngineRegistries` the scenario declares by name; `registered` targets are Rust closures.** A file target names the doc path and an
   optional `registries: <name>` the host test binary registered
   (`ScenarioRunner::register_registries("default", || EngineRegistries::default())`); the
   Paladin nodes' `LlmPort`s are replaced by `ScenarioLlm` instances at compile time via a
@@ -452,8 +437,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   "e2e1", |scripted: &ScriptedPorts| -> WarGraph)` receives the per-node scripted ports so
   code-built graphs (Function nodes, worker templates, custom edge evaluators, Aegis handlers)
   are fully expressible.
-- **D-32: The runner is a `libtest-mimic` custom harness — one runtime-discovered test per
-  case, no proc macro.** `paladin_eval::eval_scenarios!("evals/**/*.eval.yaml")` expands to a
+- **D-32: The runner is a `libtest-mimic` custom harness, one runtime-discovered test per case, no proc macro.** `paladin_eval::eval_scenarios!("evals/**/*.eval.yaml")` expands to a
   `fn main()` for a `[[test]] name = "evals" harness = false` target that globs the pattern at
   runtime, registers the host's graph constructors (D-31) and hands one `Trial` per
   `(file, case)` to `libtest-mimic` — so `cargo test --test evals e2e1::approve` filters, the
@@ -461,18 +445,14 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   publish. Rejected: a proc macro reading files at compile time (a second crate, recompiles on
   every scenario edit, and glob expansion in `proc_macro` is fragile); `macro_rules!` with
   explicit paths (one test per *file*, not per case — fails the FR).
-- **D-33: `paladin-cli eval run <glob> [--repeat N] [--bless] [--live] [--registries <name>]`
-  in `src/application/cli/commands/eval.rs`, behind `cli`, with `paladin-eval` an optional
-  dependency the `cli` feature enables.** `--repeat N` runs every case N times sequentially and
+- **D-33: `paladin-cli eval run <glob> [--repeat N] [--bless] [--live] [--registries <name>]` in `src/application/cli/commands/eval.rs`, behind `cli`, with `paladin-eval` an optional dependency the `cli` feature enables.** `--repeat N` runs every case N times sequentially and
   prints a per-case pass rate; **any divergence across repeats** (not N/N identical verdicts)
   exits non-zero with the differing `seq` ranges — nondeterminism with scripted mocks is a bug
   to surface, per the PRD. `--bless` writes `<scenario>.<case>.snap.json` beside the scenario for
   `final_state_snapshot` assertions (the `UPDATE_*=1` env idiom's CLI cousin). The CLI can only
   run file targets and `registered` targets whose constructors ship in the facade (the E2E
   three, registered in the facade's eval registry), which is documented.
-- **D-34: E2E-1/2/3 become `evals/e2e-1-crash-resume.eval.yaml`, `evals/e2e-2-approval-gate.
-  eval.yaml`, `evals/e2e-3-map-reduce-fault-tolerance.eval.yaml` at the repo root, with
-  `registered` targets whose constructors are shared with the integration tests.** The graph
+- **D-34: E2E-1/2/3 become `evals/e2e-1-crash-resume.eval.yaml`, `evals/e2e-2-approval-gate. eval.yaml`, `evals/e2e-3-map-reduce-fault-tolerance.eval.yaml` at the repo root, with `registered` targets whose constructors are shared with the integration tests.** The graph
   builders in the three `tests/integration/e2e_*_test.rs` files are refactored (behavior-
   preserving) into `tests/helpers/e2e_fixtures.rs` and used by both the integration tests (which
   must stay green as integration tests — SHIP-03) and the facade's `tests/evals.rs` harness.
@@ -485,8 +465,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   times: { min: 7 } }` (5 workers + 2 retries as attempts are visible per `NodeStarted`),
   `node_executed: { node: aggregate, times: { exact: 1 } }` and the 5-element list field.
   Both the harness and the integration tests run in the default `cargo test --workspace`.
-- **D-35: Live mode is `--live` + `PALADIN_EVAL_LIVE=1` + provider env keys, structural
-  assertions only unless `allow_content_assertions: true`, never in default CI.** Providers come
+- **D-35: Live mode is `--live` + `PALADIN_EVAL_LIVE=1` + provider env keys, structural assertions only unless the scenario opts in to content assertions, never in default CI.** Providers come
   from `paladin-llm`'s `provider_factory` with the keys ADR-0012 already governs for live-API
   tests; content assertions (`final_state_field_equals`, `_matches`, `field_json_path_equals`,
   `final_state_snapshot`) are skipped with a visible `SKIPPED (content assertion, live mode)`
@@ -495,8 +474,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
 
 ### Config, docs & program bookkeeping (X-07 … X-11)
 
-- **D-36: `src/config/trace.rs` — `TraceConfig` with `Default`, `validate()`, `EnvOverridable`
-  (`PALADIN_TRACE_*`), mirroring `RunStreamConfig` and `WaypointRetentionConfig`.** Fields:
+- **D-36: `src/config/trace.rs` holds `TraceConfig` with `Default`, `validate()` and `EnvOverridable` under the `PALADIN_TRACE` env prefix, mirroring `RunStreamConfig` and `WaypointRetentionConfig`.** Fields:
   `log_sink: bool = true`, `channel_capacity: usize = 1024`, `persist: bool = false`,
   `state_values: bool = false`, `value_cap_bytes: usize = 256`, `heartbeat_interval_secs: u64 =
   5`, `otel: OtelConfig { enabled: bool = false, endpoint: String = "http://localhost:4318/v1/
@@ -540,7 +518,7 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
   (sqlite + postgres), Citadel files unchanged. §9.5: `trace.*`, `web_server.dev_ui.*`,
   `PALADIN_TRACE_*`, `PALADIN_EVAL_LIVE`. §9.6: `trace_seq` payload field and `replay` mode on
   `GET /v1/runs/{id}/stream`; the `dev-ui` page listed as a non-API route. §9.7: none.
-- **D-40: Close-out gates on the phase's final commit, in this order:** `cargo test --workspace`
+- **D-40: Close-out gates on the phase's final commit, in this order.** `cargo test --workspace`
   (incl. `--test evals`), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D
   warnings` (with and without `otel`/`dev-ui`), `cargo semver-checks` against the published
   `0.9.0` crates for all twelve crates (the new crate has no baseline — recorded), the `msrv`

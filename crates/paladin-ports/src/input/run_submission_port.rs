@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use paladin_core::platform::container::run::{RunId, RunStatus, WebhookSpec};
 use paladin_core::platform::container::user::UserRole;
-use paladin_core::platform::container::waypoint::ThreadId;
+use paladin_core::platform::container::waypoint::{ThreadId, WaypointId};
 
 /// A run submission request (D-12).
 #[derive(Debug, Clone)]
@@ -27,6 +27,25 @@ pub struct SubmitRun {
     /// The caller-supplied input.
     pub input: serde_json::Value,
     /// An optional webhook delivery target for this run's lifecycle events.
+    pub webhook: Option<WebhookSpec>,
+    /// The identity and role of the submitting principal, if known.
+    pub requested_by: Option<(String, UserRole)>,
+}
+
+/// A request to fork a NEW run from a specific Waypoint on an existing
+/// thread (D-45, PLAT §2.1): the resulting run continues on the SAME
+/// thread rather than starting a fresh one, carrying `fork_from` so the
+/// worker drives `WarEngine::fork` instead of `start`/`resume`.
+#[derive(Debug, Clone)]
+pub struct ForkRun {
+    /// The thread to fork on.
+    pub thread_id: ThreadId,
+    /// The Waypoint to fork from.
+    pub from_waypoint_id: WaypointId,
+    /// An optional state edit merged at the fork point.
+    pub edit: Option<serde_json::Value>,
+    /// An optional webhook delivery target for the forked run's lifecycle
+    /// events.
     pub webhook: Option<WebhookSpec>,
     /// The identity and role of the submitting principal, if known.
     pub requested_by: Option<(String, UserRole)>,
@@ -130,6 +149,22 @@ pub enum RunSubmissionError {
         /// Why the URL was rejected (the `SsrfRejection`'s own message).
         reason: String,
     },
+    /// No run exists yet for the target thread -- [`RunSubmissionPort::fork`]
+    /// has nothing to copy the assistant reference from (D-45).
+    #[error("no run found for thread: {thread_id}")]
+    UnknownThread {
+        /// The thread with no run row.
+        thread_id: ThreadId,
+    },
+    /// `from_waypoint_id` does not identify a Waypoint on the target
+    /// thread (D-45).
+    #[error("unknown waypoint {waypoint_id} on thread {thread_id}")]
+    UnknownWaypoint {
+        /// The thread the fork was attempted against.
+        thread_id: ThreadId,
+        /// The unrecognised waypoint id, rendered as a string.
+        waypoint_id: String,
+    },
     /// No run store/queue is configured (the D-24 501 precedent).
     #[error("run submission is not wired: configure run_store and run_queue")]
     NotWired,
@@ -158,7 +193,28 @@ pub trait RunSubmissionPort: Send + Sync {
     /// (idempotent). Returns [`RunSubmissionError::NotFound`] when `run_id`
     /// does not exist, and [`RunSubmissionError::AlreadyTerminal`] when the
     /// run has already reached a terminal status.
-    async fn cancel(&self, run_id: &RunId) -> Result<CancelOutcome, RunSubmissionError>;
+    ///
+    /// `requested_by` is the invoking principal's identity/role (D-46):
+    /// when `Some`, an implementor authorizes the request against the
+    /// run's own assistant `allowed_roles` (empty means any authenticated
+    /// caller), returning [`RunSubmissionError::Forbidden`] on a mismatch,
+    /// BEFORE the durable cancel flag is written. `None` skips this check
+    /// (a same-process/internal caller with no principal to authorize
+    /// against).
+    async fn cancel(
+        &self,
+        run_id: &RunId,
+        requested_by: Option<(String, UserRole)>,
+    ) -> Result<CancelOutcome, RunSubmissionError>;
+
+    /// Fork a NEW run from `request.from_waypoint_id` onto
+    /// `request.thread_id` (D-45): the run's own `fork_from` carries the
+    /// fork point and optional edit, and its assistant reference is copied
+    /// from the thread's most recent run. Subject to the SAME
+    /// one-active-run-per-thread invariant [`RunSubmissionPort::submit`]
+    /// enforces (D-17/D-18): [`RunSubmissionError::ThreadBusy`] while a run
+    /// is already active on the thread.
+    async fn fork(&self, request: ForkRun) -> Result<RunAccepted, RunSubmissionError>;
 }
 
 #[cfg(test)]
@@ -174,7 +230,15 @@ mod tests {
             Err(RunSubmissionError::NotWired)
         }
 
-        async fn cancel(&self, _run_id: &RunId) -> Result<CancelOutcome, RunSubmissionError> {
+        async fn cancel(
+            &self,
+            _run_id: &RunId,
+            _requested_by: Option<(String, UserRole)>,
+        ) -> Result<CancelOutcome, RunSubmissionError> {
+            Err(RunSubmissionError::NotWired)
+        }
+
+        async fn fork(&self, _request: ForkRun) -> Result<RunAccepted, RunSubmissionError> {
             Err(RunSubmissionError::NotWired)
         }
     }

@@ -251,7 +251,7 @@ async fn cross_instance_cancel_probe() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        let cancel_outcome = service_b.cancel(&run_id).await.unwrap();
+        let cancel_outcome = service_b.cancel(&run_id, None).await.unwrap();
         assert!(
             !cancel_outcome.was_local,
             "instance B never dispatched this run locally -- was_local must be false"
@@ -357,7 +357,7 @@ async fn local_cancel_signals_token() {
         // (200ms) node even starts.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let cancel_outcome = service.cancel(&run_id).await.unwrap();
+        let cancel_outcome = service.cancel(&run_id, None).await.unwrap();
         assert!(
             cancel_outcome.was_local,
             "this instance IS the one dispatching the run -- was_local must be true"
@@ -400,9 +400,9 @@ async fn cancel_is_idempotent_on_a_non_terminal_run() {
 
     let (run_id, _thread_id) = submit(&repository, &queue, "unused").await;
 
-    let first = service.cancel(&run_id).await.unwrap();
+    let first = service.cancel(&run_id, None).await.unwrap();
     assert!(!first.was_local, "no worker pool is wired -- always false");
-    let second = service.cancel(&run_id).await.unwrap();
+    let second = service.cancel(&run_id, None).await.unwrap();
     assert_eq!(
         first.status, second.status,
         "calling cancel twice on a non-terminal run must be Ok both times with the same status"

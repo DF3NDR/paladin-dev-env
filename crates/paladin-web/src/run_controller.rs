@@ -7,27 +7,35 @@
 //! | Method & path | Description |
 //! |---------------|-------------|
 //! | `POST /runs` | Submit a run; `202 Accepted` with `{ run_id, thread_id, state_url }` |
+//! | `GET /runs` | Paginated list, filterable by `thread_id`/`assistant_id`/`status` (D-47) |
 //! | `GET /runs/{run_id}` | The run's current status |
 //! | `GET /runs/{run_id}/stream` | Server-Sent Events stream of the run's progress (PLAT-FR-07, D-24..D-27) |
+//! | `POST /runs/{run_id}/cancel` | Idempotent cancel request (D-16); `202` on a non-terminal run, `409` on a terminal one |
+//! | `GET /runs/{run_id}/webhook-deliveries` | Paginated delivery attempts, newest-first (D-40, PLAT-FR-14) |
 //!
 //! [`RunApiState`] holds `Option<Arc<dyn RunSubmissionPort>>`,
-//! `Option<Arc<dyn RunRepositoryPort>>` and `Option<Arc<dyn
-//! RunEventStreamPort>>` -- all `paladin-ports` trait objects, never a
-//! `paladin-battalion` type -- so this crate takes no dependency on
-//! `paladin-battalion` in its default build (ADR-0031). When a route's own
-//! port is `None`, it answers `501 not_implemented` naming the config key
-//! to set, per D-44 (the D-24 precedent).
+//! `Option<Arc<dyn RunRepositoryPort>>`, `Option<Arc<dyn
+//! RunEventStreamPort>>` and `Option<Arc<dyn WebhookDeliveryRepositoryPort>>`
+//! -- all `paladin-ports` trait objects, never a `paladin-battalion` type --
+//! so this crate takes no dependency on `paladin-battalion` in its default
+//! build (ADR-0031). When a route's own port is `None`, it answers `501
+//! not_implemented` naming the config key to set, per D-44 (the D-24
+//! precedent).
 //!
 //! A success body is the serialized payload; failures use the unified
 //! [`ApiError`](crate::error::ApiError) envelope.
 //!
-//! ## Authorization
+//! ## Authorization (D-46)
 //!
-//! Both routes are behind the same `require_authentication` middleware as
-//! `/v1/agents/*` and `/v1/threads/*` (D-44); scope enforcement beyond
-//! authentication is completed in a later plan (PLAT-06). The `Principal`
-//! is extracted (its role attached to the submitted run's `requested_by`)
-//! so per-assistant `allowed_roles` scoping can land as a body-only change.
+//! Every route sits behind the same `require_authentication` middleware as
+//! `/v1/agents/*` and `/v1/threads/*` (D-44). `POST /runs`, `POST
+//! /runs/{run_id}/cancel` and `POST /threads/{id}/fork` are
+//! **invocation-shaped**: any authenticated principal, subject to the
+//! target assistant's own `allowed_roles` (checked inside
+//! `RunSubmissionService`, which is the only layer that ever resolves
+//! `allowed_roles` -- `paladin-web` has no visibility into them,
+//! ADR-0031). Every read (`GET /runs`, `GET /runs/{run_id}`, `GET
+//! /runs/{run_id}/webhook-deliveries`) needs authentication only.
 
 use std::convert::Infallible;
 use std::pin::Pin;
@@ -43,11 +51,15 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use paladin_core::platform::container::run::{Run, RunId};
+use paladin_core::platform::container::run::{
+    Run, RunCursor, RunEventKind, RunId, RunStatus, WebhookSpec,
+};
 use paladin_core::platform::container::waypoint::ThreadId;
+use paladin_core::platform::container::webhook::{WebhookDeliveryId, WebhookDeliveryStatus};
 use paladin_ports::input::run_event_stream_port::{RunEventStreamPort, RunStreamError};
 use paladin_ports::input::run_submission_port::{RunSubmissionError, RunSubmissionPort, SubmitRun};
-use paladin_ports::output::run_repository_port::RunRepositoryPort;
+use paladin_ports::output::run_repository_port::{RunPage, RunQuery, RunRepositoryPort};
+use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -55,6 +67,7 @@ use utoipa_axum::routes;
 use crate::agent_auth::{HasAgentAuth, Principal};
 use crate::agent_controller::{API_V1_PREFIX, JsonValue, ok_body};
 use crate::error::{ApiError, ApiErrorBody};
+use crate::pagination::{PageQuery, decode_cursor, encode_cursor, resolve_limit};
 
 /// The 15s heartbeat interval `GET /runs/{run_id}/stream` keeps alive on
 /// both the live and degraded paths (D-26) -- defeats idle proxy timeouts.
@@ -69,6 +82,8 @@ const SUBMISSION_PORT_HINT: &str =
 const REPOSITORY_PORT_HINT: &str = "no run store backend configured: set run_store.backend";
 const RUN_EVENTS_PORT_HINT: &str =
     "no run event stream backend configured: set run_store.backend and run_queue.backend";
+const WEBHOOK_DELIVERIES_PORT_HINT: &str =
+    "no webhook delivery backend configured: set webhooks.enabled";
 
 /// Shared state for the run routes (D-44).
 ///
@@ -107,6 +122,10 @@ pub struct RunApiState {
     /// Validates and persists run schedules (`/schedules*`, PLAT-05, D-42, D-46). `None`
     /// when unwired (`schedules.enabled` config gate, D-44/D-50).
     pub schedules: Option<Arc<dyn paladin_ports::input::schedule_admin_port::ScheduleAdminPort>>,
+    /// Reads persisted webhook delivery attempts (`GET
+    /// /runs/{run_id}/webhook-deliveries`, D-40, PLAT-FR-14). `None` when
+    /// unwired.
+    pub webhook_deliveries: Option<Arc<dyn WebhookDeliveryRepositoryPort>>,
 }
 
 impl RunApiState {
@@ -122,7 +141,18 @@ impl RunApiState {
             code_registry: None,
             expose_code_registry: true,
             schedules: None,
+            webhook_deliveries: None,
         }
+    }
+
+    /// Wire a [`WebhookDeliveryRepositoryPort`], enabling `GET
+    /// /runs/{run_id}/webhook-deliveries`.
+    pub fn with_webhook_deliveries(
+        mut self,
+        webhook_deliveries: Arc<dyn WebhookDeliveryRepositoryPort>,
+    ) -> Self {
+        self.webhook_deliveries = Some(webhook_deliveries);
+        self
     }
 
     /// Wire a [`paladin_ports::input::schedule_admin_port::ScheduleAdminPort`], enabling
@@ -219,6 +249,11 @@ pub struct SubmitRunRequest {
     #[serde(default)]
     #[schema(value_type = Object)]
     pub input: serde_json::Value,
+    /// An optional webhook delivery target for this run's lifecycle events
+    /// (D-40) -- validated by the write-time SSRF guard (D-42) before the
+    /// run is ever persisted.
+    #[serde(default)]
+    pub webhook: Option<RunWebhookRequestDto>,
 }
 
 /// Response body for a successful `POST /runs` (`202 Accepted`).
@@ -254,6 +289,13 @@ pub struct RunResponse {
     pub finished_at: Option<DateTime<Utc>>,
     /// The engine's error, if this run is `Failed`.
     pub error: Option<String>,
+    /// The webhook delivery target, if any -- `secret` redacted to `"***"`
+    /// (mirrors `schedule_controller::WebhookResponseDto`'s identical
+    /// precedent; the raw signing secret is never echoed back).
+    pub webhook: Option<RunWebhookDto>,
+    /// How many responses are currently parked on this run awaiting worker
+    /// consumption -- the COUNT only, never the response values themselves.
+    pub pending_responses: usize,
 }
 
 impl From<&Run> for RunResponse {
@@ -268,8 +310,199 @@ impl From<&Run> for RunResponse {
             started_at: run.started_at,
             finished_at: run.finished_at,
             error: run.error.clone(),
+            webhook: run.webhook.as_ref().map(RunWebhookDto::from),
+            pending_responses: run.pending_responses.len(),
         }
     }
+}
+
+/// Wire shape of a webhook delivery target on write (`POST /runs`, `POST
+/// /threads/{id}/fork`), mirroring `schedule_controller::WebhookRequestDto`.
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub struct RunWebhookRequestDto {
+    /// The delivery URL -- validated by the write-time SSRF guard (D-42)
+    /// before the run is ever persisted.
+    pub url: String,
+    /// The HMAC signing secret, if any.
+    #[serde(default)]
+    pub secret: Option<String>,
+    /// The lifecycle events this webhook subscribes to (`"awaiting_input"`,
+    /// `"completed"`, `"failed"`, `"halted"`, `"cancelled"`).
+    #[serde(default)]
+    pub events: Vec<String>,
+}
+
+/// Wire shape of a webhook delivery target on read -- the SAME shape as
+/// [`RunWebhookRequestDto`], except `secret` is redacted (T-27-15-04).
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct RunWebhookDto {
+    /// The delivery URL.
+    pub url: String,
+    /// `"***"` when a secret is set on the run, `null` otherwise -- the raw
+    /// secret is never echoed back.
+    pub secret: Option<String>,
+    /// The lifecycle events this webhook subscribes to.
+    pub events: Vec<String>,
+}
+
+impl From<&WebhookSpec> for RunWebhookDto {
+    fn from(webhook: &WebhookSpec) -> Self {
+        Self {
+            url: webhook.url.clone(),
+            secret: webhook.secret.as_ref().map(|_| "***".to_string()),
+            events: webhook
+                .events
+                .iter()
+                .map(|k| event_kind_label(*k))
+                .collect(),
+        }
+    }
+}
+
+fn event_kind_label(kind: RunEventKind) -> String {
+    match kind {
+        RunEventKind::AwaitingInput => "awaiting_input",
+        RunEventKind::Completed => "completed",
+        RunEventKind::Failed => "failed",
+        RunEventKind::Halted => "halted",
+        RunEventKind::Cancelled => "cancelled",
+    }
+    .to_string()
+}
+
+fn parse_event_kind(raw: &str) -> Result<RunEventKind, ApiError> {
+    match raw {
+        "awaiting_input" => Ok(RunEventKind::AwaitingInput),
+        "completed" => Ok(RunEventKind::Completed),
+        "failed" => Ok(RunEventKind::Failed),
+        "halted" => Ok(RunEventKind::Halted),
+        "cancelled" => Ok(RunEventKind::Cancelled),
+        other => Err(ApiError::bad_request(format!(
+            "unknown webhook event kind '{other}': expected one of awaiting_input, completed, \
+             failed, halted, cancelled"
+        ))),
+    }
+}
+
+/// Convert a wire [`RunWebhookRequestDto`] into the core [`WebhookSpec`]
+/// `RunSubmissionPort::submit`/`fork` consume. `pub(crate)` so
+/// `thread_controller::fork_thread` can reuse it verbatim for `POST
+/// /threads/{id}/fork`'s own optional `webhook` field, rather than
+/// duplicating the event-kind parsing.
+pub(crate) fn to_run_webhook_spec(dto: RunWebhookRequestDto) -> Result<WebhookSpec, ApiError> {
+    let mut events = Vec::with_capacity(dto.events.len());
+    for raw in &dto.events {
+        events.push(parse_event_kind(raw)?);
+    }
+    Ok(WebhookSpec {
+        url: dto.url,
+        secret: dto.secret,
+        events,
+    })
+}
+
+// --- List / cancel / webhook-deliveries DTOs (D-47) -------------------
+
+/// Query parameters for `GET /runs`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RunListQuery {
+    /// Restrict to a single thread.
+    #[serde(default)]
+    pub thread_id: Option<String>,
+    /// Restrict to a single assistant.
+    #[serde(default)]
+    pub assistant_id: Option<String>,
+    /// Restrict to a single status (`"queued"`, `"running"`,
+    /// `"awaiting_input"`, `"completed"`, `"failed"`, `"halted"`,
+    /// `"cancelled"`).
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Maximum number of items to return (at most 100).
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Opaque pagination cursor from a previous page's `next_cursor`.
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+/// Response body for `GET /runs`.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct RunListResponse {
+    /// The page of runs, ordered `(submitted_at DESC, run_id DESC)`. A
+    /// cursor walk gives a stable ordering for rows that already existed
+    /// when the first page was fetched, but is NOT a point-in-time
+    /// snapshot: a row inserted after the first page may be omitted from
+    /// the walk (D-47 backstop).
+    pub items: Vec<RunResponse>,
+    /// Opaque cursor for the next page, `None` on the last page.
+    pub next_cursor: Option<String>,
+}
+
+/// Response body for a successful `POST /runs/{run_id}/cancel`.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct CancelRunResponse {
+    /// The cancelled run's identity.
+    pub run_id: String,
+    /// The run's status immediately after the durable cancel flag was
+    /// written -- always a non-terminal status.
+    pub status: String,
+    /// Whether THIS process instance held an in-process cancellation
+    /// signal for the run and fired it directly (a same-instance fast
+    /// path).
+    pub was_local: bool,
+}
+
+/// Wire projection of one attempt of a
+/// [`paladin_core::platform::container::webhook::WebhookDelivery`].
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct WebhookDeliveryDto {
+    /// This delivery's identity.
+    pub delivery_id: String,
+    /// Which lifecycle event this delivery carries.
+    pub event: String,
+    /// How many attempts have been made so far.
+    pub attempt: u32,
+    /// This delivery's current status (`"pending"`, `"in_flight"`,
+    /// `"delivered"`, `"retrying"`, `"dead"`).
+    pub status: String,
+    /// When this delivery is next eligible to be claimed, if not yet
+    /// terminal.
+    pub next_attempt_at: DateTime<Utc>,
+    /// The HTTP status the most recent attempt observed, if any.
+    pub last_response_status: Option<u16>,
+    /// A redacted, bounded diagnostic of the most recent attempt's
+    /// failure, if any -- never the payload or a signing secret.
+    pub last_error: Option<String>,
+    /// When this delivery was enqueued.
+    pub created_at: DateTime<Utc>,
+}
+
+fn webhook_delivery_status_label(status: WebhookDeliveryStatus) -> String {
+    status.as_str().to_string()
+}
+
+impl From<&paladin_core::platform::container::webhook::WebhookDelivery> for WebhookDeliveryDto {
+    fn from(delivery: &paladin_core::platform::container::webhook::WebhookDelivery) -> Self {
+        Self {
+            delivery_id: delivery.delivery_id.to_string(),
+            event: event_kind_label(delivery.event),
+            attempt: delivery.attempt,
+            status: webhook_delivery_status_label(delivery.status),
+            next_attempt_at: delivery.next_attempt_at,
+            last_response_status: delivery.last_response_status,
+            last_error: delivery.last_error.clone(),
+            created_at: delivery.created_at,
+        }
+    }
+}
+
+/// Response body for `GET /runs/{run_id}/webhook-deliveries`.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct WebhookDeliveryListResponse {
+    /// The page of delivery attempts, newest-first.
+    pub items: Vec<WebhookDeliveryDto>,
+    /// Opaque cursor for the next page, `None` on the last page.
+    pub next_cursor: Option<String>,
 }
 
 // --- Parsing helpers --------------------------------------------------------
@@ -282,12 +515,22 @@ fn parse_thread_id(raw: &str) -> Result<ThreadId, ApiError> {
     ThreadId::new(raw).map_err(|e| ApiError::bad_request(e.to_string()))
 }
 
+/// Parse a `status` query parameter into a [`RunStatus`], reusing the
+/// type's own `#[serde(rename_all = "snake_case")]` `Deserialize` impl
+/// rather than a second, hand-maintained label table.
+fn parse_run_status(raw: &str) -> Result<RunStatus, ApiError> {
+    serde_json::from_value(serde_json::Value::String(raw.to_string()))
+        .map_err(|_| ApiError::bad_request(format!("unknown run status '{raw}'")))
+}
+
 // --- Error mapping -----------------------------------------------------
 
 /// Map a [`RunSubmissionError`] onto the [`ApiError`] status/code this
 /// route uses. `#[non_exhaustive]`, so a future variant renders `500
-/// internal` rather than failing to compile.
-fn map_submission_error(err: RunSubmissionError) -> ApiError {
+/// internal` rather than failing to compile. `pub(crate)` so
+/// `thread_controller::fork_thread` reuses it verbatim (`fork` shares the
+/// same error enum as `submit`/`cancel`, D-45).
+pub(crate) fn map_submission_error(err: RunSubmissionError) -> ApiError {
     match err {
         RunSubmissionError::UnknownAssistant { assistant_id } => {
             ApiError::not_found(format!("unknown assistant '{assistant_id}'"))
@@ -301,7 +544,7 @@ fn map_submission_error(err: RunSubmissionError) -> ApiError {
         RunSubmissionError::ThreadBusy { thread_id } => ApiError::new(
             StatusCode::CONFLICT,
             "thread_busy",
-            format!("thread '{thread_id}' already has an active run"),
+            format!("thread '{thread_id}' already has an active run -- resume it via POST /threads/{thread_id}/resume"),
         )
         .with_details(serde_json::json!({ "remedy": "resume" })),
         RunSubmissionError::Forbidden { reason } => ApiError::forbidden(reason),
@@ -312,6 +555,20 @@ fn map_submission_error(err: RunSubmissionError) -> ApiError {
         RunSubmissionError::AlreadyTerminal { run_id, status } => {
             ApiError::conflict(format!("run '{run_id}' is already terminal ({status})"))
         }
+        RunSubmissionError::WebhookRejected { reason } => ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "webhook_url_rejected",
+            format!("webhook URL rejected: {reason}"),
+        ),
+        RunSubmissionError::UnknownThread { thread_id } => {
+            ApiError::not_found(format!("unknown thread '{thread_id}'"))
+        }
+        RunSubmissionError::UnknownWaypoint {
+            thread_id,
+            waypoint_id,
+        } => ApiError::not_found(format!(
+            "unknown waypoint '{waypoint_id}' on thread '{thread_id}'"
+        )),
         RunSubmissionError::Backend { message } => ApiError::internal(message),
         RunSubmissionError::NotWired => ApiError::not_implemented(SUBMISSION_PORT_HINT),
         other => ApiError::internal(other.to_string()),
@@ -336,8 +593,9 @@ fn map_submission_error(err: RunSubmissionError) -> ApiError {
     request_body = SubmitRunRequest,
     responses(
         (status = 202, description = "Run accepted", body = SubmitRunResponse),
-        (status = 400, description = "Invalid thread id", body = ApiErrorBody),
+        (status = 400, description = "Invalid thread id, or webhook_url_rejected (write-time SSRF guard, D-42)", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 403, description = "Role not permitted for this assistant (allowed_roles, D-46)", body = ApiErrorBody),
         (status = 404, description = "Unknown assistant or version", body = ApiErrorBody),
         (status = 409, description = "Thread busy -- the remedy is POST /threads/{id}/resume", body = ApiErrorBody),
         (status = 501, description = "No run submission backend configured", body = ApiErrorBody),
@@ -355,13 +613,14 @@ pub async fn submit_run(
         .ok_or_else(|| ApiError::not_implemented(SUBMISSION_PORT_HINT))?;
 
     let thread_id = body.thread_id.as_deref().map(parse_thread_id).transpose()?;
+    let webhook = body.webhook.map(to_run_webhook_spec).transpose()?;
 
     let request = SubmitRun {
         assistant_id: body.assistant_id,
         version: body.version,
         thread_id,
         input: body.input,
-        webhook: None,
+        webhook,
         requested_by: Some((principal.id.clone(), principal.role)),
     };
 
@@ -425,6 +684,194 @@ pub async fn get_run(
         .ok_or_else(|| ApiError::not_found(format!("unknown run '{run_id}'")))?;
 
     Ok((StatusCode::OK, ok_body(&RunResponse::from(&run))))
+}
+
+/// `GET /runs` -- paginated list, filterable by `thread_id`/`assistant_id`/
+/// `status` (D-47). Authenticated, any role.
+///
+/// Ordered `(submitted_at DESC, run_id DESC)`; a cursor walk gives a stable
+/// ordering for rows that already existed when the first page was fetched,
+/// but is NOT a point-in-time snapshot -- a row inserted after the first
+/// page was read may be omitted from the walk (D-47 backstop). An empty
+/// result set is `200 { items: [], next_cursor: null }`, never `404`.
+///
+/// Returns:
+/// - `200 OK` with [`RunListResponse`] on success;
+/// - `400 Bad Request` for `limit == 0`/`limit > 100`, an unparseable
+///   `cursor`, an invalid `thread_id`, or an unknown `status`;
+/// - `501 Not Implemented` if no run store backend is configured.
+#[utoipa::path(
+    get,
+    path = "/runs",
+    tag = "runs",
+    params(
+        ("thread_id" = Option<String>, Query, description = "Restrict to a single thread"),
+        ("assistant_id" = Option<String>, Query, description = "Restrict to a single assistant"),
+        ("status" = Option<String>, Query, description = "Restrict to a single status"),
+        ("limit" = Option<u32>, Query, description = "Max items to return, 1..=100 (default 20)"),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: rows inserted after the first page was fetched may be omitted"),
+    ),
+    responses(
+        (status = 200, description = "A page of runs; { items: [], next_cursor: null } when empty", body = RunListResponse),
+        (status = 400, description = "Invalid limit, cursor, thread_id, or status", body = ApiErrorBody),
+        (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 501, description = "No run store backend configured", body = ApiErrorBody),
+    ),
+    security(("api_key" = []), ("bearer_token" = [])),
+)]
+pub async fn list_runs(
+    State(state): State<RunApiState>,
+    Extension(_principal): Extension<Principal>,
+    axum::extract::Query(params): axum::extract::Query<RunListQuery>,
+) -> Result<(StatusCode, JsonValue), ApiError> {
+    let repository = state
+        .run_repository
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(REPOSITORY_PORT_HINT))?;
+
+    let limit = resolve_limit(params.limit)?;
+    let thread_id = params
+        .thread_id
+        .as_deref()
+        .map(parse_thread_id)
+        .transpose()?;
+    let status = params.status.as_deref().map(parse_run_status).transpose()?;
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_cursor::<RunCursor>)
+        .transpose()?;
+
+    let page: RunPage = repository
+        .list(RunQuery {
+            thread_id,
+            assistant_id: params.assistant_id,
+            status,
+            limit,
+            cursor,
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let items: Vec<RunResponse> = page.items.iter().map(RunResponse::from).collect();
+    let next_cursor = page.next_cursor.as_ref().map(encode_cursor);
+    Ok((
+        StatusCode::OK,
+        ok_body(&RunListResponse { items, next_cursor }),
+    ))
+}
+
+/// `POST /runs/{run_id}/cancel` -- idempotently request cancellation
+/// (D-16, D-46).
+///
+/// Invocation-shaped: any authenticated principal, subject to the run's
+/// own assistant `allowed_roles`, checked inside
+/// [`RunSubmissionPort::cancel`] (`paladin-web` has no visibility into
+/// `allowed_roles` itself, ADR-0031).
+///
+/// Returns:
+/// - `202 Accepted` with [`CancelRunResponse`] on a non-terminal run
+///   (idempotent -- a second call also answers `202`);
+/// - `400 Bad Request` for a malformed run id;
+/// - `403 Forbidden` if the principal's role is not permitted;
+/// - `404 Not Found` for an unknown run;
+/// - `409 Conflict` if the run is already terminal;
+/// - `501 Not Implemented` if no run submission backend is configured.
+#[utoipa::path(
+    post,
+    path = "/runs/{run_id}/cancel",
+    tag = "runs",
+    params(("run_id" = String, Path, description = "Run id")),
+    responses(
+        (status = 202, description = "Cancel accepted (idempotent on a non-terminal run)", body = CancelRunResponse),
+        (status = 400, description = "Invalid run id", body = ApiErrorBody),
+        (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 403, description = "Role not permitted for this run's assistant", body = ApiErrorBody),
+        (status = 404, description = "Unknown run", body = ApiErrorBody),
+        (status = 409, description = "The run is already terminal", body = ApiErrorBody),
+        (status = 501, description = "No run submission backend configured", body = ApiErrorBody),
+    ),
+    security(("api_key" = []), ("bearer_token" = [])),
+)]
+pub async fn cancel_run(
+    State(state): State<RunApiState>,
+    Extension(principal): Extension<Principal>,
+    Path(run_id): Path<String>,
+) -> Result<(StatusCode, JsonValue), ApiError> {
+    let submission = state
+        .run_submission
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(SUBMISSION_PORT_HINT))?;
+    let id = parse_run_id(&run_id)?;
+
+    let outcome = submission
+        .cancel(&id, Some((principal.id.clone(), principal.role)))
+        .await
+        .map_err(map_submission_error)?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        ok_body(&CancelRunResponse {
+            run_id: outcome.run_id.to_string(),
+            status: outcome.status.as_str().to_string(),
+            was_local: outcome.was_local,
+        }),
+    ))
+}
+
+/// `GET /runs/{run_id}/webhook-deliveries` -- paginated delivery attempts,
+/// newest-first (D-40, PLAT-FR-14). Authenticated, any role.
+///
+/// Returns:
+/// - `200 OK` with [`WebhookDeliveryListResponse`] on success;
+/// - `400 Bad Request` for an invalid run id, `limit`, or `cursor`;
+/// - `501 Not Implemented` if no webhook delivery backend is configured.
+#[utoipa::path(
+    get,
+    path = "/runs/{run_id}/webhook-deliveries",
+    tag = "runs",
+    params(
+        ("run_id" = String, Path, description = "Run id"),
+        ("limit" = Option<u32>, Query, description = "Max items to return, 1..=100 (default 20)"),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: deliveries recorded after the first page was fetched may be omitted"),
+    ),
+    responses(
+        (status = 200, description = "A page of delivery attempts, newest-first; { items: [], next_cursor: null } when empty", body = WebhookDeliveryListResponse),
+        (status = 400, description = "Invalid run id, limit, or cursor", body = ApiErrorBody),
+        (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 501, description = "No webhook delivery backend configured", body = ApiErrorBody),
+    ),
+    security(("api_key" = []), ("bearer_token" = [])),
+)]
+pub async fn list_webhook_deliveries(
+    State(state): State<RunApiState>,
+    Extension(_principal): Extension<Principal>,
+    Path(run_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<PageQuery>,
+) -> Result<(StatusCode, JsonValue), ApiError> {
+    let deliveries = state
+        .webhook_deliveries
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(WEBHOOK_DELIVERIES_PORT_HINT))?;
+    let id = parse_run_id(&run_id)?;
+    let limit = resolve_limit(params.limit)?;
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_cursor::<WebhookDeliveryId>)
+        .transpose()?;
+
+    let page = deliveries
+        .list_for_run(&id, limit, cursor)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let items: Vec<WebhookDeliveryDto> = page.items.iter().map(WebhookDeliveryDto::from).collect();
+    let next_cursor = page.next_cursor.as_ref().map(encode_cursor);
+    Ok((
+        StatusCode::OK,
+        ok_body(&WebhookDeliveryListResponse { items, next_cursor }),
+    ))
 }
 
 // --- Streaming ----------------------------------------------------------
@@ -525,8 +972,11 @@ pub async fn stream_run(
 pub fn run_openapi_router(state: RunApiState) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(submit_run))
+        .routes(routes!(list_runs))
         .routes(routes!(get_run))
         .routes(routes!(stream_run))
+        .routes(routes!(cancel_run))
+        .routes(routes!(list_webhook_deliveries))
         .merge(crate::assistant_controller::assistant_routes())
         .merge(crate::schedule_controller::schedule_routes())
         .route_layer(axum::middleware::from_fn_with_state(
@@ -587,6 +1037,8 @@ mod tests {
         ThreadBusy,
         UnknownAssistant,
         NotWired,
+        Forbidden,
+        AlreadyTerminal,
     }
 
     struct MockSubmissionPort {
@@ -618,20 +1070,49 @@ mod tests {
                     assistant_id: request.assistant_id,
                 }),
                 MockOutcome::NotWired => Err(RunSubmissionError::NotWired),
+                MockOutcome::Forbidden => Err(RunSubmissionError::Forbidden {
+                    reason: "role not permitted for this assistant".to_string(),
+                }),
+                MockOutcome::AlreadyTerminal => Err(RunSubmissionError::AlreadyTerminal {
+                    run_id: RunId::new_v7(),
+                    status: paladin_core::platform::container::run::RunStatus::Completed,
+                }),
             }
         }
 
         async fn cancel(
             &self,
             run_id: &RunId,
+            _requested_by: Option<(String, paladin_core::platform::container::user::UserRole)>,
         ) -> Result<paladin_ports::input::run_submission_port::CancelOutcome, RunSubmissionError>
         {
             match self.outcome {
                 MockOutcome::NotWired => Err(RunSubmissionError::NotWired),
+                MockOutcome::Forbidden => Err(RunSubmissionError::Forbidden {
+                    reason: "role not permitted for this run's assistant".to_string(),
+                }),
+                MockOutcome::AlreadyTerminal => Err(RunSubmissionError::AlreadyTerminal {
+                    run_id: run_id.clone(),
+                    status: paladin_core::platform::container::run::RunStatus::Completed,
+                }),
                 _ => Ok(paladin_ports::input::run_submission_port::CancelOutcome {
                     run_id: run_id.clone(),
                     status: paladin_core::platform::container::run::RunStatus::Running,
                     was_local: false,
+                }),
+            }
+        }
+
+        async fn fork(
+            &self,
+            request: paladin_ports::input::run_submission_port::ForkRun,
+        ) -> Result<paladin_ports::input::run_submission_port::RunAccepted, RunSubmissionError>
+        {
+            match self.outcome {
+                MockOutcome::NotWired => Err(RunSubmissionError::NotWired),
+                _ => Ok(paladin_ports::input::run_submission_port::RunAccepted {
+                    run_id: RunId::new_v7(),
+                    thread_id: request.thread_id,
                 }),
             }
         }
@@ -920,7 +1401,13 @@ mod tests {
     fn run_openapi_router_contains_run_paths() {
         let state = RunApiState::new();
         let (_router, api) = run_openapi_router(state).split_for_parts();
-        for expected in ["/runs", "/runs/{run_id}", "/runs/{run_id}/stream"] {
+        for expected in [
+            "/runs",
+            "/runs/{run_id}",
+            "/runs/{run_id}/stream",
+            "/runs/{run_id}/cancel",
+            "/runs/{run_id}/webhook-deliveries",
+        ] {
             assert!(
                 api.paths.paths.contains_key(expected),
                 "missing path {expected}: {:?}",
@@ -1061,5 +1548,486 @@ mod tests {
     fn run_stream_heartbeat_interval_is_15_seconds() {
         assert_eq!(RUN_STREAM_HEARTBEAT_SECS, 15);
         let _ = KeepAlive::new().interval(Duration::from_secs(RUN_STREAM_HEARTBEAT_SECS));
+    }
+
+    // --- list_runs (D-47) -------------------------------------------------
+
+    #[tokio::test]
+    async fn list_runs_returns_501_when_unwired() {
+        let state = RunApiState::new();
+        let app = run_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/runs")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn list_runs_empty_is_200_with_empty_items_and_null_cursor() {
+        let repository = Arc::new(MockRepository::default());
+        let state = RunApiState::new().with_repository(repository);
+        let (status, Json(body)) = list_runs(
+            State(state),
+            tester_principal(),
+            axum::extract::Query(RunListQuery {
+                thread_id: None,
+                assistant_id: None,
+                status: None,
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["items"].as_array().unwrap().len(), 0);
+        assert!(body["next_cursor"].is_null());
+    }
+
+    #[tokio::test]
+    async fn list_runs_rejects_limit_zero_and_101() {
+        let repository = Arc::new(MockRepository::default());
+        for bad_limit in [Some(0), Some(101)] {
+            let state = RunApiState::new().with_repository(repository.clone());
+            let err = list_runs(
+                State(state),
+                tester_principal(),
+                axum::extract::Query(RunListQuery {
+                    thread_id: None,
+                    assistant_id: None,
+                    status: None,
+                    limit: bad_limit,
+                    cursor: None,
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
+    async fn list_runs_rejects_malformed_cursor_as_400_never_500() {
+        let repository = Arc::new(MockRepository::default());
+        let state = RunApiState::new().with_repository(repository);
+        let err = list_runs(
+            State(state),
+            tester_principal(),
+            axum::extract::Query(RunListQuery {
+                thread_id: None,
+                assistant_id: None,
+                status: None,
+                limit: None,
+                cursor: Some("not-a-valid-cursor".to_string()),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(err.to_body()["error"]["code"], "invalid_cursor");
+    }
+
+    #[tokio::test]
+    async fn list_runs_rejects_unknown_status() {
+        let repository = Arc::new(MockRepository::default());
+        let state = RunApiState::new().with_repository(repository);
+        let err = list_runs(
+            State(state),
+            tester_principal(),
+            axum::extract::Query(RunListQuery {
+                thread_id: None,
+                assistant_id: None,
+                status: Some("not-a-status".to_string()),
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // --- cancel_run (D-16, D-46) -------------------------------------------
+
+    #[tokio::test]
+    async fn cancel_run_accepted_returns_202() {
+        let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
+            outcome: MockOutcome::Accepted,
+        }));
+        let app = run_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn cancel_run_already_terminal_returns_409() {
+        let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
+            outcome: MockOutcome::AlreadyTerminal,
+        }));
+        let app = run_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn cancel_run_returns_501_when_unwired() {
+        let state = RunApiState::new();
+        let app = run_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    // --- list_webhook_deliveries (D-40, PLAT-FR-14) ------------------------
+
+    #[derive(Default)]
+    struct MockWebhookDeliveries {
+        items: Mutex<Vec<paladin_core::platform::container::webhook::WebhookDelivery>>,
+    }
+
+    #[async_trait]
+    impl WebhookDeliveryRepositoryPort for MockWebhookDeliveries {
+        async fn enqueue(
+            &self,
+            delivery: paladin_core::platform::container::webhook::WebhookDelivery,
+        ) -> Result<(), paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryError>
+        {
+            self.items.lock().unwrap().push(delivery);
+            Ok(())
+        }
+
+        async fn get(
+            &self,
+            delivery_id: &WebhookDeliveryId,
+        ) -> Result<
+            Option<paladin_core::platform::container::webhook::WebhookDelivery>,
+            paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryError,
+        > {
+            Ok(self
+                .items
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|d| &d.delivery_id == delivery_id)
+                .cloned())
+        }
+
+        async fn claim_due(
+            &self,
+            _now: DateTime<Utc>,
+            _limit: u32,
+        ) -> Result<
+            Vec<paladin_core::platform::container::webhook::WebhookDelivery>,
+            paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryError,
+        > {
+            Ok(vec![])
+        }
+
+        async fn record_attempt(
+            &self,
+            _delivery_id: &WebhookDeliveryId,
+            _result: paladin_core::platform::container::webhook::WebhookAttemptResult,
+        ) -> Result<(), paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryError>
+        {
+            Ok(())
+        }
+
+        async fn list_for_run(
+            &self,
+            run_id: &RunId,
+            limit: u32,
+            _cursor: Option<WebhookDeliveryId>,
+        ) -> Result<
+            paladin_ports::output::webhook_delivery_port::WebhookDeliveryPage,
+            paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryError,
+        > {
+            let items: Vec<_> = self
+                .items
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|d| &d.run_id == run_id)
+                .take(limit as usize)
+                .cloned()
+                .collect();
+            Ok(
+                paladin_ports::output::webhook_delivery_port::WebhookDeliveryPage {
+                    items,
+                    next_cursor: None,
+                },
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn list_webhook_deliveries_returns_501_when_unwired() {
+        let state = RunApiState::new();
+        let app = run_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/runs/{}/webhook-deliveries", RunId::new_v7()))
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn list_webhook_deliveries_empty_is_200_with_empty_items() {
+        let run_id = RunId::new_v7();
+        let state =
+            RunApiState::new().with_webhook_deliveries(Arc::new(MockWebhookDeliveries::default()));
+        let (status, Json(body)) = list_webhook_deliveries(
+            State(state),
+            tester_principal(),
+            Path(run_id.to_string()),
+            axum::extract::Query(PageQuery {
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["items"].as_array().unwrap().len(), 0);
+        assert!(body["next_cursor"].is_null());
+    }
+
+    #[tokio::test]
+    async fn list_webhook_deliveries_no_secret_in_body() {
+        let run_id = RunId::new_v7();
+        let repo = Arc::new(MockWebhookDeliveries::default());
+        let delivery = paladin_core::platform::container::webhook::WebhookDelivery::new(
+            WebhookDeliveryId::new_v7(),
+            run_id.clone(),
+            ThreadId::new("t-wh").unwrap(),
+            RunEventKind::Completed,
+            "https://example.com/hook",
+            r#"{"run_id":"x"}"#,
+            Utc::now(),
+        );
+        repo.items.lock().unwrap().push(delivery);
+        let state = RunApiState::new().with_webhook_deliveries(repo);
+        let (status, Json(body)) = list_webhook_deliveries(
+            State(state),
+            tester_principal(),
+            Path(run_id.to_string()),
+            axum::extract::Query(PageQuery {
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(status, StatusCode::OK);
+        let items = body["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(!body.to_string().to_lowercase().contains("secret"));
+    }
+
+    // --- run_controller_auth: auth/scope tests (D-46, T-27-15-01) ---------
+    //
+    // Named module (not just a flat function set) so `cargo test
+    // run_controller_auth` selects every test below by substring match on
+    // the fully-qualified test path.
+    mod run_controller_auth {
+        use super::*;
+
+        fn authed_state(auth: crate::agent_auth::AgentAuthConfig) -> RunApiState {
+            RunApiState::new()
+                .with_submission(Arc::new(MockSubmissionPort {
+                    outcome: MockOutcome::Accepted,
+                }))
+                .with_auth(auth)
+        }
+
+        fn api_key_auth(
+            key: &str,
+            role: paladin_core::platform::container::user::UserRole,
+        ) -> crate::agent_auth::AgentAuthConfig {
+            let mut api_keys = HashMap::new();
+            api_keys.insert(
+                key.to_string(),
+                Principal {
+                    id: "svc".to_string(),
+                    role,
+                },
+            );
+            crate::agent_auth::AgentAuthConfig {
+                enabled: true,
+                api_keys,
+                token_verifier: None,
+            }
+        }
+
+        #[tokio::test]
+        async fn unauthenticated_request_is_401() {
+            let auth = api_key_auth(
+                "sk-abc",
+                paladin_core::platform::container::user::UserRole::User,
+            );
+            let app = run_router(authed_state(auth));
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&serde_json::json!({ "assistant_id": "a1" }))
+                                .unwrap(),
+                        ))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+
+        #[tokio::test]
+        async fn submit_forbidden_role_is_403() {
+            let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
+                outcome: MockOutcome::Forbidden,
+            }));
+            let app = run_router(state);
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&serde_json::json!({ "assistant_id": "a1" }))
+                                .unwrap(),
+                        ))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+
+        #[tokio::test]
+        async fn cancel_forbidden_role_is_403() {
+            let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
+                outcome: MockOutcome::Forbidden,
+            }));
+            let app = run_router(state);
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+
+        /// D-46: registry-shaped mutations (assistant create) require
+        /// admin, even though they are merged onto the SAME router this
+        /// module tests -- proves the two-tier convention actually holds
+        /// at the router level, not just per-file.
+        #[tokio::test]
+        async fn admin_only_assistant_route_is_403_for_non_admin() {
+            let auth = api_key_auth(
+                "user-key",
+                paladin_core::platform::container::user::UserRole::User,
+            );
+            let app = run_router(RunApiState::new().with_auth(auth));
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/assistants")
+                        .header("x-api-key", "user-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&serde_json::json!({
+                                "assistant_id": "a1",
+                                "definition": { "kind": "workflow", "body": {} }
+                            }))
+                            .unwrap(),
+                        ))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+
+        /// The existing rate limiter (`with_http_layers`) proven on the new
+        /// `/v1/runs` router exactly as it already is on `/v1/agents/*`
+        /// (D-44): a 2 req/s, burst-1 governor answers the second
+        /// immediate request with `429`.
+        #[tokio::test]
+        async fn rate_limited_request_is_429() {
+            let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
+                outcome: MockOutcome::Accepted,
+            }));
+            let inner = run_router(state);
+            let config = crate::http_layers::RateLimitConfig {
+                enabled: true,
+                per_second: 2,
+                burst: 1,
+            };
+            let app = crate::http_layers::apply_rate_limit(inner, &config);
+
+            let make_req = || {
+                Request::builder()
+                    .uri(format!("/v1/runs/{}", RunId::new_v7()))
+                    .header("x-real-ip", "9.9.9.9")
+                    .body(Body::empty())
+                    .unwrap()
+            };
+
+            let first = app.clone().oneshot(make_req()).await.unwrap();
+            assert_eq!(first.status(), StatusCode::NOT_IMPLEMENTED); // unwired repo, still admitted
+
+            let second = app.clone().oneshot(make_req()).await.unwrap();
+            let third = app.oneshot(make_req()).await.unwrap();
+            assert!(
+                second.status() == StatusCode::TOO_MANY_REQUESTS
+                    || third.status() == StatusCode::TOO_MANY_REQUESTS,
+                "expected a 429 within the burst window"
+            );
+        }
     }
 }

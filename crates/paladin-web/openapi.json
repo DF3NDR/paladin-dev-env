@@ -1284,6 +1284,113 @@
       }
     },
     "/v1/runs": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`GET /runs` -- paginated list, filterable by `thread_id`/`assistant_id`/\n`status` (D-47). Authenticated, any role.",
+        "description": "Ordered `(submitted_at DESC, run_id DESC)`; a cursor walk gives a stable\nordering for rows that already existed when the first page was fetched,\nbut is NOT a point-in-time snapshot -- a row inserted after the first\npage was read may be omitted from the walk (D-47 backstop). An empty\nresult set is `200 { items: [], next_cursor: null }`, never `404`.\n\nReturns:\n- `200 OK` with [`RunListResponse`] on success;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, an unparseable\n  `cursor`, an invalid `thread_id`, or an unknown `status`;\n- `501 Not Implemented` if no run store backend is configured.",
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "query",
+            "description": "Restrict to a single thread",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "assistant_id",
+            "in": "query",
+            "description": "Restrict to a single assistant",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Restrict to a single status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return, 1..=100 (default 20)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: rows inserted after the first page was fetched may be omitted",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of runs; { items: [], next_cursor: null } when empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit, cursor, thread_id, or status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run store backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "runs"
@@ -1313,7 +1420,7 @@
             }
           },
           "400": {
-            "description": "Invalid thread id",
+            "description": "Invalid thread id, or webhook_url_rejected (write-time SSRF guard, D-42)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1324,6 +1431,16 @@
           },
           "401": {
             "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not permitted for this assistant (allowed_roles, D-46)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1454,6 +1571,107 @@
         ]
       }
     },
+    "/v1/runs/{run_id}/cancel": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`POST /runs/{run_id}/cancel` -- idempotently request cancellation\n(D-16, D-46).",
+        "description": "Invocation-shaped: any authenticated principal, subject to the run's\nown assistant `allowed_roles`, checked inside\n[`RunSubmissionPort::cancel`] (`paladin-web` has no visibility into\n`allowed_roles` itself, ADR-0031).\n\nReturns:\n- `202 Accepted` with [`CancelRunResponse`] on a non-terminal run\n  (idempotent -- a second call also answers `202`);\n- `400 Bad Request` for a malformed run id;\n- `403 Forbidden` if the principal's role is not permitted;\n- `404 Not Found` for an unknown run;\n- `409 Conflict` if the run is already terminal;\n- `501 Not Implemented` if no run submission backend is configured.",
+        "operationId": "cancel_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancel accepted (idempotent on a non-terminal run)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid run id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not permitted for this run's assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run is already terminal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run submission backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/runs/{run_id}/stream": {
       "get": {
         "tags": [
@@ -1512,6 +1730,97 @@
           },
           "501": {
             "description": "No run event stream backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/webhook-deliveries": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`GET /runs/{run_id}/webhook-deliveries` -- paginated delivery attempts,\nnewest-first (D-40, PLAT-FR-14). Authenticated, any role.",
+        "description": "Returns:\n- `200 OK` with [`WebhookDeliveryListResponse`] on success;\n- `400 Bad Request` for an invalid run id, `limit`, or `cursor`;\n- `501 Not Implemented` if no webhook delivery backend is configured.",
+        "operationId": "list_webhook_deliveries",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return, 1..=100 (default 20)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: deliveries recorded after the first page was fetched may be omitted",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of delivery attempts, newest-first; { items: [], next_cursor: null } when empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDeliveryListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid run id, limit, or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No webhook delivery backend configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -2497,6 +2806,29 @@
           }
         }
       },
+      "CancelRunResponse": {
+        "type": "object",
+        "description": "Response body for a successful `POST /runs/{run_id}/cancel`.",
+        "required": [
+          "run_id",
+          "status",
+          "was_local"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "description": "The cancelled run's identity."
+          },
+          "status": {
+            "type": "string",
+            "description": "The run's status immediately after the durable cancel flag was\nwritten -- always a non-terminal status."
+          },
+          "was_local": {
+            "type": "boolean",
+            "description": "Whether THIS process instance held an in-process cancellation\nsignal for the run and fired it directly (a same-instance fast\npath)."
+          }
+        }
+      },
       "CreateAssistantRequest": {
         "type": "object",
         "description": "Request body for `POST /assistants`.",
@@ -2971,6 +3303,29 @@
           }
         }
       },
+      "RunListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /runs`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunResponse"
+            },
+            "description": "The page of runs, ordered `(submitted_at DESC, run_id DESC)`. A\ncursor walk gives a stable ordering for rows that already existed\nwhen the first page was fetched, but is NOT a point-in-time\nsnapshot: a row inserted after the first page may be omitted from\nthe walk (D-47 backstop)."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, `None` on the last page."
+          }
+        }
+      },
       "RunResponse": {
         "type": "object",
         "description": "Response body for `GET /runs/{run_id}`.",
@@ -2980,7 +3335,8 @@
           "assistant_id",
           "version",
           "status",
-          "submitted_at"
+          "submitted_at",
+          "pending_responses"
         ],
         "properties": {
           "assistant_id": {
@@ -3001,6 +3357,11 @@
             ],
             "format": "date-time",
             "description": "When this run reached a terminal status, if it has."
+          },
+          "pending_responses": {
+            "type": "integer",
+            "description": "How many responses are currently parked on this run awaiting worker\nconsumption -- the COUNT only, never the response values themselves.",
+            "minimum": 0
           },
           "run_id": {
             "type": "string",
@@ -3032,6 +3393,72 @@
             "format": "int32",
             "description": "The resolved, frozen assistant version.",
             "minimum": 0
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunWebhookDto",
+                "description": "The webhook delivery target, if any -- `secret` redacted to `\"***\"`\n(mirrors `schedule_controller::WebhookResponseDto`'s identical\nprecedent; the raw signing secret is never echoed back)."
+              }
+            ]
+          }
+        }
+      },
+      "RunWebhookDto": {
+        "type": "object",
+        "description": "Wire shape of a webhook delivery target on read -- the SAME shape as\n[`RunWebhookRequestDto`], except `secret` is redacted (T-27-15-04).",
+        "required": [
+          "url",
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The lifecycle events this webhook subscribes to."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"***\"` when a secret is set on the run, `null` otherwise -- the raw\nsecret is never echoed back."
+          },
+          "url": {
+            "type": "string",
+            "description": "The delivery URL."
+          }
+        }
+      },
+      "RunWebhookRequestDto": {
+        "type": "object",
+        "description": "Wire shape of a webhook delivery target on write (`POST /runs`, `POST\n/threads/{id}/fork`), mirroring `schedule_controller::WebhookRequestDto`.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The lifecycle events this webhook subscribes to (`\"awaiting_input\"`,\n`\"completed\"`, `\"failed\"`, `\"halted\"`, `\"cancelled\"`)."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The HMAC signing secret, if any."
+          },
+          "url": {
+            "type": "string",
+            "description": "The delivery URL -- validated by the write-time SSRF guard (D-42)\nbefore the run is ever persisted."
           }
         }
       },
@@ -3191,6 +3618,17 @@
             "format": "int32",
             "description": "A specific version, or omitted to resolve `latest` at submit time.",
             "minimum": 0
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunWebhookRequestDto",
+                "description": "An optional webhook delivery target for this run's lifecycle events\n(D-40) -- validated by the write-time SSRF guard (D-42) before the\nrun is ever persisted."
+              }
+            ]
           }
         }
       },
@@ -3312,6 +3750,87 @@
           "waypoint_id": {
             "type": "string",
             "description": "The summarized waypoint's identity."
+          }
+        }
+      },
+      "WebhookDeliveryDto": {
+        "type": "object",
+        "description": "Wire projection of one attempt of a\n[`paladin_core::platform::container::webhook::WebhookDelivery`].",
+        "required": [
+          "delivery_id",
+          "event",
+          "attempt",
+          "status",
+          "next_attempt_at",
+          "created_at"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many attempts have been made so far.",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this delivery was enqueued."
+          },
+          "delivery_id": {
+            "type": "string",
+            "description": "This delivery's identity."
+          },
+          "event": {
+            "type": "string",
+            "description": "Which lifecycle event this delivery carries."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A redacted, bounded diagnostic of the most recent attempt's\nfailure, if any -- never the payload or a signing secret."
+          },
+          "last_response_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status the most recent attempt observed, if any.",
+            "minimum": 0
+          },
+          "next_attempt_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this delivery is next eligible to be claimed, if not yet\nterminal."
+          },
+          "status": {
+            "type": "string",
+            "description": "This delivery's current status (`\"pending\"`, `\"in_flight\"`,\n`\"delivered\"`, `\"retrying\"`, `\"dead\"`)."
+          }
+        }
+      },
+      "WebhookDeliveryListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /runs/{run_id}/webhook-deliveries`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookDeliveryDto"
+            },
+            "description": "The page of delivery attempts, newest-first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, `None` on the last page."
           }
         }
       },

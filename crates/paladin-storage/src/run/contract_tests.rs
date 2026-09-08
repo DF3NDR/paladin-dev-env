@@ -285,9 +285,14 @@ pub async fn insert_rejects_second_active_run_then_succeeds_after_terminal(
         // Retire the first run to a terminal status (every active status has
         // a legal edge to `Cancelled`, per `RunStatus::try_transition`),
         // then confirm the thread is no longer busy.
-        port.update_status(&first.run_id, active, RunStatus::Cancelled, contract_timestamp())
-            .await
-            .unwrap();
+        port.update_status(
+            &first.run_id,
+            active,
+            RunStatus::Cancelled,
+            contract_timestamp(),
+        )
+        .await
+        .unwrap();
 
         let third = sample_run(&thread, "assistant-a", contract_timestamp());
         port.insert(&third).await.unwrap();
@@ -664,7 +669,11 @@ pub async fn insert_with_latest_resolves_current_latest_and_freezes_it(
 /// `UnknownAssistant`.
 pub async fn insert_with_latest_unknown_assistant_fails(run_port: &dyn RunRepositoryPort) {
     let thread = ThreadId::new("contract-run-insert-with-latest-unknown").unwrap();
-    let run = sample_run(&thread, "definitely-unknown-assistant", contract_timestamp());
+    let run = sample_run(
+        &thread,
+        "definitely-unknown-assistant",
+        contract_timestamp(),
+    );
     let err = run_port.insert_with_latest(&run).await.unwrap_err();
     assert!(matches!(err, RunRepositoryError::UnknownAssistant { .. }));
 }

@@ -279,18 +279,28 @@ additionally requires an admin-role credential:
 | Route | Behavior |
 |---|---|
 | `GET /v1/threads/{id}/state` | The thread's latest status, plus outstanding `parleys`/`responses` when suspended |
-| `POST /v1/threads/{id}/resume` | Submits `{ "responses": [{ "parley_id", "value", "responded_by" }] }`; returns **`202 Accepted { thread_id, state_url }`** immediately; an authenticated caller without the admin role gets `403` |
+| `POST /v1/threads/{id}/resume` | Submits `{ "responses": [{ "parley_id", "value", "responded_by" }] }`; returns **`202 Accepted { thread_id, state_url, run_id }`** immediately; an authenticated caller without the admin role gets `403` |
 | `GET /v1/threads/{id}/history` | Paginated Chronicle history: `?limit=20&cursor=...` (limit ≤ 100), `{ items, next_cursor }` |
 
 `POST .../resume` never holds the connection open: it validates synchronously (typed
 400/404/409 errors on rejection, nothing persisted) and, only for a valid **and complete**
-submission, spawns the actual engine continuation as a background task registered with the
-process's `ShutdownCoordinator`, returning `202` immediately. A client polls `GET .../state` for
-the outcome. Two distinct `409` conflict codes share the same HTTP status:
+submission, either re-enqueues the same `run_id` onto the durable run server (Phase 27's Platform
+API, when a run row exists for the thread) or, for a pre-run-server thread with no run row, spawns
+the actual engine continuation as a background task registered with the process's
+`ShutdownCoordinator` (`run_id: null` on the response in that fallback case) — either way, `202`
+returns immediately. A client polls `GET .../state`, or `GET /v1/runs/{run_id}` when `run_id` is
+present, for the outcome. Two distinct `409` conflict codes share the same HTTP status:
 `thread_not_awaiting_input` (the thread is not suspended) and `graph_not_registered` (the thread's
 graph fingerprint has no `WarGraph` registered in this process). Every route answers `501
 not_implemented`, naming the config key to set, when no waypoint backend (`APP_WAYPOINT_STORE_
 BACKEND=sqlite|postgres`) is wired.
+
+> **The full run lifecycle — submission, cancellation, streaming, assistants, schedules and
+> webhooks — is documented separately.** This page covers the thread-level pause/resume/history
+> surface; see
+> [Platform API — Runs, Threads, Assistants, Schedules, Webhooks](../api-reference/platform-api.md)
+> for `POST /runs`, `GET /runs/{run_id}/stream`, and everything built on top of the resume
+> mechanism this page describes.
 
 > **Never template a secret or credential into a Gate's payload.** `GET /v1/threads/{id}/state`
 > returns that payload verbatim to any authenticated caller. A `payload_template` is

@@ -48,6 +48,38 @@ queue:
   max_retries: 3
 ```
 
+## Run server: producer API + worker replicas
+
+The Platform API (v0.10, [`docs/src/api-reference/platform-api.md`](../api-reference/platform-api.md))
+is this same queue/worker shape applied to `POST /runs`: `paladin-server`'s API replicas are the
+producer — `POST /runs` performs one repository insert and one queue enqueue, with no engine work
+on the request path — and a separate `paladin-worker` Deployment is the consumer, dequeuing and
+driving `WarEngine` through `RunWorkerPool`.
+[`k8s/server/worker-deployment.yaml`](https://github.com/DF3NDR/paladin-dev-env/blob/main/k8s/server/worker-deployment.yaml)
+is a worked example: same image as the API Deployment, `APP_RUN_STORE_BACKEND=postgres`,
+`APP_RUN_QUEUE_BACKEND=redis` and `APP_RUN_WORKER_CONCURRENCY=4` set so its pods only consume
+work — see [`k8s/README.md`](https://github.com/DF3NDR/paladin-dev-env/tree/main/k8s#worker-replicas-platform-api-v010)
+for the manifest and the Secret it needs.
+
+A few properties of this split are worth stating plainly rather than assuming:
+
+- **The API replicas and the worker replicas share the SAME run store and the SAME Redis queue.**
+  There is exactly one source of truth for a run's status (the store) and exactly one dispatch
+  path onto a worker (the queue) — an API pod answering `GET /runs/{id}` and a worker pod driving
+  that same run are reading/writing the identical row, never a per-pod copy.
+- **Cancellation is cross-instance by construction.** `POST /runs/{id}/cancel` writes a durable
+  flag through the shared repository first; a worker on ANY instance — not necessarily the one
+  that happens to be running that thread — observes the flag at the next superstep boundary via a
+  `CancellationProbe`. Scaling worker replicas does not weaken cancellation.
+- **The in-process auth token store is still single-replica-scoped (ADR-0041), and a worker/API
+  split does not change that.** `paladin-worker` pods never serve the `/v1` auth-gated routes at
+  all, so they add no new exposure to this limitation — it is entirely a property of however many
+  `paladin-server` API replicas are running `http.auth.bearer_token.enabled: true` at once. Run
+  ONE API replica if you need that credential path, or terminate auth upstream (a gateway/ingress
+  issuing its own tokens) if you need more than one — the static-API-key path
+  (`http.auth.api_keys`, the shipped default) has no such limitation, since the keys are
+  byte-identical in every pod.
+
 ## See also
 
 - Standing up Redis and the adapter in detail —

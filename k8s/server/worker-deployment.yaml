@@ -1,0 +1,147 @@
+# Worker-replica Deployment for the Platform API run server (PRD 06 §6; PLAT-02).
+#
+# Same image as k8s/server/deployment.yaml (the paladin-server binary), different env: this
+# Deployment's pods drive RunWorkerPool -- dequeuing from the same durable queue the API
+# replicas (deployment.yaml) enqueue onto, and driving the same durable run store both sets of
+# pods share. No separate Service is needed: worker pods consume work, they do not serve
+# inbound traffic; liveness/readiness probes hit the pod IP directly via the kubelet, with no
+# Service resource routing to them.
+#
+# Every env var below is one of the config structs `src/config/{run_store,run_queue,
+# run_worker,schedules}.rs` (Phase 27, PLAT-01/02/05) reads via `APP_`-prefixed env overrides --
+# see docs/src/api-reference/platform-api.md#configuration for the full table and defaults.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paladin-worker
+  namespace: paladin
+  labels:
+    app: paladin-worker
+    version: v0.10.0
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: paladin-worker
+  template:
+    metadata:
+      labels:
+        app: paladin-worker
+        version: v0.10.0
+    spec:
+      # At least 2x APP_RUN_WORKER_LEASE_SECONDS is NOT the relevant ratio here -- lease expiry
+      # is what lets a SECOND worker redeliver a run if this one is killed outright. This value
+      # instead mirrors k8s/server/deployment.yaml's own rule: at least 2x the configured
+      # APP_ENGINE_SHUTDOWN_GRACE_SECS (default 30s, src/config/engine.rs) so the kubelet's
+      # SIGKILL deadline never lands while a worker is still inside its own graceful-shutdown
+      # drain window (a worker finishes its current superstep, lets the run persist, then exits
+      # -- draining, not dropping; PLAT-02 D-13). If you raise APP_ENGINE_SHUTDOWN_GRACE_SECS,
+      # raise this to at least 2x that new value too.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: paladin-worker
+          image: paladin-server:0.10.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PALADIN_CONFIG
+              value: /etc/paladin/config.yml
+
+            # --- Durable run store (PLAT-01, D-03) -- shared with the API replicas in
+            # deployment.yaml. RunStoreBackend::Postgres never carries the connection string
+            # inline (src/config/run_store.rs); only the NAME of the env var that holds it does.
+            - name: APP_RUN_STORE_BACKEND
+              value: "postgres"
+            - name: APP_RUN_STORE_URL_ENV
+              value: "PALADIN_RUN_DB_URL"
+            - name: PALADIN_RUN_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: paladin-secrets
+                  key: run-db-url
+
+            # --- Durable run queue (PLAT-02, D-06..D-08) -- shared with the API replicas.
+            - name: APP_RUN_QUEUE_BACKEND
+              value: "redis"
+            - name: APP_RUN_QUEUE_URL_ENV
+              value: "PALADIN_REDIS_URL"
+            - name: PALADIN_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: paladin-secrets
+                  key: redis-url
+
+            # --- Worker pool tuning (PLAT-02, D-10) -- each of this Deployment's replicas runs
+            # its own pool of this size; the heartbeat interval is DERIVED as lease_seconds / 4,
+            # there is no separate heartbeat knob (src/config/run_worker.rs).
+            - name: APP_RUN_WORKER_CONCURRENCY
+              value: "4"
+            - name: APP_RUN_WORKER_LEASE_SECONDS
+              value: "60"
+
+            # --- Schedules (PLAT-05, D-36..D-39) -- deliberately set on THIS Deployment only,
+            # not duplicated onto deployment.yaml's API replicas: ScheduleService::tick_once
+            # claims a tick via a single conditional UPDATE before it ever submits a run
+            # (claim_tick, D-37), so every one of this Deployment's `replicas: 2` pods racing the
+            # same tick is safe by construction -- exactly one wins, the others observe zero rows
+            # affected and skip. Running the tick loop on one ReplicaSet keeps its scheduling
+            # timing in one place rather than spread across both the API and worker deployments.
+            - name: APP_SCHEDULES_ENABLED
+              value: "true"
+
+            # Provider credentials, same shape as deployment.yaml -- a workflow assistant's
+            # Paladin nodes still need an LLM provider to execute.
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: paladin-server-secrets
+                  key: openai-api-key
+          volumeMounts:
+            - name: config
+              mountPath: /etc/paladin
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "1Gi"
+      volumes:
+        - name: config
+          configMap:
+            name: paladin-server-config

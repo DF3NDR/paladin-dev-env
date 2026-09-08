@@ -28,6 +28,32 @@ kubectl apply -f k8s/server/secret.yaml -f k8s/server/
 > single replica — that store is in-process and per-pod, so a token issued by one replica
 > does not verify on another. See ADR-0041.
 
+### Worker replicas (Platform API, v0.10)
+
+- [`server/worker-deployment.yaml`](server/worker-deployment.yaml) — a `paladin-worker`
+  Deployment (`replicas: 2`) running the SAME image as `server/deployment.yaml`, with `APP_RUN_
+  STORE_BACKEND=postgres`, `APP_RUN_QUEUE_BACKEND=redis` and `APP_RUN_WORKER_CONCURRENCY=4` set
+  so its pods drive `RunWorkerPool` against the durable run store and queue instead of serving
+  API traffic. No separate Service is needed — worker pods only consume work.
+
+```bash
+# The worker Deployment needs a run-db-url and redis-url key on a `paladin-secrets` Secret,
+# in addition to the paladin-server-secrets the API replicas already use for provider keys:
+kubectl -n paladin create secret generic paladin-secrets \
+  --from-literal=run-db-url=postgres://paladin:CHANGE_ME@postgres:5432/paladin_runs \
+  --from-literal=redis-url=redis://redis:6379
+kubectl apply -f k8s/server/worker-deployment.yaml
+```
+
+> **Auth token store, revisited for a worker/API split.** Running `paladin-worker` pods
+> alongside multiple `paladin-server` API replicas does not change ADR-0041's scope: the
+> in-process bearer-token store is still per-pod. The worker Deployment above never serves
+> the `/v1` auth-gated routes at all (it has no reason to — it only dequeues), so it carries
+> no new exposure; the existing guidance for `paladin-server` (static API keys are safe to
+> scale, `bearer_token.enabled: true` is not, past one replica) is unchanged. See
+> [Queue / Worker (Distributed)](../docs/src/deployment-topologies/queue-worker.md) for the
+> full producer/worker-replica topology writeup.
+
 ## Quick Start
 
 ### Prerequisites

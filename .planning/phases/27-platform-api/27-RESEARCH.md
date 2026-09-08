@@ -283,6 +283,7 @@ schemars`).
 | `ipnet` | crates.io | published 2017-08-14 (~9 yrs) | 10,685,439/wk | github.com/krisprice/ipnet | OK | Approved (but likely unneeded — see Standard Stack) |
 | `jsonschema` | crates.io | published 2020-03-29 (~6 yrs) | 1,571,639/wk | github.com/Stranger6667/jsonschema | OK | Approved |
 | `schemars` | crates.io | published 2019-08-08 (~7 yrs) | 12,350,808/wk | github.com/GREsau/schemars | OK | Approved (already a direct dependency) |
+| `chrono-tz` | crates.io | published 2016-10-08 (~10 yrs) | 2,584,730/wk | github.com/chronotope/chrono-tz | OK | Approved — added at plan time (2026-09-08) because D-38's optional IANA timezone needs it and it is **not** in `Cargo.lock` (0 occurrences); genuinely new dependency, `cargo msrv verify` at 1.88 required (plan 27-11) |
 
 **Packages removed due to [SLOP] verdict:** none.
 **Packages flagged as suspicious [SUS]:** none. All five packages are long-established,

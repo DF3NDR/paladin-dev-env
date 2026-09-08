@@ -586,7 +586,54 @@ Plans:
   4. Assistants are append-only immutable versions (no PUT, ever) with `latest` frozen at submit time, and `WarGraphDoc` compiles through a registry-resolving `compile()` with a restart-stable fingerprint round-trip (PLAT-04)
   5. Cron schedules survive restart without duplicate or missed-then-double firing; HMAC-signed webhook delivery retries bounded on 5xx/timeout with an SSRF guard rejecting non-http(s)/loopback/link-local/private/metadata targets; and every new endpoint carries existing auth, rate limiting, scopes and pagination, with `openapi.json` regenerated and Python/TypeScript clients generated and smoke-tested in CI (PLAT-05, PLAT-06)
 
-**Plans**: TBD
+**Plans:** 18 plans
+
+Plans:
+
+**Wave 1**
+
+- [ ] 27-01-PLAN.md — Tracer: core `Run`/status machine (D-01 checkpoint), ports, InMemory adapters, submission + worker, `POST /runs` → `Completed` end-to-end (PLAT-01, PLAT-02)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 27-02-PLAN.md — `runs` migrations, run-repository contract suite, SQLite + Postgres adapters, partial unique index (PLAT-01, PLAT-02)
+- [ ] 27-03-PLAN.md — `RunQueuePort` contract suite, Redis ZSET+Lua lease adapter, `redis-queue` CI job, generalised Postgres job (PLAT-02)
+- [ ] 27-04-PLAN.md — Worker pool hardening: heartbeat, resume-not-restart dispatch, drain, kill-mid-run twin of acceptance 2 (PLAT-02, PLAT-03)
+- [ ] 27-05-PLAN.md — `WarGraphDoc` + `compile()`, schemars golden schema, fixture corpus, two-process fingerprint proof (PLAT-04)
+- [ ] 27-06-PLAN.md — Seven X-09 config structs, all off/today by default (PLAT-01…05)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 27-07-PLAN.md — `CancellationProbe` engine seam, debounced DB probe, persisted-flag-first cancel, cross-instance test (PLAT-02)
+- [ ] 27-08-PLAN.md — Resume re-enqueues the same `run_id`; `ResumeAccepted`/`ResumeAcceptedResponse.run_id`; §9.2/§9.6 (PLAT-03)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 27-09-PLAN.md — Assistant storage: core types (D-28/D-29 checkpoint), update-less port, migrations, three adapters, freeze-at-submit (PLAT-04)
+- [ ] 27-10-PLAN.md — Run streaming: `RunEventBus`, TraceSink adapter, degraded mode, SSE route with 15 s keep-alive (PLAT-03)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 27-11-PLAN.md — Schedules storage + `ScheduleService`: croner/chrono-tz, conditional tick claim, restart/race proofs under a paused clock (PLAT-05)
+- [ ] 27-12-PLAN.md — Assistant service: compile-is-validation, stored resolver, `DocGraphRegistry`, assistant routes with synthetic code entries (PLAT-04)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 27-13-PLAN.md — Webhooks: delivery table/adapters, SSRF guard (write + send), HMAC over exact bytes, no-redirect client, bounded-retry drain (PLAT-05)
+- [ ] 27-14-PLAN.md — `ScheduleAdminPort` + `/v1/schedules` routes (PLAT-05, PLAT-06)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 27-15-PLAN.md — HTTP surface completion: runs list/cancel/deliveries, threads list/get/fork/delete, scopes, pagination, 429 proof, ten-concurrent-submits (PLAT-06, PLAT-02)
+- [ ] 27-16-PLAN.md — mdBook platform-api page, queue/worker + k8s worker-replica example, parley page links (PLAT-05, PLAT-06)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 27-17-PLAN.md — `paladin-server` wiring from config, fail-closed feature gates, services registered with the coordinator, §9.5 (all)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 27-18-PLAN.md — Acceptance-1 E2E test, `sdk-clients` CI job, phase-wide OpenAPI review, §9.6, CI evidence checkpoint (all)
 
 ### Phase 28: Observability & Tooling
 

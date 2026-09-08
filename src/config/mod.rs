@@ -22,6 +22,14 @@ pub mod notifications;
 #[allow(missing_docs)]
 pub mod queue;
 #[allow(missing_docs)]
+pub mod run_queue;
+#[allow(missing_docs)]
+pub mod run_store;
+#[allow(missing_docs)]
+pub mod run_stream;
+#[allow(missing_docs)]
+pub mod run_worker;
+#[allow(missing_docs)]
 pub mod scheduler;
 #[allow(missing_docs)]
 pub mod settings;
@@ -56,6 +64,10 @@ pub use crate::config::node_cache::{NodeCacheBackend, NodeCacheConfig};
 #[cfg(feature = "notifications")]
 pub use crate::config::notifications::NotificationConfig;
 pub use crate::config::queue::QueueConfig;
+pub use crate::config::run_queue::{RunQueueBackend, RunQueueConfig};
+pub use crate::config::run_store::{RunStoreBackend, RunStoreConfig};
+pub use crate::config::run_stream::RunStreamConfig;
+pub use crate::config::run_worker::RunWorkerConfig;
 pub use crate::config::scheduler::SchedulerConfig;
 pub use crate::config::waypoint_retention::WaypointRetentionConfig;
 pub use crate::config::waypoint_store::{WaypointStoreBackend, WaypointStoreConfig};

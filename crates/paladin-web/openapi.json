@@ -818,6 +818,83 @@
         ]
       }
     },
+    "/v1/runs/{run_id}/stream": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`GET /runs/{run_id}/stream` -- Server-Sent Events stream of a run's\nprogress (PLAT-FR-07, D-24..D-27).",
+        "description": "Returns:\n- `200 OK` `text/event-stream` on success, framing the seven wire events\n  this module's own docs table lists;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` if no run exists with that id;\n- `501 Not Implemented` if no run event stream backend is configured.",
+        "operationId": "stream_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream of the seven frozen wire events (D-25): `superstep` `{ superstep }`, `node_started` `{ superstep, node_id }`, `node_finished` `{ superstep, node_id, outcome }`, `state_delta` `{ superstep, fields, bytes }` (changed field NAMES and a byte-size count only -- never a value), `parley` `{ waypoint_id, parleys }`, `done` `{ status, waypoint_id }` and `error` `{ status, message, waypoint_id }`. Every event also carries `seq`, `at`, `mode` (`live` or `degraded`) and `dropped`. The degraded path (the run executes on another instance, or is already terminal) gives no ordering guarantee relative to the live path and may coalesce supersteps; `done`/`error` are always eventually delivered on both paths. A 15s heartbeat comment line defeats idle proxy timeouts on both paths.",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "400": {
+            "description": "Invalid run id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run event stream backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
     "/v1/threads/{id}/history": {
       "get": {
         "tags": [

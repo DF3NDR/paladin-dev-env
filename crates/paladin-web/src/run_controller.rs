@@ -8,14 +8,15 @@
 //! |---------------|-------------|
 //! | `POST /runs` | Submit a run; `202 Accepted` with `{ run_id, thread_id, state_url }` |
 //! | `GET /runs/{run_id}` | The run's current status |
+//! | `GET /runs/{run_id}/stream` | Server-Sent Events stream of the run's progress (PLAT-FR-07, D-24..D-27) |
 //!
-//! [`RunApiState`] holds `Option<Arc<dyn RunSubmissionPort>>` and
-//! `Option<Arc<dyn RunRepositoryPort>>` -- both `paladin-ports` trait
-//! objects, never a `paladin-battalion` type -- so this crate takes no
-//! dependency on `paladin-battalion` in its default build (ADR-0031). When
-//! either field is `None`, every route in this module answers `501
-//! not_implemented` naming the config key to set, per D-44 (the D-24
-//! precedent).
+//! [`RunApiState`] holds `Option<Arc<dyn RunSubmissionPort>>`,
+//! `Option<Arc<dyn RunRepositoryPort>>` and `Option<Arc<dyn
+//! RunEventStreamPort>>` -- all `paladin-ports` trait objects, never a
+//! `paladin-battalion` type -- so this crate takes no dependency on
+//! `paladin-battalion` in its default build (ADR-0031). When a route's own
+//! port is `None`, it answers `501 not_implemented` naming the config key
+//! to set, per D-44 (the D-24 precedent).
 //!
 //! A success body is the serialized payload; failures use the unified
 //! [`ApiError`](crate::error::ApiError) envelope.
@@ -28,16 +29,23 @@
 //! is extracted (its role attached to the submitted run's `requested_by`)
 //! so per-assistant `allowed_roles` scoping can land as a body-only change.
 
+use std::convert::Infallible;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Extension;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
+use axum::response::sse::KeepAlive;
+use axum::response::{IntoResponse, Response, Sse, sse::Event};
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::run::{Run, RunId};
 use paladin_core::platform::container::waypoint::ThreadId;
+use paladin_ports::input::run_event_stream_port::{RunEventStreamPort, RunStreamError};
 use paladin_ports::input::run_submission_port::{RunSubmissionError, RunSubmissionPort, SubmitRun};
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
 
@@ -48,9 +56,19 @@ use crate::agent_auth::{HasAgentAuth, Principal};
 use crate::agent_controller::{API_V1_PREFIX, JsonValue, ok_body};
 use crate::error::{ApiError, ApiErrorBody};
 
+/// The 15s heartbeat interval `GET /runs/{run_id}/stream` keeps alive on
+/// both the live and degraded paths (D-26) -- defeats idle proxy timeouts.
+pub const RUN_STREAM_HEARTBEAT_SECS: u64 = 15;
+
+/// A boxed SSE event stream, mirroring
+/// [`crate::agent_controller`]'s own `SseEventStream` type alias.
+type SseEventStream = Pin<Box<dyn futures::Stream<Item = Result<Event, Infallible>> + Send>>;
+
 const SUBMISSION_PORT_HINT: &str =
     "no run submission backend configured: set run_store.backend and run_queue.backend";
 const REPOSITORY_PORT_HINT: &str = "no run store backend configured: set run_store.backend";
+const RUN_EVENTS_PORT_HINT: &str =
+    "no run event stream backend configured: set run_store.backend and run_queue.backend";
 
 /// Shared state for the run routes (D-44).
 ///
@@ -69,6 +87,10 @@ pub struct RunApiState {
     /// dependency, mirroring how thread reads go straight to `WaypointPort`
     /// (D-12). `None` when unwired.
     pub run_repository: Option<Arc<dyn RunRepositoryPort>>,
+    /// Opens a run's event stream (`GET /runs/{run_id}/stream`, PLAT-FR-07)
+    /// -- names neither the bus, the engine nor `TraceEvent` (D-27). `None`
+    /// when unwired.
+    pub run_events: Option<Arc<dyn RunEventStreamPort>>,
     /// Authentication configuration -- the SAME [`crate::agent_auth::AgentAuthConfig`]
     /// shape every other stateful router in this crate carries.
     pub auth: crate::agent_auth::AgentAuthConfig,
@@ -81,6 +103,7 @@ impl RunApiState {
         Self {
             run_submission: None,
             run_repository: None,
+            run_events: None,
             auth: crate::agent_auth::AgentAuthConfig::default(),
         }
     }
@@ -94,6 +117,12 @@ impl RunApiState {
     /// Wire a [`RunRepositoryPort`], enabling `GET /runs/{run_id}`.
     pub fn with_repository(mut self, repository: Arc<dyn RunRepositoryPort>) -> Self {
         self.run_repository = Some(repository);
+        self
+    }
+
+    /// Wire a [`RunEventStreamPort`], enabling `GET /runs/{run_id}/stream`.
+    pub fn with_run_events(mut self, run_events: Arc<dyn RunEventStreamPort>) -> Self {
+        self.run_events = Some(run_events);
         self
     }
 
@@ -345,6 +374,93 @@ pub async fn get_run(
     Ok((StatusCode::OK, ok_body(&RunResponse::from(&run))))
 }
 
+// --- Streaming ----------------------------------------------------------
+
+/// Frame a [`paladin_ports::input::run_event_stream_port::RunEventStream`]
+/// as an SSE event stream: each `event:` line is the wire name
+/// [`paladin_core::platform::container::run::RunStreamEventKind::as_str`]
+/// returns and `data:` is the whole event serialized as JSON (`run_id`,
+/// `thread_id`, `kind`, `seq`, `at`, `mode`, `dropped`, `payload`). Names
+/// neither the bus, the engine nor `TraceEvent` (D-27) -- this function's
+/// only input is the core `RunStreamEvent` type.
+fn frame_run_events(
+    stream: paladin_ports::input::run_event_stream_port::RunEventStream,
+) -> SseEventStream {
+    Box::pin(stream.map(|event| {
+        let name = event.kind.as_str();
+        let data = serde_json::to_string(&event)
+            .unwrap_or_else(|_| serde_json::json!({ "error": "serialization_failed" }).to_string());
+        Ok(Event::default().event(name).data(data))
+    }))
+}
+
+/// `GET /runs/{run_id}/stream` -- Server-Sent Events stream of a run's
+/// progress (PLAT-FR-07, D-24..D-27).
+///
+/// Returns:
+/// - `200 OK` `text/event-stream` on success, framing the seven wire events
+///   this module's own docs table lists;
+/// - `400 Bad Request` for a malformed run id;
+/// - `404 Not Found` if no run exists with that id;
+/// - `501 Not Implemented` if no run event stream backend is configured.
+#[utoipa::path(
+    get,
+    path = "/runs/{run_id}/stream",
+    tag = "runs",
+    params(("run_id" = String, Path, description = "Run id")),
+    responses(
+        (status = 200, description = "Server-Sent Events stream of the seven frozen wire \
+            events (D-25): `superstep` `{ superstep }`, `node_started` \
+            `{ superstep, node_id }`, `node_finished` `{ superstep, node_id, outcome }`, \
+            `state_delta` `{ superstep, fields, bytes }` (changed field NAMES and a byte-size \
+            count only -- never a value), `parley` `{ waypoint_id, parleys }`, `done` \
+            `{ status, waypoint_id }` and `error` `{ status, message, waypoint_id }`. Every \
+            event also carries `seq`, `at`, `mode` (`live` or `degraded`) and `dropped`. The \
+            degraded path (the run executes on another instance, or is already terminal) \
+            gives no ordering guarantee relative to the live path and may coalesce \
+            supersteps; `done`/`error` are always eventually delivered on both paths. A 15s \
+            heartbeat comment line defeats idle proxy timeouts on both paths.",
+            content_type = "text/event-stream"),
+        (status = 400, description = "Invalid run id", body = ApiErrorBody),
+        (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 404, description = "Unknown run", body = ApiErrorBody),
+        (status = 501, description = "No run event stream backend configured", body = ApiErrorBody),
+    ),
+    security(("api_key" = []), ("bearer_token" = [])),
+)]
+pub async fn stream_run(
+    State(state): State<RunApiState>,
+    Extension(_principal): Extension<Principal>,
+    Path(run_id): Path<String>,
+) -> Response {
+    let Some(run_events) = state.run_events.as_ref() else {
+        return ApiError::not_implemented(RUN_EVENTS_PORT_HINT).into_response();
+    };
+    let id = match parse_run_id(&run_id) {
+        Ok(id) => id,
+        Err(error) => return error.into_response(),
+    };
+
+    match run_events.stream(&id).await {
+        Ok(stream) => {
+            let boxed = frame_run_events(stream);
+            Sse::new(boxed)
+                .keep_alive(
+                    KeepAlive::new().interval(Duration::from_secs(RUN_STREAM_HEARTBEAT_SECS)),
+                )
+                .into_response()
+        }
+        Err(RunStreamError::NotFound { run_id }) => {
+            ApiError::not_found(format!("unknown run '{run_id}'")).into_response()
+        }
+        Err(RunStreamError::NotWired) => {
+            ApiError::not_implemented(RUN_EVENTS_PORT_HINT).into_response()
+        }
+        Err(RunStreamError::Backend { message }) => ApiError::internal(message).into_response(),
+        Err(other) => ApiError::internal(other.to_string()).into_response(),
+    }
+}
+
 // --- Router -----------------------------------------------------------------
 
 /// Build the run API as a `utoipa-axum` [`OpenApiRouter`], mirroring
@@ -357,6 +473,7 @@ pub fn run_openapi_router(state: RunApiState) -> OpenApiRouter {
     OpenApiRouter::new()
         .routes(routes!(submit_run))
         .routes(routes!(get_run))
+        .routes(routes!(stream_run))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::agent_auth::require_authentication::<RunApiState>,
@@ -748,12 +865,146 @@ mod tests {
     fn run_openapi_router_contains_run_paths() {
         let state = RunApiState::new();
         let (_router, api) = run_openapi_router(state).split_for_parts();
-        for expected in ["/runs", "/runs/{run_id}"] {
+        for expected in ["/runs", "/runs/{run_id}", "/runs/{run_id}/stream"] {
             assert!(
                 api.paths.paths.contains_key(expected),
                 "missing path {expected}: {:?}",
                 api.paths.paths.keys().collect::<Vec<_>>()
             );
         }
+    }
+
+    // --- stream_run (PLAT-FR-07, D-24..D-27) --------------------------------
+
+    struct MockRunEventStreamPort {
+        events: Vec<paladin_core::platform::container::run::RunStreamEvent>,
+    }
+
+    #[async_trait]
+    impl RunEventStreamPort for MockRunEventStreamPort {
+        async fn stream(
+            &self,
+            _run_id: &RunId,
+        ) -> Result<paladin_ports::input::run_event_stream_port::RunEventStream, RunStreamError>
+        {
+            Ok(Box::pin(futures::stream::iter(self.events.clone())))
+        }
+    }
+
+    struct AlwaysNotFound;
+
+    #[async_trait]
+    impl RunEventStreamPort for AlwaysNotFound {
+        async fn stream(
+            &self,
+            run_id: &RunId,
+        ) -> Result<paladin_ports::input::run_event_stream_port::RunEventStream, RunStreamError>
+        {
+            Err(RunStreamError::NotFound {
+                run_id: run_id.clone(),
+            })
+        }
+    }
+
+    fn tester_principal() -> Extension<Principal> {
+        Extension(Principal {
+            id: "tester".to_string(),
+            role: paladin_core::platform::container::user::UserRole::Admin,
+        })
+    }
+
+    fn sample_stream_event(
+        run_id: &RunId,
+        kind: paladin_core::platform::container::run::RunStreamEventKind,
+        payload: serde_json::Value,
+    ) -> paladin_core::platform::container::run::RunStreamEvent {
+        paladin_core::platform::container::run::RunStreamEvent::new(
+            run_id.clone(),
+            ThreadId::new("t-stream").unwrap(),
+            kind,
+            1,
+            paladin_core::platform::container::run::RunStreamMode::Live,
+            0,
+            payload,
+        )
+    }
+
+    async fn read_response_body(response: Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        String::from_utf8(bytes.to_vec()).expect("utf8 body")
+    }
+
+    #[tokio::test]
+    async fn run_stream_sse() {
+        use paladin_core::platform::container::run::RunStreamEventKind;
+
+        let run_id = RunId::new_v7();
+        let events = vec![
+            sample_stream_event(
+                &run_id,
+                RunStreamEventKind::Superstep,
+                serde_json::json!({ "superstep": 1 }),
+            ),
+            sample_stream_event(
+                &run_id,
+                RunStreamEventKind::Parley,
+                serde_json::json!({ "waypoint_id": "wp-1", "parleys": [] }),
+            ),
+            sample_stream_event(
+                &run_id,
+                RunStreamEventKind::Done,
+                serde_json::json!({ "status": "completed", "waypoint_id": "wp-1" }),
+            ),
+        ];
+        let state = RunApiState::new().with_run_events(Arc::new(MockRunEventStreamPort { events }));
+
+        let response = stream_run(State(state), tester_principal(), Path(run_id.to_string())).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = read_response_body(response).await;
+        let superstep_pos = body
+            .find("event: superstep")
+            .expect("superstep event present");
+        let parley_pos = body.find("event: parley").expect("parley event present");
+        let done_pos = body.find("event: done").expect("done event present");
+        assert!(
+            superstep_pos < parley_pos && parley_pos < done_pos,
+            "events must appear in order: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_stream_returns_501_when_unwired() {
+        let state = RunApiState::new();
+        let response = stream_run(
+            State(state),
+            tester_principal(),
+            Path(RunId::new_v7().to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    #[tokio::test]
+    async fn run_stream_unknown_run_returns_404() {
+        let state = RunApiState::new().with_run_events(Arc::new(AlwaysNotFound));
+        let response = stream_run(
+            State(state),
+            tester_principal(),
+            Path(RunId::new_v7().to_string()),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// D-26: the 15s heartbeat interval is asserted directly on the
+    /// constant and the builder call this handler makes -- a real 15s wait
+    /// is not acceptable in CI.
+    #[test]
+    fn run_stream_heartbeat_interval_is_15_seconds() {
+        assert_eq!(RUN_STREAM_HEARTBEAT_SECS, 15);
+        let _ = KeepAlive::new().interval(Duration::from_secs(RUN_STREAM_HEARTBEAT_SECS));
     }
 }

@@ -33,6 +33,7 @@ pub mod prompt;
 pub mod queue_config;
 pub mod queue_item;
 pub mod registry_error;
+pub mod run;
 pub mod run_scope;
 pub mod sanctum;
 pub mod schedule;

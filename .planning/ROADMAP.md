@@ -578,6 +578,7 @@ Plans:
 **Goal**: Runs execute durably in the background on a worker pool, integrate with Parley pauses and live streaming, and are managed through versioned assistants, cron schedules and webhooks — all reachable over a production-shaped HTTP API.
 **Depends on**: Phase 22, Phase 24
 **Requirements**: PLAT-01, PLAT-02, PLAT-03, PLAT-04, PLAT-05, PLAT-06
+**UI hint**: no
 **Success Criteria** (what must be TRUE):
 
   1. `POST /runs` returns 202 within 250ms p99 (enqueue only), a `RunRepositoryPort` persists every status transition, and the status machine is monotonic with typed illegal-transition errors (PLAT-01)
@@ -586,7 +587,7 @@ Plans:
   4. Assistants are append-only immutable versions (no PUT, ever) with `latest` frozen at submit time, and `WarGraphDoc` compiles through a registry-resolving `compile()` with a restart-stable fingerprint round-trip (PLAT-04)
   5. Cron schedules survive restart without duplicate or missed-then-double firing; HMAC-signed webhook delivery retries bounded on 5xx/timeout with an SSRF guard rejecting non-http(s)/loopback/link-local/private/metadata targets; and every new endpoint carries existing auth, rate limiting, scopes and pagination, with `openapi.json` regenerated and Python/TypeScript clients generated and smoke-tested in CI (PLAT-05, PLAT-06)
 
-**Plans:** 18 plans
+**Plans:** 25 plans (18 executed + 7 gap-closure)
 
 Plans:
 
@@ -634,6 +635,22 @@ Plans:
 **Wave 9** *(blocked on Wave 8 completion)*
 
 - [x] 27-18-PLAN.md — Acceptance-1 E2E test, `sdk-clients` CI job, phase-wide OpenAPI review, §9.6, CI evidence checkpoint (all)
+
+**Gap closure — Wave 1** *(from 27-VERIFICATION.md's 5 CI-evidenced gaps + 27-REVIEW.md CR-01/WR-01…04; parallel, disjoint files)*
+
+- [ ] 27-19-PLAN.md — Redis claim/nack scripts increment `attempt` only on a reclaim; Tier-1 marker guards (PLAT-02)
+- [ ] 27-20-PLAN.md — Postgres run-timestamp microsecond precision contract; contract fixtures at storage resolution (PLAT-01)
+- [ ] 27-21-PLAN.md — Hermetic `sdk-clients` smoke: loopback LLM stub, committed lockfile, exact `completed` assertion (PLAT-06)
+- [ ] 27-22-PLAN.md — Webhook hardening: bounded response-body read (CR-01), no send on signing-key load failure (WR-01) (PLAT-05)
+- [ ] 27-23-PLAN.md — Heartbeat zero-lease guard (WR-04); `Agent`-kind delivery carve-out and unscoped-read model documented, tested, ledgered (WR-02, WR-03) (PLAT-02, PLAT-03, PLAT-05, PLAT-06)
+
+**Gap closure — Wave 2** *(blocked on Wave 1: the public-API baseline is taken after every code change)*
+
+- [ ] 27-24-PLAN.md — Toolchain-order-independent API-surface extraction + regenerated baseline; `e2e-platform-api` CI job (PLAT-06)
+
+**Gap closure — Wave 3** *(blocked on Wave 2)*
+
+- [ ] 27-25-PLAN.md — CI evidence checkpoint: live-run proof for every closed gap, recorded in 27-CI-EVIDENCE.md (all)
 
 ### Phase 28: Observability & Tooling
 

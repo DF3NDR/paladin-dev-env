@@ -246,7 +246,7 @@ paladin-web = { workspace = true }
 # under `schedule_restart_exactly_once`/`two_services_one_tick_exactly_one_fire`
 # -- a feature addition to the already-`{ workspace = true }`-pinned `tokio`
 # runtime dependency above, not a new package, mirroring
-# `crates/paladin-battalion/Cargo.toml`'s identical `test-util` dev-dependency
+# `crates/paladin-battalion/Cargo.toml`'s identical extra-feature dev-dependency
 # precedent.
 tokio = { workspace = true, features = ["test-util"] }
 

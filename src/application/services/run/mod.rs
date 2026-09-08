@@ -16,6 +16,9 @@ pub mod events;
 /// The seam every assistant source plugs into, plus this slice's
 /// code-registered implementation (D-32).
 pub mod resolver;
+/// `ScheduleService` — the claim-then-submit tick loop driving persisted
+/// cron `RunSchedule`s (PLAT-05, D-36..D-39).
+pub mod schedule;
 /// `RunSubmissionService` — the facade `RunSubmissionPort` implementation
 /// (D-12).
 pub mod submission;

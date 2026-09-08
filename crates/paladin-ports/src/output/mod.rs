@@ -39,6 +39,10 @@ pub mod run_repository_port;
 /// replica-safe `RunSchedule` contract every backend adapter
 /// (InMemory/SQLite/Postgres) implements.
 pub mod run_schedule_repository_port;
+/// Run trace persistence port (OBS-02, D-17): the durable, append-only
+/// `TraceRecord` contract every backend adapter (InMemory/SQLite/Postgres)
+/// implements.
+pub mod run_trace_port;
 /// Sanctum (vector store / RAG) port.
 pub mod sanctum_port;
 /// Scheduler port.

@@ -253,6 +253,16 @@ return 'ok'
 /// Crate-private (not `pub`): `paladin-storage`'s items are outside the
 /// tracked `.project/current-exports.txt` public-API baseline, and this key
 /// is an implementation detail of one adapter, never a field a caller reads.
+///
+/// `#[cfg(test)]`: the two Lua constants above embed this same literal
+/// directly in their script text (Lua cannot interpolate a Rust `const`),
+/// so this identifier has no production-code reader -- it exists solely so
+/// the `claim_marker_*` guard tests below build their expected strings and
+/// fixtures from one named source instead of repeating the magic string
+/// `"_claimed"`. Gated behind `cfg(test)` rather than left universally
+/// reachable so a plain `cargo clippy -- -D warnings` build does not flag
+/// it as dead code.
+#[cfg(test)]
 const RUN_QUEUE_CLAIMED_MARKER: &str = "_claimed";
 
 /// Configuration for the Redis-backed run queue (D-08).
@@ -580,6 +590,90 @@ mod tests {
         assert!(
             !rendered.contains("s3cr3t"),
             "unparsable connection url leaked into Debug output: {rendered}"
+        );
+    }
+
+    // ── Claim marker guard tests (gap-closure, plan 27-19) ────────────────
+    //
+    // The claim/nack scripts run on the Redis server, so a devcontainer with
+    // no reachable `redis-test` can only pin the *shape* of the script text
+    // and the *compatibility* of the marker with `QueuedRun` deserialization
+    // -- never the scripts' actual runtime behavior. That behavioral proof
+    // is the CI `redis-queue` job's live clauses (D-51); do not mistake
+    // these three for behavioral evidence.
+
+    /// The marker never reaches a consumer of `QueuedRun`: the struct has no
+    /// `#[serde(deny_unknown_fields)]` (confirmed by reading its derives,
+    /// not assumed), so a member payload carrying the marker still
+    /// deserializes to exactly the fixture's `run_id` and `attempt`.
+    #[test]
+    fn claim_marker_is_ignored_by_queued_run_deserialization() {
+        let thread =
+            paladin_core::platform::container::waypoint::ThreadId::new("claim-marker-deser")
+                .unwrap();
+        let fixture = contract_tests::sample_queued_run(&thread);
+
+        let mut value =
+            serde_json::to_value(&fixture).expect("QueuedRun fixture must serialize to JSON");
+        let object = value
+            .as_object_mut()
+            .expect("QueuedRun serializes to a JSON object");
+        object.insert(
+            RUN_QUEUE_CLAIMED_MARKER.to_string(),
+            serde_json::json!(true),
+        );
+        let member_json = serde_json::to_string(&value).expect("spliced value must serialize");
+
+        let round_tripped: QueuedRun = serde_json::from_str(&member_json)
+            .expect("the claim marker must not break QueuedRun deserialization");
+
+        assert_eq!(round_tripped.run_id, fixture.run_id);
+        assert_eq!(round_tripped.attempt, fixture.attempt);
+    }
+
+    /// The claim script's single `attempt` increment must be lexically
+    /// inside the marker-test branch, and the marker must be set on the
+    /// first-claim path -- pinning the script's shape without a live
+    /// server.
+    #[test]
+    fn claim_marker_gates_the_attempt_increment_in_the_claim_script() {
+        let marker_check = format!("if decoded.{RUN_QUEUE_CLAIMED_MARKER} then");
+        let marker_set = format!("decoded.{RUN_QUEUE_CLAIMED_MARKER} = true");
+        assert!(
+            RUN_QUEUE_CLAIM_LUA.contains(&marker_check),
+            "claim script must test the claim marker before incrementing attempt"
+        );
+        assert!(
+            RUN_QUEUE_CLAIM_LUA.contains(&marker_set),
+            "claim script must set the claim marker on the first-claim path"
+        );
+        let increment_count = RUN_QUEUE_CLAIM_LUA
+            .matches("decoded.attempt = decoded.attempt + 1")
+            .count();
+        assert_eq!(
+            increment_count, 1,
+            "claim script must increment attempt exactly once, guarded by the marker check"
+        );
+    }
+
+    /// The nack script must increment `attempt` exactly once and clear the
+    /// claim marker exactly once, so the requeued message's next claim is
+    /// treated as a first claim rather than a second reclaim.
+    #[test]
+    fn claim_marker_is_cleared_by_the_nack_script() {
+        let increment_count = RUN_QUEUE_NACK_LUA
+            .matches("decoded.attempt = decoded.attempt + 1")
+            .count();
+        assert_eq!(
+            increment_count, 1,
+            "nack script must increment attempt exactly once"
+        );
+
+        let marker_clear = format!("decoded.{RUN_QUEUE_CLAIMED_MARKER} = nil");
+        let clear_count = RUN_QUEUE_NACK_LUA.matches(&marker_clear).count();
+        assert_eq!(
+            clear_count, 1,
+            "nack script must clear the claim marker exactly once"
         );
     }
 

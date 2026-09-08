@@ -11,3 +11,8 @@ pub mod in_memory;
 /// Shared `RunQueuePort` contract suite (D-06): one generic async function
 /// per contract clause, run unchanged by both `in_memory` and `redis`.
 pub mod contract_tests;
+
+/// Redis-backed implementation: a sorted-set visibility lease driven by an
+/// atomic Lua `EVAL` (D-08), behind the `redis-queue` feature.
+#[cfg(feature = "redis-queue")]
+pub mod redis;

@@ -50,4 +50,7 @@ pub mod user_group;
 pub mod vault;
 pub mod vision;
 pub mod waypoint;
+/// Webhook delivery identity and the persisted `WebhookDelivery` aggregate
+/// (PLAT-FR-14/15, D-40..D-43).
+pub mod webhook;
 pub mod workflow;

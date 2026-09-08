@@ -89,3 +89,9 @@ pub mod cron;
 /// precedent); SQLite and Postgres adapters are added behind the existing
 /// `sqlite`/`postgres` features.
 pub mod run_schedule;
+
+/// `WebhookDeliveryRepositoryPort` storage adapters (D-40). The in-memory
+/// backend is always available (no feature gate, mirroring `run_schedule`'s
+/// D-03 precedent); SQLite and Postgres adapters are added behind the
+/// existing `sqlite`/`postgres` features.
+pub mod webhook;

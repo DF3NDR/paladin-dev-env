@@ -184,6 +184,7 @@ impl WebhookDeliveryService {
 
         // The signing value lives on the RUN's own WebhookSpec, never on
         // the delivery row (prohibition P1) -- read it fresh at send time.
+        let new_attempt = delivery.attempt + 1;
         let signing_key = match self.runs.get(&delivery.run_id).await {
             Ok(Some(run)) => run
                 .webhook
@@ -196,7 +197,43 @@ impl WebhookDeliveryService {
                     "webhook delivery service: failed to load run {} for delivery {delivery_id}: {error}",
                     delivery.run_id
                 );
-                String::new()
+                // WR-01 (27-REVIEW.md): the run lookup that supplies this
+                // delivery's OWN signing secret failed with a backend
+                // error -- signing with a fallback empty key and sending
+                // anyway would hand a receiver a payload it must reject as
+                // mis-signed, while still burning one of the delivery's
+                // budgeted five attempts (`record_attempt` unconditionally
+                // increments `attempt`, see the tradeoff note below).
+                // Rescheduling instead costs the identical attempt but
+                // never ships a payload known in advance to be
+                // mis-signed -- strictly better than the alternative, even
+                // though it means a delivery can still dead-letter after
+                // enough transient backend errors despite the receiving
+                // target having been reachable the entire time.
+                //
+                // Tradeoff recorded as a deliberate non-goal: suppressing
+                // the `attempt` increment on this reschedule would need a
+                // new `WebhookDeliveryRepositoryPort` method threaded
+                // across the trait and its three adapters (in-memory,
+                // sqlite, postgres) -- out of this gap-closure plan's
+                // scope.
+                let delay = chrono::Duration::from_std(backoff_for(new_attempt))
+                    .unwrap_or_else(|_| chrono::Duration::zero());
+                self.finish(
+                    &delivery_id,
+                    WebhookAttemptResult {
+                        outcome: WebhookAttemptOutcome::Retrying {
+                            next_attempt_at: (self.options.now)() + delay,
+                        },
+                        response_status: None,
+                        error: Some(bounded_error(&format!(
+                            "signing key load failed for run {}: {error}",
+                            delivery.run_id
+                        ))),
+                    },
+                )
+                .await;
+                return;
             }
         };
 
@@ -204,7 +241,6 @@ impl WebhookDeliveryService {
             signing_key.as_bytes(),
             delivery.payload.as_bytes(),
         );
-        let new_attempt = delivery.attempt + 1;
 
         let send_result = self
             .client

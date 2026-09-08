@@ -22,16 +22,26 @@ use async_trait::async_trait;
 use log::{error, info, warn};
 use paladin::application::services::parley::{GraphRegistry, ParleyPortAdapter};
 use paladin::config::agents::AuthConfig;
+use paladin::config::assistants::AssistantsConfig;
 use paladin::config::engine::EngineConfig;
 use paladin::config::env_utils::EnvOverridable;
+use paladin::config::run_queue::RunQueueConfig;
+use paladin::config::run_store::{RunStoreBackend, RunStoreConfig};
+use paladin::config::run_stream::RunStreamConfig;
+use paladin::config::run_worker::RunWorkerConfig;
+use paladin::config::schedules::SchedulesConfig;
 use paladin::config::settings::Settings;
 use paladin::config::waypoint_store::{WaypointStoreBackend, WaypointStoreConfig};
+use paladin::config::webhooks::WebhooksConfig;
 use paladin::infrastructure::adapters::auth::InMemoryTokenAuthAdapter;
 use paladin::infrastructure::web::agent_host::{bind_address, build_agent_registry};
 use paladin::infrastructure::web::facade_provisioner::FacadeProvisioner;
+use paladin::infrastructure::web::run_api_wiring::{
+    ErasedWaypointStore, RunApiConfigs, build_run_api,
+};
 use paladin::infrastructure::web::{
     AgentApiState, AgentAuthConfig, HttpLayersConfig, Principal, RateLimitConfig, ThreadApiState,
-    TimeoutPolicy, agent_router, thread_router, with_http_layers,
+    TimeoutPolicy, agent_router, run_router, thread_router, with_http_layers,
 };
 use paladin_battalion::engine::WarEngine;
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
@@ -40,6 +50,8 @@ use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_ports::input::parley_port::ParleyPort;
 use paladin_ports::output::auth_port::AuthPort;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+use paladin_ports::output::run_queue_port::RunQueuePort;
+use paladin_ports::output::run_repository_port::RunRepositoryPort;
 use paladin_ports::output::waypoint_port::WaypointPort;
 use tokio::signal;
 
@@ -70,6 +82,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let registry = build_agent_registry(&settings).await?;
     let mut agent_ids: Vec<String> = registry.list().into_iter().map(|(id, _)| id).collect();
     agent_ids.sort();
+    // Shared with `build_run_api`'s `CodeAgentResolver` (D-32) below, so a code-registered
+    // agent id is runnable through `POST /runs` without a second registry.
+    let registry = Arc::new(registry);
     let provisioner = FacadeProvisioner::from_settings(&settings);
     let timeouts = settings.timeouts.clone().unwrap_or_default();
     // Cross-cutting HTTP layers (health routes are merged inside `agent_router`).
@@ -104,15 +119,94 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     waypoint_store_config
         .validate()
         .map_err(|e| format!("invalid waypoint store configuration: {e}"))?;
-    let thread_state = build_thread_state(
-        &waypoint_store_config,
-        &engine_config,
+
+    // Platform API (Phase 27, PLAT-01..06): the seven X-09 config structs, each
+    // `Default` + `apply_env_overrides()` + `validate()`'d before ever reaching
+    // `build_run_api` -- every one defaults to off / today's-behaviour (D-50), so a
+    // v0.9 config boots this v0.10 binary with no run server at all.
+    let mut run_store_config = RunStoreConfig::default();
+    run_store_config.apply_env_overrides();
+    run_store_config
+        .validate()
+        .map_err(|e| format!("invalid run store configuration: {e}"))?;
+    let mut run_queue_config = RunQueueConfig::default();
+    run_queue_config.apply_env_overrides();
+    run_queue_config
+        .validate()
+        .map_err(|e| format!("invalid run queue configuration: {e}"))?;
+    let mut run_worker_config = RunWorkerConfig::default();
+    run_worker_config.apply_env_overrides();
+    run_worker_config
+        .validate()
+        .map_err(|e| format!("invalid run worker configuration: {e}"))?;
+    let mut run_stream_config = RunStreamConfig::default();
+    run_stream_config.apply_env_overrides();
+    run_stream_config
+        .validate()
+        .map_err(|e| format!("invalid run stream configuration: {e}"))?;
+    let mut assistants_config = AssistantsConfig::default();
+    assistants_config.apply_env_overrides();
+    assistants_config
+        .validate()
+        .map_err(|e| format!("invalid assistants configuration: {e}"))?;
+    let mut schedules_config = SchedulesConfig::default();
+    schedules_config.apply_env_overrides();
+    schedules_config
+        .validate()
+        .map_err(|e| format!("invalid schedules configuration: {e}"))?;
+    let mut webhooks_config = WebhooksConfig::default();
+    webhooks_config.apply_env_overrides();
+    webhooks_config
+        .validate()
+        .map_err(|e| format!("invalid webhooks configuration: {e}"))?;
+    let run_configs = RunApiConfigs {
+        run_store: run_store_config,
+        run_queue: run_queue_config,
+        run_worker: run_worker_config,
+        run_stream: run_stream_config,
+        assistants: assistants_config,
+        schedules: schedules_config,
+        webhooks: webhooks_config,
+    };
+    let run_store_backend_label = format!("{:?}", run_configs.run_store.backend);
+    let run_store_disabled = matches!(run_configs.run_store.backend, RunStoreBackend::Disabled);
+
+    // One waypoint store, shared by the thread surface's own `WarEngine` AND the run
+    // engine `build_run_api` constructs (D-24 precedent extended to the run pipeline):
+    // `build_run_api` errors closed, naming `waypoint_store.backend`, if `run_store` is
+    // enabled but this is `None`.
+    let waypoint_store = build_waypoint_store(&waypoint_store_config).await?;
+
+    let run_handles = build_run_api(
+        run_configs,
+        &settings,
         shutdown_coordinator.clone(),
+        waypoint_store.clone(),
         auth.clone(),
+        Arc::clone(&registry),
     )
     .await?;
 
-    let state = AgentApiState::new(Arc::new(registry))
+    // D-24/PLAT-FR-06: thread `parley_extras` into the SAME `ParleyPortAdapter` the thread
+    // surface builds, so a resume against a thread with an active run row re-enqueues
+    // durably instead of spawning in-process (D-19..D-23); then thread the run
+    // repository/submission directly onto `ThreadApiState` for `GET /threads*`/
+    // `POST /threads/{id}/fork` (D-45).
+    let mut thread_state = thread_state_from_store(
+        waypoint_store,
+        &engine_config,
+        shutdown_coordinator.clone(),
+        auth.clone(),
+        run_handles.parley_extras.clone(),
+    );
+    if let Some(run_repository) = run_handles.run_repository.clone() {
+        thread_state = thread_state.with_runs(run_repository);
+    }
+    if let Some(run_submission) = run_handles.thread_run_submission.clone() {
+        thread_state = thread_state.with_run_submission(run_submission);
+    }
+
+    let state = AgentApiState::new(Arc::clone(&registry))
         .with_provisioner(Arc::new(provisioner))
         .with_timeouts(TimeoutPolicy {
             default_secs: timeouts.default_seconds,
@@ -131,9 +225,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     // Optionally serve the OpenAPI spec + Swagger UI (unversioned, unauthenticated).
     let docs_enabled = http.docs.enabled;
-    // `thread_router`'s output is merged ALONGSIDE `agent_router`'s, never
-    // inside it, so `AgentApiState` stays untouched (D-24).
-    let routes = agent_router(state.clone()).merge(thread_router(thread_state));
+    // `thread_router`'s and `run_router`'s output are merged ALONGSIDE `agent_router`'s,
+    // never inside it, so `AgentApiState` stays untouched (D-24, D-44).
+    let routes = agent_router(state.clone())
+        .merge(thread_router(thread_state))
+        .merge(run_router(run_handles.run_state));
     let routes = if docs_enabled {
         let spec = paladin::infrastructure::web::openapi::build_openapi(state);
         routes.merge(paladin::infrastructure::web::openapi::docs_router(spec))
@@ -141,6 +237,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         routes
     };
     let app = with_http_layers(routes, &layers);
+    // Kept alive until this function returns (i.e. until `axum::serve`'s graceful
+    // shutdown completes): every task here is already registered with
+    // `shutdown_coordinator`, so `drain_on_shutdown`'s `cancel_and_wait` is what actually
+    // waits for them -- this binding only needs to outlive that wait (D-13).
+    let _run_tasks = run_handles.tasks;
 
     let listener = tokio::net::TcpListener::bind(bind_address(&settings)).await?;
     let bound = listener.local_addr()?;
@@ -150,7 +251,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         agent_ids
     );
     info!(
-        "routes: GET /health, GET /ready, GET/POST /v1/agents, GET/DELETE /v1/agents/{{id}}, POST /v1/agents/{{id}}/execute[/stream], POST /v1/agents/{{id}}/jobs, GET /v1/agents/{{id}}/jobs/{{job_id}}, GET /v1/threads/{{id}}/state, POST /v1/threads/{{id}}/resume, GET /v1/threads/{{id}}/history"
+        "routes: GET /health, GET /ready, GET/POST /v1/agents, GET/DELETE /v1/agents/{{id}}, POST /v1/agents/{{id}}/execute[/stream], POST /v1/agents/{{id}}/jobs, GET /v1/agents/{{id}}/jobs/{{job_id}}, GET/POST /v1/threads[/{{id}}][/fork], GET /v1/threads/{{id}}/state, POST /v1/threads/{{id}}/resume, GET /v1/threads/{{id}}/history, GET/POST /v1/runs[/{{id}}][/stream|/cancel|/webhook-deliveries], GET/POST /v1/assistants[/{{id}}][/versions...], GET/POST /v1/schedules[/{{id}}]"
     );
     info!(
         "waypoint store backend: {:?} ({})",
@@ -162,6 +263,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             "thread routes answer 501 until a backend is configured"
         } else {
             "thread routes are live"
+        }
+    );
+    info!(
+        "run store backend: {run_store_backend_label} ({})",
+        if run_store_disabled {
+            "run server disabled; POST /v1/runs and every /v1/runs*, /v1/assistants*, \
+             /v1/schedules* route answers 501 until run_store.backend is configured"
+        } else {
+            "run server is live"
         }
     );
     if docs_enabled {
@@ -325,92 +435,41 @@ impl PaladinPort for NoRegisteredGraphsPaladinPort {
     }
 }
 
-/// Build the thread surface's [`ThreadApiState`] from [`WaypointStoreConfig`]
-/// (HITL-05, D-24/D-25/D-26): `Disabled` (the default) yields `None`-valued
-/// state fields, so every `/v1/threads/*` route answers `501` naming the
-/// config key to set; `Sqlite`/`Postgres` construct a real store, a facade
-/// [`ParleyPortAdapter`] over it (registered with `coordinator`, D-21), and
-/// an empty [`GraphRegistry`] -- this process registers no `WarGraph`s
-/// itself (ADR-0039; see [`NoRegisteredGraphsPaladinPort`]'s own rustdoc).
-async fn build_thread_state(
+/// Build the durable waypoint store from [`WaypointStoreConfig`] (HITL-05, D-24/D-25/D-26;
+/// extended by Phase 27 to also feed [`build_run_api`]'s run engine): `Disabled` (the
+/// default) yields `None`; `Sqlite`/`Postgres` connect a real store, already erased to
+/// `Arc<dyn WaypointPort>` so ONE instance can be shared by both the thread surface's own
+/// `WarEngine` ([`thread_state_from_store`]) and the run engine `build_run_api` constructs.
+async fn build_waypoint_store(
     waypoint_store_config: &WaypointStoreConfig,
-    engine_config: &EngineConfig,
-    coordinator: ShutdownCoordinator,
-    auth: AgentAuthConfig,
-) -> Result<ThreadApiState, Box<dyn std::error::Error>> {
+) -> Result<Option<Arc<dyn WaypointPort>>, Box<dyn std::error::Error>> {
     match &waypoint_store_config.backend {
-        WaypointStoreBackend::Disabled => Ok(ThreadApiState::new().with_auth(auth)),
+        WaypointStoreBackend::Disabled => Ok(None),
         WaypointStoreBackend::Sqlite { path } => {
-            let store = Arc::new(
-                paladin_storage::waypoint::sqlite::SqliteWaypointStore::new(path)
-                    .await
-                    .map_err(|e| {
-                        format!("failed to open sqlite waypoint store at '{path}': {e}")
-                    })?,
-            );
-            Ok(thread_state_over_store(
-                store,
-                engine_config,
-                coordinator,
-                auth,
-            ))
+            let store = paladin_storage::waypoint::sqlite::SqliteWaypointStore::new(path)
+                .await
+                .map_err(|e| format!("failed to open sqlite waypoint store at '{path}': {e}"))?;
+            Ok(Some(Arc::new(store) as Arc<dyn WaypointPort>))
         }
-        WaypointStoreBackend::Postgres { url_env } => {
-            build_postgres_thread_state(url_env, engine_config, coordinator, auth).await
-        }
+        WaypointStoreBackend::Postgres { url_env } => build_postgres_waypoint_store(url_env).await,
     }
 }
 
-/// Compose a [`ThreadApiState`] over an already-constructed waypoint store:
-/// shared by the `Sqlite` and (when compiled in) `Postgres` branches of
-/// [`build_thread_state`].
-fn thread_state_over_store<W: WaypointPort + 'static>(
-    store: Arc<W>,
-    engine_config: &EngineConfig,
-    coordinator: ShutdownCoordinator,
-    auth: AgentAuthConfig,
-) -> ThreadApiState {
-    let engine = Arc::new(
-        WarEngine::new(Arc::new(NoRegisteredGraphsPaladinPort), Arc::clone(&store))
-            .with_durability(engine_config.waypoint_durability)
-            .with_shutdown_grace(Duration::from_secs(engine_config.shutdown_grace_secs)),
-    );
-    // Deliberately empty: this process registers no `WarGraph`s (ADR-0039).
-    let registry = Arc::new(GraphRegistry::new());
-    let adapter = ParleyPortAdapter::new(engine, Arc::clone(&store), registry, coordinator);
-    let waypoints: Arc<dyn WaypointPort> = store;
-    let parley: Arc<dyn ParleyPort> = Arc::new(adapter);
-    ThreadApiState::new()
-        .with_waypoints(waypoints)
-        .with_parley(parley)
-        .with_auth(auth)
-}
-
-/// The `Postgres` branch of [`build_thread_state`], split out so the
+/// The `Postgres` branch of [`build_waypoint_store`], split out so the
 /// `#[cfg(feature = "storage-postgres")]` gate (X-11.4: the default
 /// `paladin-ai` build gains no Postgres driver) applies to one small
 /// function rather than an inline `#[cfg]` block inside a `match` arm.
 #[cfg(feature = "storage-postgres")]
-async fn build_postgres_thread_state(
+async fn build_postgres_waypoint_store(
     url_env: &str,
-    engine_config: &EngineConfig,
-    coordinator: ShutdownCoordinator,
-    auth: AgentAuthConfig,
-) -> Result<ThreadApiState, Box<dyn std::error::Error>> {
+) -> Result<Option<Arc<dyn WaypointPort>>, Box<dyn std::error::Error>> {
     let url = std::env::var(url_env).map_err(|_| {
         format!("waypoint store postgres backend names env var '{url_env}', which is not set")
     })?;
-    let store = Arc::new(
-        paladin_storage::waypoint::postgres::PostgresWaypointStore::new(&url)
-            .await
-            .map_err(|e| format!("failed to open postgres waypoint store: {e}"))?,
-    );
-    Ok(thread_state_over_store(
-        store,
-        engine_config,
-        coordinator,
-        auth,
-    ))
+    let store = paladin_storage::waypoint::postgres::PostgresWaypointStore::new(&url)
+        .await
+        .map_err(|e| format!("failed to open postgres waypoint store: {e}"))?;
+    Ok(Some(Arc::new(store) as Arc<dyn WaypointPort>))
 }
 
 /// When this binary is built without `storage-postgres`, a configured
@@ -418,12 +477,9 @@ async fn build_postgres_thread_state(
 /// silent `Disabled` fallback (fail-closed, matching `build_auth_config`'s
 /// own precedent elsewhere in this file).
 #[cfg(not(feature = "storage-postgres"))]
-async fn build_postgres_thread_state(
+async fn build_postgres_waypoint_store(
     url_env: &str,
-    _engine_config: &EngineConfig,
-    _coordinator: ShutdownCoordinator,
-    _auth: AgentAuthConfig,
-) -> Result<ThreadApiState, Box<dyn std::error::Error>> {
+) -> Result<Option<Arc<dyn WaypointPort>>, Box<dyn std::error::Error>> {
     Err(format!(
         "waypoint store backend is configured as 'postgres' (env var '{url_env}') but this \
          binary was built without the 'storage-postgres' feature; rebuild with \
@@ -431,6 +487,70 @@ async fn build_postgres_thread_state(
          =sqlite"
     )
     .into())
+}
+
+/// Compose the thread surface's [`ThreadApiState`] over an already-erased waypoint store
+/// (`None` when no backend is configured -- every `/v1/threads/*` route then answers `501`
+/// naming the config key to set, D-24). `parley_extras`, when `Some`, wires
+/// [`ParleyPortAdapter::with_run_repository`]/[`with_run_queue`](ParleyPortAdapter::with_run_queue)
+/// so a resume against a thread with an active run row re-enqueues durably instead of
+/// spawning in-process (PLAT-FR-06, D-19..D-23) -- `None` (Phase 24's exact prior behavior)
+/// when the run store is disabled. [`ErasedWaypointStore`] lets this function build a
+/// concrete-typed `WarEngine`/`ParleyPortAdapter` over the SAME trait-object store
+/// [`build_run_api`]'s own run engine uses, without either function needing to know the
+/// other's concrete backend type.
+fn thread_state_from_store(
+    waypoint_store: Option<Arc<dyn WaypointPort>>,
+    engine_config: &EngineConfig,
+    coordinator: ShutdownCoordinator,
+    auth: AgentAuthConfig,
+    parley_extras: Option<(Arc<dyn RunRepositoryPort>, Arc<dyn RunQueuePort>)>,
+) -> ThreadApiState {
+    let Some(store) = waypoint_store else {
+        return ThreadApiState::new().with_auth(auth);
+    };
+    let erased = Arc::new(ErasedWaypointStore::new(Arc::clone(&store)));
+    let engine = Arc::new(
+        WarEngine::new(Arc::new(NoRegisteredGraphsPaladinPort), Arc::clone(&erased))
+            .with_durability(engine_config.waypoint_durability)
+            .with_shutdown_grace(Duration::from_secs(engine_config.shutdown_grace_secs)),
+    );
+    // Deliberately empty: this process registers no `WarGraph`s (ADR-0039).
+    let registry = Arc::new(GraphRegistry::new());
+    let mut adapter = ParleyPortAdapter::new(engine, erased, registry, coordinator);
+    if let Some((run_repository, run_queue)) = parley_extras {
+        adapter = adapter
+            .with_run_repository(run_repository)
+            .with_run_queue(run_queue);
+    }
+    let parley: Arc<dyn ParleyPort> = Arc::new(adapter);
+    ThreadApiState::new()
+        .with_waypoints(store)
+        .with_parley(parley)
+        .with_auth(auth)
+}
+
+/// Thin wrapper over [`build_waypoint_store`] + [`thread_state_from_store`] with no
+/// `parley_extras` -- kept for this file's own pre-Phase-27 test coverage
+/// (`server_wires_no_waypoint_backend_by_default`/`server_wires_sqlite_backend_when_configured`),
+/// which exercise exactly Phase 24's thread-surface-only behavior. `run()` itself calls
+/// [`build_waypoint_store`]/[`thread_state_from_store`] directly (it needs `parley_extras`),
+/// so this wrapper is test-only.
+#[cfg(test)]
+async fn build_thread_state(
+    waypoint_store_config: &WaypointStoreConfig,
+    engine_config: &EngineConfig,
+    coordinator: ShutdownCoordinator,
+    auth: AgentAuthConfig,
+) -> Result<ThreadApiState, Box<dyn std::error::Error>> {
+    let waypoint_store = build_waypoint_store(waypoint_store_config).await?;
+    Ok(thread_state_from_store(
+        waypoint_store,
+        engine_config,
+        coordinator,
+        auth,
+        None,
+    ))
 }
 
 /// Resolve the config file path: `PALADIN_CONFIG`, else the first CLI argument, else
@@ -909,5 +1029,101 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    // --- Phase 27 Plan 17: run API wiring (PLAT-01..06, D-44) --------------
+
+    /// `run_router`'s output is merged ALONGSIDE `agent_router`'s and
+    /// `thread_router`'s in `run()`, exactly like `thread_router` already is
+    /// (D-24, D-44): an unwired `RunApiState` answers `501`, not `404`,
+    /// proving the route is genuinely reachable and reached its handler.
+    #[tokio::test]
+    async fn run_router_is_merged_alongside_agent_and_thread_routers() {
+        let registry = paladin::infrastructure::web::AgentRegistry::new();
+        let agent_state = AgentApiState::new(Arc::new(registry));
+        let thread_state = ThreadApiState::new();
+        let run_state = paladin_web::RunApiState::new();
+
+        let app = agent_router(agent_state)
+            .merge(thread_router(thread_state))
+            .merge(run_router(run_state));
+
+        let agents = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/v1/agents")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(agents.status(), axum::http::StatusCode::OK);
+
+        let runs = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/v1/runs")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(r#"{"assistant_id":"any"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(runs.status(), axum::http::StatusCode::NOT_IMPLEMENTED);
+    }
+
+    /// `build_run_api` over every config's `Default` (`run_store.backend =
+    /// disabled`) spawns zero background tasks -- the D-50/X-09 contract
+    /// this binary's own startup relies on for a v0.9 config to boot
+    /// v0.10 with no run server at all.
+    #[tokio::test]
+    async fn default_config_spawns_no_run_services() {
+        use paladin::infrastructure::web::run_api_wiring::{RunApiConfigs, build_run_api};
+
+        let configs = RunApiConfigs {
+            run_store: paladin::config::run_store::RunStoreConfig::default(),
+            run_queue: paladin::config::run_queue::RunQueueConfig::default(),
+            run_worker: paladin::config::run_worker::RunWorkerConfig::default(),
+            run_stream: paladin::config::run_stream::RunStreamConfig::default(),
+            assistants: paladin::config::assistants::AssistantsConfig::default(),
+            schedules: paladin::config::schedules::SchedulesConfig::default(),
+            webhooks: paladin::config::webhooks::WebhooksConfig::default(),
+        };
+        let registry = Arc::new(paladin::infrastructure::web::AgentRegistry::new());
+
+        let handles = build_run_api(
+            configs,
+            &Settings::default(),
+            ShutdownCoordinator::new(),
+            None,
+            AgentAuthConfig::default(),
+            registry,
+        )
+        .await
+        .expect("disabled run store never fails to build");
+
+        assert!(
+            handles.tasks.is_empty(),
+            "a disabled run store must spawn no background tasks"
+        );
+    }
+
+    /// The served `/openapi.json` document lists the run paths (PLAT-06,
+    /// D-44) regardless of whether a run store is actually configured in
+    /// the process building it -- the SAME D-24 precedent
+    /// `openapi::build_openapi` already applies to the thread paths.
+    #[tokio::test]
+    async fn openapi_json_lists_run_paths() {
+        let registry = paladin::infrastructure::web::AgentRegistry::new();
+        let agent_state = AgentApiState::new(Arc::new(registry));
+        let spec = paladin::infrastructure::web::openapi::build_openapi(agent_state);
+
+        assert!(
+            spec.paths.paths.contains_key("/v1/runs"),
+            "paths: {:?}",
+            spec.paths.paths.keys().collect::<Vec<_>>()
+        );
     }
 }

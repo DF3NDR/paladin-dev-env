@@ -76,7 +76,7 @@ impl PaladinPort for EngineExecutionPort {
 }
 
 /// Build the run engine's real [`PaladinPort`] from `settings` (Phase 27, PLAT-01/02),
-/// using the SAME default-provider resolution [`FacadeProvisioner`]/[`build_agent`] use: no
+/// using the SAME default-provider resolution [`FacadeProvisioner`]/`build_agent` use: no
 /// per-node provider hint exists on [`paladin_core::platform::container::paladin::PaladinData`]
 /// (a `WarGraphDoc`-defined `Paladin` node carries only a `model` string, never a
 /// `provider`), so the single resolved default provider backs every `NodeSpec::Paladin` node

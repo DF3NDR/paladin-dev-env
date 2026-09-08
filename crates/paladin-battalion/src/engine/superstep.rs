@@ -1461,6 +1461,31 @@ enum NodeRunOutcome {
     Interrupted,
 }
 
+/// Map one attempt's [`NodeRunOutcome`] onto the [`NodeOutcomeKind`]
+/// vocabulary [`TraceEvent::NodeFinished`] reports (D-02) -- the SAME
+/// vocabulary the persisted `Waypoint`'s `NodeExecutionRecord` uses, so a
+/// trace and a Waypoint never disagree. A `Succeeded` attempt is further
+/// split into `Ended`/`Parleyed` by its `Directive.next`, mirroring
+/// `NodeOutcomeKind`'s own doc comment; `Interrupted` is reported
+/// `Skipped { reason: "shutdown" }`, exactly as it is recorded on the
+/// Halted Waypoint itself.
+fn node_outcome_kind(outcome: &NodeRunOutcome) -> NodeOutcomeKind {
+    match outcome {
+        NodeRunOutcome::Succeeded(directive) => match &directive.next {
+            NextStep::End => NodeOutcomeKind::Ended,
+            NextStep::Parley(_) => NodeOutcomeKind::Parleyed,
+            _ => NodeOutcomeKind::Succeeded,
+        },
+        NodeRunOutcome::Skipped(reason) => NodeOutcomeKind::Skipped {
+            reason: reason.clone(),
+        },
+        NodeRunOutcome::Failed(_) => NodeOutcomeKind::Failed,
+        NodeRunOutcome::Interrupted => NodeOutcomeKind::Skipped {
+            reason: "shutdown".to_string(),
+        },
+    }
+}
+
 /// What one spawned node-dispatch task (the `tokio::spawn`'d async block in
 /// the dispatch loop below) resolves to: the node's own `NodeId` (so the
 /// grace-race join phase, which re-indexes by `dispatch_entries` position
@@ -2183,8 +2208,8 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         visit_counts = candidate_counts;
 
         trace.emit(TraceEvent::SuperstepStarted {
-            thread_id: thread.clone(),
             superstep: superstep_number,
+            vanguard: vanguard.clone(),
         });
 
         // --- CF-03 / CF-FR-12: this superstep's dispatch entries = every
@@ -2440,10 +2465,10 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     {
                         let started_at = Utc::now();
                         node_trace.emit(TraceEvent::NodeStarted {
-                            thread_id: base_ctx.thread_id.clone(),
                             superstep: base_ctx.superstep,
                             node_id: nid.clone(),
                             attempt: 1,
+                            muster_task_key: base_ctx.muster.as_ref().map(|m| m.task_key.clone()),
                         });
                         let paladin_id = match &dispatch {
                             NodeDispatch::Paladin { paladin, .. } => Some(paladin.uuid),
@@ -2452,10 +2477,14 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         let duration_ms =
                             (Utc::now() - started_at).num_milliseconds().max(0) as u64;
                         node_trace.emit(TraceEvent::NodeFinished {
-                            thread_id: base_ctx.thread_id.clone(),
                             superstep: base_ctx.superstep,
                             node_id: nid.clone(),
                             attempt: 1,
+                            // A cache hit always merges as `Edges`-routed
+                            // (FT-FR-18, D-29) -- never `Ended`/`Parleyed`.
+                            outcome: NodeOutcomeKind::Succeeded,
+                            duration_ms,
+                            token_count: 0,
                             cache_hit: true,
                         });
                         return NodeTaskOutput {
@@ -2513,10 +2542,10 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             engine_deadline,
                         );
                         node_trace.emit(TraceEvent::NodeStarted {
-                            thread_id: ctx.thread_id.clone(),
                             superstep: ctx.superstep,
                             node_id: nid.clone(),
                             attempt,
+                            muster_task_key: ctx.muster.as_ref().map(|m| m.task_key.clone()),
                         });
                         let started_at = Utc::now();
 
@@ -2625,10 +2654,12 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         let duration_ms =
                             (Utc::now() - started_at).num_milliseconds().max(0) as u64;
                         node_trace.emit(TraceEvent::NodeFinished {
-                            thread_id: ctx.thread_id.clone(),
                             superstep: ctx.superstep,
                             node_id: nid.clone(),
                             attempt,
+                            outcome: node_outcome_kind(&outcome),
+                            duration_ms,
+                            token_count,
                             // Plan 25-13 is the only plan that sets this
                             // `true` (a served-from-cache outcome).
                             cache_hit: false,
@@ -3443,9 +3474,27 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             }
         };
         trace.emit(TraceEvent::DeltaMerged {
-            thread_id: thread.clone(),
             superstep: superstep_number,
-            field_changes: merge_report.changed_fields,
+            // `MergeReport` today carries only the changed field NAMES
+            // (`changed_fields`); the dispatch-rule name, writer list and
+            // value byte size D-05's `FieldChange` shape also carries are
+            // not yet threaded through `Battlefield::merge` -- left as
+            // placeholder defaults here, exactly like `RunFinished`'s
+            // not-yet-computed fields elsewhere in this plan, until a later
+            // plan enriches `MergeReport` itself.
+            field_changes: merge_report
+                .changed_fields
+                .into_iter()
+                .map(
+                    |field| paladin_core::platform::container::trace::FieldChange {
+                        field,
+                        dispatch: String::new(),
+                        writers: Vec::new(),
+                        value_bytes: 0,
+                        value: None,
+                    },
+                )
+                .collect(),
         });
 
         for node_id in &ran {
@@ -4421,8 +4470,9 @@ pub(crate) async fn persist_waypoint<W: WaypointPort>(
     match waypoint_port.save(waypoint).await {
         Ok(()) => {
             trace.emit(TraceEvent::WaypointSaved {
-                thread_id: waypoint.thread_id.clone(),
                 waypoint_id: waypoint.waypoint_id,
+                superstep: waypoint.superstep,
+                status: format!("{:?}", waypoint.status),
             });
         }
         Err(source) => match durability {
@@ -4479,7 +4529,11 @@ mod tests {
     }
 
     fn no_trace() -> Arc<TraceDispatcher> {
-        Arc::new(TraceDispatcher::new(None))
+        Arc::new(TraceDispatcher::new(
+            ThreadId::new("t").unwrap(),
+            None,
+            None,
+        ))
     }
 
     fn no_interceptors() -> Vec<Arc<dyn NodeInterceptor>> {
@@ -13614,22 +13668,18 @@ mod tests {
             .events()
             .await
             .iter()
-            .filter_map(|event| match event {
+            .filter_map(|record| match &record.event {
                 TraceEvent::NodeStarted {
-                    thread_id,
-                    node_id,
-                    attempt,
-                    ..
-                } if thread_id == &hit_thread && node_id == &id => {
+                    node_id, attempt, ..
+                } if record.thread_id == hit_thread && node_id == &id => {
                     Some(("NodeStarted", *attempt, None))
                 }
                 TraceEvent::NodeFinished {
-                    thread_id,
                     node_id,
                     attempt,
                     cache_hit,
                     ..
-                } if thread_id == &hit_thread && node_id == &id => {
+                } if record.thread_id == hit_thread && node_id == &id => {
                     Some(("NodeFinished", *attempt, Some(*cache_hit)))
                 }
                 _ => None,
@@ -13645,12 +13695,10 @@ mod tests {
             .events()
             .await
             .iter()
-            .filter_map(|event| match event {
-                TraceEvent::NodeFinished {
-                    thread_id,
-                    cache_hit,
-                    ..
-                } if thread_id == &miss_thread => Some(*cache_hit),
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeFinished { cache_hit, .. } if record.thread_id == miss_thread => {
+                    Some(*cache_hit)
+                }
                 _ => None,
             })
             .collect();

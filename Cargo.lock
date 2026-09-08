@@ -3452,6 +3452,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "log",
  "md5 0.7.0",
  "mime_guess",
  "paladin-ai-core",

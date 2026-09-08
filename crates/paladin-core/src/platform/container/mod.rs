@@ -43,6 +43,9 @@ pub mod schedule;
 pub mod structured;
 pub mod task;
 pub mod token_usage;
+/// The authoritative trace model (OBS-01): `TraceEvent`, `TraceRecord` and
+/// their supporting types (D-01, D-02).
+pub mod trace;
 pub mod transience;
 pub mod trigger;
 pub mod user;

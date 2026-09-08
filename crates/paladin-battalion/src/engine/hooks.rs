@@ -23,10 +23,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use chrono::Utc;
 use tokio::sync::mpsc;
 
 use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
-use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink};
+use paladin_core::platform::container::run::RunId;
+use paladin_core::platform::container::waypoint::ThreadId;
+use paladin_ports::output::trace_sink_port::{TraceEmitter, TraceEvent, TraceRecord, TraceSink};
 
 use crate::engine::node::{NodeContext, StateNodeError};
 
@@ -34,32 +37,45 @@ use crate::engine::node::{NodeContext, StateNodeError};
 /// [`TraceDispatcher::new`]. Arbitrary but generous for a single run's event
 /// volume; callers with unusual throughput needs can use
 /// [`TraceDispatcher::with_capacity`] instead.
-const DEFAULT_CAPACITY: usize = 1024;
+pub(crate) const DEFAULT_CAPACITY: usize = 1024;
 
 /// Shared state between a [`TraceDispatcher`] and its background consumer
 /// task.
 struct TraceQueue {
-    /// Buffered, not-yet-forwarded events. A `std::sync::Mutex`, not a
+    /// Buffered, not-yet-forwarded records. A `std::sync::Mutex`, not a
     /// `tokio::sync::Mutex`: every critical section here is synchronous and
     /// brief (push/pop on a `VecDeque`), so there is nothing to gain from an
     /// async-aware lock and a real cost (an extra allocation/state machine)
     /// to paying for one.
-    buffer: Mutex<VecDeque<TraceEvent>>,
+    buffer: Mutex<VecDeque<TraceRecord>>,
     /// The configured capacity. When `buffer` is at this length, `emit`
-    /// drops the OLDEST buffered event to make room for the new one.
+    /// drops the OLDEST buffered record to make room for the new one.
     capacity: usize,
     /// Total events dropped so far due to a full queue (T-22-31) — readable
     /// via [`TraceDispatcher::dropped_count`], never silently lost.
     dropped: AtomicU64,
+    /// This dispatcher's own monotonic sequence counter (D-03): 1-based,
+    /// stamped onto every [`TraceRecord`] at enqueue time, so `seq` order
+    /// IS causal order regardless of how many concurrent callers share this
+    /// dispatcher.
+    seq: AtomicU64,
 }
 
-/// The engine-owned trace event dispatcher (ENG-FR-21): sits between the
-/// superstep loop and an optional `Arc<dyn TraceSink>`, forwarding events
-/// over a bounded, drop-oldest queue via a single background task.
+/// The engine-owned trace event dispatcher (ENG-FR-21, D-03): sits between
+/// the superstep loop (and every producer sharing its
+/// [`TraceEmitter`] handle) and an optional `Arc<dyn TraceSink>`,
+/// stamping `seq`/`at`/`thread_id`/`run_id` at enqueue time and forwarding
+/// the resulting [`TraceRecord`]s over a bounded, drop-oldest queue via a
+/// single background task.
 ///
 /// With no sink configured, [`TraceDispatcher::new`] allocates no channel and
 /// [`TraceDispatcher::emit`] is a zero-cost no-op — the untraced path costs
-/// nothing (a must-have truth of this plan).
+/// nothing (a must-have truth carried from Phase 22).
+///
+/// Constructed with the specific `thread_id` (and optional `run_id`) it
+/// stamps every record for (D-03): production always builds one engine —
+/// and so one dispatcher — per run (the Phase 27 worker's own pattern), so
+/// `seq` starting at 1 per dispatcher IS `seq` starting at 1 per run.
 pub struct TraceDispatcher {
     /// `None` when no sink is configured. `Some` pairs the shared queue with
     /// the lightweight "doorbell" sender that wakes the consumer task —
@@ -68,25 +84,45 @@ pub struct TraceDispatcher {
     /// consumer's `recv().await` return `None` and exit once the buffer it
     /// can see has drained, rather than leaking a task that loops forever.
     inner: Option<(Arc<TraceQueue>, mpsc::Sender<()>)>,
+    /// The thread every record this dispatcher stamps belongs to.
+    thread_id: ThreadId,
+    /// The Platform API run every record this dispatcher stamps belongs to,
+    /// when known.
+    run_id: Option<RunId>,
 }
 
 impl TraceDispatcher {
-    /// Construct a dispatcher forwarding to `sink` (if any) with the default
-    /// capacity. `None` allocates no channel and spawns no task.
-    pub fn new(sink: Option<Arc<dyn TraceSink>>) -> Self {
-        Self::with_capacity(sink, DEFAULT_CAPACITY)
+    /// Construct a dispatcher stamping every record for `thread_id`
+    /// (and `run_id`, when known), forwarding to `sink` (if any) with the
+    /// default capacity. `None` allocates no channel and spawns no task.
+    pub fn new(
+        thread_id: ThreadId,
+        run_id: Option<RunId>,
+        sink: Option<Arc<dyn TraceSink>>,
+    ) -> Self {
+        Self::with_capacity(thread_id, run_id, sink, DEFAULT_CAPACITY)
     }
 
     /// As [`TraceDispatcher::new`], with an explicit queue `capacity`.
-    pub fn with_capacity(sink: Option<Arc<dyn TraceSink>>, capacity: usize) -> Self {
+    pub fn with_capacity(
+        thread_id: ThreadId,
+        run_id: Option<RunId>,
+        sink: Option<Arc<dyn TraceSink>>,
+        capacity: usize,
+    ) -> Self {
         let Some(sink) = sink else {
-            return Self { inner: None };
+            return Self {
+                inner: None,
+                thread_id,
+                run_id,
+            };
         };
 
         let queue = Arc::new(TraceQueue {
             buffer: Mutex::new(VecDeque::with_capacity(capacity)),
             capacity: capacity.max(1),
             dropped: AtomicU64::new(0),
+            seq: AtomicU64::new(0),
         });
         // Capacity 1: the doorbell only ever needs to prove "there is at
         // least one more thing to check for" -- the consumer always drains
@@ -98,22 +134,24 @@ impl TraceDispatcher {
         tokio::spawn(async move {
             loop {
                 loop {
-                    let event = {
+                    let record = {
                         let mut buf = consumer_queue
                             .buffer
                             .lock()
                             .expect("trace queue mutex poisoned");
                         buf.pop_front()
                     };
-                    match event {
-                        Some(event) => {
+                    match record {
+                        Some(record) => {
                             // Fire-and-forget: this await can block or hang
                             // forever without affecting `emit` or the run,
                             // which have already returned by the time this
                             // task runs. The return value is diagnostic only
                             // (see trace_sink_port's module docs) and is
-                            // deliberately discarded.
-                            let _ = sink.on_event(event).await;
+                            // deliberately discarded. Panic isolation around
+                            // this call lands in a later commit of this same
+                            // plan (D-08).
+                            let _ = sink.on_event(record).await;
                         }
                         None => break,
                     }
@@ -130,17 +168,30 @@ impl TraceDispatcher {
 
         Self {
             inner: Some((queue, doorbell_tx)),
+            thread_id,
+            run_id,
         }
     }
 
-    /// Enqueue `event`. Never awaits the sink and never awaits channel
+    /// Stamp `event` into a [`TraceRecord`] (`seq`/`at`/`thread_id`/`run_id`,
+    /// D-03) and enqueue it. Never awaits the sink and never awaits channel
     /// backpressure (see the module-level "Why fire-and-forget" section):
-    /// with no sink configured this is a no-op; with a sink configured, a
-    /// full queue drops the OLDEST buffered event (incrementing the counter
-    /// [`TraceDispatcher::dropped_count`] reports) to make room for `event`.
+    /// with no sink configured this is a no-op (no `seq` observably
+    /// advances); with a sink configured, a full queue drops the OLDEST
+    /// buffered record (incrementing the counter
+    /// [`TraceDispatcher::dropped_count`] reports) to make room for the new
+    /// one.
     pub fn emit(&self, event: TraceEvent) {
         let Some((queue, doorbell)) = &self.inner else {
             return;
+        };
+        let seq = queue.seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let record = TraceRecord {
+            thread_id: self.thread_id.clone(),
+            run_id: self.run_id.clone(),
+            seq,
+            at: Utc::now(),
+            event,
         };
         {
             let mut buf = queue.buffer.lock().expect("trace queue mutex poisoned");
@@ -148,7 +199,7 @@ impl TraceDispatcher {
                 buf.pop_front();
                 queue.dropped.fetch_add(1, Ordering::SeqCst);
             }
-            buf.push_back(event);
+            buf.push_back(record);
         }
         // A full doorbell channel means a signal is already pending and the
         // consumer will drain everything (including this event) once it
@@ -162,6 +213,20 @@ impl TraceDispatcher {
         self.inner
             .as_ref()
             .map_or(0, |(queue, _)| queue.dropped.load(Ordering::SeqCst))
+    }
+
+    /// The thread every record this dispatcher stamps belongs to.
+    pub fn thread_id(&self) -> &ThreadId {
+        &self.thread_id
+    }
+}
+
+impl TraceEmitter for TraceDispatcher {
+    /// Delegates to the inherent [`TraceDispatcher::emit`] (D-03): lets a
+    /// producer below the superstep engine hold `Arc<dyn TraceEmitter>`
+    /// rather than a concrete dispatcher type.
+    fn emit(&self, event: TraceEvent) {
+        TraceDispatcher::emit(self, event);
     }
 }
 
@@ -283,62 +348,85 @@ mod tests {
             TraceEvent::RunStarted { .. } => "RunStarted",
             TraceEvent::SuperstepStarted { .. } => "SuperstepStarted",
             TraceEvent::NodeStarted { .. } => "NodeStarted",
+            TraceEvent::NodeProgress { .. } => "NodeProgress",
             TraceEvent::NodeFinished { .. } => "NodeFinished",
+            TraceEvent::EdgeEvaluated { .. } => "EdgeEvaluated",
             TraceEvent::DeltaMerged { .. } => "DeltaMerged",
             TraceEvent::WaypointSaved { .. } => "WaypointSaved",
+            TraceEvent::ParleyRaised { .. } => "ParleyRaised",
             TraceEvent::RunFinished { .. } => "RunFinished",
+            TraceEvent::FallbackHop { .. } => "FallbackHop",
+            TraceEvent::MiddlewareEvent { .. } => "MiddlewareEvent",
             _ => "unknown",
+        }
+    }
+
+    fn run_started() -> TraceEvent {
+        TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        }
+    }
+
+    fn run_finished() -> TraceEvent {
+        TraceEvent::RunFinished {
+            status: paladin_ports::output::trace_sink_port::RunFinishStatus::Completed,
+            total_supersteps: 0,
+            total_tokens: 0,
+            duration_ms: 0,
+            trace_dropped_total: 0,
+        }
+    }
+
+    fn superstep_started(superstep: u64) -> TraceEvent {
+        TraceEvent::SuperstepStarted {
+            superstep,
+            vanguard: Vec::new(),
         }
     }
 
     #[tokio::test]
     async fn no_sink_emit_is_a_no_op_and_dropped_count_is_zero() {
-        let dispatcher = TraceDispatcher::new(None);
-        dispatcher.emit(TraceEvent::RunStarted {
-            thread_id: ThreadId::new("t").unwrap(),
-        });
+        let dispatcher = TraceDispatcher::new(ThreadId::new("t").unwrap(), None, None);
+        dispatcher.emit(run_started());
         assert_eq!(dispatcher.dropped_count(), 0);
     }
 
     #[tokio::test]
     async fn recording_sink_receives_emitted_events_in_order() {
         let sink = RecordingTraceSink::new();
-        let dispatcher = TraceDispatcher::new(Some(sink.clone()));
         let thread_id = ThreadId::new("t").unwrap();
+        let dispatcher = TraceDispatcher::new(thread_id.clone(), None, Some(sink.clone()));
 
-        dispatcher.emit(TraceEvent::RunStarted {
-            thread_id: thread_id.clone(),
-        });
-        dispatcher.emit(TraceEvent::SuperstepStarted {
-            thread_id: thread_id.clone(),
-            superstep: 1,
-        });
-        dispatcher.emit(TraceEvent::RunFinished { thread_id });
+        dispatcher.emit(run_started());
+        dispatcher.emit(superstep_started(1));
+        dispatcher.emit(run_finished());
 
         // Give the background consumer a chance to drain.
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let events = sink.events().await;
-        let names: Vec<&str> = events.iter().map(event_name).collect();
+        let records = sink.events().await;
+        let names: Vec<&str> = records.iter().map(|r| event_name(&r.event)).collect();
         assert_eq!(names, vec!["RunStarted", "SuperstepStarted", "RunFinished"]);
+        // D-03: seq is 1-based and gapless for a freshly constructed
+        // dispatcher.
+        let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, vec![1, 2, 3]);
+        assert!(records.iter().all(|r| r.thread_id == thread_id));
     }
 
     #[tokio::test]
     async fn permanently_blocking_sink_never_stalls_emit() {
         let entered = Arc::new(AtomicBool::new(false));
         let sink = BlockingTraceSink::new(entered.clone());
-        let dispatcher = TraceDispatcher::new(Some(sink));
+        let dispatcher = TraceDispatcher::new(ThreadId::new("t").unwrap(), None, Some(sink));
 
         let result = tokio::time::timeout(Duration::from_secs(5), async {
-            dispatcher.emit(TraceEvent::RunStarted {
-                thread_id: ThreadId::new("t").unwrap(),
-            });
+            dispatcher.emit(run_started());
             // A second event proves `emit` itself never awaits the
             // sink's own handler, even after the handler has started
             // blocking.
             tokio::time::sleep(Duration::from_millis(50)).await;
-            dispatcher.emit(TraceEvent::RunFinished {
-                thread_id: ThreadId::new("t").unwrap(),
-            });
+            dispatcher.emit(run_finished());
         })
         .await;
 
@@ -355,11 +443,10 @@ mod tests {
     #[tokio::test]
     async fn always_erroring_sink_does_not_panic_or_block_dispatcher() {
         let sink = AlwaysErroringTraceSink::new();
-        let dispatcher = TraceDispatcher::new(Some(sink.clone()));
+        let dispatcher =
+            TraceDispatcher::new(ThreadId::new("t").unwrap(), None, Some(sink.clone()));
         for _ in 0..5 {
-            dispatcher.emit(TraceEvent::RunStarted {
-                thread_id: ThreadId::new("t").unwrap(),
-            });
+            dispatcher.emit(run_started());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(sink.call_count(), 5);
@@ -373,31 +460,23 @@ mod tests {
         // that just accumulates in the queue rather than being drained.
         let gate = Arc::new(tokio::sync::Notify::new());
         let sink = GatedTraceSink::new(gate.clone());
-        let dispatcher = TraceDispatcher::with_capacity(Some(sink.clone()), 2);
-        let thread_id = ThreadId::new("t").unwrap();
+        let dispatcher = TraceDispatcher::with_capacity(
+            ThreadId::new("t").unwrap(),
+            None,
+            Some(sink.clone()),
+            2,
+        );
 
-        dispatcher.emit(TraceEvent::SuperstepStarted {
-            thread_id: thread_id.clone(),
-            superstep: 0,
-        });
+        dispatcher.emit(superstep_started(0));
         // Let the consumer pick event 0 up and start blocking on the gate.
         tokio::time::sleep(Duration::from_millis(20)).await;
 
         // Fill the queue to capacity (2) then overflow it by one: the
         // OLDEST of these three (superstep 1) must be the one dropped, not
         // superstep 3 (the newest).
-        dispatcher.emit(TraceEvent::SuperstepStarted {
-            thread_id: thread_id.clone(),
-            superstep: 1,
-        });
-        dispatcher.emit(TraceEvent::SuperstepStarted {
-            thread_id: thread_id.clone(),
-            superstep: 2,
-        });
-        dispatcher.emit(TraceEvent::SuperstepStarted {
-            thread_id: thread_id.clone(),
-            superstep: 3,
-        });
+        dispatcher.emit(superstep_started(1));
+        dispatcher.emit(superstep_started(2));
+        dispatcher.emit(superstep_started(3));
         assert_eq!(dispatcher.dropped_count(), 1);
 
         gate.notify_one();
@@ -407,7 +486,7 @@ mod tests {
             .events()
             .await
             .iter()
-            .map(|e| match e {
+            .map(|r| match &r.event {
                 TraceEvent::SuperstepStarted { superstep, .. } => *superstep,
                 other => panic!("unexpected event: {other:?}"),
             })

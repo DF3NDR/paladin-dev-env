@@ -1,12 +1,18 @@
-//! # Trace Sink Port — Standardized Execution Observability (ENG-FR-21)
+//! # Trace Sink Port — Standardized Execution Observability (ENG-FR-21, OBS-01)
 //!
-//! Defines [`TraceSink`] and its typed [`TraceEvent`] stream: the seam Doc 07
-//! (`paladin-eval`, OTel export, graph visualization) plugs an observability
-//! consumer into. Phase 22 Plan 09 lands the trait and its event shape with
-//! **no consumer** — `paladin-battalion`'s `engine::hooks::TraceDispatcher`
-//! is the only thing that calls [`TraceSink::on_event`], and it does so
-//! fire-and-forget over a bounded, drop-oldest queue so a slow or failing
-//! sink can never stall or fail a run (T-22-30).
+//! Defines [`TraceSink`] over the authoritative [`TraceRecord`] envelope
+//! (now defined in `paladin-core`, re-exported here per D-01), plus the
+//! synchronous [`TraceEmitter`] handle producers use to reach a dispatcher
+//! (D-03) and [`CompositeSink`], the panic-isolating fan-out (D-08).
+//!
+//! ## Why the authoritative types live in `paladin-core`, re-exported here (D-01)
+//!
+//! ADR-0016 has core own port value types, with ports re-exporting them so
+//! every existing `use paladin_ports::output::trace_sink_port::TraceEvent`
+//! keeps compiling unchanged. `TraceEvent`/`TraceRecord`/`FieldChange`/
+//! `NodeProgressKind`/`MiddlewareAction`/`RunFinishStatus`/
+//! `TRACE_SCHEMA_VERSION` are defined in
+//! `paladin_core::platform::container::trace` and `pub use`d below.
 //!
 //! ## Why a dedicated port, not a re-used one
 //!
@@ -20,14 +26,10 @@
 //! or SDK client either way, but the difference here is behavioral, not
 //! structural).
 //!
-//! ## `TraceEvent` carries field NAMES, not field VALUES
+//! ## `TraceRecord` carries field NAMES, not field VALUES
 //!
-//! `DeltaMerged` reports which [`FieldName`]s changed in a merge, never their
-//! `serde_json::Value` contents (T-22-32). Attaching an exporter that ships
-//! events off-process must not, by itself, export the shared Battlefield
-//! state — a consumer that wants values reads them from the `Waypoint`
-//! through `WaypointPort`, a port whose whole contract is durable, at-rest
-//! persistence rather than a live telemetry stream.
+//! See `paladin_core::platform::container::trace`'s own module docs for the
+//! full "field NAMES, not VALUES" and redact-then-truncate rules (D-05).
 //!
 //! ## Errors are diagnostics only
 //!
@@ -36,12 +38,36 @@
 //! dropped connection, for instance) — but the return value is never
 //! inspected by anything that decides a run's outcome. `TraceDispatcher`
 //! (`paladin-battalion::engine::hooks`) discards it unconditionally.
+//!
+//! ## `TraceEmitter`: the synchronous handle producers reach a dispatcher
+//! through (D-03)
+//!
+//! `TraceSink` is the CONSUMER side (what a sink implements to receive
+//! records). `TraceEmitter` is the PRODUCER side: a synchronous,
+//! never-awaiting, object-safe trait a `TraceDispatcher` implements behind
+//! a cheap clonable `Arc<dyn TraceEmitter>` handle, so a producer below the
+//! superstep engine (`FallbackLlmAdapter`, the facade's middleware chain,
+//! `PaladinExecutionService`'s stream/tool paths) can emit an event without
+//! ever awaiting anything or importing `paladin-battalion` itself.
+//!
+//! ## `CompositeSink`: panic-isolated fan-out (D-08)
+//!
+//! Forwards each record to every child sequentially, each child wrapped in
+//! its own panic guard, so one panicking or erroring child never starves or
+//! fails its siblings. Returns `Ok(())` unless every child errored — the
+//! same "errors are diagnostics only" contract `TraceSink` itself carries.
+
+use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::FutureExt;
 use thiserror::Error;
 
-use paladin_core::platform::container::battlefield::FieldName;
-use paladin_core::platform::container::waypoint::{NodeId, ThreadId, WaypointId};
+pub use paladin_core::platform::container::trace::{
+    FieldChange, MiddlewareAction, NodeProgressKind, RunFinishStatus, TRACE_SCHEMA_VERSION,
+    TraceEvent, TraceRecord,
+};
 
 /// Errors a [`TraceSink`] implementation may report from its own handling of
 /// an event.
@@ -54,101 +80,6 @@ pub enum TraceSinkError {
     /// The sink failed to record or forward the event.
     #[error("trace sink error: {0}")]
     Failed(String),
-}
-
-/// One typed observability event emitted by the superstep engine
-/// (ENG-FR-21) — plus [`TraceEvent::FallbackHop`], emitted by the
-/// `FallbackLlmAdapter` below the engine (Doc 04 D-25). Marked `#[non_exhaustive]`
-/// because Doc 07 is expected to extend this set for the eval harness and
-/// OTel export without that being a breaking change for existing sinks (a
-/// `match` over `TraceEvent` must always carry a wildcard arm).
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum TraceEvent {
-    /// A run started (`WarEngine::start` or `WarEngine::resume`).
-    RunStarted {
-        /// The thread whose run started.
-        thread_id: ThreadId,
-    },
-    /// A superstep began.
-    SuperstepStarted {
-        /// The thread this superstep belongs to.
-        thread_id: ThreadId,
-        /// The superstep index that began.
-        superstep: u64,
-    },
-    /// One attempt of a node's execution began (Doc 04 D-16): emitted once
-    /// PER ATTEMPT, so a node retried under an Aegis retry policy produces
-    /// one `NodeStarted`/`NodeFinished` pair per attempt, each carrying its
-    /// own `attempt` number. Field names match PRD 07 §2's span-per-attempt
-    /// shape so Phase 28's OTel export renames nothing.
-    NodeStarted {
-        /// The thread this execution belongs to.
-        thread_id: ThreadId,
-        /// The superstep this execution belongs to.
-        superstep: u64,
-        /// The node that started executing.
-        node_id: NodeId,
-        /// The 1-indexed attempt this event belongs to; `1` for a node
-        /// with no retry policy.
-        attempt: u32,
-    },
-    /// One attempt of a node's execution finished, successfully or not
-    /// (Doc 04 D-16): emitted once per attempt, paired with the
-    /// `NodeStarted` carrying the same `attempt`.
-    NodeFinished {
-        /// The thread this execution belongs to.
-        thread_id: ThreadId,
-        /// The superstep this execution belongs to.
-        superstep: u64,
-        /// The node that finished executing.
-        node_id: NodeId,
-        /// The 1-indexed attempt this event belongs to; `1` for a node
-        /// with no retry policy.
-        attempt: u32,
-        /// Whether this attempt's outcome was served from the node cache
-        /// (FT-06) instead of by executing the node. Always `false` until
-        /// plan 25-13 wires the cache lookup.
-        cache_hit: bool,
-    },
-    /// A superstep's collected deltas were merged into the Battlefield.
-    DeltaMerged {
-        /// The thread this merge belongs to.
-        thread_id: ThreadId,
-        /// The superstep this merge belongs to.
-        superstep: u64,
-        /// The fields whose value changed by this merge (names only — see
-        /// the module-level "carries field NAMES" section).
-        field_changes: Vec<FieldName>,
-    },
-    /// A Waypoint was persisted.
-    WaypointSaved {
-        /// The thread the waypoint belongs to.
-        thread_id: ThreadId,
-        /// The persisted waypoint's identity.
-        waypoint_id: WaypointId,
-    },
-    /// A run finished, with any terminal `RunOutcome`.
-    RunFinished {
-        /// The thread whose run finished.
-        thread_id: ThreadId,
-    },
-    /// A `FallbackLlmAdapter` chain (Doc 04 FT-FR-16, D-25) gave up on one
-    /// provider and moved to the next. Emitted once PER HOP, before the next
-    /// provider is called, so a three-provider chain that lands on its third
-    /// element produces exactly two of these. Field names match PRD 07 §2's
-    /// shape so Phase 28's OTel export renames nothing.
-    FallbackHop {
-        /// The node the hop happened on behalf of. Always `None` when the
-        /// event comes from the adapter itself: a plain `LlmPort` composed
-        /// below the superstep engine cannot know which node it is serving.
-        /// Phase 28 may enrich this from the engine side.
-        node_id: Option<NodeId>,
-        /// `get_provider_name()` of the provider that failed.
-        from_provider: String,
-        /// `get_provider_name()` of the provider the chain moves to.
-        to_provider: String,
-    },
 }
 
 /// Port trait for standardized execution observability (ENG-FR-21).
@@ -175,36 +106,125 @@ pub enum TraceEvent {
 /// background task while the engine itself keeps running concurrently.
 #[async_trait]
 pub trait TraceSink: Send + Sync {
-    /// Handle one [`TraceEvent`].
+    /// Handle one stamped [`TraceRecord`].
     ///
     /// The returned `Result` is diagnostic only — see the module-level
     /// "Errors are diagnostics only" section. An implementation that wants
     /// to observe every event exactly once, in order, still can: the
-    /// dispatcher forwards events to a single sink instance sequentially
+    /// dispatcher forwards records to a single sink instance sequentially
     /// (never concurrently), it just never blocks the run while doing so.
-    async fn on_event(&self, event: TraceEvent) -> Result<(), TraceSinkError>;
+    async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError>;
+}
+
+/// The synchronous, never-awaiting handle a producer BELOW the superstep
+/// engine reaches a `TraceDispatcher` through (D-03): the engine's own
+/// [`TraceDispatcher`](paladin_core) stamps `seq`/`at`/`thread_id` at
+/// enqueue time, so every producer sharing one handle for a run stamps from
+/// the SAME counter, keeping `seq` order causal.
+///
+/// Object-safe (`Box<dyn TraceEmitter>` and `Arc<dyn TraceEmitter>` both
+/// compile) and deliberately synchronous — `emit` never awaits, so a
+/// producer can call it from a hot, non-async path without a runtime.
+pub trait TraceEmitter: Send + Sync {
+    /// Emit one [`TraceEvent`]. Never blocks and never fails visibly — a
+    /// full queue drops the oldest buffered record (counted, never silent,
+    /// see `TraceDispatcher::dropped_count`).
+    fn emit(&self, event: TraceEvent);
+}
+
+/// A panic-isolated fan-out to every child [`TraceSink`] (D-08).
+///
+/// Forwards each record to every child SEQUENTIALLY, in vector order, each
+/// child wrapped in its own `catch_unwind` guard, so one panicking or
+/// erroring child neither starves nor fails its siblings. Returns `Ok(())`
+/// unless EVERY child errored (or panicked) — the same "errors are
+/// diagnostics only" contract [`TraceSink`] itself carries.
+pub struct CompositeSink {
+    sinks: Vec<Arc<dyn TraceSink>>,
+}
+
+impl CompositeSink {
+    /// Construct a fan-out over `sinks`, forwarded to in vector order.
+    pub fn new(sinks: Vec<Arc<dyn TraceSink>>) -> Self {
+        Self { sinks }
+    }
+
+    /// Append one more child sink, forwarded to after every sink already
+    /// present.
+    pub fn push(&mut self, sink: Arc<dyn TraceSink>) {
+        self.sinks.push(sink);
+    }
+}
+
+#[async_trait]
+impl TraceSink for CompositeSink {
+    async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+        if self.sinks.is_empty() {
+            return Ok(());
+        }
+        let mut all_failed = true;
+        for sink in &self.sinks {
+            let outcome = AssertUnwindSafe(sink.on_event(record.clone()))
+                .catch_unwind()
+                .await;
+            match outcome {
+                Ok(Ok(())) => all_failed = false,
+                Ok(Err(_)) => {
+                    // Diagnostic only — this child failed, its siblings
+                    // still run.
+                }
+                Err(_panic) => {
+                    // A panicking child must never starve or fail its
+                    // siblings (D-08).
+                    log::error!(
+                        target: "paladin::trace",
+                        "a CompositeSink child panicked while handling a trace record"
+                    );
+                }
+            }
+        }
+        if all_failed {
+            return Err(TraceSinkError::Failed(
+                "every CompositeSink child failed or panicked".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_core::platform::container::waypoint::ThreadId;
+    use tokio::sync::Mutex;
 
     struct MockTraceSink;
 
     #[async_trait]
     impl TraceSink for MockTraceSink {
-        async fn on_event(&self, _event: TraceEvent) -> Result<(), TraceSinkError> {
+        async fn on_event(&self, _record: TraceRecord) -> Result<(), TraceSinkError> {
             Ok(())
+        }
+    }
+
+    fn sample_record(event: TraceEvent) -> TraceRecord {
+        TraceRecord {
+            thread_id: ThreadId::new("t1").unwrap(),
+            run_id: None,
+            seq: 1,
+            at: chrono::Utc::now(),
+            event,
         }
     }
 
     #[tokio::test]
     async fn mock_sink_implements_trait() {
         let sink = MockTraceSink;
-        let event = TraceEvent::RunStarted {
-            thread_id: ThreadId::new("t1").unwrap(),
-        };
-        assert!(sink.on_event(event).await.is_ok());
+        let record = sample_record(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        });
+        assert!(sink.on_event(record).await.is_ok());
     }
 
     #[test]
@@ -212,39 +232,122 @@ mod tests {
         let _: Option<Box<dyn TraceSink>> = None;
     }
 
+    /// D-03: `TraceEmitter` must be object-safe too — a producer holds
+    /// `Arc<dyn TraceEmitter>`, never a concrete dispatcher type.
     #[test]
-    fn all_seven_event_variants_construct() {
+    fn emitter_trait_is_object_safe() {
+        let _: Option<Box<dyn TraceEmitter>> = None;
+        let _: Option<Arc<dyn TraceEmitter>> = None;
+    }
+
+    struct RecordingSink {
+        events: Mutex<Vec<TraceRecord>>,
+    }
+
+    impl RecordingSink {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                events: Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl TraceSink for RecordingSink {
+        async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+            self.events.lock().await.push(record);
+            Ok(())
+        }
+    }
+
+    struct PanickingSink;
+
+    #[async_trait]
+    impl TraceSink for PanickingSink {
+        async fn on_event(&self, _record: TraceRecord) -> Result<(), TraceSinkError> {
+            panic!("simulated panic in CompositeSink child");
+        }
+    }
+
+    struct AlwaysErroringSink;
+
+    #[async_trait]
+    impl TraceSink for AlwaysErroringSink {
+        async fn on_event(&self, _record: TraceRecord) -> Result<(), TraceSinkError> {
+            Err(TraceSinkError::Failed("simulated failure".to_string()))
+        }
+    }
+
+    /// D-08: every child receives the record, in vector order, and a
+    /// panicking first child does not prevent a healthy second child from
+    /// receiving it.
+    #[tokio::test]
+    async fn composite_sink_forwards_to_every_child_even_when_one_panics() {
+        let a = Arc::new(PanickingSink);
+        let b = RecordingSink::new();
+        let composite = CompositeSink::new(vec![a, b.clone()]);
+
+        let record = sample_record(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        });
+        let result = composite.on_event(record).await;
+        assert!(
+            result.is_ok(),
+            "a panicking child must not fail on_event when a sibling succeeds"
+        );
+        assert_eq!(b.events.lock().await.len(), 1);
+    }
+
+    /// D-08: `on_event` returns `Err` only when EVERY child failed.
+    #[tokio::test]
+    async fn composite_sink_errs_only_when_every_child_fails() {
+        let a = Arc::new(AlwaysErroringSink);
+        let b = Arc::new(PanickingSink);
+        let composite = CompositeSink::new(vec![a, b]);
+
+        let record = sample_record(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        });
+        let result = composite.on_event(record).await;
+        assert!(
+            result.is_err(),
+            "on_event must error when every child failed or panicked"
+        );
+    }
+
+    /// D-08: with at least one succeeding child, `on_event` is `Ok`.
+    #[tokio::test]
+    async fn composite_sink_ok_when_at_least_one_child_succeeds() {
+        let a = Arc::new(AlwaysErroringSink);
+        let b = RecordingSink::new();
+        let composite = CompositeSink::new(vec![a, b.clone()]);
+
+        let record = sample_record(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        });
+        assert!(composite.on_event(record).await.is_ok());
+        assert_eq!(b.events.lock().await.len(), 1);
+    }
+
+    #[test]
+    fn all_twelve_event_variants_construct_via_reexport() {
         let thread_id = ThreadId::new("t1").unwrap();
-        let _ = TraceEvent::RunStarted {
+        let _ = TraceRecord {
             thread_id: thread_id.clone(),
+            run_id: None,
+            seq: 1,
+            at: chrono::Utc::now(),
+            event: TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 0,
+                total_tokens: 0,
+                duration_ms: 0,
+                trace_dropped_total: 0,
+            },
         };
-        let _ = TraceEvent::SuperstepStarted {
-            thread_id: thread_id.clone(),
-            superstep: 1,
-        };
-        let _ = TraceEvent::NodeStarted {
-            thread_id: thread_id.clone(),
-            superstep: 1,
-            node_id: NodeId::new("n1"),
-            attempt: 1,
-        };
-        let _ = TraceEvent::NodeFinished {
-            thread_id: thread_id.clone(),
-            superstep: 1,
-            node_id: NodeId::new("n1"),
-            attempt: 1,
-            cache_hit: false,
-        };
-        let _ = TraceEvent::DeltaMerged {
-            thread_id: thread_id.clone(),
-            superstep: 1,
-            field_changes: vec![FieldName::new("x").unwrap()],
-        };
-        let _ = TraceEvent::WaypointSaved {
-            thread_id: thread_id.clone(),
-            waypoint_id: WaypointId::generate(),
-        };
-        let _ = TraceEvent::RunFinished { thread_id };
     }
 
     /// D-25: the fallback adapter's hop event carries an OPTIONAL node id

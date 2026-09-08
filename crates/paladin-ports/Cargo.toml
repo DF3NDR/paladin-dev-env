@@ -22,6 +22,7 @@ chrono = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 futures = "0.3"
+log = { workspace = true }
 md5 = "0.7"
 mime_guess = "2"
 

@@ -17,6 +17,19 @@ pub mod contract_tests;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
+/// PostgreSQL implementation of `RunTracePort`, behind the `postgres`
+/// feature, over migration `006`.
+#[cfg(feature = "postgres")]
+pub mod postgres;
+
+/// Retention join (D-17): a small sibling to `waypoint::retention::prune`
+/// that prunes `run_traces` for the same threads and bounds
+/// `WaypointRetentionService` already applies to Waypoints -- NOT a
+/// generalisation of it, since `waypoint::retention::prune` is hard-typed
+/// to `&dyn WaypointPort` and cannot accept this trait too
+/// (28-RESEARCH.md Q14 / Pitfall 3).
+pub mod retention;
+
 /// The superstep a `TraceRecord`'s row is filed under for
 /// `RunTracePort::prune_thread`'s `(thread_id, superstep < ?)` predicate.
 ///

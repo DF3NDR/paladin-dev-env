@@ -69,6 +69,25 @@ const LIST_SELECT_PREFIX: &str = "SELECT run_id, thread_id, assistant_id, assist
      webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version \
      FROM runs WHERE 1 = 1";
 
+/// D-30: resolves and freezes `assistant_version` onto the new row from the
+/// referenced assistant's CURRENT `latest` inside this ONE statement --
+/// `assistant_version` is never a bound parameter, it is `a.latest`,
+/// selected atomically alongside every other column. Zero rows affected
+/// means the `WHERE` clause found no matching, non-deleted assistant row
+/// (`RunRepositoryError::UnknownAssistant`, checked by the caller); a
+/// unique-constraint violation on `idx_runs_thread_active` (the run WOULD
+/// have inserted, but the thread is busy) surfaces as a `sqlx::Error` and is
+/// mapped to `ThreadBusy` by the same `map_insert_error` `insert` uses.
+const INSERT_RUN_WITH_LATEST: &str = "INSERT INTO runs \
+     (run_id, thread_id, assistant_id, assistant_version, status, input, submitted_at, \
+      started_at, finished_at, attempt, cancel_requested, error, webhook, pending_responses, \
+      fork_from, output, final_waypoint_id, schema_version) \
+     SELECT ?, ?, ?, a.latest, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? \
+     FROM assistants a WHERE a.assistant_id = ? AND a.deleted_at IS NULL";
+
+const SELECT_RESOLVED_ASSISTANT_VERSION: &str =
+    "SELECT assistant_version FROM runs WHERE run_id = ?";
+
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
 /// SQLite `RunRepositoryPort` implementation (PLAT-01, Tier 1: always
@@ -645,6 +664,81 @@ impl RunRepositoryPort for SqliteRunRepository {
         }
         Ok(())
     }
+
+    async fn insert_with_latest(&self, run: &Run) -> Result<u32, RunRepositoryError> {
+        let input =
+            serde_json::to_string(&run.input).map_err(|e| RunRepositoryError::Serialization {
+                message: e.to_string(),
+            })?;
+        let webhook = run
+            .webhook
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| RunRepositoryError::Serialization {
+                message: e.to_string(),
+            })?;
+        let pending_responses = serde_json::to_string(&run.pending_responses).map_err(|e| {
+            RunRepositoryError::Serialization {
+                message: e.to_string(),
+            }
+        })?;
+        let fork_from = run
+            .fork_from
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| RunRepositoryError::Serialization {
+                message: e.to_string(),
+            })?;
+        let output = run
+            .output
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| RunRepositoryError::Serialization {
+                message: e.to_string(),
+            })?;
+
+        let result = sqlx::query(INSERT_RUN_WITH_LATEST)
+            .bind(run.run_id.as_str())
+            .bind(run.thread_id.as_str())
+            .bind(&run.assistant.assistant_id)
+            .bind(run.status.as_str())
+            .bind(input)
+            .bind(run.submitted_at)
+            .bind(run.started_at)
+            .bind(run.finished_at)
+            .bind(run.attempt as i64)
+            .bind(run.cancel_requested as i64)
+            .bind(&run.error)
+            .bind(webhook)
+            .bind(pending_responses)
+            .bind(fork_from)
+            .bind(output)
+            .bind(&run.final_waypoint_id)
+            .bind(&run.schema_version)
+            .bind(&run.assistant.assistant_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| self.map_insert_error(e, &run.thread_id))?;
+
+        if result.rows_affected() == 0 {
+            return Err(RunRepositoryError::UnknownAssistant {
+                assistant_id: run.assistant.assistant_id.clone(),
+            });
+        }
+
+        let row = sqlx::query(SELECT_RESOLVED_ASSISTANT_VERSION)
+            .bind(run.run_id.as_str())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+        let version: i64 = row
+            .try_get("assistant_version")
+            .map_err(|e| RunRepositoryError::Backend { source: e.into() })?;
+        Ok(version as u32)
+    }
 }
 
 #[cfg(test)]
@@ -777,5 +871,75 @@ mod tests {
             !message.contains("hunter2-secret"),
             "connection error leaked the password: {message}"
         );
+    }
+
+    // ── insert_with_latest / freeze-at-submit (D-30) ─────────────────────
+    // These clauses need a `SqliteRunRepository` AND a
+    // `SqliteAssistantRepository` reading/writing the SAME on-disk
+    // database -- the `INSERT ... SELECT ... FROM assistants` statement
+    // (`INSERT_RUN_WITH_LATEST`) only sees an assistant row committed
+    // through the SAME file, and `sqlx::migrate!` embeds every file under
+    // `migrations/sqlite/` (so either constructor's own migration run
+    // already creates both tables on that shared file).
+
+    async fn shared_file_stores() -> (
+        SqliteRunRepository,
+        crate::assistant::sqlite::SqliteAssistantRepository,
+        std::path::PathBuf,
+    ) {
+        let path = std::env::temp_dir().join(format!(
+            "paladin_run_assistant_freeze_test_{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let url = format!("sqlite://{}", path.display());
+        let run_repo = SqliteRunRepository::new_shared_file(&url).await.unwrap();
+        let assistant_repo =
+            crate::assistant::sqlite::SqliteAssistantRepository::new_shared_file(&url)
+                .await
+                .unwrap();
+        (run_repo, assistant_repo, path)
+    }
+
+    fn cleanup_shared_file(path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    #[tokio::test]
+    async fn insert_with_latest_resolves_current_latest_and_freezes_it() {
+        let (run_repo, assistant_repo, path) = shared_file_stores().await;
+        contract_tests::insert_with_latest_resolves_current_latest_and_freezes_it(
+            &run_repo,
+            &assistant_repo,
+        )
+        .await;
+        cleanup_shared_file(&path);
+    }
+
+    #[tokio::test]
+    async fn insert_with_latest_unknown_assistant_fails() {
+        let (run_repo, _assistant_repo, path) = shared_file_stores().await;
+        contract_tests::insert_with_latest_unknown_assistant_fails(&run_repo).await;
+        cleanup_shared_file(&path);
+    }
+
+    #[tokio::test]
+    async fn insert_with_latest_soft_deleted_assistant_fails() {
+        let (run_repo, assistant_repo, path) = shared_file_stores().await;
+        contract_tests::insert_with_latest_soft_deleted_assistant_fails(&run_repo, &assistant_repo)
+            .await;
+        cleanup_shared_file(&path);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn assistant_version_freeze_at_submit() {
+        let (run_repo, assistant_repo, path) = shared_file_stores().await;
+        let run_repo: Arc<dyn RunRepositoryPort> = Arc::new(run_repo);
+        let assistant_repo: Arc<
+            dyn paladin_ports::output::assistant_repository_port::AssistantRepositoryPort,
+        > = Arc::new(assistant_repo);
+        contract_tests::assistant_version_freeze_at_submit(run_repo, assistant_repo).await;
+        cleanup_shared_file(&path);
     }
 }

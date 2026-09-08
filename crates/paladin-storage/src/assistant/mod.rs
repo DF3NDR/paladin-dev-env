@@ -14,8 +14,10 @@ pub mod in_memory;
 /// tests can call it.
 pub mod contract_tests;
 
-// `sqlite`/`postgres` adapter modules are declared by Task 3, once those
-// files exist -- declaring a feature-gated `mod` before its file exists
-// makes `rustfmt`/`cargo check` fail to resolve it regardless of `cfg`
-// gating (the identical Task-boundary lesson `crate::run::mod`'s own
-// history records for plan 27-02).
+/// SQLite implementation, behind the `sqlite` feature (D-03).
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
+
+/// PostgreSQL implementation, behind the `postgres` feature (D-03, Tier 2).
+#[cfg(feature = "postgres")]
+pub mod postgres;

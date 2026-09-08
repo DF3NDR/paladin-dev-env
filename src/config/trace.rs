@@ -149,11 +149,58 @@ impl Default for OtelConfig {
     }
 }
 
+/// Structured validation errors for [`TraceConfig`] (X-06). `#[non_exhaustive]`
+/// so a future variant is not a breaking change for downstream matchers.
+///
+/// RED-phase stub (Task 2): variants exist so the new tests compile;
+/// `TraceConfig::validate_typed` does not raise any of them yet.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum TraceConfigError {
+    /// `channel_capacity` was `0`.
+    #[error("trace.channel_capacity must be greater than 0")]
+    ZeroChannelCapacity,
+    /// `value_cap_bytes` was `0`.
+    #[error("trace.value_cap_bytes must be greater than 0")]
+    ZeroValueCapBytes,
+    /// `otel.enabled` was `true` but `otel.endpoint`'s scheme was neither
+    /// `http` nor `https`.
+    #[error("trace.otel.endpoint must use the http or https scheme, got `{scheme}`")]
+    EndpointNotHttp {
+        /// The rejected scheme.
+        scheme: String,
+    },
+    /// `otel.enabled` was `true` on a build compiled without the named
+    /// Cargo feature.
+    #[error("trace.otel.enabled requires the `{feature}` feature to be compiled in")]
+    FeatureNotCompiled {
+        /// The Cargo feature name required.
+        feature: &'static str,
+    },
+}
+
+impl TraceConfig {
+    /// RED-phase stub (Task 2): always succeeds. The GREEN commit
+    /// implements the four rules documented on [`TraceConfigError`].
+    pub fn validate_typed(&self) -> Result<(), TraceConfigError> {
+        Ok(())
+    }
+}
+
+// RED-phase stub (Task 2): a no-op `EnvOverridable` impl so
+// `trace_env_overrides_apply` compiles and fails on its assertions. The
+// GREEN commit reads the nine `PALADIN_TRACE_*` variables.
+impl crate::config::env_utils::EnvOverridable for TraceConfig {
+    fn apply_env_overrides(&mut self) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::env_utils::EnvOverridable;
     use config::{Config, File, FileFormat};
     use serial_test::serial;
+    use std::env;
 
     /// A minimal `Settings`-shaped wrapper used to exercise `trace`'s
     /// deserialization behavior in isolation, mirroring
@@ -214,5 +261,117 @@ mod tests {
             .validate()
             .expect_err("zero channel_capacity should be rejected");
         assert!(err.contains("channel_capacity"));
+    }
+
+    // ── Task 2 behaviors ─────────────────────────────────────────────────
+
+    /// Behavior: `OtelConfig::default()` matches D-36's documented values.
+    #[test]
+    fn otel_config_default_matches_documented_values() {
+        let config = OtelConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.endpoint, "http://localhost:4318/v1/traces");
+        assert!(config.headers.is_empty());
+        assert_eq!(config.service_name, "paladin");
+    }
+
+    /// Behavior: `OtelConfig`'s `Debug` output names header keys but never
+    /// prints a header value (security instructions, D-36).
+    #[test]
+    fn otel_debug_redacts_header_values() {
+        let mut config = OtelConfig::default();
+        config
+            .headers
+            .insert("authorization".to_string(), "Bearer sk-secret".to_string());
+
+        let rendered = format!("{config:?}");
+
+        assert!(rendered.contains("authorization"));
+        assert!(!rendered.contains("sk-secret"));
+    }
+
+    /// Behavior: `validate_typed` rejects a zero `channel_capacity`, a zero
+    /// `value_cap_bytes`, and (this build has no `otel` feature declared)
+    /// `otel.enabled` at all, each with its own distinct variant.
+    #[test]
+    fn validate_typed_rejects_each_invalid_case_distinctly() {
+        let mut config = TraceConfig {
+            channel_capacity: 0,
+            ..TraceConfig::default()
+        };
+        assert!(matches!(
+            config.validate_typed(),
+            Err(TraceConfigError::ZeroChannelCapacity)
+        ));
+
+        config = TraceConfig {
+            value_cap_bytes: 0,
+            ..TraceConfig::default()
+        };
+        assert!(matches!(
+            config.validate_typed(),
+            Err(TraceConfigError::ZeroValueCapBytes)
+        ));
+
+        // This workspace has no `otel` Cargo feature declared yet (28-09's
+        // scope), so `otel.enabled` alone is always rejected as
+        // `FeatureNotCompiled` -- exercised directly below rather than via
+        // a non-http(s) scheme, since that branch is unreachable until the
+        // feature exists.
+        config = TraceConfig::default();
+        config.otel.enabled = true;
+        assert!(matches!(
+            config.validate_typed(),
+            Err(TraceConfigError::FeatureNotCompiled { feature: "otel" })
+        ));
+    }
+
+    /// Behavior: setting all nine `PALADIN_TRACE_*` variables and calling
+    /// `apply_env_overrides` changes exactly those fields.
+    #[test]
+    #[serial]
+    fn trace_env_overrides_apply() {
+        unsafe {
+            env::set_var("PALADIN_TRACE_LOG_SINK", "false");
+            env::set_var("PALADIN_TRACE_CHANNEL_CAPACITY", "64");
+            env::set_var("PALADIN_TRACE_PERSIST", "true");
+            env::set_var("PALADIN_TRACE_STATE_VALUES", "true");
+            env::set_var("PALADIN_TRACE_VALUE_CAP_BYTES", "64");
+            env::set_var("PALADIN_TRACE_HEARTBEAT_INTERVAL_SECS", "1");
+            env::set_var("PALADIN_TRACE_OTEL_ENABLED", "true");
+            env::set_var(
+                "PALADIN_TRACE_OTEL_ENDPOINT",
+                "https://collector.example.com/v1/traces",
+            );
+            env::set_var("PALADIN_TRACE_OTEL_SERVICE_NAME", "paladin-test");
+        }
+
+        let mut config = TraceConfig::default();
+        config.apply_env_overrides();
+
+        assert!(!config.log_sink);
+        assert_eq!(config.channel_capacity, 64);
+        assert!(config.persist);
+        assert!(config.state_values);
+        assert_eq!(config.value_cap_bytes, 64);
+        assert_eq!(config.heartbeat_interval_secs, 1);
+        assert!(config.otel.enabled);
+        assert_eq!(
+            config.otel.endpoint,
+            "https://collector.example.com/v1/traces"
+        );
+        assert_eq!(config.otel.service_name, "paladin-test");
+
+        unsafe {
+            env::remove_var("PALADIN_TRACE_LOG_SINK");
+            env::remove_var("PALADIN_TRACE_CHANNEL_CAPACITY");
+            env::remove_var("PALADIN_TRACE_PERSIST");
+            env::remove_var("PALADIN_TRACE_STATE_VALUES");
+            env::remove_var("PALADIN_TRACE_VALUE_CAP_BYTES");
+            env::remove_var("PALADIN_TRACE_HEARTBEAT_INTERVAL_SECS");
+            env::remove_var("PALADIN_TRACE_OTEL_ENABLED");
+            env::remove_var("PALADIN_TRACE_OTEL_ENDPOINT");
+            env::remove_var("PALADIN_TRACE_OTEL_SERVICE_NAME");
+        }
     }
 }

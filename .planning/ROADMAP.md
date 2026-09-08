@@ -673,8 +673,8 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 28-01-PLAN.md — Core trace types, `TraceRecord` envelope, `TraceEmitter`, `CompositeSink`, dispatcher stamping, panic isolation, drop accounting, ordering + X-05 stress tests (OBS-01)
-- [ ] 28-02-PLAN.md — `TraceConfig`/`OtelConfig` config structs, `web_server.dev_ui.mermaid_url`, both YAML files (OBS-01, OBS-02)
+- [x] 28-01-PLAN.md — Core trace types, `TraceRecord` envelope, `TraceEmitter`, `CompositeSink`, dispatcher stamping, panic isolation, drop accounting, ordering + X-05 stress tests (OBS-01)
+- [x] 28-02-PLAN.md — `TraceConfig`/`OtelConfig` config structs, `web_server.dev_ui.mermaid_url`, both YAML files (OBS-01, OBS-02)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

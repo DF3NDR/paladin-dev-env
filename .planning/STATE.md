@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 27
-current_phase_name: Platform API
+current_phase_name: platform-api
 status: executing
 stopped_at: Phase 27 context gathered
-last_updated: "2026-09-08T01:43:07.295Z"
-last_activity: 2026-09-07
-last_activity_desc: Phase 26 complete, transitioned to Phase 27
+last_updated: "2026-09-08T01:49:20.142Z"
+last_activity: 2026-09-08
+last_activity_desc: Phase 27 execution started
 progress:
   total_phases: 7
   completed_phases: 6
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-07 after Phase 26)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 27 — Platform API
+**Current focus:** Phase 27 — platform-api
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
 **Progress:** [███████░░░] v0.10.0 — 6 of 9 phases complete (22, 22.1, 23, 24, 25, 26); 85/85 planned plans executed (Phase 27 not yet planned)
@@ -51,10 +51,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 27 — Platform API
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-07 — Phase 26 complete, transitioned to Phase 27
+Phase: 27 (platform-api) — EXECUTING
+Plan: 1 of 18
+Status: Executing Phase 27
+Last activity: 2026-09-08 — Phase 27 execution started
 
 ## Performance Metrics
 

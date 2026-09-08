@@ -82,7 +82,9 @@ pub use crate::config::schedules::SchedulesConfig;
 pub use crate::config::trace::{OtelConfig, TraceConfig, TraceConfigError};
 pub use crate::config::waypoint_retention::WaypointRetentionConfig;
 pub use crate::config::waypoint_store::{WaypointStoreBackend, WaypointStoreConfig};
-pub use crate::config::web_server::{MessageServiceSettings, ServerConfig, SourceConfig};
+pub use crate::config::web_server::{
+    DevUiConfig, MessageServiceSettings, ServerConfig, SourceConfig, WebServerConfig,
+};
 pub use crate::config::webhooks::WebhooksConfig;
 pub use paladin_llm::config::vision::{VisionConfig, VisionProviderConfig, VisionRetryConfig};
 // Garrison, Sanctum, RAG and MemoryExtraction config types live in the paladin-memory crate (Task 6.0)

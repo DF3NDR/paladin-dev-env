@@ -311,6 +311,24 @@ spec:
               topologyKey: kubernetes.io/hostname
 ```
 
+### Worker replicas (Platform API, v0.10)
+
+The Deployment above serves the `/v1` API surface. Since Phase 27's Platform API turns
+`paladin-server` into a durable run server (`POST /runs` enqueues, a worker pool executes off the
+request path — see [`docs/src/api-reference/platform-api.md`](../api-reference/platform-api.md)),
+horizontal scale-out for run *execution* is a second, separate Deployment consuming the same
+durable run store and queue, not a config flag on this one:
+
+[`k8s/server/worker-deployment.yaml`](https://github.com/DF3NDR/paladin-dev-env/blob/main/k8s/server/worker-deployment.yaml)
+is the worked example — same image, `APP_RUN_STORE_BACKEND=postgres`,
+`APP_RUN_QUEUE_BACKEND=redis`, `APP_RUN_WORKER_CONCURRENCY` set, no separate Service (worker pods
+only consume work, they never serve inbound traffic). See
+[Queue / Worker (Distributed)](../deployment-topologies/queue-worker.md#run-server-producer-api--worker-replicas)
+for the full producer/worker-replica writeup, including why scaling worker replicas does **not**
+change ADR-0041's single-replica scope for the in-process auth token store — that limitation
+attaches to how many API replicas serve `bearer_token`-authenticated routes, not to how many
+worker replicas exist.
+
 ### Service
 
 ```yaml

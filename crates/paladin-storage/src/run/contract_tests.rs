@@ -27,6 +27,26 @@ use paladin_ports::output::run_repository_port::{
 };
 
 use crate::assistant::contract_tests::sample_new_version as sample_assistant_new_version;
+use crate::run::storage_timestamp;
+
+/// The current instant, truncated to the narrowest resolution any supported
+/// backend persists (microseconds, via `storage_timestamp`).
+///
+/// Every fixture and `at` value in this suite is stamped through this
+/// function rather than reading the system clock directly, which typically
+/// yields nanosecond-precision sub-second digits that a value written
+/// through `PostgresRunRepository` cannot round-trip exactly (`TIMESTAMPTZ`
+/// holds microseconds). If a clause built its fixture from an unnormalised
+/// clock read instead, the only way to make its `assert_eq!` pass on
+/// Postgres would be to weaken that assertion into a tolerance-based
+/// comparison, which would stop proving the field round-trips at all.
+/// Stamping fixtures at the storage resolution instead keeps every
+/// `assert_eq!` in this file exact, on every backend, including the ones
+/// (SQLite, in-memory) that would have preserved the finer resolution just
+/// fine on their own.
+pub fn contract_timestamp() -> DateTime<Utc> {
+    storage_timestamp(Utc::now())
+}
 
 /// Build a `Run` fixture for `thread`/`assistant_id`, stamped with the given
 /// `submitted_at`. Every contract function should build fixtures through
@@ -54,7 +74,7 @@ fn sample_parley_response(responded_by: &str) -> ParleyResponse {
         prompt: "which option?".to_string(),
         value: serde_json::json!("a"),
         responded_by: Some(responded_by.to_string()),
-        responded_at: Utc::now(),
+        responded_at: contract_timestamp(),
         defaulted: false,
     }
 }
@@ -65,7 +85,7 @@ fn sample_parley_response(responded_by: &str) -> ParleyResponse {
 /// `webhook` (with `secret`), `pending_responses` and `fork_from`.
 pub async fn insert_then_get_round_trips_every_field(port: &dyn RunRepositoryPort) {
     let thread = ThreadId::new("contract-run-insert-get-round-trip").unwrap();
-    let mut run = sample_run(&thread, "assistant-a", Utc::now())
+    let mut run = sample_run(&thread, "assistant-a", contract_timestamp())
         .with_webhook(WebhookSpec {
             url: "https://example.com/hook".to_string(),
             secret: Some("shh-secret".to_string()),
@@ -114,10 +134,10 @@ pub async fn update_status_queued_to_running_sets_started_at_then_stale_cas_fail
     port: &dyn RunRepositoryPort,
 ) {
     let thread = ThreadId::new("contract-run-cas-queued-running").unwrap();
-    let run = sample_run(&thread, "assistant-a", Utc::now());
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
     port.insert(&run).await.unwrap();
 
-    let at = Utc::now();
+    let at = contract_timestamp();
     port.update_status(&run.run_id, RunStatus::Queued, RunStatus::Running, at)
         .await
         .unwrap();
@@ -139,9 +159,9 @@ pub async fn update_status_running_to_completed_sets_finished_at_then_terminal_i
     port: &dyn RunRepositoryPort,
 ) {
     let thread = ThreadId::new("contract-run-cas-running-completed").unwrap();
-    let run = sample_run(&thread, "assistant-a", Utc::now());
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
     port.insert(&run).await.unwrap();
-    let started_at = Utc::now();
+    let started_at = contract_timestamp();
     port.update_status(
         &run.run_id,
         RunStatus::Queued,
@@ -151,7 +171,7 @@ pub async fn update_status_running_to_completed_sets_finished_at_then_terminal_i
     .await
     .unwrap();
 
-    let finished_at = Utc::now();
+    let finished_at = contract_timestamp();
     port.update_status(
         &run.run_id,
         RunStatus::Running,
@@ -180,9 +200,9 @@ pub async fn update_status_running_to_completed_sets_finished_at_then_terminal_i
 /// `IllegalTransition { from: Running, to: Running }`.
 pub async fn update_status_self_transition_fails(port: &dyn RunRepositoryPort) {
     let thread = ThreadId::new("contract-run-cas-self-transition").unwrap();
-    let run = sample_run(&thread, "assistant-a", Utc::now());
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
     port.insert(&run).await.unwrap();
-    let at = Utc::now();
+    let at = contract_timestamp();
     port.update_status(&run.run_id, RunStatus::Queued, RunStatus::Running, at)
         .await
         .unwrap();
@@ -217,7 +237,7 @@ pub async fn insert_rejects_second_active_run_then_succeeds_after_terminal(
     ] {
         let thread =
             ThreadId::new(format!("contract-run-thread-busy-{}", active.as_str())).unwrap();
-        let first = sample_run(&thread, "assistant-a", Utc::now());
+        let first = sample_run(&thread, "assistant-a", contract_timestamp());
         port.insert(&first).await.unwrap();
 
         // Drive the first run to `active`'s status (Queued needs no
@@ -229,7 +249,7 @@ pub async fn insert_rejects_second_active_run_then_succeeds_after_terminal(
                     &first.run_id,
                     RunStatus::Queued,
                     RunStatus::Running,
-                    Utc::now(),
+                    contract_timestamp(),
                 )
                 .await
                 .unwrap();
@@ -239,7 +259,7 @@ pub async fn insert_rejects_second_active_run_then_succeeds_after_terminal(
                     &first.run_id,
                     RunStatus::Queued,
                     RunStatus::Running,
-                    Utc::now(),
+                    contract_timestamp(),
                 )
                 .await
                 .unwrap();
@@ -247,7 +267,7 @@ pub async fn insert_rejects_second_active_run_then_succeeds_after_terminal(
                     &first.run_id,
                     RunStatus::Running,
                     RunStatus::AwaitingInput,
-                    Utc::now(),
+                    contract_timestamp(),
                 )
                 .await
                 .unwrap();
@@ -255,7 +275,7 @@ pub async fn insert_rejects_second_active_run_then_succeeds_after_terminal(
             _ => unreachable!("only active statuses are iterated"),
         }
 
-        let second = sample_run(&thread, "assistant-a", Utc::now());
+        let second = sample_run(&thread, "assistant-a", contract_timestamp());
         let err = port.insert(&second).await.unwrap_err();
         assert!(
             matches!(err, RunRepositoryError::ThreadBusy { .. }),
@@ -265,11 +285,11 @@ pub async fn insert_rejects_second_active_run_then_succeeds_after_terminal(
         // Retire the first run to a terminal status (every active status has
         // a legal edge to `Cancelled`, per `RunStatus::try_transition`),
         // then confirm the thread is no longer busy.
-        port.update_status(&first.run_id, active, RunStatus::Cancelled, Utc::now())
+        port.update_status(&first.run_id, active, RunStatus::Cancelled, contract_timestamp())
             .await
             .unwrap();
 
-        let third = sample_run(&thread, "assistant-a", Utc::now());
+        let third = sample_run(&thread, "assistant-a", contract_timestamp());
         port.insert(&third).await.unwrap();
     }
 }
@@ -288,7 +308,7 @@ pub async fn list_paginates_by_submitted_at_and_run_id_with_no_overlap_or_gap(
     // sees exactly these five rows regardless of what else the backend
     // holds.
     let assistant_id = "contract-run-list-pagination-fixture";
-    let base = Utc::now();
+    let base = contract_timestamp();
     let mut inserted = Vec::new();
     for i in 0..5u32 {
         // Runs 0 and 1 deliberately share a `submitted_at` (both `base`) so
@@ -348,11 +368,11 @@ pub async fn list_filters_by_thread_assistant_and_status(port: &dyn RunRepositor
     let thread_a = ThreadId::new("contract-run-list-filter-thread-a").unwrap();
     let thread_b = ThreadId::new("contract-run-list-filter-thread-b").unwrap();
 
-    let run_a = sample_run(&thread_a, "assistant-x", Utc::now());
+    let run_a = sample_run(&thread_a, "assistant-x", contract_timestamp());
     let run_b = sample_run(
         &thread_b,
         "assistant-y",
-        Utc::now() + chrono::Duration::seconds(1),
+        contract_timestamp() + chrono::Duration::seconds(1),
     );
     port.insert(&run_a).await.unwrap();
     port.insert(&run_b).await.unwrap();
@@ -360,7 +380,7 @@ pub async fn list_filters_by_thread_assistant_and_status(port: &dyn RunRepositor
         &run_b.run_id,
         RunStatus::Queued,
         RunStatus::Running,
-        Utc::now(),
+        contract_timestamp(),
     )
     .await
     .unwrap();
@@ -403,7 +423,7 @@ pub async fn list_filters_by_thread_assistant_and_status(port: &dyn RunRepositor
 /// with `AlreadyTerminal`.
 pub async fn request_cancel_is_idempotent_and_rejects_terminal(port: &dyn RunRepositoryPort) {
     let thread = ThreadId::new("contract-run-request-cancel").unwrap();
-    let run = sample_run(&thread, "assistant-a", Utc::now());
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
     port.insert(&run).await.unwrap();
 
     let status = port.request_cancel(&run.run_id).await.unwrap();
@@ -415,7 +435,7 @@ pub async fn request_cancel_is_idempotent_and_rejects_terminal(port: &dyn RunRep
         &run.run_id,
         RunStatus::Queued,
         RunStatus::Cancelled,
-        Utc::now(),
+        contract_timestamp(),
     )
     .await
     .unwrap();
@@ -429,7 +449,7 @@ pub async fn request_cancel_is_idempotent_and_rejects_terminal(port: &dyn RunRep
 pub async fn is_cancel_requested_reflects_active_run_flag(port: &dyn RunRepositoryPort) {
     let thread = ThreadId::new("contract-run-is-cancel-requested").unwrap();
     let unknown = ThreadId::new("contract-run-is-cancel-requested-unknown").unwrap();
-    let run = sample_run(&thread, "assistant-a", Utc::now());
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
     port.insert(&run).await.unwrap();
 
     assert!(!port.is_cancel_requested(&thread).await.unwrap());
@@ -444,7 +464,7 @@ pub async fn is_cancel_requested_reflects_active_run_flag(port: &dyn RunReposito
 /// `bump_attempt` returns the incremented value and persists it.
 pub async fn bump_attempt_increments_and_persists(port: &dyn RunRepositoryPort) {
     let thread = ThreadId::new("contract-run-bump-attempt").unwrap();
-    let run = sample_run(&thread, "assistant-a", Utc::now());
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
     port.insert(&run).await.unwrap();
 
     let first = port.bump_attempt(&run.run_id).await.unwrap();
@@ -463,7 +483,7 @@ pub async fn record_resume_on_awaiting_input_then_clear_pending_responses(
     port: &dyn RunRepositoryPort,
 ) {
     let thread = ThreadId::new("contract-run-record-resume").unwrap();
-    let run = sample_run(&thread, "assistant-a", Utc::now());
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
     port.insert(&run).await.unwrap();
 
     // Not AwaitingInput yet: record_resume must fail.
@@ -477,7 +497,7 @@ pub async fn record_resume_on_awaiting_input_then_clear_pending_responses(
         &run.run_id,
         RunStatus::Queued,
         RunStatus::Running,
-        Utc::now(),
+        contract_timestamp(),
     )
     .await
     .unwrap();
@@ -485,7 +505,7 @@ pub async fn record_resume_on_awaiting_input_then_clear_pending_responses(
         &run.run_id,
         RunStatus::Running,
         RunStatus::AwaitingInput,
-        Utc::now(),
+        contract_timestamp(),
     )
     .await
     .unwrap();
@@ -513,13 +533,13 @@ pub async fn record_resume_on_awaiting_input_then_clear_pending_responses(
 /// without touching `status`.
 pub async fn record_outcome_persists_fields_without_touching_status(port: &dyn RunRepositoryPort) {
     let thread = ThreadId::new("contract-run-record-outcome").unwrap();
-    let run = sample_run(&thread, "assistant-a", Utc::now());
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
     port.insert(&run).await.unwrap();
     port.update_status(
         &run.run_id,
         RunStatus::Queued,
         RunStatus::Running,
-        Utc::now(),
+        contract_timestamp(),
     )
     .await
     .unwrap();
@@ -548,7 +568,7 @@ pub async fn record_outcome_persists_fields_without_touching_status(port: &dyn R
 /// version fails `get` with `UnknownSchemaVersion { found }`, never a panic.
 pub async fn get_on_unsupported_schema_version_fails(port: &dyn RunRepositoryPort) {
     let thread = ThreadId::new("contract-run-unknown-schema-version").unwrap();
-    let mut run = sample_run(&thread, "assistant-a", Utc::now());
+    let mut run = sample_run(&thread, "assistant-a", contract_timestamp());
     run.schema_version = "v99-from-the-future".to_string();
     port.insert(&run).await.unwrap();
 
@@ -573,7 +593,7 @@ pub async fn ten_concurrent_inserts_one_thread_exactly_one_accepted(
     let mut handles = Vec::new();
     for _ in 0..10 {
         let port = Arc::clone(&port);
-        let run = sample_run(&thread, "assistant-a", Utc::now());
+        let run = sample_run(&thread, "assistant-a", contract_timestamp());
         handles.push(tokio::spawn(async move { port.insert(&run).await }));
     }
 
@@ -620,7 +640,7 @@ pub async fn insert_with_latest_resolves_current_latest_and_freezes_it(
         .unwrap();
 
     let thread1 = ThreadId::new("contract-run-insert-with-latest-t1").unwrap();
-    let mut run1 = sample_run(&thread1, assistant_id.as_str(), Utc::now());
+    let mut run1 = sample_run(&thread1, assistant_id.as_str(), contract_timestamp());
     run1.assistant.version = 999; // must be ignored -- resolved from `latest`, not the caller
     let resolved1 = run_port.insert_with_latest(&run1).await.unwrap();
     assert_eq!(resolved1, 1);
@@ -633,7 +653,7 @@ pub async fn insert_with_latest_resolves_current_latest_and_freezes_it(
         .unwrap();
 
     let thread2 = ThreadId::new("contract-run-insert-with-latest-t2").unwrap();
-    let run2 = sample_run(&thread2, assistant_id.as_str(), Utc::now());
+    let run2 = sample_run(&thread2, assistant_id.as_str(), contract_timestamp());
     let resolved2 = run_port.insert_with_latest(&run2).await.unwrap();
     assert_eq!(resolved2, 2);
     let loaded2 = run_port.get(&run2.run_id).await.unwrap().unwrap();
@@ -644,7 +664,7 @@ pub async fn insert_with_latest_resolves_current_latest_and_freezes_it(
 /// `UnknownAssistant`.
 pub async fn insert_with_latest_unknown_assistant_fails(run_port: &dyn RunRepositoryPort) {
     let thread = ThreadId::new("contract-run-insert-with-latest-unknown").unwrap();
-    let run = sample_run(&thread, "definitely-unknown-assistant", Utc::now());
+    let run = sample_run(&thread, "definitely-unknown-assistant", contract_timestamp());
     let err = run_port.insert_with_latest(&run).await.unwrap_err();
     assert!(matches!(err, RunRepositoryError::UnknownAssistant { .. }));
 }
@@ -663,7 +683,7 @@ pub async fn insert_with_latest_soft_deleted_assistant_fails(
     assistant_port.soft_delete(&assistant_id).await.unwrap();
 
     let thread = ThreadId::new("contract-run-insert-with-latest-deleted-thread").unwrap();
-    let run = sample_run(&thread, assistant_id.as_str(), Utc::now());
+    let run = sample_run(&thread, assistant_id.as_str(), contract_timestamp());
     let err = run_port.insert_with_latest(&run).await.unwrap_err();
     assert!(matches!(err, RunRepositoryError::UnknownAssistant { .. }));
 }
@@ -700,7 +720,7 @@ pub async fn assistant_version_freeze_at_submit(
     for i in 0..10 {
         let run_port = Arc::clone(&run_port);
         let thread = ThreadId::new(format!("contract-run-freeze-thread-{i}")).unwrap();
-        let run = sample_run(&thread, assistant_id.as_str(), Utc::now());
+        let run = sample_run(&thread, assistant_id.as_str(), contract_timestamp());
         let run_id = run.run_id.clone();
         insert_handles.push(tokio::spawn(async move {
             run_port

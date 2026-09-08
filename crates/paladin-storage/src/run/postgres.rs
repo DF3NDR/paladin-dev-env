@@ -13,6 +13,14 @@ is_unique_violation()-before-generic-wrap mapping to `ThreadBusy` (D-17,
 native `BOOLEAN` for `cancel_requested`, and native `TIMESTAMPTZ` for the
 three timestamp columns. Every statement uses bound parameters; no query
 string is ever built by formatting a caller-supplied value into it.
+
+Precision contract (D-01, D-03, D-04): `TIMESTAMPTZ` holds microsecond
+resolution, so every `chrono::DateTime<Utc>` bound into `submitted_at`,
+`started_at` or `finished_at` -- in `INSERT_RUN`, `INSERT_RUN_WITH_LATEST`
+and `update_status`'s `QueryBuilder` pushes -- is normalised through
+`crate::run::storage_timestamp` first. That function's own rustdoc is the
+single source of truth for the contract (truncation toward zero, not
+rounding); this module never reimplements it.
 */
 
 use async_trait::async_trait;
@@ -29,6 +37,7 @@ use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunPage, RunQuery, RunRepositoryError, RunRepositoryPort,
 };
 
+use crate::run::storage_timestamp;
 use crate::waypoint::redact::redact_database_url_password;
 
 // Every top-level query string below is a plain `&'static str` literal (or,
@@ -329,9 +338,9 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(run.assistant.version as i32)
             .bind(run.status.as_str())
             .bind(input)
-            .bind(run.submitted_at)
-            .bind(run.started_at)
-            .bind(run.finished_at)
+            .bind(storage_timestamp(run.submitted_at))
+            .bind(run.started_at.map(storage_timestamp))
+            .bind(run.finished_at.map(storage_timestamp))
             .bind(run.attempt as i32)
             .bind(run.cancel_requested)
             .bind(&run.error)
@@ -370,6 +379,11 @@ impl RunRepositoryPort for PostgresRunRepository {
         // CAS predicate is evaluated.
         RunStatus::try_transition(from, to)
             .map_err(|_| RunRepositoryError::IllegalTransition { from, to })?;
+
+        // Normalised once (D-01): both `started_at` and `finished_at` bind
+        // this same normalised instant when both branches below fire on a
+        // single terminal-and-just-started transition.
+        let at = storage_timestamp(at);
 
         let mut builder: sqlx::QueryBuilder<sqlx::Postgres> =
             sqlx::QueryBuilder::new("UPDATE runs SET status = ");
@@ -679,9 +693,9 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(&run.assistant.assistant_id)
             .bind(run.status.as_str())
             .bind(input)
-            .bind(run.submitted_at)
-            .bind(run.started_at)
-            .bind(run.finished_at)
+            .bind(storage_timestamp(run.submitted_at))
+            .bind(run.started_at.map(storage_timestamp))
+            .bind(run.finished_at.map(storage_timestamp))
             .bind(run.attempt as i32)
             .bind(run.cancel_requested)
             .bind(&run.error)
@@ -692,6 +706,7 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(&run.final_waypoint_id)
             .bind(&run.schema_version)
             .bind(&run.assistant.assistant_id)
+            // (INSERT_RUN_WITH_LATEST's trailing $18 predicate bind, unchanged)
             .execute(&self.pool)
             .await
             .map_err(|e| self.map_insert_error(e, &run.thread_id))?;

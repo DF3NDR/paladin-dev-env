@@ -629,7 +629,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 27-17-PLAN.md — `paladin-server` wiring from config, fail-closed feature gates, services registered with the coordinator, §9.5 (all)
+- [x] 27-17-PLAN.md — `paladin-server` wiring from config, fail-closed feature gates, services registered with the coordinator, §9.5 (all)
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

@@ -5,9 +5,16 @@ A lease-aware in-memory `RunQueuePort` implementation (D-08's Tier 1 twin):
 a `VecDeque<QueueEntry>` of visible-or-scheduled messages plus a
 `HashMap<LeaseToken, LeaseEntry>` of in-flight leases with real expiry
 instants. `dequeue` hides a message for the lease duration; an expired
-lease becomes visible again (reclaimed lazily on the next queue operation)
-rather than being stubbed out -- plan 27-03's queue contract suite runs
-against this adapter unchanged.
+lease becomes visible again (reclaimed lazily on the next queue operation),
+with `attempt` incremented on the redelivered message, rather than being
+stubbed out -- plan 27-03's queue contract suite runs against this adapter
+unchanged.
+
+A bounded ring of recently-reclaimed tokens (`recently_expired`) lets
+`ack`/`extend_lease`/`nack` distinguish `QueueError::LeaseExpired` (the
+token was issued and has since expired) from `QueueError::UnknownLease`
+(the token was never issued by this queue at all) -- the two errors D-07
+requires callers be able to tell apart.
 */
 
 use std::collections::{HashMap, VecDeque};
@@ -20,6 +27,12 @@ use tokio::sync::Mutex;
 use paladin_ports::output::run_queue_port::{
     LeaseToken, LeasedRun, QueueError, QueuedRun, RunQueuePort,
 };
+
+/// How many recently-expired tokens to remember for the
+/// `LeaseExpired`-vs-`UnknownLease` distinction. Bounded so a long-running
+/// queue's memory does not grow unboundedly; far larger than any single
+/// test or realistic in-flight lease count needs.
+const RECENTLY_EXPIRED_CAPACITY: usize = 4096;
 
 struct QueueEntry {
     queued: QueuedRun,
@@ -35,14 +48,21 @@ struct LeaseEntry {
 struct Inner {
     entries: VecDeque<QueueEntry>,
     leases: HashMap<LeaseToken, LeaseEntry>,
+    /// A bounded FIFO ring of tokens whose lease recently expired (reclaimed
+    /// by [`Inner::reclaim_expired_leases`]), oldest first. Membership here
+    /// (rather than in `leases`) is what makes a stale token's error
+    /// `LeaseExpired` instead of `UnknownLease`.
+    recently_expired: VecDeque<LeaseToken>,
     next_token: u64,
 }
 
 impl Inner {
     /// Move every lease whose `expires_at` has passed back onto the visible
-    /// queue -- the "an expired lease becomes visible again" half of the
-    /// module doc's contract. Called at the start of every operation so a
-    /// caller never observes a stale lease as still held.
+    /// queue with `attempt` incremented -- the "an expired lease becomes
+    /// visible again, redelivered with attempt+1" half of the module doc's
+    /// contract -- and record the token in `recently_expired`. Called at the
+    /// start of every operation so a caller never observes a stale lease as
+    /// still held.
     fn reclaim_expired_leases(&mut self, now: Instant) {
         let expired: Vec<LeaseToken> = self
             .leases
@@ -51,11 +71,37 @@ impl Inner {
             .map(|(token, _)| token.clone())
             .collect();
         for token in expired {
-            if let Some(entry) = self.leases.remove(&token) {
+            if let Some(mut entry) = self.leases.remove(&token) {
+                entry.queued.attempt += 1;
                 self.entries.push_back(QueueEntry {
                     queued: entry.queued,
                     visible_at: now,
                 });
+                self.remember_expired(token);
+            }
+        }
+    }
+
+    /// Record `token` in the bounded `recently_expired` ring, evicting the
+    /// oldest entry first if at capacity.
+    fn remember_expired(&mut self, token: LeaseToken) {
+        if self.recently_expired.len() >= RECENTLY_EXPIRED_CAPACITY {
+            self.recently_expired.pop_front();
+        }
+        self.recently_expired.push_back(token);
+    }
+
+    /// Classify a token this queue does not currently hold a live lease
+    /// for: `LeaseExpired` if it was issued and has since expired,
+    /// `UnknownLease` if this queue never issued it at all.
+    fn error_for_missing_token(&self, token: &LeaseToken) -> QueueError {
+        if self.recently_expired.contains(token) {
+            QueueError::LeaseExpired {
+                token: token.clone(),
+            }
+        } else {
+            QueueError::UnknownLease {
+                token: token.clone(),
             }
         }
     }
@@ -126,9 +172,7 @@ impl RunQueuePort for InMemoryRunQueue {
                 entry.expires_at = now + lease;
                 Ok(())
             }
-            None => Err(QueueError::UnknownLease {
-                token: token.clone(),
-            }),
+            None => Err(inner.error_for_missing_token(token)),
         }
     }
 
@@ -138,9 +182,7 @@ impl RunQueuePort for InMemoryRunQueue {
         inner.reclaim_expired_leases(now);
         match inner.leases.remove(token) {
             Some(_) => Ok(()),
-            None => Err(QueueError::UnknownLease {
-                token: token.clone(),
-            }),
+            None => Err(inner.error_for_missing_token(token)),
         }
     }
 
@@ -149,16 +191,15 @@ impl RunQueuePort for InMemoryRunQueue {
         let now = Instant::now();
         inner.reclaim_expired_leases(now);
         match inner.leases.remove(token) {
-            Some(entry) => {
+            Some(mut entry) => {
+                entry.queued.attempt += 1;
                 inner.entries.push_back(QueueEntry {
                     queued: entry.queued,
                     visible_at: now + requeue_delay,
                 });
                 Ok(())
             }
-            None => Err(QueueError::UnknownLease {
-                token: token.clone(),
-            }),
+            None => Err(inner.error_for_missing_token(token)),
         }
     }
 
@@ -173,137 +214,104 @@ impl RunQueuePort for InMemoryRunQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-    use paladin_core::platform::container::run::RunId;
-    use paladin_core::platform::container::waypoint::ThreadId;
+    use crate::run_queue::contract_tests;
+    use std::sync::Arc as StdArc;
 
-    fn sample_queued() -> QueuedRun {
-        QueuedRun {
-            run_id: RunId::new_v7(),
-            thread_id: ThreadId::new("t1").unwrap(),
-            attempt: 1,
-            enqueued_at: Utc::now(),
+    // ── D-06 shared contract suite, one #[tokio::test] per clause ────────
+    //
+    // Each test constructs its own fresh, empty `InMemoryRunQueue` (the
+    // contract suite's own precondition) and delegates entirely to
+    // `contract_tests`, so a failure names the violated contract clause
+    // directly rather than a line number in this file.
+
+    #[tokio::test]
+    async fn fifo_order_and_distinct_lease_tokens() {
+        contract_tests::fifo_order_and_distinct_lease_tokens(&InMemoryRunQueue::new()).await;
+    }
+
+    #[tokio::test]
+    async fn lease_expiry_redelivers_with_attempt_incremented() {
+        contract_tests::lease_expiry_redelivers_with_attempt_incremented(&InMemoryRunQueue::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn extend_lease_keeps_message_hidden_until_new_expiry() {
+        contract_tests::extend_lease_keeps_message_hidden_until_new_expiry(
+            &InMemoryRunQueue::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn ack_removes_message_permanently() {
+        contract_tests::ack_removes_message_permanently(&InMemoryRunQueue::new()).await;
+    }
+
+    #[tokio::test]
+    async fn nack_requeues_after_delay_with_attempt_incremented() {
+        contract_tests::nack_requeues_after_delay_with_attempt_incremented(
+            &InMemoryRunQueue::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn expired_token_operations_return_lease_expired_and_touch_nothing() {
+        contract_tests::expired_token_operations_return_lease_expired_and_touch_nothing(
+            &InMemoryRunQueue::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn unknown_token_operations_return_unknown_lease() {
+        contract_tests::unknown_token_operations_return_unknown_lease(&InMemoryRunQueue::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn depth_counts_ready_plus_leased() {
+        contract_tests::depth_counts_ready_plus_leased(&InMemoryRunQueue::new()).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_workers_each_message_exactly_once() {
+        let queue: StdArc<dyn RunQueuePort> = StdArc::new(InMemoryRunQueue::new());
+        contract_tests::concurrent_workers_each_message_exactly_once(queue).await;
+    }
+
+    // ── Adapter-specific regression coverage beyond the shared contract ──
+
+    #[tokio::test]
+    async fn recently_expired_ring_evicts_the_oldest_token_at_capacity() {
+        // A capacity-scoped regression for `remember_expired`'s eviction
+        // policy, exercised directly against `Inner` (bypassing the queue's
+        // own dequeue/reclaim timing) so the test stays fast regardless of
+        // how large `RECENTLY_EXPIRED_CAPACITY` is: fill the ring to
+        // capacity with synthetic tokens, then push one more and confirm
+        // the oldest was evicted while the newest is remembered. This is
+        // deliberately adapter-internal (not part of the cross-backend
+        // contract, since Redis has no equivalent in-memory ring) so it
+        // lives here rather than in `contract_tests`.
+        let mut inner = Inner::default();
+        for i in 0..RECENTLY_EXPIRED_CAPACITY {
+            inner.remember_expired(LeaseToken::new(format!("token-{i}")));
         }
-    }
+        let oldest = LeaseToken::new("token-0");
+        assert!(inner.recently_expired.contains(&oldest));
 
-    #[tokio::test]
-    async fn enqueue_then_dequeue_returns_the_message() {
-        let queue = InMemoryRunQueue::new();
-        let queued = sample_queued();
-        queue.enqueue(queued.clone()).await.unwrap();
-        assert_eq!(queue.depth().await.unwrap(), 1);
+        let overflow_token = LeaseToken::new("token-overflow");
+        inner.remember_expired(overflow_token.clone());
 
-        let leased = queue
-            .dequeue(Duration::from_secs(30))
-            .await
-            .unwrap()
-            .expect("a message was enqueued");
-        assert_eq!(leased.queued.run_id, queued.run_id);
-    }
-
-    #[tokio::test]
-    async fn dequeue_on_empty_queue_returns_none() {
-        let queue = InMemoryRunQueue::new();
+        assert_eq!(inner.recently_expired.len(), RECENTLY_EXPIRED_CAPACITY);
         assert!(
-            queue
-                .dequeue(Duration::from_secs(30))
-                .await
-                .unwrap()
-                .is_none()
+            !inner.recently_expired.contains(&oldest),
+            "the oldest token must be evicted once the ring is at capacity"
         );
-    }
-
-    #[tokio::test]
-    async fn dequeue_hides_message_for_the_lease_duration() {
-        let queue = InMemoryRunQueue::new();
-        queue.enqueue(sample_queued()).await.unwrap();
-        let _leased = queue.dequeue(Duration::from_secs(30)).await.unwrap();
-        // Depth counts leased-but-unacked messages too.
-        assert_eq!(queue.depth().await.unwrap(), 1);
-        // No second message is visible while the lease is held.
         assert!(
-            queue
-                .dequeue(Duration::from_secs(30))
-                .await
-                .unwrap()
-                .is_none()
+            inner.recently_expired.contains(&overflow_token),
+            "the newest token must still be remembered"
         );
-    }
-
-    #[tokio::test]
-    async fn ack_removes_the_message_permanently() {
-        let queue = InMemoryRunQueue::new();
-        queue.enqueue(sample_queued()).await.unwrap();
-        let leased = queue
-            .dequeue(Duration::from_secs(30))
-            .await
-            .unwrap()
-            .unwrap();
-        queue.ack(&leased.token).await.unwrap();
-        assert_eq!(queue.depth().await.unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn ack_on_unknown_token_is_an_error() {
-        let queue = InMemoryRunQueue::new();
-        let err = queue
-            .ack(&LeaseToken::new("does-not-exist"))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, QueueError::UnknownLease { .. }));
-    }
-
-    #[tokio::test]
-    async fn expired_lease_becomes_visible_again() {
-        let queue = InMemoryRunQueue::new();
-        queue.enqueue(sample_queued()).await.unwrap();
-        let leased = queue
-            .dequeue(Duration::from_millis(1))
-            .await
-            .unwrap()
-            .unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
-
-        let redelivered = queue
-            .dequeue(Duration::from_secs(30))
-            .await
-            .unwrap()
-            .expect("the expired lease's message becomes visible again");
-        assert_eq!(redelivered.queued.run_id, leased.queued.run_id);
-    }
-
-    #[tokio::test]
-    async fn nack_requeues_after_the_delay() {
-        let queue = InMemoryRunQueue::new();
-        queue.enqueue(sample_queued()).await.unwrap();
-        let leased = queue
-            .dequeue(Duration::from_secs(30))
-            .await
-            .unwrap()
-            .unwrap();
-        queue
-            .nack(&leased.token, Duration::from_millis(1))
-            .await
-            .unwrap();
-
-        // Immediately after nack, the delay has not elapsed -- allow a
-        // brief moment then confirm it becomes visible.
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        let redelivered = queue
-            .dequeue(Duration::from_secs(30))
-            .await
-            .unwrap()
-            .expect("nack'd message becomes visible after its delay");
-        assert_eq!(redelivered.queued.run_id, leased.queued.run_id);
-    }
-
-    #[tokio::test]
-    async fn extend_lease_on_unknown_token_is_an_error() {
-        let queue = InMemoryRunQueue::new();
-        let err = queue
-            .extend_lease(&LeaseToken::new("does-not-exist"), Duration::from_secs(30))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, QueueError::UnknownLease { .. }));
     }
 }

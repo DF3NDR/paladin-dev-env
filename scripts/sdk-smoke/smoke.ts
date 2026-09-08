@@ -7,17 +7,24 @@
  * array) -> submit a run for a code-registered agent (`POST /v1/runs`, expects a
  * `run_id`) -> poll `GET /v1/runs/{run_id}` until a terminal status or 30s.
  *
- * Exits non-zero (via a thrown error surfacing as an unhandled rejection) on ANY
- * deviation -- this script's own exit code is `sdk-clients`'s real TypeScript-side
- * gate (prohibition P1: the job must not be able to go green on a client that
- * failed to install, list nothing, or submit nothing).
+ * A TERMINAL status is not a PASS. Only `SUCCESS_STATUS` ("completed") is success
+ * (PLAT-06 `precision`) -- the comparison is exact and case-sensitive, never a
+ * prefix, substring or truthiness check. Any other terminal status (`failed`,
+ * `halted`, `cancelled`) is a failure that names the status and prints the run's
+ * own `error` text; a run still non-terminal at the poll deadline is a failure
+ * that names the last observed status. Exits non-zero (via a thrown error
+ * surfacing as an unhandled rejection) on ANY deviation -- this script's own exit
+ * code is `sdk-clients`'s real TypeScript-side gate (prohibition P1: the job must
+ * not be able to go green on a client that failed to install, list nothing,
+ * submitted nothing, or observed a run that did not actually work).
  *
- * The generated package is resolved as a relative `file:` dependency
- * (`package.json`, installed by `run.sh` via `npm ci` before this script runs) --
- * see this file's own module docs for why field access below tolerates either a
- * typed model instance or a plain object: this test suite cannot run the
- * generator locally (no Java, no Docker -- see `27-18-SUMMARY.md`) to pin the
- * exact generated shape.
+ * The generated package is installed separately, from its local build directory,
+ * by `run.sh` (via `npm install --no-save` after `npm ci` -- see that file and
+ * `package.json`'s own module docs for why this cannot be a `file:` dependency in
+ * a committed lockfile) -- see this file's own module docs for why field access
+ * below tolerates either a typed model instance or a plain object: this test
+ * suite cannot run the generator locally (no Java, no Docker -- see
+ * `27-18-SUMMARY.md`) to pin the exact generated shape.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -27,12 +34,35 @@ const BASE_URL = process.env.PALADIN_SMOKE_BASE_URL ?? "http://127.0.0.1:18080";
 const API_KEY = process.env.PALADIN_SMOKE_API_KEY ?? "sdk-smoke-test-key";
 const AGENT_ID = process.env.PALADIN_SMOKE_AGENT_ID ?? "sdk-smoke-agent";
 const POLL_TIMEOUT_MS = 30_000;
+
+// The single success status string (Task 3, PLAT-06 `precision`). A terminal
+// status is not a pass on its own -- only this exact, case-sensitive value is.
+const SUCCESS_STATUS = "completed";
+
+// Every status that stops polling -- decides WHEN polling ends, never WHETHER
+// the run succeeded. Success/failure is decided exclusively by
+// `evaluateTerminalStatus` against `SUCCESS_STATUS`.
 const TERMINAL_STATUSES = new Set(["completed", "failed", "halted", "cancelled"]);
 
 function fail(message: string): never {
   // eslint-disable-next-line no-console
   console.error(`SMOKE FAIL: ${message}`);
   process.exit(1);
+}
+
+/**
+ * The success decision, extracted into its own function -- mirrors
+ * `smoke.py`'s `evaluate_terminal_status` so the two scripts' logs read
+ * alike. A terminal status of exactly `SUCCESS_STATUS` is success (returns
+ * normally). Any other terminal status -- or a non-terminal/unknown status
+ * observed at the poll deadline -- is a failure that names both the observed
+ * status and the run's own `error` text.
+ */
+function evaluateTerminalStatus(status: unknown, error: unknown): void {
+  if (status === SUCCESS_STATUS) {
+    return;
+  }
+  fail(`run did not reach '${SUCCESS_STATUS}' -- observed status ${String(status)}, error: ${String(error)}`);
 }
 
 function field(obj: unknown, name: string): unknown {
@@ -84,20 +114,22 @@ async function pollUntilTerminal(config: Configuration, runId: string): Promise<
   const api = new RunsApi(config);
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   let lastStatus: unknown = undefined;
+  let lastError: unknown = undefined;
   while (Date.now() < deadline) {
     const response = await api.getRun({ runId });
     lastStatus = field(response, "status");
+    lastError = field(response, "error");
     if (typeof lastStatus === "string" && TERMINAL_STATUSES.has(lastStatus)) {
       // eslint-disable-next-line no-console
       console.log(`poll run: terminal status '${lastStatus}' reached`);
+      evaluateTerminalStatus(lastStatus, lastError);
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  fail(
-    `GET /v1/runs/${runId} never reached a terminal status within ${POLL_TIMEOUT_MS}ms ` +
-      `(last observed: ${String(lastStatus)})`,
-  );
+  // Deadline reached with no terminal status observed -- PLAT-06 `boundary`:
+  // the deadline itself is a failure, never a silent pass.
+  evaluateTerminalStatus(lastStatus, lastError);
 }
 
 async function main(): Promise<void> {

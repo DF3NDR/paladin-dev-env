@@ -9,9 +9,23 @@
 # `paladin-server` to boot against -- `config.test.yml` has neither. A new,
 # narrowly-scoped file colocated with the script that needs it is the minimal
 # footprint that makes `run.sh` runnable.
+#
+# Gap-closure (27-21, D-49): this file previously pointed at the real,
+# unauthenticated vendor OpenAI endpoint, so a submitted run legitimately
+# failed with "Authentication failed" -- a smoke that needs a real credential
+# is a smoke that cannot run on a fork's PR, and a run that ends `failed`
+# proves nothing about the generated client. Both the top-level `llm_url` and
+# the `llm.openai` block below now point at the loopback mock LLM stub that
+# `lib-boot.sh` starts itself (`smoke_boot_start`), and `llm_api_key` is the
+# same present-but-fake placeholder the boot exports as `OPENAI_API_KEY` --
+# construction only checks the key is PRESENT, never that it is valid.
+# Provider construction actually reads the ENVIRONMENT
+# (`OpenAIConfig::from_env`), not this section, but the file stays
+# self-describing so a reader does not have to cross-reference `lib-boot.sh`
+# to see the endpoint a copy of this config would use.
 llm_type: "openai"
-llm_url: "https://api.openai.com/v1"
-llm_api_key: ""
+llm_url: "http://127.0.0.1:18081/v1"
+llm_api_key: "sk-sdk-smoke-hermetic"
 max_file_size: 10485760
 sources: []
 
@@ -21,6 +35,9 @@ server:
 
 llm:
   default_provider: "openai"
+  openai:
+    api_key: "sk-sdk-smoke-hermetic"
+    base_url: "http://127.0.0.1:18081/v1"
 
 # One resident, code-registered agent (D-32) -- the id `scripts/sdk-smoke/run.sh`
 # submits a run against. `allowed_roles` omitted: any authenticated caller (the

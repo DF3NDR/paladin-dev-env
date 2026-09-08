@@ -815,7 +815,7 @@ jobs:
   # and the selected-count assertion below are what give this job its meaning
   # -- do not remove them.
   postgres-integration:
-    name: Postgres Waypoint Contract Suite (live server)
+    name: Postgres Storage Contract Suites (live server)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -842,44 +842,57 @@ jobs:
       - name: Assert the live server accepts connections
         run: docker exec paladin-postgres-test pg_isready -U paladin -d paladin_waypoint_test
 
-      - name: Run PostgresWaypointStore contract suite
+      - name: Run every *::postgres contract suite
         run: |
           set -o pipefail
           # --nocapture: store_or_skip() announces its early-return path on
           # stdout, which cargo swallows without it -- the detection step below
-          # would have nothing to read. --test-threads=1: this module's tests
+          # would have nothing to read. --test-threads=1: these modules' tests
           # share one database (unlike the SQLite suite's per-test in-memory
           # database), and
           # list_threads_empty_then_three_threads_newest_activity_first asserts
           # a literally empty store; under default parallelism a peer test's
           # writes land inside that assertion's window and the job goes red for
           # a reason that is not a real contract violation.
+          #
+          # The `--lib postgres` filter is a substring match, not a path
+          # anchor: it selects every `*::postgres` module this crate declares
+          # (today `waypoint::postgres`; 27-09/27-11/27-13 add more under the
+          # same convention), so this job picks up each new Postgres suite
+          # automatically as the phase lands them, with no per-suite CI edit.
+          # Both env vars point at the same live server -- `WAYPOINT_POSTGRES_TEST_URL`
+          # for the existing waypoint suite's own var name, `STORAGE_POSTGRES_TEST_URL`
+          # for every later *::postgres suite this phase adds under its own name.
           WAYPOINT_POSTGRES_TEST_URL=postgres://paladin:paladin@localhost:5433/paladin_waypoint_test \
-            cargo test -p paladin-storage --features postgres --lib waypoint::postgres \
+          STORAGE_POSTGRES_TEST_URL=postgres://paladin:paladin@localhost:5433/paladin_waypoint_test \
+            cargo test -p paladin-storage --features postgres --lib postgres \
             -- --test-threads=1 --nocapture 2>&1 | tee /tmp/postgres-waypoint-test.log
 
       - name: Fail if the suite took the SKIP path
         run: |
           if grep -q 'SKIP:' /tmp/postgres-waypoint-test.log; then
-            echo "::error::waypoint::postgres took the SKIP path — the live server was NOT exercised."
+            echo "::error::a *::postgres suite took the SKIP path — the live server was NOT exercised."
             grep 'SKIP:' /tmp/postgres-waypoint-test.log
             exit 1
           fi
-          echo "All waypoint::postgres tests exercised the live server."
+          echo "All *::postgres tests exercised the live server."
 
       - name: Fail if the suite selected fewer tests than it declares
         run: |
           set -o pipefail
           # Anchored to attribute position (leading whitespace then the attr):
           # an unanchored count also matches the literal inside comments — the
-          # module's own "One #[tokio::test] per shared contract function"
-          # comment inflated the declared count to 27 vs 26 real tests and
-          # failed a run in which every selected test passed.
-          EXPECTED=$(grep -cE '^\s*#\[tokio::test\]' crates/paladin-storage/src/waypoint/postgres.rs)
+          # waypoint module's own "One #[tokio::test] per shared contract
+          # function" comment once inflated its declared count to 27 vs 26
+          # real tests and failed a run in which every selected test passed.
+          # Summed over every `*/postgres.rs` file so a later plan's new
+          # Postgres suite is covered by this same declared-count assertion
+          # without a CI edit.
+          EXPECTED=$(grep -hcE '^\s*#\[tokio::test\]' crates/paladin-storage/src/*/postgres.rs | awk '{sum+=$1} END {print sum+0}')
           ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/postgres-waypoint-test.log | tail -1)
           echo "Declared tests: $EXPECTED, passed: ${ACTUAL:-0}"
           if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then
-            echo "::error::waypoint::postgres selected fewer tests (${ACTUAL:-0}) than the module declares ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
+            echo "::error::*::postgres selected fewer tests (${ACTUAL:-0}) than the modules declare ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
             exit 1
           fi
 
@@ -958,6 +971,88 @@ jobs:
           echo "Declared tests: $EXPECTED, passed: ${ACTUAL:-0}"
           if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then
             echo "::error::node_cache::redis selected fewer tests (${ACTUAL:-0}) than the module declares ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
+            exit 1
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.test.yml logs redis-test
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker/docker-compose.test.yml down -v
+
+  # Redis run-queue live-server integration (D-06/D-08, D-51). The
+  # RedisRunQueue Tier 2 contract suite self-skips -- and therefore passes --
+  # when no server is reachable, exactly like the redis-cache-integration job
+  # above. Docker is absent from every authoring environment for this phase,
+  # so before this job the suite would execute in no environment at all while
+  # every CI run reported green -- the same failure shape the Postgres,
+  # Ollama and redis-cache jobs above were each added to close.
+  #
+  # Reuses the `redis-test` service `docker-integration`/`redis-cache-integration`
+  # already bring up (docker/docker-compose.test.yml) rather than defining a
+  # second Redis container. Uses logical database index 1
+  # (`redis://127.0.0.1:6380/1`), never index 0, so this job's keys never
+  # share a keyspace with the redis-cache-integration job above even if both
+  # ever ran against the same server.
+  #
+  # The reachability assertion (`redis-cli ping`), the early-return detection
+  # step and the selected-count assertion below are what give this job its
+  # meaning -- do not remove them.
+  redis-queue:
+    name: Redis Run Queue Contract Suite (live server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: redis-queue
+
+      - name: Start redis-test and wait for healthy
+        run: |
+          docker compose -f docker/docker-compose.test.yml up -d redis-test
+          echo "Waiting for redis-test to report healthy..."
+          timeout 120 sh -c 'until docker inspect paladin-redis-test --format="{{.State.Health.Status}}" 2>/dev/null | grep -qx healthy; do sleep 3; done'
+
+      - name: Assert the live server accepts connections
+        run: docker exec paladin-redis-test redis-cli ping
+
+      - name: Run RedisRunQueue contract suite
+        run: |
+          set -o pipefail
+          # --nocapture: queue_or_skip() announces its early-return path on
+          # stdout, which cargo swallows without it -- the detection step
+          # below would have nothing to read. Database index 1 (not 0, which
+          # redis-cache-integration uses) so this job never shares keys with
+          # that job even if both ever ran against the same server.
+          RUN_QUEUE_REDIS_TEST_URL=redis://127.0.0.1:6380/1 \
+            cargo test -p paladin-storage --features redis-queue --lib run_queue::redis \
+            -- --nocapture 2>&1 | tee /tmp/redis-run-queue-test.log
+
+      - name: Fail if the suite took the SKIP path
+        run: |
+          if grep -q 'SKIP:' /tmp/redis-run-queue-test.log; then
+            echo "::error::run_queue::redis took the SKIP path — the live server was NOT exercised."
+            grep 'SKIP:' /tmp/redis-run-queue-test.log
+            exit 1
+          fi
+          echo "All run_queue::redis tests exercised the live server."
+
+      - name: Fail if the suite selected fewer tests than it declares
+        run: |
+          set -o pipefail
+          EXPECTED=$(grep -cE '^\s*#\[test\]|^\s*#\[tokio::test\]' crates/paladin-storage/src/run_queue/redis.rs)
+          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/redis-run-queue-test.log | tail -1)
+          echo "Declared tests: $EXPECTED, passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then
+            echo "::error::run_queue::redis selected fewer tests (${ACTUAL:-0}) than the module declares ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
             exit 1
           fi
 

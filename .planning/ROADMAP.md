@@ -719,6 +719,7 @@ Plans:
 **Goal**: v0.10.0 is releasable — the migration record is complete, backward compatibility is proven rather than asserted, the program acceptance audit passes, and every crate publishes.
 **Depends on**: Phase 22, Phase 23, Phase 24, Phase 25, Phase 26, Phase 27, Phase 28 (all)
 **Requirements**: SHIP-01, SHIP-02, SHIP-03, SHIP-04
+**UI hint**: no
 **Success Criteria** (what must be TRUE):
 
   1. `MIGRATION.md` has every §9 section filled with no "TBD" — M-B-01…03 resolved with chosen defaults and worked examples, the §9.2 register matching the `cargo semver-checks` allowlist exactly — and is linked from the README and the mdBook "Upgrading" page (SHIP-01)

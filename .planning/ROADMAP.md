@@ -705,7 +705,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 28-15-PLAN.md — `dev-ui` inspector page: first `paladin-web` feature, route, template, oneshot smoke test (OBS-03)
+- [x] 28-15-PLAN.md — `dev-ui` inspector page: first `paladin-web` feature, route, template, oneshot smoke test (OBS-03)
 - [x] 28-16-PLAN.md — E2E fixture extraction and the three dogfood eval scenarios (OBS-04)
 
 **Wave 8** *(blocked on Wave 7 completion)*

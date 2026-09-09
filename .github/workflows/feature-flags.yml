@@ -187,24 +187,75 @@ jobs:
       - name: Run unit test binary (llm-all)
         run: cargo test --test unit --features llm-all
 
+  # Dedicated job (28-09, D-13b): the fourteen-leg matrix's test step above is
+  # `cargo test --workspace --lib`, which never executes the `tests/lib.rs`
+  # integration binary that `tests/integration/otel_transport_test.rs` is
+  # compiled through (`tests/integration/mod.rs`'s `#[cfg(feature = "otel")]`
+  # gate) -- so an `otel` matrix entry alone would build the feature but never
+  # actually run its transport assertion against a real socket. This job
+  # builds `--no-default-features --features otel` AND runs both the span-tree
+  # shape tests (`otel_sink`'s own `#[cfg(test)]` module) and the transport
+  # integration test in the SAME leg, giving D-13b's OTLP stub assertion a CI
+  # home.
+  otel-feature:
+    name: OTel Feature (otel)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: otel-feature
+
+      - name: Check (otel)
+        run: cargo check --no-default-features --features otel
+
+      - name: Build (otel)
+        run: cargo build --workspace --no-default-features --features otel
+
+      # `--workspace`, not `-p paladin-ai`: a pre-existing, unrelated gap
+      # (`paladin_builder.rs`'s own `#[cfg(test)]` module references
+      # `paladin_llm::deepseek`/`anthropic` with no feature gate) only
+      # surfaces when paladin-ai's `--lib` test target is compiled in
+      # ISOLATION under `--no-default-features` -- `-p paladin-ai
+      # --no-default-features --lib` fails to compile for that unrelated
+      # reason even with NO otel feature involved (confirmed empirically,
+      # 28-09; logged in `deferred-items.md`, out of this plan's scope
+      # per the executor's scope-boundary rule). `--workspace` unifies
+      # features across every workspace member the same way the existing
+      # `no-default-features`/`all-features`/`full` matrix legs above
+      # already do, which avoids it.
+      - name: Run span-tree shape tests (otel)
+        run: cargo test --workspace --no-default-features --features otel --lib infrastructure::telemetry::otel_sink
+
+      - name: Run OTLP transport integration test (otel)
+        run: cargo test --workspace --no-default-features --features otel --test lib -- otel_transport_test
+
   # Summary job to require all matrix builds pass
   feature-matrix-summary:
     name: Feature Matrix Summary
     runs-on: ubuntu-latest
-    needs: [feature-matrix, cli-isolation, llm-registry-unit-tests]
+    needs: [feature-matrix, cli-isolation, llm-registry-unit-tests, otel-feature]
     if: always()
     steps:
       - name: Check feature matrix results
         run: |
-          if [[ "${{ needs.feature-matrix.result }}" == "success" && "${{ needs.cli-isolation.result }}" == "success" && "${{ needs.llm-registry-unit-tests.result }}" == "success" ]]; then
+          if [[ "${{ needs.feature-matrix.result }}" == "success" && "${{ needs.cli-isolation.result }}" == "success" && "${{ needs.llm-registry-unit-tests.result }}" == "success" && "${{ needs.otel-feature.result }}" == "success" ]]; then
             echo "✅ All feature flag combinations passed"
             echo "✅ CLI isolation tests passed"
             echo "✅ LLM registry unit tests passed (llm-all)"
+            echo "✅ OTel feature tests passed (otel)"
             exit 0
           else
             echo "❌ Some feature flag combinations failed"
             echo "feature-matrix: ${{ needs.feature-matrix.result }}"
             echo "cli-isolation: ${{ needs.cli-isolation.result }}"
             echo "llm-registry-unit-tests: ${{ needs.llm-registry-unit-tests.result }}"
+            echo "otel-feature: ${{ needs.otel-feature.result }}"
             exit 1
           fi

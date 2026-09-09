@@ -507,4 +507,231 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
+
+    // --- Task 2: every locked copy string / outcome class + per-panel state fixtures ---
+
+    /// A view with no supersteps at all (E1/E4 empty, D-24: "a known thread with no
+    /// history yields Ok with empty supersteps/visits, not an error").
+    fn empty_fixture_view() -> InspectorView {
+        InspectorView {
+            thread_id: thread("t-empty"),
+            run_id: None,
+            status: None,
+            mermaid: "graph TD".to_string(),
+            observed_only: false,
+            source: InspectorSource::Waypoints,
+            supersteps: vec![],
+            visits: vec![],
+        }
+    }
+
+    /// A view with supersteps but zero visits and zero fired/evaluated edges anywhere
+    /// (E2/E3 partial-empty: their own per-panel empty copy independent of the
+    /// whole-page empty state).
+    fn no_visits_no_edges_fixture_view() -> InspectorView {
+        InspectorView {
+            thread_id: thread("t-no-visits"),
+            run_id: Some(RunId::new_v7()),
+            status: Some(RunStatus::Completed),
+            mermaid: "graph TD\nsolo".to_string(),
+            observed_only: false,
+            source: InspectorSource::Waypoints,
+            supersteps: vec![SuperstepRow {
+                superstep: 1,
+                waypoint_id: WaypointId::generate(),
+                vanguard: vec![node("solo")],
+                completed: vec![completed_row("solo", NodeOutcomeKind::Ended)],
+                field_changes: vec![],
+                fired_edges: vec![],
+                evaluated_edges: vec![],
+                status: SuperstepStatus::Completed,
+            }],
+            visits: vec![],
+        }
+    }
+
+    /// A Waypoints-source view with a fired edge but (per D-21) no evaluated_edges data
+    /// at all -- the "evaluated-but-not-fired edges unavailable" case (E3 partial).
+    fn waypoints_source_fixture_view() -> InspectorView {
+        InspectorView {
+            thread_id: thread("t-waypoints"),
+            run_id: Some(RunId::new_v7()),
+            status: Some(RunStatus::Running),
+            mermaid: "graph TD\ncheck --> retry".to_string(),
+            observed_only: false,
+            source: InspectorSource::Waypoints,
+            supersteps: vec![SuperstepRow {
+                superstep: 3,
+                waypoint_id: WaypointId::generate(),
+                vanguard: vec![node("check")],
+                completed: vec![completed_row("check", NodeOutcomeKind::Succeeded)],
+                field_changes: vec![],
+                fired_edges: vec![(node("check"), node("retry"))],
+                evaluated_edges: vec![],
+                status: SuperstepStatus::Running,
+            }],
+            visits: vec![],
+        }
+    }
+
+    /// A view exercising the partial cases: a cache-hit `CompletedRow` (no
+    /// duration/token figures, E2 "partial"), and an awaiting-input superstep (empty
+    /// `completed`, E4 "partial").
+    fn partial_fixture_view() -> InspectorView {
+        InspectorView {
+            thread_id: thread("t-partial"),
+            run_id: Some(RunId::new_v7()),
+            status: Some(RunStatus::AwaitingInput),
+            mermaid: "graph TD\napprove".to_string(),
+            observed_only: true,
+            source: InspectorSource::Trace,
+            supersteps: vec![
+                SuperstepRow {
+                    superstep: 1,
+                    waypoint_id: WaypointId::generate(),
+                    vanguard: vec![node("cached_node")],
+                    completed: vec![CompletedRow {
+                        node_id: node("cached_node"),
+                        attempt: 1,
+                        outcome: NodeOutcomeKind::Succeeded,
+                        duration_ms: None,
+                        token_count: None,
+                        cache_hit: true,
+                    }],
+                    field_changes: vec![],
+                    fired_edges: vec![],
+                    evaluated_edges: vec![],
+                    status: SuperstepStatus::Running,
+                },
+                SuperstepRow {
+                    superstep: 2,
+                    waypoint_id: WaypointId::generate(),
+                    vanguard: vec![node("approve")],
+                    completed: vec![],
+                    field_changes: vec![],
+                    fired_edges: vec![],
+                    evaluated_edges: vec![],
+                    status: SuperstepStatus::AwaitingInput,
+                },
+            ],
+            visits: vec![],
+        }
+    }
+
+    async fn html_body_for(view: InspectorView) -> String {
+        let app = admin_router(state_with(MockOutcome::View(view)));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/dev-ui/threads/any")
+                    .header("Authorization", "Bearer admin-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        body_string(response).await
+    }
+
+    /// The served page carries every locked Copywriting Contract string verbatim
+    /// (28-UI-SPEC.md), regardless of the request's data -- a silent drop of a state is
+    /// a test failure rather than an invisible regression.
+    #[tokio::test]
+    async fn dev_ui_page_contains_every_locked_copy_string() {
+        let body = html_body_for(branching_fixture_view()).await;
+        for s in [
+            "No supersteps recorded yet",
+            "No nodes have executed yet.",
+            "No edges evaluated yet.",
+            "Rendering diagram",
+            "could not be parsed",
+            "observed nodes only",
+        ] {
+            assert!(body.contains(s), "missing locked copy string: {s}");
+        }
+    }
+
+    /// The served page carries the CSS class name for all five `NodeOutcomeKind`
+    /// outcomes (28-UI-SPEC.md "Outcome color set"), independent of what the fixture's
+    /// own data happens to contain.
+    #[tokio::test]
+    async fn dev_ui_page_contains_every_outcome_class() {
+        let body = html_body_for(branching_fixture_view()).await;
+        for c in [
+            "outcome-success",
+            "outcome-failed",
+            "outcome-parleyed",
+            "outcome-skipped",
+            "outcome-cache_hit",
+        ] {
+            assert!(body.contains(c), "missing outcome class: {c}");
+        }
+    }
+
+    /// E1/E4 empty: a thread with no completed superstep embeds an empty `supersteps`
+    /// array, which the page's own JS renders as the whole-page empty state.
+    #[tokio::test]
+    async fn dev_ui_page_embeds_empty_supersteps_for_a_thread_with_no_history() {
+        let body = html_body_for(empty_fixture_view()).await;
+        assert!(body.contains("\"supersteps\":[]"));
+        assert!(body.contains("\"visits\":[]"));
+    }
+
+    /// E2 empty: supersteps exist but no node was ever visited -- the visits panel's own
+    /// empty copy applies independent of the whole-page empty state.
+    #[tokio::test]
+    async fn dev_ui_page_embeds_populated_supersteps_with_empty_visits() {
+        let body = html_body_for(no_visits_no_edges_fixture_view()).await;
+        assert!(!body.contains("\"supersteps\":[]"));
+        assert!(body.contains("\"visits\":[]"));
+    }
+
+    /// E3 empty: every superstep's fired/evaluated edge lists are empty.
+    #[tokio::test]
+    async fn dev_ui_page_embeds_supersteps_with_no_fired_edges() {
+        let body = html_body_for(no_visits_no_edges_fixture_view()).await;
+        assert!(body.contains("\"fired_edges\":[]"));
+        assert!(body.contains("\"evaluated_edges\":[]"));
+    }
+
+    /// E3 partial: a Waypoints-source view's `evaluated_edges` stays empty on every row
+    /// even when `fired_edges` is populated (D-21) -- the page's JS labels the missing
+    /// half via `InspectorSource::Waypoints` rather than presenting it as exact.
+    #[tokio::test]
+    async fn dev_ui_page_marks_waypoints_source_for_the_evaluated_unavailable_case() {
+        let body = html_body_for(waypoints_source_fixture_view()).await;
+        assert!(body.contains("\"source\":\"Waypoints\""));
+        assert!(body.contains("\"fired_edges\":[[\"check\",\"retry\"]]"));
+        assert!(body.contains("\"evaluated_edges\":[]"));
+    }
+
+    /// E2 partial: a cache-hit `CompletedRow` carries `duration_ms`/`token_count` as
+    /// `None` by construction -- the page renders a dash rather than a stale/misleading
+    /// number.
+    #[tokio::test]
+    async fn dev_ui_page_embeds_cache_hit_row_with_no_duration_or_tokens() {
+        let body = html_body_for(partial_fixture_view()).await;
+        assert!(body.contains("\"cache_hit\":true"));
+        assert!(body.contains("\"duration_ms\":null"));
+        assert!(body.contains("\"token_count\":null"));
+    }
+
+    /// E4 partial: an awaiting-input superstep's `completed` list is empty by
+    /// construction (a Gate suspension runs no node) -- never a missing row.
+    #[tokio::test]
+    async fn dev_ui_page_embeds_awaiting_input_superstep_with_empty_completed() {
+        let body = html_body_for(partial_fixture_view()).await;
+        assert!(body.contains("\"status\":\"AwaitingInput\""));
+        assert!(body.contains("\"completed\":[]"));
+    }
+
+    /// D-22: the locked `observed_only` title suffix is available to the page whenever
+    /// the view's own `observed_only` flag is set, regardless of which fixture supplies
+    /// it.
+    #[tokio::test]
+    async fn dev_ui_page_embeds_observed_only_flag() {
+        let body = html_body_for(partial_fixture_view()).await;
+        assert!(body.contains("\"observed_only\":true"));
+    }
 }

@@ -12,3 +12,6 @@ pub mod agent;
 pub mod arsenal;
 pub mod battalion;
 pub mod maneuver;
+
+// Evaluation harness CLI (28-12, D-33): `paladin-cli eval run`.
+pub mod eval;

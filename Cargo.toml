@@ -194,6 +194,17 @@ serde_yaml = { version = "0.9", optional = true }
 indicatif = { version = "0.17", optional = true }
 console = { version = "0.15", optional = true }
 dialoguer = { version = "0.11", optional = true }
+# D-33 (plan 28-12): `paladin-cli eval run` builds a `ScenarioRunner`
+# directly. Optional, `cli`-feature-gated only -- the facade's DEFAULT build
+# (no `cli` feature) gains no edge to this crate; the `evals` `[[test]]`
+# target's OWN need for it (independent of `cli`) is the separate,
+# unconditional `[dev-dependencies]` entry below.
+paladin-eval = { version = "0.9.0", path = "crates/paladin-eval", optional = true }
+# `paladin-cli eval run`'s own glob matching over its `<glob>` argument --
+# the SAME "0.3.4" pin `crates/paladin-eval/Cargo.toml` already resolved, so
+# this is a new EDGE on an already-resolved package, never a new package in
+# the lock file.
+glob = { version = "0.3.4", optional = true }
 qdrant-client = { workspace = true, optional = true }
 base64 = "0.22"
 # Encryption dependencies for Sentinel Vision System (Epic 13, Task 11.0)
@@ -299,6 +310,12 @@ opentelemetry_sdk = { version = "0.32.1", features = ["testing"] }
 # `http-proto` feature already requests (no `tonic`/gRPC).
 opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
 prost = "0.14"
+# D-32: the `evals` harness target (`tests/evals.rs`) needs `ScenarioRunner`
+# unconditionally, independent of the `cli` feature -- `cargo test --test
+# evals` must work with no `--features` at all. paladin-eval's own default
+# build depends downward only (paladin-core/ports/battalion/llm-mock/storage-
+# sqlite), never on this facade (D-27) -- this is a one-way dev-only edge.
+paladin-eval = { version = "0.9.0", path = "crates/paladin-eval" }
 
 # Integration test configuration
 [[test]]
@@ -404,6 +421,17 @@ path = "tests/integration/e2e_compensation_chain_test.rs"
 name = "aegis_retry_stress"
 path = "tests/integration/aegis_retry_stress_test.rs"
 
+# D-32 (28-RESEARCH.md Q4): the FIRST `harness = false` `[[test]]` target in
+# this workspace -- every other `harness = false` hit in this manifest is a
+# `[[bench]]`. `tests/evals.rs` expands `paladin_eval::eval_scenarios!` into
+# its own `fn main()`; `libtest-mimic` tolerates the coverage script's
+# trailing `--test-threads=1` (a no-op it accepts rather than an
+# unrecognised-flag failure), so no CI change is needed for this target.
+[[test]]
+name = "evals"
+harness = false
+path = "tests/evals.rs"
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"
@@ -503,7 +531,7 @@ redis-cache = ["paladin-storage/redis-cache"]
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
 
 # CLI (binary and test tooling only — not compiled into the library)
-cli = ["dep:clap", "dep:dialoguer", "dep:indicatif", "dep:console", "dep:serde_yaml", "dep:colored", "dep:comfy-table", "paladin-herald/table", "paladin-herald/color"]
+cli = ["dep:clap", "dep:dialoguer", "dep:indicatif", "dep:console", "dep:serde_yaml", "dep:colored", "dep:comfy-table", "dep:paladin-eval", "dep:glob", "paladin-herald/table", "paladin-herald/color"]
 
 # Convenience flag for enabling all optional features
 full = ["llm-all", "content-processing", "web-server", "notifications", "storage", "vision", "redis-queue", "s3-storage", "openai-embeddings", "qdrant", "cli"]

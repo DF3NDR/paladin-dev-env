@@ -4,7 +4,9 @@ use paladin::application::cli::commands::{
     agent::{AgentCommands, handle_agent_new, handle_agent_run},
     arsenal::{ArsenalCommands, handle_arsenal_command},
     battalion::{BattalionCommands, handle_battalion_new, handle_battalion_run},
-    council, features,
+    council,
+    eval::{EvalCommands, run_eval},
+    features,
     maneuver::{ManeuverCommands, handle_maneuver_command},
     muster, onboarding, setup_check,
 };
@@ -88,6 +90,11 @@ enum Commands {
         #[arg(long)]
         no_review: bool,
     },
+    /// Evaluation harness operations (run scripted scenarios)
+    Eval {
+        #[command(subcommand)]
+        action: EvalCommands,
+    },
     /// Run a council discussion
     Council {
         /// Discussion topic
@@ -150,6 +157,18 @@ async fn main() {
                 })
         }
         Commands::Features { category, format } => features::run_features(category, format).await,
+        Commands::Eval { action } => match action {
+            EvalCommands::Run(args) => {
+                run_eval(
+                    args.glob,
+                    args.repeat,
+                    args.bless,
+                    args.live,
+                    args.registries,
+                )
+                .await
+            }
+        },
         Commands::Muster {
             task,
             output,

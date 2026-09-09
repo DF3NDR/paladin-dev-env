@@ -25,251 +25,72 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use paladin_battalion::engine::{
-    EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeSpec, RunOutcome, StateNode,
-    StateNodeError, WarEngine, WarGraph,
-};
-use paladin_core::base::entity::node::Node;
-use paladin_core::platform::container::battalion::campaign::EdgeCondition;
-use paladin_core::platform::container::battlefield::{
-    Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
-};
-use paladin_core::platform::container::directive::Directive;
-use paladin_core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin_battalion::engine::{RunOutcome, WarEngine};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId, Waypoint, WaypointStatus};
 use paladin_ports::output::waypoint_port::WaypointPort;
 use paladin_storage::waypoint::sqlite::SqliteWaypointStore;
 
 // `tests/helpers/` is shared across many integration test binaries; this
-// standalone [[test]] target only needs `FaultyPaladinPort`, so the rest of
-// the module tree is unused here -- allowed rather than pruned, since
-// trimming shared test infrastructure to satisfy one consumer would be an
-// out-of-scope edit to a file this plan does not own.
+// standalone [[test]] target needs `FaultyPaladinPort` and the shared
+// `e2e_fixtures` graph builders (plan 28-16, D-34) -- the rest of the module
+// tree is unused here, allowed rather than pruned.
 #[allow(dead_code, unused_imports)]
 #[path = "../helpers/mod.rs"]
 mod helpers;
 use helpers::FaultyPaladinPort;
+use helpers::e2e_fixtures;
 
-/// The loop bound: `loop_gate` must run exactly this many times before its
-/// `loop_status` flips from `"continue"` to `"done"`. Deliberately > 3 so
-/// dropping "after superstep 3" (E2E-1's own scenario text) lands MID-loop,
-/// not after it -- the harder, more interesting crash-resume case.
-const LOOP_BOUND: i64 = 5;
-
-/// A deterministic `Function` node driving the graph's one cycle entirely
-/// off durable Battlefield state (never off its own in-process memory) --
-/// the property that makes it safe to resume: a freshly constructed
-/// `LoopGateNode` in a brand new graph instance continues counting from
-/// wherever the restored `loop_count` field left off.
-struct LoopGateNode;
-
-#[async_trait::async_trait]
-impl StateNode for LoopGateNode {
-    async fn run(
-        &self,
-        state: &Battlefield,
-        _ctx: &NodeContext,
-    ) -> Result<Directive, StateNodeError> {
-        let count_field = FieldName::new("loop_count").expect("valid field name");
-        let status_field = FieldName::new("loop_status").expect("valid field name");
-        let current = state
-            .get::<i64>(&count_field)
-            .map_err(|e| StateNodeError(e.to_string()))?
-            .unwrap_or(0);
-        let next = current + 1;
-        let status = if next < LOOP_BOUND {
-            "continue"
-        } else {
-            "done"
-        };
-
-        let mut delta = StateDelta::new();
-        delta
-            .set(count_field, next)
-            .map_err(|e| StateNodeError(e.to_string()))?;
-        delta
-            .set(status_field, status)
-            .map_err(|e| StateNodeError(e.to_string()))?;
-        Ok(delta.into())
-    }
-}
-
-fn make_paladin(name: &str) -> Paladin {
-    let data = PaladinData {
-        system_prompt: format!("{name} prompt"),
-        name: name.to_string(),
-        user_name: "TestUser".to_string(),
-        model: "test-model".to_string(),
-        temperature: 0.7,
-        max_loops: MaxLoops::Fixed(1),
-        stop_words: vec![],
-        status: PaladinStatus::Idle,
-        vision_enabled: false,
-        ..Default::default()
-    };
-    Node::new(data, Some(name.to_string()))
-}
-
-fn field(name: &str) -> FieldName {
-    FieldName::new(name).expect("valid field name")
-}
-
-/// Build the E2E-1 fixture: 6 nodes (5 Paladin, 1 Function), one bounded
-/// self-loop.
-///
-/// `loop_gate` (self-loop, bounded, GRAPH ENTRY) `-> researcher -> writer ->
-/// reviewer -> finalizer -> archiver`. The loop is deliberately the graph's
-/// entry point rather than fed by an upstream node: the engine's
-/// join-readiness rule (Phase 22 Plan 07 `Frontier::is_ready`) requires
-/// EVERY incoming edge of a node to be resolved (not `Pending`) before that
-/// node is placed in the next Vanguard. A self-loop edge is Pending until
-/// its OWN node has executed at least once -- so a node that is BOTH
-/// self-looping AND fed by a separate upstream edge could never execute at
-/// all (its self-edge blocks its first run, and its first run is what would
-/// resolve the self-edge). `loop_gate` itself has no separate upstream feed
-/// -- it is a standalone self-loop, the simplest instance of the same
-/// bootstrap problem: with no OTHER incoming edge either, it could never
-/// take its first turn unless seeded directly into the initial Vanguard as a
-/// graph entry.
-///
-/// (Phase 22 Plan 16 audit, `22-deferred-items.md`: `loop_gate`'s
-/// standalone self-loop-as-entry arrangement is the same readiness-dodge
-/// pattern the Plan 16 audit enumerated by direct reading, not assumed,
-/// across the fixtures that actually EXECUTE their looping node. One
-/// exception exists --
-/// `engine::graph::tests::validate_accepts_self_loop_on_node_reachable_from_entry_by_normal_edge`
-/// constructs the harder self-loop-plus-upstream-edge shape this comment
-/// describes, but only calls `validate`, never runs the graph -- so it never
-/// reaches `is_ready` and needs no entry-point workaround. The general
-/// "self-looping AND fed by a separate upstream edge" case this comment
-/// warns about is BUG-03's cycle-bootstrap starvation defect, registered
-/// and fixed in Phase 22.1 by `Frontier::starved_release`
-/// (`engine::superstep`) -- see the now-passing regression tests
-/// `engine::superstep::tests::self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`
-/// and
-/// `engine::superstep::tests::cycle_node_fed_from_outside_the_cycle_takes_its_first_turn`,
-/// not an ignored reproduction.)
-///
-/// An uninterrupted run takes exactly `LOOP_BOUND + 5` supersteps:
-/// `loop_gate` x `LOOP_BOUND` (supersteps 1..=LOOP_BOUND), then researcher,
-/// writer, reviewer, finalizer, archiver (one superstep each).
-fn build_graph() -> WarGraph {
-    let schema = BattlefieldSchema::new(vec![
-        FieldSpec::new(field("topic"), DispatchRule::LastWrite, None, true),
-        FieldSpec::new(field("research_out"), DispatchRule::LastWrite, None, false),
-        FieldSpec::new(field("writer_out"), DispatchRule::LastWrite, None, false),
-        FieldSpec::new(
-            field("loop_count"),
-            DispatchRule::LastWrite,
-            Some(serde_json::json!(0)),
-            false,
-        ),
-        FieldSpec::new(
-            field("loop_status"),
-            DispatchRule::LastWrite,
-            Some(serde_json::json!("pending")),
-            false,
-        ),
-        FieldSpec::new(field("reviewer_out"), DispatchRule::LastWrite, None, false),
-        FieldSpec::new(field("finalizer_out"), DispatchRule::LastWrite, None, false),
-        FieldSpec::new(field("archiver_out"), DispatchRule::LastWrite, None, false),
-    ]);
-    let mut graph = WarGraph::new(schema, EngineLimits::default());
-
-    let researcher = NodeId::new("researcher");
-    let writer = NodeId::new("writer");
-    let loop_gate = NodeId::new("loop_gate");
-    let reviewer = NodeId::new("reviewer");
-    let finalizer = NodeId::new("finalizer");
-    let archiver = NodeId::new("archiver");
-
-    graph.add_node(
-        researcher.clone(),
-        NodeSpec::paladin(
-            make_paladin("researcher"),
-            InputMapping::new("{topic}"),
-            field("research_out"),
-        ),
-    );
-    graph.add_node(
-        writer.clone(),
-        NodeSpec::paladin(
-            make_paladin("writer"),
-            InputMapping::new("{research_out}"),
-            field("writer_out"),
-        ),
-    );
-    graph.add_node(
-        loop_gate.clone(),
-        NodeSpec::Function(Arc::new(LoopGateNode)),
-    );
-    graph.add_node(
-        reviewer.clone(),
-        NodeSpec::paladin(
-            make_paladin("reviewer"),
-            InputMapping::new("{writer_out}"),
-            field("reviewer_out"),
-        ),
-    );
-    graph.add_node(
-        finalizer.clone(),
-        NodeSpec::paladin(
-            make_paladin("finalizer"),
-            InputMapping::new("{reviewer_out}"),
-            field("finalizer_out"),
-        ),
-    );
-    graph.add_node(
-        archiver.clone(),
-        NodeSpec::paladin(
-            make_paladin("archiver"),
-            InputMapping::new("{finalizer_out}"),
-            field("archiver_out"),
-        ),
-    );
-
-    graph.add_edge(EdgeSpec {
-        from: loop_gate.clone(),
-        to: loop_gate.clone(),
-        condition: Some(EdgeCondition::Contains(
-            "\"loop_status\":\"continue\"".to_string(),
-        )),
-    });
-    graph.add_edge(EdgeSpec {
-        from: loop_gate.clone(),
-        to: researcher.clone(),
-        condition: Some(EdgeCondition::Contains(
-            "\"loop_status\":\"done\"".to_string(),
-        )),
-    });
-    graph.add_edge(EdgeSpec {
-        from: researcher.clone(),
-        to: writer.clone(),
-        condition: None,
-    });
-    graph.add_edge(EdgeSpec {
-        from: writer.clone(),
-        to: reviewer.clone(),
-        condition: None,
-    });
-    graph.add_edge(EdgeSpec {
-        from: reviewer.clone(),
-        to: finalizer.clone(),
-        condition: None,
-    });
-    graph.add_edge(EdgeSpec {
-        from: finalizer.clone(),
-        to: archiver.clone(),
-        condition: None,
-    });
-
-    graph.add_entry(loop_gate);
-    graph
-}
+// The E2E-1 fixture: 6 nodes (5 Paladin, 1 Function), one bounded
+// self-loop.
+//
+// `loop_gate` (self-loop, bounded, GRAPH ENTRY) `-> researcher -> writer ->
+// reviewer -> finalizer -> archiver`. The loop is deliberately the graph's
+// entry point rather than fed by an upstream node: the engine's
+// join-readiness rule (Phase 22 Plan 07 `Frontier::is_ready`) requires
+// EVERY incoming edge of a node to be resolved (not `Pending`) before that
+// node is placed in the next Vanguard. A self-loop edge is Pending until
+// its OWN node has executed at least once -- so a node that is BOTH
+// self-looping AND fed by a separate upstream edge could never execute at
+// all (its self-edge blocks its first run, and its first run is what would
+// resolve the self-edge). `loop_gate` itself has no separate upstream feed
+// -- it is a standalone self-loop, the simplest instance of the same
+// bootstrap problem: with no OTHER incoming edge either, it could never
+// take its first turn unless seeded directly into the initial Vanguard as a
+// graph entry.
+//
+// (Phase 22 Plan 16 audit, `22-deferred-items.md`: `loop_gate`'s
+// standalone self-loop-as-entry arrangement is the same readiness-dodge
+// pattern the Plan 16 audit enumerated by direct reading, not assumed,
+// across the fixtures that actually EXECUTE their looping node. One
+// exception exists --
+// `engine::graph::tests::validate_accepts_self_loop_on_node_reachable_from_entry_by_normal_edge`
+// constructs the harder self-loop-plus-upstream-edge shape this comment
+// describes, but only calls `validate`, never runs the graph -- so it never
+// reaches `is_ready` and needs no entry-point workaround. The general
+// "self-looping AND fed by a separate upstream edge" case this comment
+// warns about is BUG-03's cycle-bootstrap starvation defect, registered
+// and fixed in Phase 22.1 by `Frontier::starved_release`
+// (`engine::superstep`) -- see the now-passing regression tests
+// `engine::superstep::tests::self_looping_node_fed_by_upstream_edge_can_never_take_first_turn`
+// and
+// `engine::superstep::tests::cycle_node_fed_from_outside_the_cycle_takes_its_first_turn`,
+// not an ignored reproduction.)
+//
+// An uninterrupted run takes exactly `LOOP_BOUND + 5` supersteps:
+// `loop_gate` x `LOOP_BOUND` (supersteps 1..=LOOP_BOUND), then researcher,
+// writer, reviewer, finalizer, archiver (one superstep each).
+//
+// The graph itself now lives in `tests/helpers/e2e_fixtures.rs` as
+// `build_crash_resume_graph`, shared verbatim with the eval harness (plan
+// 28-16, D-34). This comment stays here since it documents THIS test's own
+// crash-simulation technique, not the graph shape.
 
 fn initial_delta() -> StateDelta {
     let mut delta = StateDelta::new();
-    delta.set(field("topic"), "rust workflows").unwrap();
+    delta
+        .set(e2e_fixtures::field("topic"), "rust workflows")
+        .unwrap();
     delta
 }
 
@@ -310,7 +131,7 @@ async fn e2e_1_crash_resume_matches_control_run_with_no_reexecution() {
                 .expect("control store should connect"),
         );
         let control_port = Arc::new(FaultyPaladinPort::new());
-        let control_graph = build_graph();
+        let control_graph = e2e_fixtures::build_crash_resume_graph();
         let control_thread = ThreadId::new("e2e-1-control").expect("valid thread id");
         let control_engine = WarEngine::new(control_port.clone(), control_store.clone());
 
@@ -323,7 +144,7 @@ async fn e2e_1_crash_resume_matches_control_run_with_no_reexecution() {
             other => panic!("expected control run to complete, got {other:?}"),
         };
 
-        let total_supersteps = (LOOP_BOUND as usize) + 5;
+        let total_supersteps = (e2e_fixtures::LOOP_BOUND as usize) + 5;
         let control_waypoints = full_history(&control_store, &control_thread).await;
         assert_eq!(
             control_waypoints.len(),
@@ -337,7 +158,8 @@ async fn e2e_1_crash_resume_matches_control_run_with_no_reexecution() {
             .filter(|r| r.node_id == NodeId::new("loop_gate"))
             .count();
         assert_eq!(
-            control_loop_runs, LOOP_BOUND as usize,
+            control_loop_runs,
+            e2e_fixtures::LOOP_BOUND as usize,
             "loop_gate must run exactly LOOP_BOUND times"
         );
 
@@ -376,7 +198,7 @@ async fn e2e_1_crash_resume_matches_control_run_with_no_reexecution() {
                 .expect("resumed store should reconnect to the same file"),
         );
         let resumed_port = Arc::new(FaultyPaladinPort::new());
-        let resumed_graph = build_graph();
+        let resumed_graph = e2e_fixtures::build_crash_resume_graph();
         let resumed_engine = WarEngine::new(resumed_port.clone(), resumed_store.clone());
 
         let resumed_outcome = resumed_engine

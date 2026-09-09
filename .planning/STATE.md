@@ -914,5 +914,5 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
-- `/gsd-secure-phase 28` — security enforcement is on and no `28-SECURITY.md` exists yet. (`26-SECURITY.md` `eb9051a2` and `27-SECURITY.md` `849acdb1` are both `verified`, `threats_open: 0` — those steps are done.)
+- `28-SECURITY.md` written 2026-09-09 — `verified`, `threats_open: 0` (75/75 closed; `26-SECURITY.md` `eb9051a2` and `27-SECURITY.md` `849acdb1` likewise). Security step for Phases 26–28 is done; note the recorded production-wiring caveat (replay / trace persistence / `dev-ui` router not wired at the composition root — re-secure the phase that wires them).
 - Phase 28 close-out after the security audit: `/gsd-ship` / Phase 29 (SHIP-01…04)

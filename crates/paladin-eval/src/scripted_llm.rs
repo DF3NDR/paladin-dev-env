@@ -159,6 +159,13 @@ impl ScenarioLlm {
 
     /// Every request this [`ScenarioLlm`] (across every [`ScenarioLlm::for_node`] clone
     /// sharing its state) has received so far, in call order.
+    ///
+    /// # Threat accepted here (28-05-PLAN.md `<threat_model>`, T-28-05-03)
+    ///
+    /// Each [`CapturedRequest`] carries the rendered prompt text, and failure renderers
+    /// echo it into the developer console or CI log. This is accepted: the log is
+    /// test-harness-local and exists precisely to make a failure actionable, and
+    /// scenarios are scripted with fixture prompts, never production data.
     pub fn requests(&self) -> Vec<CapturedRequest> {
         self.shared
             .requests

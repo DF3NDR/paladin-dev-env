@@ -25,6 +25,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY crates ./crates
 COPY benches ./benches
+# `paladin-cli eval run` compiles the shared E2E graph builders from tests/helpers
+# via a `#[path]` include (plan 28-16); the lib target needs the file present.
+COPY tests ./tests
 # SQL migrations are embedded in the binary at compile time (D-17,
 # crates/paladin-memory/src/migrations.rs) -- no migrations/ directory to copy.
 # config.yml is gitignored (env-specific); provide at runtime via volume mount

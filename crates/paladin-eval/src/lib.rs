@@ -53,9 +53,13 @@
 
 #![warn(missing_docs)]
 
+pub mod assertion;
 pub mod scenario;
 pub mod scripted_llm;
 
+pub use assertion::{
+    AssertionContext, AssertionFailure, AssertionOutcome, CustomAssertion, evaluate,
+};
 pub use scenario::{
     Assertion, Case, EVAL_SCHEMA_VERSION, LiveOptions, LlmErrorKind, LlmScript, MatchRule,
     ParleyScript, RunStatusValue, Scenario, ScenarioError, ScenarioTarget, ScriptEntry, StoreKind,

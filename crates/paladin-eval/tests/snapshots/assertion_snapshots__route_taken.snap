@@ -1,0 +1,8 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: route_taken ["worker", "planner"]
+  expected: ["worker", "planner"] as a subsequence of the executed route
+  observed: ["planner", "worker", "worker"]
+  seq: 3..=10

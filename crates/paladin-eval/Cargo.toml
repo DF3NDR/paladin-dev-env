@@ -55,3 +55,7 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Not a [workspace.dependencies] entry -- mirrors the root facade manifest's
+# own `insta = "1.34"` pin (Cargo.toml:218, its own [dev-dependencies]), the
+# same non-workspace-table precedent `serde_yaml` above already follows.
+insta = "1.34"

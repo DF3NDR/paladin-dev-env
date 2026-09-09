@@ -1,0 +1,8 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: run_status Failed
+  expected: Failed
+  observed: Completed
+  seq: 13..=13

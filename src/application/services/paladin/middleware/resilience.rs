@@ -49,7 +49,6 @@ use async_trait::async_trait;
 use paladin_core::platform::container::aegis::RetryPolicy;
 use paladin_llm::fallback::{FallbackChainError, FallbackLlmAdapter};
 use paladin_ports::output::llm_port::LlmPort;
-use paladin_ports::output::trace_sink_port::MiddlewareAction;
 
 use crate::application::services::paladin::error::PaladinError;
 
@@ -110,12 +109,16 @@ impl ExecutionMiddleware for ModelFallbackMiddleware {
         cx: &mut ModelCallContext<'_>,
     ) -> Result<MiddlewareFlow, PaladinError> {
         cx.llm_override = Some(Arc::clone(&self.adapter));
-        // 28-06, D-04: installing the fallback chain as this call's
-        // effective port never changes the returned `MiddlewareFlow`
-        // (always `Continue`), so the chain driver cannot observe this
-        // action structurally -- report it via the hint instead (see
-        // `middleware::chain`'s own module docs for the full mechanism).
-        cx.middleware_action_hint = Some(MiddlewareAction::Fallback);
+        // WR-01 (28-REVIEW): this only INSTALLS the fallback chain as this
+        // call's effective port -- it does not mean a hop actually
+        // happened. Every call through a Paladin configured with this
+        // middleware would otherwise emit a misleading
+        // `MiddlewareAction::Fallback` even on a healthy, first-attempt,
+        // no-error call. `FallbackLlmAdapter::record_hop`
+        // (`crates/paladin-llm/src/fallback.rs`) already emits
+        // `TraceEvent::FallbackHop` -- a distinct event that fires ONLY on
+        // a real hop -- so that is this run's source of truth for fallback
+        // activity; no `MiddlewareAction::Fallback` hint is set here.
         Ok(MiddlewareFlow::Continue)
     }
 
@@ -167,10 +170,15 @@ impl ExecutionMiddleware for ModelRetryMiddleware {
         cx: &mut ModelCallContext<'_>,
     ) -> Result<MiddlewareFlow, PaladinError> {
         cx.retry_policy = Some(self.policy.clone());
-        // 28-06, D-04: see `ModelFallbackMiddleware::before_model`'s own
-        // comment -- installing a retry policy never changes the returned
-        // `MiddlewareFlow`, so the driver reports it via the hint.
-        cx.middleware_action_hint = Some(MiddlewareAction::Retry);
+        // WR-01 (28-REVIEW): this only INSTALLS the retry policy -- it does
+        // not mean a retry actually fired. Setting the hint here
+        // unconditionally made every successful, first-attempt call emit a
+        // misleading `MiddlewareAction::Retry`. The real signal now comes
+        // from `PaladinExecutionService::execute_with_retry_and_temperature`'s
+        // own retry arm, which emits `MiddlewareAction::Retry` (named
+        // `"model_retry"`, this middleware's own `name()`) at the exact
+        // moment a retry is about to happen, gated on `retry_policy` being
+        // `Some` (i.e. this middleware actually being installed).
         Ok(MiddlewareFlow::Continue)
     }
 
@@ -190,6 +198,7 @@ mod tests {
     use paladin_core::platform::container::aegis::RetryPredicate;
     use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
     use paladin_ports::output::llm_port::LlmError;
+    use paladin_ports::output::trace_sink_port::MiddlewareAction;
     use std::time::Duration;
 
     fn make_paladin(max_loops: u32) -> Paladin {
@@ -439,5 +448,270 @@ mod tests {
         // count, not the chain length multiplied by itself.
         assert_eq!(p1.call_count(), 2);
         assert_eq!(p2.call_count(), 2);
+    }
+
+    // ── WR-01 (28-REVIEW): Retry/Fallback events fire only when the
+    // action actually happens, never unconditionally on every call ────────
+
+    use paladin_core::platform::container::waypoint::ThreadId;
+    use paladin_ports::output::trace_sink_port::{
+        StandaloneEmitter, TraceEvent, TraceRecord, TraceSink, TraceSinkError,
+    };
+
+    #[derive(Default)]
+    struct RecordingSink {
+        events: std::sync::Mutex<Vec<TraceRecord>>,
+    }
+
+    #[async_trait]
+    impl TraceSink for RecordingSink {
+        async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+            self.events.lock().unwrap().push(record);
+            Ok(())
+        }
+    }
+
+    async fn middleware_events_eventually(
+        sink: &RecordingSink,
+        min_len: usize,
+    ) -> Vec<(String, MiddlewareAction)> {
+        for _ in 0..300 {
+            let events = sink.events.lock().unwrap().clone();
+            let middleware_events: Vec<(String, MiddlewareAction)> = events
+                .iter()
+                .filter_map(|r| match &r.event {
+                    TraceEvent::MiddlewareEvent { name, action } => Some((name.clone(), *action)),
+                    _ => None,
+                })
+                .collect();
+            if middleware_events.len() >= min_len {
+                return middleware_events;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        sink.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|r| match &r.event {
+                TraceEvent::MiddlewareEvent { name, action } => Some((name.clone(), *action)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// WR-01: a call that succeeds on its FIRST attempt with
+    /// `ModelRetryMiddleware` installed must emit ZERO
+    /// `MiddlewareAction::Retry` events -- before the fix, `before_model`
+    /// set the hint unconditionally, so even a healthy call emitted one.
+    #[tokio::test]
+    async fn retry_middleware_emits_no_event_when_first_attempt_succeeds() {
+        let sink = Arc::new(RecordingSink::default());
+        let emitter: Arc<dyn paladin_ports::output::trace_sink_port::TraceEmitter> =
+            Arc::new(StandaloneEmitter::new(
+                ThreadId::new("wr-01-retry-no-op").unwrap(),
+                None,
+                Some(sink.clone() as Arc<dyn TraceSink>),
+            ));
+        let llm = Arc::new(MockLlmAdapter::new().with_response("first try"));
+        let middleware = Arc::new(ModelRetryMiddleware::new(RetryPolicy::default()));
+        let service = make_service(llm.clone())
+            .with_middleware(middleware)
+            .with_trace_emitter(emitter);
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert!(result.output.contains("first try"));
+        assert_eq!(llm.call_count(), 1);
+        // Give the fire-and-forget dispatcher a moment to drain, then
+        // confirm no Retry event ever arrived.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let events = sink.events.lock().unwrap().clone();
+        let retry_events: Vec<&TraceRecord> = events
+            .iter()
+            .filter(|r| {
+                matches!(
+                    &r.event,
+                    TraceEvent::MiddlewareEvent {
+                        action: MiddlewareAction::Retry,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert!(
+            retry_events.is_empty(),
+            "a first-attempt success must emit no Retry event, got: {retry_events:?}"
+        );
+    }
+
+    /// WR-01: a call that fails transiently 3 times then succeeds must
+    /// emit exactly 3 `MiddlewareAction::Retry` events -- one per actual
+    /// retry, named for the middleware's own `name()` (`"model_retry"`) --
+    /// never one per `before_model` invocation (4, counting the final
+    /// successful attempt).
+    #[tokio::test(start_paused = true)]
+    async fn retry_middleware_emits_exactly_one_event_per_actual_retry() {
+        let sink = Arc::new(RecordingSink::default());
+        let emitter: Arc<dyn paladin_ports::output::trace_sink_port::TraceEmitter> =
+            Arc::new(StandaloneEmitter::new(
+                ThreadId::new("wr-01-retry-count").unwrap(),
+                None,
+                Some(sink.clone() as Arc<dyn TraceSink>),
+            ));
+        let llm = Arc::new(MockLlmAdapter::new().with_script(vec![
+            MockScriptEntry::Error(transient("p")),
+            MockScriptEntry::Error(transient("p")),
+            MockScriptEntry::Error(transient("p")),
+            MockScriptEntry::Text("finally!".to_string()),
+        ]));
+        let policy = RetryPolicy {
+            max_attempts: 4,
+            jitter: false,
+            ..RetryPolicy::default()
+        };
+        let middleware = Arc::new(ModelRetryMiddleware::new(policy));
+        let service = make_service(llm.clone())
+            .with_middleware(middleware)
+            .with_trace_emitter(emitter);
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+        assert!(result.output.contains("finally!"));
+        assert_eq!(llm.call_count(), 4);
+
+        let observed = middleware_events_eventually(&sink, 3).await;
+        let retry_events: Vec<&(String, MiddlewareAction)> = observed
+            .iter()
+            .filter(|(_, action)| *action == MiddlewareAction::Retry)
+            .collect();
+        assert_eq!(
+            retry_events.len(),
+            3,
+            "exactly 3 actual retries, not 4 before_model calls: {observed:?}"
+        );
+        assert!(
+            retry_events.iter().all(|(name, _)| name == "model_retry"),
+            "every Retry event must name the middleware's own name(): {observed:?}"
+        );
+    }
+
+    /// WR-01: a call whose primary port succeeds immediately with
+    /// `ModelFallbackMiddleware` installed must emit ZERO
+    /// `MiddlewareAction::Fallback` events -- before the fix, `before_model`
+    /// set the hint unconditionally on every call, healthy or not.
+    #[tokio::test]
+    async fn fallback_middleware_emits_no_event_when_primary_succeeds() {
+        let sink = Arc::new(RecordingSink::default());
+        let emitter: Arc<dyn paladin_ports::output::trace_sink_port::TraceEmitter> =
+            Arc::new(StandaloneEmitter::new(
+                ThreadId::new("wr-01-fallback-no-op").unwrap(),
+                None,
+                Some(sink.clone() as Arc<dyn TraceSink>),
+            ));
+        let primary: Arc<dyn LlmPort> = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("primary")
+                .with_response("served by primary"),
+        );
+        let backup: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_provider_name("backup"));
+        let middleware = Arc::new(ModelFallbackMiddleware::new(vec![primary, backup]).unwrap());
+        let service_default: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new());
+        let service = make_service(service_default)
+            .with_middleware(middleware)
+            .with_trace_emitter(emitter);
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+        assert!(result.output.contains("served by primary"));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let events = sink.events.lock().unwrap().clone();
+        let fallback_events: Vec<&TraceRecord> = events
+            .iter()
+            .filter(|r| {
+                matches!(
+                    &r.event,
+                    TraceEvent::MiddlewareEvent {
+                        action: MiddlewareAction::Fallback,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert!(
+            fallback_events.is_empty(),
+            "a healthy primary-served call must emit no Fallback event, got: {fallback_events:?}"
+        );
+    }
+
+    /// WR-01: even when a real hop DOES occur, `ModelFallbackMiddleware`
+    /// itself no longer emits a `MiddlewareAction::Fallback` event --
+    /// `FallbackLlmAdapter`'s own `TraceEvent::FallbackHop` (a distinct
+    /// event, always accurate to a real hop) is the source of truth.
+    #[tokio::test]
+    async fn fallback_middleware_emits_no_middleware_action_event_on_a_real_hop() {
+        let sink = Arc::new(RecordingSink::default());
+        let emitter: Arc<dyn paladin_ports::output::trace_sink_port::TraceEmitter> =
+            Arc::new(StandaloneEmitter::new(
+                ThreadId::new("wr-01-fallback-real-hop").unwrap(),
+                None,
+                Some(sink.clone() as Arc<dyn TraceSink>),
+            ));
+        let primary: Arc<dyn LlmPort> = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("primary")
+                .with_error(transient("primary")),
+        );
+        let backup: Arc<dyn LlmPort> = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("backup")
+                .with_response("served by backup"),
+        );
+        let middleware = Arc::new(ModelFallbackMiddleware::new(vec![primary, backup]).unwrap());
+        let service_default: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new());
+        let service = make_service(service_default)
+            .with_middleware(middleware)
+            .with_trace_emitter(emitter.clone());
+        let paladin = make_paladin(1);
+
+        // `FallbackLlmAdapter::record_hop` (no explicit `with_trace_emitter`
+        // of its own here, since `ModelFallbackMiddleware` never sets one)
+        // falls back to the AMBIENT `current_trace_emitter()` a real run's
+        // worker dispatch sets via this task-local -- so the scope is
+        // required for `FallbackHop` itself to be observable here, mirroring
+        // `fallback_hop_lands_in_the_run_sequence` in
+        // `crates/paladin-llm/src/fallback.rs`.
+        let result = paladin_ports::output::trace_sink_port::RUN_TRACE_EMITTER
+            .scope(emitter, service.execute(&paladin, "hi"))
+            .await
+            .unwrap();
+        assert_eq!(result.served_by.as_deref(), Some("backup"));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let events = sink.events.lock().unwrap().clone();
+        assert!(
+            events
+                .iter()
+                .any(|r| matches!(r.event, TraceEvent::FallbackHop { .. })),
+            "a real hop must still produce FallbackHop: {events:?}"
+        );
+        let fallback_middleware_events: Vec<&TraceRecord> = events
+            .iter()
+            .filter(|r| {
+                matches!(
+                    &r.event,
+                    TraceEvent::MiddlewareEvent {
+                        action: MiddlewareAction::Fallback,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert!(
+            fallback_middleware_events.is_empty(),
+            "ModelFallbackMiddleware must never emit its own MiddlewareAction::Fallback: {fallback_middleware_events:?}"
+        );
     }
 }

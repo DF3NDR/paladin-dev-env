@@ -27,17 +27,26 @@
 //!   directly from the returned [`ToolFlow`] in `run_around_tool`
 //!   (`Deny`/`Rewrite` respectively — a rewritten call IS a redaction of
 //!   the request).
-//! - [`MiddlewareAction::Retry`]/[`MiddlewareAction::Fallback`] — these
-//!   never change the returned `MiddlewareFlow` (`ModelRetryMiddleware`/
-//!   `ModelFallbackMiddleware` both return plain `Continue` after setting
-//!   `cx.retry_policy`/`cx.llm_override`), so the driver cannot observe
-//!   them structurally. Both middleware instead set
-//!   [`ModelCallContext::middleware_action_hint`] on themselves before
-//!   returning; the driver reads (and clears) that hint immediately after
-//!   EVERY `before_model`/`after_model` call, emitting it if present. This
-//!   is a general mechanism, not special-cased to those two: any future
-//!   middleware whose action the driver cannot structurally observe uses
-//!   the same hint.
+//! - [`MiddlewareAction::Retry`]/[`MiddlewareAction::Fallback`] — WR-01
+//!   (28-REVIEW) moved these OFF the generic hint mechanism below:
+//!   `ModelRetryMiddleware`/`ModelFallbackMiddleware::before_model` only
+//!   INSTALL a capability (`cx.retry_policy`/`cx.llm_override`) that the
+//!   call site may or may not end up using, so setting the hint
+//!   unconditionally in `before_model` made every call -- retried or not,
+//!   hopped or not -- emit a misleading event. `MiddlewareAction::Retry` is
+//!   now emitted directly by
+//!   `PaladinExecutionService::execute_with_retry_and_temperature`'s own
+//!   retry arm, at the moment a retry is actually about to happen;
+//!   `MiddlewareAction::Fallback` was dropped entirely in favor of
+//!   `FallbackLlmAdapter`'s own `TraceEvent::FallbackHop`, which already
+//!   fires only on a real hop. Neither goes through `emit_pending_hint`
+//!   below anymore.
+//! - The [`ModelCallContext::middleware_action_hint`] mechanism itself
+//!   remains general-purpose: any future middleware whose action the
+//!   driver cannot structurally observe from the returned `MiddlewareFlow`
+//!   (e.g. `Guardrail`'s in-place redaction) can still set it before
+//!   returning `Continue`, and `emit_pending_hint` reads (and clears) it
+//!   immediately after EVERY `before_model`/`after_model` call.
 
 use std::sync::Arc;
 

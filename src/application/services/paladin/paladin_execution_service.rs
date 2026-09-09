@@ -97,7 +97,7 @@ use paladin_ports::output::structured_executor_port::{
 };
 use paladin_ports::output::token_counter_port::TokenCounterPort;
 use paladin_ports::output::trace_sink_port::{
-    NodeProgressKind, TraceEmitter, TraceEvent, current_trace_emitter,
+    MiddlewareAction, NodeProgressKind, TraceEmitter, TraceEvent, current_trace_emitter,
 };
 use paladin_ports::output::vault_port::VaultPort;
 #[cfg(feature = "vision")]
@@ -2571,6 +2571,17 @@ impl PaladinExecutionService {
                         }
                         None => Duration::from_millis(100 * 2u64.pow(attempt - 1)), // 100ms, 200ms, 400ms, ...
                     };
+                    // WR-01 (28-REVIEW): emit `MiddlewareAction::Retry`
+                    // exactly HERE -- the moment a retry is actually about
+                    // to happen -- rather than unconditionally from
+                    // `ModelRetryMiddleware::before_model` (which fired on
+                    // every call, retried or not). Gated on `retry_policy`
+                    // being `Some` so this never misattributes an event to
+                    // `model_retry` when no such middleware is installed
+                    // (the plain `100ms * 2^(attempt-1)` fallback path).
+                    if retry_policy.is_some() {
+                        cx.emit_middleware_event("model_retry", MiddlewareAction::Retry);
+                    }
                     warn!(
                         "LLM call failed, retrying: id={}, loop={}, attempt={}, backoff_ms={}, error={}",
                         execution_id,

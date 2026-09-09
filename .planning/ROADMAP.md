@@ -678,9 +678,9 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 28-03-PLAN.md — Engine producers: `EdgeEvaluated`, `ParleyRaised`, rate-limited heartbeats, populated `RunFinished`, `WarEngine::trace_emitter()` (OBS-01)
-- [ ] 28-04-PLAN.md — `RunTracePort`, three storage adapters, `run_traces` migrations, contract suite, retention join (OBS-02)
-- [ ] 28-05-PLAN.md — `paladin-eval` crate, scenario file format, `ScenarioLlm`, golden JSON Schema (OBS-04)
+- [x] 28-03-PLAN.md — Engine producers: `EdgeEvaluated`, `ParleyRaised`, rate-limited heartbeats, populated `RunFinished`, `WarEngine::trace_emitter()` (OBS-01)
+- [x] 28-04-PLAN.md — `RunTracePort`, three storage adapters, `run_traces` migrations, contract suite, retention join (OBS-02)
+- [x] 28-05-PLAN.md — `paladin-eval` crate, scenario file format, `ScenarioLlm`, golden JSON Schema (OBS-04)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

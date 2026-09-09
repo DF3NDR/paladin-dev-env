@@ -1,0 +1,67 @@
+schema_version: "1"
+# .project/v0.10.0/00-program-overview.md §6, E2E-1: the 6-node cyclic
+# workflow (one bounded self-loop) run against a mock LLM with a durable
+# Waypoint backend, dropped after superstep 3, resumed by a fresh engine.
+# Graph: tests/helpers/e2e_fixtures.rs::build_crash_resume_graph -- the SAME
+# builder tests/integration/e2e_crash_resume_test.rs uses (plan 28-16, D-34).
+target:
+  registered: "e2e-1-crash-resume"
+store: sqlite_temp
+llm:
+  per_node:
+    researcher:
+      - text: "research notes"
+    writer:
+      - text: "draft article"
+    reviewer:
+      - text: "reviewed draft"
+    finalizer:
+      - text: "final copy"
+    archiver:
+      - text: "archived"
+cases:
+  - name: crash_after_superstep_3
+    input:
+      topic: "rust workflows"
+    # LOOP_BOUND=5: superstep 3 lands mid-loop (loop_gate has completed 3 of
+    # its 5 required iterations) -- the harder, more interesting crash point,
+    # matching the integration test's own choice.
+    interrupt_after_superstep: 3
+    assertions:
+      # The resumed run's own captured trace starts fresh from the seeded
+      # Waypoint -- these counts are the POST-resume executions only:
+      # loop_gate needs 2 more iterations (4th and 5th) to reach LOOP_BOUND,
+      # then each straight-line node runs exactly once. None of the five
+      # Paladin nodes had completed before the interrupt at superstep 3, so
+      # "not re-executed" is proven by each running exactly once here.
+      - node_executed:
+          node: "loop_gate"
+          times:
+            exact: 2
+      - node_executed:
+          node: "researcher"
+          times:
+            exact: 1
+      - node_executed:
+          node: "writer"
+          times:
+            exact: 1
+      - node_executed:
+          node: "reviewer"
+          times:
+            exact: 1
+      - node_executed:
+          node: "finalizer"
+          times:
+            exact: 1
+      - node_executed:
+          node: "archiver"
+          times:
+            exact: 1
+      - run_status: completed
+      - supersteps_max: 10
+      # The resumed run's final Battlefield equals an uninterrupted control
+      # run's BY CONSTRUCTION (same deterministic graph, same per-node
+      # scripts, same seeded prefix) -- the blessed snapshot below IS that
+      # comparison.
+      - final_state_snapshot

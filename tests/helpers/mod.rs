@@ -2,6 +2,7 @@
 //!
 //! Common test infrastructure including mocks, fixtures, and helper functions.
 
+pub mod e2e_fixtures;
 pub mod mock_arsenal_adapter;
 pub mod mock_llm_adapter;
 pub mod mock_paladin_port;

@@ -144,8 +144,21 @@ impl<'a> AssertionContext<'a> {
         })
     }
 
+    /// The LAST `RunFinished` record in the trace -- never the first.
+    ///
+    /// A case answering a raised Parley (`Case::parley_responses`) drives the
+    /// engine through more than one top-level call (`start`, then one or
+    /// more `resume_with`), and EACH call emits its own `RunFinished` record
+    /// (D-02): the first, from `start`, necessarily reads
+    /// `status: AwaitingInput` (that is why the run paused for a response at
+    /// all); only the LAST one reflects the run's true terminal outcome
+    /// after every scripted response has been applied. `.find_map` would
+    /// silently pick that stale first record; `.rev().find_map` finds the
+    /// most recent one instead, so `run_status`/`total_tokens_max`/
+    /// `supersteps_max` (which all delegate to this one method) evaluate the
+    /// run's ACTUAL final state, not a pre-resume snapshot.
     fn run_finished(&self) -> Option<RunFinishedInfo<'a>> {
-        self.records.iter().find_map(|r| match &r.event {
+        self.records.iter().rev().find_map(|r| match &r.event {
             TraceEvent::RunFinished {
                 status,
                 total_supersteps,

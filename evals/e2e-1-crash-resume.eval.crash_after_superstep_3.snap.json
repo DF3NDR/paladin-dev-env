@@ -1,0 +1,10 @@
+{
+  "archiver_out": "archived",
+  "finalizer_out": "final copy",
+  "loop_count": 5,
+  "loop_status": "done",
+  "research_out": "research notes",
+  "reviewer_out": "reviewed draft",
+  "topic": "rust workflows",
+  "writer_out": "draft article"
+}

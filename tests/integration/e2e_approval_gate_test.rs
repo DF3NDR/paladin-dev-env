@@ -18,112 +18,30 @@ use std::time::Duration;
 
 use chrono::Utc;
 
-use paladin_battalion::engine::graph::GateRequestTemplate;
-use paladin_battalion::engine::{
-    EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeSpec, RunOutcome, StateNode,
-    StateNodeError, WarEngine, WarGraph,
-};
+use paladin_battalion::engine::{NodeSpec, RunOutcome, WarEngine};
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
-use paladin_core::platform::container::battlefield::{
-    Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
-};
-use paladin_core::platform::container::directive::Directive;
+use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
 use paladin_core::platform::container::parley::{ParleyKind, ParleyResponse};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId, WaypointStatus};
 use paladin_ports::output::waypoint_port::WaypointPort;
 use paladin_storage::waypoint::sqlite::SqliteWaypointStore;
 
 // `tests/helpers/` is shared across many integration test binaries; this
-// standalone [[test]] target only needs `FaultyPaladinPort`, so the rest of
-// the module tree is unused here -- allowed rather than pruned, following
+// standalone [[test]] target needs `FaultyPaladinPort` and the shared
+// `e2e_fixtures` graph builders (plan 28-16, D-34) -- the rest of the module
+// tree is unused here, allowed rather than pruned, following
 // `e2e_crash_resume_test.rs`'s own precedent for this exact situation.
 #[allow(dead_code, unused_imports)]
 #[path = "../helpers/mod.rs"]
 mod helpers;
 use helpers::FaultyPaladinPort;
+use helpers::e2e_fixtures;
 
-fn field(name: &str) -> FieldName {
-    FieldName::new(name).expect("valid field name")
-}
-
-/// A `Function` node that always writes the same fixed value to one field,
-/// ignoring the observed Battlefield -- the `act`/`cancel` branch effects
-/// this scenario asserts on.
-struct FixedOutputNode {
-    field: FieldName,
-    value: serde_json::Value,
-}
-
-impl FixedOutputNode {
-    fn new(field: FieldName, value: serde_json::Value) -> Arc<Self> {
-        Arc::new(Self { field, value })
-    }
-}
-
-#[async_trait::async_trait]
-impl StateNode for FixedOutputNode {
-    async fn run(
-        &self,
-        _state: &Battlefield,
-        _ctx: &NodeContext,
-    ) -> Result<Directive, StateNodeError> {
-        let mut delta = StateDelta::new();
-        delta.set_raw(self.field.clone(), self.value.clone());
-        Ok(delta.into())
-    }
-}
-
-/// Build the E2E-2 fixture: one `NodeSpec::Gate` (`Approval`, `output_field: "approved"`) plus a
-/// `Contains("true")` edge to `act` and a `Contains("false")` edge to `cancel` -- the exact
-/// "three lines of graph" shape the PRD promises.
-fn build_graph() -> WarGraph {
-    let schema = BattlefieldSchema::new(vec![
-        FieldSpec::new(
-            field("approved"),
-            DispatchRule::LastWrite,
-            Some(serde_json::json!(false)),
-            false,
-        ),
-        FieldSpec::new(field("path"), DispatchRule::LastWrite, None, false),
-    ]);
-    let mut graph = WarGraph::new(schema, EngineLimits::default());
-
-    let request = GateRequestTemplate::new(
-        ParleyKind::Approval,
-        InputMapping::new("Approve the deploy?"),
-    );
-    graph.add_node(
-        NodeId::new("approve"),
-        NodeSpec::gate(request, Some(field("approved"))),
-    );
-    graph.add_node(
-        NodeId::new("act"),
-        NodeSpec::Function(FixedOutputNode::new(
-            field("path"),
-            serde_json::json!("act"),
-        )),
-    );
-    graph.add_node(
-        NodeId::new("cancel"),
-        NodeSpec::Function(FixedOutputNode::new(
-            field("path"),
-            serde_json::json!("cancel"),
-        )),
-    );
-
-    graph.add_edge(EdgeSpec {
-        from: NodeId::new("approve"),
-        to: NodeId::new("act"),
-        condition: Some(EdgeCondition::Contains(r#""approved":true"#.to_string())),
-    });
-    graph.add_edge(EdgeSpec {
-        from: NodeId::new("approve"),
-        to: NodeId::new("cancel"),
-        condition: Some(EdgeCondition::Contains(r#""approved":false"#.to_string())),
-    });
-    graph.add_entry(NodeId::new("approve"));
-    graph
-}
+// The E2E-2 fixture -- one `NodeSpec::Gate` (`Approval`, `output_field: "approved"`) plus a
+// `Contains("true")` edge to `act` and a `Contains("false")` edge to `cancel`, the exact
+// "three lines of graph" shape the PRD promises -- now lives in
+// `tests/helpers/e2e_fixtures.rs` as `build_approval_gate_graph`, shared verbatim with the
+// eval harness (plan 28-16, D-34).
 
 fn temp_db_url(label: &str) -> String {
     let path = std::env::temp_dir().join(format!(
@@ -139,7 +57,7 @@ fn temp_db_url(label: &str) -> String {
 /// Returns the final `path` field's value (`"act"` or `"cancel"`).
 async fn run_gate_scenario(label: &str, approved_value: serde_json::Value) -> String {
     let db_url = temp_db_url(label);
-    let graph = build_graph();
+    let graph = e2e_fixtures::build_approval_gate_graph();
     let thread = ThreadId::new(format!("e2e-2-{label}")).expect("valid thread id");
 
     // --- Instance A: start, suspend, then drop (simulated process death). --
@@ -195,7 +113,7 @@ async fn run_gate_scenario(label: &str, approved_value: serde_json::Value) -> St
         .expect("resume_with should complete the run");
     match resumed {
         RunOutcome::Completed { final_state, .. } => final_state
-            .get::<String>(&field("path"))
+            .get::<String>(&e2e_fixtures::field("path"))
             .expect("path field should read")
             .expect("path field must be set by the branch that fired"),
         other => panic!("expected Completed, got {other:?}"),
@@ -236,7 +154,7 @@ async fn e2e2_denial_branch_survives_process_drop() {
 async fn e2e2_suspended_thread_holds_no_engine_resources() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let db_url = temp_db_url("no-resources");
-        let graph = build_graph();
+        let graph = e2e_fixtures::build_approval_gate_graph();
         let thread = ThreadId::new("e2e-2-no-resources").expect("valid thread id");
 
         {
@@ -314,7 +232,7 @@ async fn e2e2_suspended_thread_holds_no_engine_resources() {
 /// `Contains("true")` edge and a `Contains("false")` edge -- the shape the PRD promises.
 #[test]
 fn e2e2_graph_is_three_lines_of_graph() {
-    let graph = build_graph();
+    let graph = e2e_fixtures::build_approval_gate_graph();
 
     match graph.node(&NodeId::new("approve")) {
         Some(NodeSpec::Gate {

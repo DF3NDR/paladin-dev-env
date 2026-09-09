@@ -638,22 +638,52 @@ pub fn run_eval_harness_main(pattern: &str) -> ! {
     libtest_mimic::run(&args, trials).exit()
 }
 
+/// Like [`run_eval_harness_main`], but calls `configure` on a fresh
+/// [`ScenarioRunner`] before building trials (D-31, D-34, plan 28-16): lets a
+/// host `[[test]] harness = false` binary register its own
+/// [`ScenarioRunner::register_graph`]/[`ScenarioRunner::register_registries`]
+/// constructors before the pattern is globbed, so a `registered` target
+/// resolves instead of reporting [`RunnerError::UnknownGraph`].
+pub fn run_eval_harness_main_with(pattern: &str, configure: impl FnOnce(&mut ScenarioRunner)) -> ! {
+    let args = Arguments::from_args();
+    let mut runner = ScenarioRunner::new();
+    configure(&mut runner);
+    let trials = runner.trials(pattern);
+    libtest_mimic::run(&args, trials).exit()
+}
+
 /// Expands to a `fn main()` for a `harness = false` `[[test]]` target (D-32):
 /// globs `$pattern` at runtime and hands one `libtest_mimic::Trial` per
 /// `(file, case)` pair to the custom harness, so `cargo test --test <name>
 /// <filter>` filters exactly like any other Rust test.
 ///
-/// # Example
+/// A second, optional argument registers graph constructors and registries
+/// factories before the pattern is globbed (D-31, D-34) -- needed by any
+/// `registered` (as opposed to `graph_doc`) scenario target.
+///
+/// # Examples
 ///
 /// ```ignore
-/// // tests/evals.rs
+/// // tests/evals.rs -- no registered targets
 /// paladin_eval::eval_scenarios!("evals/**/*.eval.yaml");
+/// ```
+///
+/// ```ignore
+/// // tests/evals.rs -- with registered targets
+/// paladin_eval::eval_scenarios!("evals/**/*.eval.yaml", |runner: &mut paladin_eval::ScenarioRunner| {
+///     runner.register_graph("my-graph", std::sync::Arc::new(|_ports| my_graph()));
+/// });
 /// ```
 #[macro_export]
 macro_rules! eval_scenarios {
     ($pattern:expr) => {
         fn main() {
             $crate::runner::run_eval_harness_main($pattern)
+        }
+    };
+    ($pattern:expr, $configure:expr) => {
+        fn main() {
+            $crate::runner::run_eval_harness_main_with($pattern, $configure)
         }
     };
 }
@@ -721,7 +751,16 @@ impl PaladinPort for ScenarioPaladinPort {
             }
             LlmSource::Live(provider) => provider.generate(request).await,
         }
-        .map_err(|source| PaladinError::LlmError(source.to_string()))?;
+        // `paladin_battalion::llm_failure::to_paladin_error` (not the legacy
+        // `PaladinError::LlmError(source.to_string())` string erasure): a
+        // scripted `error:` entry's `LlmErrorKind::Transient` must survive as
+        // `Transience::Transient` so a scenario's Aegis retry policy under
+        // the DEFAULT `TransientOnly` predicate can actually retry it (D-34's
+        // E2E-3 dogfood scenario depends on this) -- the legacy erasure
+        // classifies EVERY `PaladinError::LlmError(_)` as `Transience::
+        // Unknown` (`paladin_core::platform::container::paladin_error::
+        // PaladinError::transience`), which `TransientOnly` never retries.
+        .map_err(|source| paladin_battalion::llm_failure::to_paladin_error(&source))?;
 
         Ok(PaladinResult {
             output: response.content,

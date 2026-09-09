@@ -57,20 +57,11 @@
 //! `cargo test --test e2e_muster_defer_order`.
 
 use std::sync::Arc;
-use std::time::Duration;
 
-use paladin_battalion::engine::{
-    EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeSpec, RunOutcome, StateNode,
-    StateNodeError, WarEngine, WarGraph,
-};
-use paladin_core::base::entity::node::Node;
-use paladin_core::platform::container::aegis::{Aegis, RetryPolicy, RetryPredicate};
-use paladin_core::platform::container::battlefield::{
-    Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
-};
-use paladin_core::platform::container::directive::{Directive, MusterTask, NextStep};
+use paladin_battalion::engine::{RunOutcome, WarEngine};
+use paladin_core::platform::container::aegis::{RetryPolicy, RetryPredicate};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_core::platform::container::node_error::NodeErrorSource;
-use paladin_core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::waypoint::{
     NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointStatus,
@@ -79,252 +70,22 @@ use paladin_ports::output::waypoint_port::WaypointPort;
 use paladin_storage::waypoint::sqlite::SqliteWaypointStore;
 
 // `tests/helpers/` is shared across many integration test binaries; this
-// standalone [[test]] target only needs `FaultyPaladinPort`, so the rest of
-// the module tree is unused here -- allowed rather than pruned, matching
+// standalone [[test]] target needs `FaultyPaladinPort` and the shared
+// `e2e_fixtures` graph builders (plan 28-16, D-34) -- the rest of the module
+// tree is unused here, allowed rather than pruned, matching
 // `e2e_crash_resume_test.rs`'s own precedent for this exact situation.
 #[allow(dead_code, unused_imports)]
 #[path = "../helpers/mod.rs"]
 mod helpers;
 use helpers::FaultyPaladinPort;
+use helpers::e2e_fixtures::{self, RECOVERING_WORKER, TASK_KEYS, WORKER_NAMES};
 
-/// The five mustered task keys, already in lexicographic (`String` byte)
-/// order -- CF-FR-11's ordering guarantee is proven under real concurrency
-/// at the unit level by `engine::superstep::tests::
-/// worker_deltas_merge_in_task_key_order_not_completion_order`; this file's
-/// job is to prove the SAME guarantee holds through the full engine +
-/// real-Paladin-dispatch path, not to re-derive it.
-const TASK_KEYS: [&str; 5] = ["a", "b", "c", "d", "e"];
-
-/// The five worker templates of the recovering-worker fixture, one per
-/// task key (`w1` runs `"a"`, .., `w5` runs `"e"`); `w3` is the one that
-/// fails its first two attempts (D-31).
-const WORKER_NAMES: [&str; 5] = ["w1", "w2", "w3", "w4", "w5"];
-
-/// The recovering worker of the E2E-3 scenario.
-const RECOVERING_WORKER: &str = "w3";
-
-fn field(name: &str) -> FieldName {
-    FieldName::new(name).expect("valid field name")
-}
-
-fn make_paladin(name: &str) -> Paladin {
-    let data = PaladinData {
-        system_prompt: format!("{name} prompt"),
-        name: name.to_string(),
-        user_name: "TestUser".to_string(),
-        model: "test-model".to_string(),
-        temperature: 0.7,
-        max_loops: MaxLoops::Fixed(1),
-        stop_words: vec![],
-        status: PaladinStatus::Idle,
-        vision_enabled: false,
-        ..Default::default()
-    };
-    Node::new(data, Some(name.to_string()))
-}
-
-/// Deterministic planner: on its one (and only) execution, musters the
-/// configured worker tasks -- each `(worker template, task_key)` pair
-/// carrying its own key as a JSON string payload (`{muster.payload}`
-/// resolves to the bare key string -- see `InputMapping::resolve_muster`).
-struct PlannerNode {
-    tasks: Vec<MusterTask>,
-}
-
-impl PlannerNode {
-    fn muster(assignments: impl IntoIterator<Item = (NodeId, &'static str)>) -> Self {
-        Self {
-            tasks: assignments
-                .into_iter()
-                .map(|(worker, key)| MusterTask {
-                    worker,
-                    payload: serde_json::json!(key),
-                    task_key: key.to_string(),
-                })
-                .collect(),
-        }
-    }
-
-    /// Five tasks, keyed `"a"`..`"e"`, all against the single `worker`
-    /// template -- the original E2E-3 muster/defer/order fixture.
-    fn single_template() -> Self {
-        let worker = NodeId::new("worker");
-        Self::muster(TASK_KEYS.iter().map(|key| (worker.clone(), *key)))
-    }
-
-    /// Five tasks, keyed `"a"`..`"e"`, each against its own `w1`..`w5`
-    /// template -- the recovering-worker fixture (see the module rustdoc).
-    fn one_template_per_task() -> Self {
-        Self::muster(
-            WORKER_NAMES
-                .iter()
-                .zip(TASK_KEYS.iter())
-                .map(|(worker, key)| (NodeId::new(*worker), *key)),
-        )
-    }
-}
-
-#[async_trait::async_trait]
-impl StateNode for PlannerNode {
-    async fn run(
-        &self,
-        _state: &Battlefield,
-        _ctx: &NodeContext,
-    ) -> Result<Directive, StateNodeError> {
-        Ok(Directive {
-            delta: StateDelta::new(),
-            next: NextStep::Muster(self.tasks.clone()),
-        })
-    }
-}
-
-/// Deferred aggregator (`defer: true`): reads the worker template's
-/// `Append`-dispatched `worker_out` field -- exactly 5 entries once every
-/// mustered task has resolved -- and copies it, unchanged, into
-/// `aggregated`, the list-dispatch Battlefield field D-17 names.
-struct AggregatorNode {
-    worker_out: FieldName,
-    aggregated: FieldName,
-}
-
-#[async_trait::async_trait]
-impl StateNode for AggregatorNode {
-    async fn run(
-        &self,
-        state: &Battlefield,
-        _ctx: &NodeContext,
-    ) -> Result<Directive, StateNodeError> {
-        let results = state
-            .get::<Vec<String>>(&self.worker_out)
-            .map_err(|e| StateNodeError(e.to_string()))?
-            .unwrap_or_default();
-        let mut delta = StateDelta::new();
-        delta.set_raw(self.aggregated.clone(), serde_json::json!(results));
-        Ok(delta.into())
-    }
-}
-
-fn schema() -> BattlefieldSchema {
-    BattlefieldSchema::new(vec![
-        FieldSpec::new(field("worker_out"), DispatchRule::Append, None, false),
-        FieldSpec::new(field("aggregated"), DispatchRule::LastWrite, None, false),
-    ])
-}
-
-/// Build the E2E-3 muster/defer/order fixture: `planner` (Function, entry,
-/// one-shot `Muster` of 5 tasks) `-> worker` (Paladin worker template, no
-/// static incoming edge -- dispatched only when mustered, D-12) `->
-/// aggregator` (Function, `defer: true`, runs once after all 5 resolve).
-fn build_graph() -> WarGraph {
-    let worker_out = field("worker_out");
-    let aggregated = field("aggregated");
-    let mut graph = WarGraph::new(schema(), EngineLimits::default());
-
-    let planner = NodeId::new("planner");
-    let worker = NodeId::new("worker");
-    let aggregator = NodeId::new("aggregator");
-
-    graph.add_node(
-        planner.clone(),
-        NodeSpec::Function(Arc::new(PlannerNode::single_template())),
-    );
-    graph.add_worker_template(
-        worker.clone(),
-        NodeSpec::paladin(
-            make_paladin("worker"),
-            InputMapping::new("{muster.payload}"),
-            worker_out.clone(),
-        ),
-    );
-    graph.add_deferred_node(
-        aggregator.clone(),
-        NodeSpec::Function(Arc::new(AggregatorNode {
-            worker_out: worker_out.clone(),
-            aggregated: aggregated.clone(),
-        })),
-    );
-    graph.add_edge(EdgeSpec {
-        from: worker.clone(),
-        to: aggregator.clone(),
-        condition: None,
-    });
-    graph.add_entry(planner);
-
-    graph
-}
-
-/// The per-task retry policy of the recovering-worker fixture (D-31):
-/// `max_attempts: 3` so `w3` may fail twice and succeed on its third
-/// attempt, and `retry_on` LEFT AT ITS DEFAULT (`TransientOnly`) -- the
-/// scenario passes because the mock's failure is Transient by value, never
-/// because the predicate was widened. Only the backoff interval is
-/// shortened: this fixture runs against a real on-disk SQLite backend, so
-/// it measures wall-clock time rather than a paused Tokio clock, and the
-/// default 500 ms/1 s waits would add seconds to a test whose assertions
-/// are counts, not durations.
-fn per_task_retry_policy() -> RetryPolicy {
-    RetryPolicy {
-        max_attempts: 3,
-        initial_interval: Duration::from_millis(20),
-        ..RetryPolicy::default()
-    }
-}
-
-/// Build the E2E-3 recovering-worker fixture: `planner` (Function, entry,
-/// one-shot `Muster` of 5 tasks, one per template) `-> w1..w5` (five
-/// Paladin worker templates, each carrying `retry` as its Aegis retry
-/// policy when `Some`, no static incoming edges) `-> aggregator` (Function,
-/// `defer: true`, runs once after all 5 resolve). See the module rustdoc
-/// for why one template per task. `None` attaches no Aegis at all -- the
-/// negative control that proves the green scenario depends on the retry.
-fn build_graph_with_a_template_per_task(retry: Option<RetryPolicy>) -> WarGraph {
-    let worker_out = field("worker_out");
-    let aggregated = field("aggregated");
-    let mut graph = WarGraph::new(schema(), EngineLimits::default());
-
-    let planner = NodeId::new("planner");
-    let aggregator = NodeId::new("aggregator");
-
-    graph.add_node(
-        planner.clone(),
-        NodeSpec::Function(Arc::new(PlannerNode::one_template_per_task())),
-    );
-    graph.add_deferred_node(
-        aggregator.clone(),
-        NodeSpec::Function(Arc::new(AggregatorNode {
-            worker_out: worker_out.clone(),
-            aggregated: aggregated.clone(),
-        })),
-    );
-    for name in WORKER_NAMES {
-        let worker = NodeId::new(name);
-        graph.add_worker_template(
-            worker.clone(),
-            NodeSpec::paladin(
-                make_paladin(name),
-                InputMapping::new("{muster.payload}"),
-                worker_out.clone(),
-            ),
-        );
-        if let Some(policy) = &retry {
-            graph.set_aegis(
-                worker.clone(),
-                Aegis {
-                    retry: Some(policy.clone()),
-                    ..Aegis::default()
-                },
-            );
-        }
-        graph.add_edge(EdgeSpec {
-            from: worker,
-            to: aggregator.clone(),
-            condition: None,
-        });
-    }
-    graph.add_entry(planner);
-
-    graph
-}
+// The five mustered task keys (`TASK_KEYS`), the five worker templates
+// (`WORKER_NAMES`), the recovering worker (`RECOVERING_WORKER`), the
+// `PlannerNode`/`AggregatorNode` fixtures, and both graph builders
+// (`build_muster_defer_order_graph` / `_with_a_template_per_task`) now live
+// in `tests/helpers/e2e_fixtures.rs` -- shared verbatim with the eval
+// harness (plan 28-16, D-34).
 
 fn temp_db_url(label: &str) -> String {
     let path = std::env::temp_dir().join(format!(
@@ -377,7 +138,7 @@ fn expected_per_template_worker_outputs() -> Vec<String> {
 
 #[tokio::test]
 async fn planner_musters_five_workers_and_the_deferred_aggregator_runs_once() {
-    let graph = build_graph();
+    let graph = e2e_fixtures::build_muster_defer_order_graph();
     let store = Arc::new(
         SqliteWaypointStore::new(&temp_db_url("basic"))
             .await
@@ -473,7 +234,7 @@ async fn planner_musters_five_workers_and_the_deferred_aggregator_runs_once() {
 
 #[tokio::test]
 async fn aggregated_results_are_exactly_five_in_task_key_order() {
-    let graph = build_graph();
+    let graph = e2e_fixtures::build_muster_defer_order_graph();
     let store = Arc::new(
         SqliteWaypointStore::new(&temp_db_url("order"))
             .await
@@ -490,7 +251,7 @@ async fn aggregated_results_are_exactly_five_in_task_key_order() {
     match outcome {
         RunOutcome::Completed { final_state, .. } => {
             let aggregated = final_state
-                .get::<Vec<String>>(&field("aggregated"))
+                .get::<Vec<String>>(&e2e_fixtures::field("aggregated"))
                 .expect("aggregated field should deserialize as Vec<String>");
             assert_eq!(
                 aggregated,
@@ -517,7 +278,9 @@ async fn aggregated_results_are_exactly_five_in_task_key_order() {
 #[tokio::test]
 async fn one_worker_recovers_by_real_per_task_retry() {
     let port = Arc::new(FaultyPaladinPort::new().fail_paladin_until_attempt(RECOVERING_WORKER, 2));
-    let graph = build_graph_with_a_template_per_task(Some(per_task_retry_policy()));
+    let graph = e2e_fixtures::build_muster_defer_order_graph_with_a_template_per_task(Some(
+        e2e_fixtures::per_task_retry_policy(),
+    ));
     let store = Arc::new(
         SqliteWaypointStore::new(&temp_db_url("recover"))
             .await
@@ -533,7 +296,7 @@ async fn one_worker_recovers_by_real_per_task_retry() {
     match outcome {
         RunOutcome::Completed { final_state, .. } => {
             let aggregated = final_state
-                .get::<Vec<String>>(&field("aggregated"))
+                .get::<Vec<String>>(&e2e_fixtures::field("aggregated"))
                 .expect("aggregated field should deserialize as Vec<String>");
             assert_eq!(
                 aggregated,
@@ -681,7 +444,7 @@ async fn one_worker_recovers_by_real_per_task_retry() {
 #[tokio::test]
 async fn without_a_retry_policy_the_same_transient_failure_fails_the_run() {
     let port = Arc::new(FaultyPaladinPort::new().fail_paladin_until_attempt(RECOVERING_WORKER, 2));
-    let graph = build_graph_with_a_template_per_task(None);
+    let graph = e2e_fixtures::build_muster_defer_order_graph_with_a_template_per_task(None);
     let store = Arc::new(
         SqliteWaypointStore::new(&temp_db_url("no-retry"))
             .await
@@ -716,12 +479,14 @@ async fn without_a_retry_policy_the_same_transient_failure_fails_the_run() {
 /// `RetryPolicy::default()` carries -- and never by widening it.
 #[test]
 fn the_default_predicate_is_used() {
-    let policy = per_task_retry_policy();
+    let policy = e2e_fixtures::per_task_retry_policy();
     assert_eq!(policy.max_attempts, 3);
     assert_eq!(policy.retry_on, RetryPredicate::TransientOnly);
     assert_eq!(policy.retry_on, RetryPolicy::default().retry_on);
 
-    let graph = build_graph_with_a_template_per_task(Some(per_task_retry_policy()));
+    let graph = e2e_fixtures::build_muster_defer_order_graph_with_a_template_per_task(Some(
+        e2e_fixtures::per_task_retry_policy(),
+    ));
     for name in WORKER_NAMES {
         let aegis = graph
             .aegis_for(&NodeId::new(name))
@@ -741,7 +506,7 @@ async fn run_completes_with_a_single_superstep_complete_waypoint_per_superstep()
     // Waypoint per superstep is unchanged; a Muster may additionally write
     // zero-or-more `Running`-status progress Waypoints inside its own
     // superstep, counted SEPARATELY from that one-per-superstep guarantee.
-    let graph = build_graph();
+    let graph = e2e_fixtures::build_muster_defer_order_graph();
     let store = Arc::new(
         SqliteWaypointStore::new(&temp_db_url("waypoint-count"))
             .await

@@ -78,3 +78,15 @@ tokio = { workspace = true }
 # own `insta = "1.34"` pin (Cargo.toml:218, its own [dev-dependencies]), the
 # same non-workspace-table precedent `serde_yaml` above already follows.
 insta = "1.34"
+
+[features]
+# D-35: `resolve_live_provider` (crates/paladin-eval/src/runner.rs) is
+# compiled ONLY under this feature -- a plain build (this crate's default)
+# has `check_live_mode`'s gate logic and the content/structural assertion
+# classification, but cannot itself construct a real provider adapter
+# (`LiveModeError::FeatureNotCompiled`), because the `paladin-llm` edge
+# above stays `default-features = false, features = ["mock"]` unless a
+# caller explicitly asks for real providers here too. Mirrors the root
+# facade's own `llm-openai`/`llm-anthropic`/`llm-deepseek` naming and
+# forwarding shape (ADR-0046).
+live = ["paladin-llm/openai", "paladin-llm/anthropic", "paladin-llm/deepseek"]

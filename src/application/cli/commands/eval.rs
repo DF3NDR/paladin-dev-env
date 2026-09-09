@@ -4,13 +4,16 @@
 //! The SAME [`paladin_eval::ScenarioRunner`] the `evals` `[[test]] harness = false`
 //! target (`tests/evals.rs`) drives is used here -- one runner, two front doors
 //! (D-32/D-33). This module adds `--repeat`'s flakiness detection and `--bless`'s
-//! snapshot regeneration on top of it; `--live`'s gate is enforced inside the
-//! runner itself (a later plan's own work).
+//! snapshot regeneration on top of it; `--live`'s three-way gate (D-35) is
+//! enforced by [`paladin_eval::check_live_mode`] itself -- checked here, UP
+//! FRONT, before any case runs (so a whole invocation refuses cleanly rather
+//! than failing case-by-case), and checked AGAIN inside
+//! `ScenarioRunner::run_case` for every caller, not only this one.
 
 use std::path::{Path, PathBuf};
 
 use paladin_core::platform::container::trace::TraceRecord;
-use paladin_eval::{Case, RunOptions, Scenario, ScenarioRunner};
+use paladin_eval::{Case, RunOptions, Scenario, ScenarioRunner, check_live_mode};
 
 use crate::application::cli::error::CliError;
 
@@ -104,6 +107,15 @@ pub async fn run_eval_report(
     live: bool,
     _registries: Option<String>,
 ) -> Result<EvalRunReport, CliError> {
+    // D-35: refuse the WHOLE invocation up front when --live's three-way
+    // gate is not satisfied -- never run some cases scripted and others
+    // live, and never silently fall back to scripted mocks. ScenarioRunner
+    // ALSO enforces this per case (defence in depth for callers other than
+    // this command), so this is belt-and-braces, not the only check.
+    if live {
+        check_live_mode(true).map_err(|source| CliError::execution(source.to_string()))?;
+    }
+
     let mut paths: Vec<PathBuf> = glob::glob(&glob)
         .map_err(|source| CliError::InvalidFilePath {
             path: glob.clone(),

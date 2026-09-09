@@ -152,13 +152,19 @@ pub struct AssertionResult {
     pub verdict: Verdict,
 }
 
-/// The outcome of evaluating one [`Assertion`] (D-29).
+/// The outcome of evaluating one [`Assertion`] (D-29, D-35).
 #[derive(Debug)]
 pub enum Verdict {
     /// The assertion held.
     Passed,
     /// The assertion did not hold; carries the actionable failure.
     Failed(AssertionFailure),
+    /// A content-bearing assertion (D-35) was skipped because the run was
+    /// live and the scenario did not opt in (`live.allow_content_assertions`)
+    /// -- carries the skip reason. Never folded into
+    /// [`CaseReport::passed`]'s pass count: a skip is neither a pass nor a
+    /// failure.
+    Skipped(String),
 }
 
 /// What a [`ScenarioRunner::run_case`] call produced for one
@@ -369,6 +375,14 @@ impl ScenarioRunner {
         case: &Case,
         options: RunOptions,
     ) -> Result<CaseReport, RunnerError> {
+        // D-35: the runner ITSELF enforces the three-way live gate, not
+        // only a caller that remembers to check first -- `options.live` is
+        // `false` on every path `eval_scenarios!`'s own harness takes, so
+        // this is unreachable for a plain `cargo test --test evals`.
+        if options.live {
+            check_live_mode(true)?;
+        }
+
         let mut initial = StateDelta::new();
         for (key, value) in &case.input {
             let field = FieldName::new(key).map_err(|source| RunnerError::InvalidField {
@@ -452,9 +466,17 @@ impl ScenarioRunner {
 
         let mut results = Vec::with_capacity(case.assertions.len());
         for assertion in &case.assertions {
-            let verdict = match assertion::evaluate(assertion, &ctx) {
-                AssertionOutcome::Passed => Verdict::Passed,
-                AssertionOutcome::Failed(failure) => Verdict::Failed(failure),
+            let verdict = if should_skip_for_live(
+                assertion,
+                options.live,
+                scenario.live.allow_content_assertions,
+            ) {
+                Verdict::Skipped("content assertion, live mode".to_string())
+            } else {
+                match assertion::evaluate(assertion, &ctx) {
+                    AssertionOutcome::Passed => Verdict::Passed,
+                    AssertionOutcome::Failed(failure) => Verdict::Failed(failure),
+                }
             };
             results.push(AssertionResult { verdict });
         }
@@ -645,6 +667,12 @@ macro_rules! eval_scenarios {
 enum LlmSource {
     /// Per-node scripted routing (the default, mock mode).
     Scripted(HashMap<String, ScenarioLlm>),
+    /// A single real provider, resolved by [`resolve_live_provider`] once
+    /// [`check_live_mode`] has already passed (D-35): live mode uses ONE
+    /// provider for the whole run (routing by each node's own `model` is
+    /// the provider's own job, exactly as `LlmRequest::model` already
+    /// carries), never a per-node substitution the way scripted mode does.
+    Live(Arc<dyn LlmPort>),
 }
 
 /// A [`PaladinPort`] implementation routing each call to the [`ScenarioLlm`]
@@ -659,6 +687,12 @@ impl ScenarioPaladinPort {
     fn scripted(router: HashMap<String, ScenarioLlm>) -> Self {
         Self {
             llm: LlmSource::Scripted(router),
+        }
+    }
+
+    fn live(provider: Arc<dyn LlmPort>) -> Self {
+        Self {
+            llm: LlmSource::Live(provider),
         }
     }
 }
@@ -685,6 +719,7 @@ impl PaladinPort for ScenarioPaladinPort {
                 })?;
                 llm.generate(request).await
             }
+            LlmSource::Live(provider) => provider.generate(request).await,
         }
         .map_err(|source| PaladinError::LlmError(source.to_string()))?;
 
@@ -722,9 +757,14 @@ impl PaladinPort for ScenarioPaladinPort {
 
 fn build_port(
     router: HashMap<String, ScenarioLlm>,
-    _options: RunOptions,
+    options: RunOptions,
 ) -> Result<Arc<dyn PaladinPort>, RunnerError> {
-    Ok(Arc::new(ScenarioPaladinPort::scripted(router)))
+    if options.live {
+        let provider = resolve_live_provider()?;
+        Ok(Arc::new(ScenarioPaladinPort::live(provider)))
+    } else {
+        Ok(Arc::new(ScenarioPaladinPort::scripted(router)))
+    }
 }
 
 /// Build the [`ScenarioLlm`] router keyed by each Paladin node's OWN
@@ -950,6 +990,132 @@ fn battlefield_snapshot_value(battlefield: &Battlefield) -> Value {
 }
 
 // ---------------------------------------------------------------------------
+// LiveMode (D-35)
+// ---------------------------------------------------------------------------
+//
+// Promotion path: a scenario runs script-mocked, deterministic, and free
+// (`ScenarioLlm`, the default) in CI on every `cargo test --test evals` and
+// every plain `paladin-cli eval run`. Live mode is a DELIBERATE, three-times
+// opt-in pre-release smoke check against a real provider -- never the
+// default, never entered by accident, and never silently substituted when
+// any one of the three gates below is missing.
+
+/// The environment variable [`check_live_mode`] requires to be set (to any
+/// non-blank value) alongside `--live` before live mode is entered (D-35).
+/// No workflow in this repository ever sets it -- default CI never spends a
+/// provider credit.
+pub const PALADIN_EVAL_LIVE_ENV: &str = "PALADIN_EVAL_LIVE";
+
+/// Why [`check_live_mode`] refused to enter live mode, or why
+/// `resolve_live_provider` (private: the runner's own internal resolution
+/// step) could not build a real provider once the gate passed (D-35). Never
+/// converted into an implicit fallback to scripted mocks -- every variant
+/// here is surfaced to the caller as a refusal.
+#[derive(Debug, Error)]
+pub enum LiveModeError {
+    /// `--live` (or the equivalent `RunOptions::live`) was not set.
+    #[error("live mode requires --live")]
+    FlagNotSet,
+    /// [`PALADIN_EVAL_LIVE_ENV`] is unset or blank.
+    #[error(
+        "live mode requires the {PALADIN_EVAL_LIVE_ENV} environment variable to be set to a \
+         non-blank value (deliberately never set by any CI workflow in this repository)"
+    )]
+    EnvNotSet,
+    /// No provider compiled into this build of `paladin-eval` has a
+    /// configured credential (ADR-0012): `paladin_llm::provider_factory::
+    /// LlmProviderFactory::get_default_provider()` returned `None`.
+    #[error(
+        "live mode requires a configured provider credential; none of paladin-llm's compiled-in \
+         providers has one set (see ADR-0012)"
+    )]
+    NoProviderKey,
+    /// The gate passed, but this build of `paladin-eval` was not compiled
+    /// with its own `live` feature (which enables real `paladin-llm`
+    /// provider adapters) -- refuses rather than silently falling back to a
+    /// scripted mock.
+    #[error(
+        "live mode's gate passed, but this build of paladin-eval was not compiled with its own \
+         `live` feature (enables real paladin-llm provider adapters); rebuild with \
+         `--features live`"
+    )]
+    FeatureNotCompiled,
+    /// The gate passed and the `live` feature is compiled in, but
+    /// constructing the resolved provider adapter itself failed.
+    #[error("failed to construct the live provider: {0}")]
+    ProviderConstruction(String),
+}
+
+/// The three-way live-mode gate (D-35): `--live` AND
+/// [`PALADIN_EVAL_LIVE_ENV`] AND a configured provider credential, ALL
+/// three, or [`LiveModeError`] naming exactly which is missing. Called by
+/// [`ScenarioRunner::run_case`] itself whenever `options.live` is `true` --
+/// never only by a caller that remembers to check first.
+pub fn check_live_mode(live_flag: bool) -> Result<(), LiveModeError> {
+    if !live_flag {
+        return Err(LiveModeError::FlagNotSet);
+    }
+    let env_set = std::env::var(PALADIN_EVAL_LIVE_ENV)
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false);
+    if !env_set {
+        return Err(LiveModeError::EnvNotSet);
+    }
+    if paladin_llm::provider_factory::LlmProviderFactory::get_default_provider().is_none() {
+        return Err(LiveModeError::NoProviderKey);
+    }
+    Ok(())
+}
+
+/// Whether `assertion` is content-bearing (D-35): compares rendered LLM
+/// output rather than structural execution facts. Skipped in live mode
+/// unless the scenario's own `live.allow_content_assertions` opts in --
+/// every other assertion kind (route, status, node counts, edges, limits,
+/// Parley) is structural and always runs in live mode regardless.
+fn is_content_assertion(assertion: &Assertion) -> bool {
+    matches!(
+        assertion,
+        Assertion::FinalStateFieldEquals { .. }
+            | Assertion::FinalStateFieldMatches { .. }
+            | Assertion::FieldJsonPathEquals { .. }
+            | Assertion::FinalStateSnapshot
+    )
+}
+
+/// The pure skip-decision [`ScenarioRunner::run_case`]'s assertion loop
+/// applies (D-35): `true` only when the run is live, `assertion` is
+/// content-bearing, and the scenario did not opt in. A structural assertion
+/// (`is_content_assertion` false) is never skipped regardless of `live` --
+/// it always evaluates, live or scripted.
+fn should_skip_for_live(assertion: &Assertion, live: bool, allow_content_assertions: bool) -> bool {
+    live && is_content_assertion(assertion) && !allow_content_assertions
+}
+
+/// Resolve a real provider once [`check_live_mode`] has already passed
+/// (D-35): live mode uses `paladin_llm::provider_factory`'s first available
+/// (configured-credential) provider for the whole run. Compiled only when
+/// this crate's own `live` feature is enabled -- see
+/// [`LiveModeError::FeatureNotCompiled`] for the refusal a build without it
+/// gives instead.
+#[cfg(feature = "live")]
+fn resolve_live_provider() -> Result<Arc<dyn LlmPort>, LiveModeError> {
+    let provider_name = paladin_llm::provider_factory::LlmProviderFactory::get_default_provider()
+        .ok_or(LiveModeError::NoProviderKey)?;
+    paladin_llm::provider_factory::LlmProviderFactory::new()
+        .create(&provider_name)
+        .map_err(|source| LiveModeError::ProviderConstruction(source.to_string()))
+}
+
+/// See the `#[cfg(feature = "live")]` sibling above -- this build was not
+/// compiled with `paladin-eval`'s own `live` feature, so live mode's gate
+/// may pass (a credential IS configured) while this crate still cannot
+/// build the real adapter itself.
+#[cfg(not(feature = "live"))]
+fn resolve_live_provider() -> Result<Arc<dyn LlmPort>, LiveModeError> {
+    Err(LiveModeError::FeatureNotCompiled)
+}
+
+// ---------------------------------------------------------------------------
 // RunnerError
 // ---------------------------------------------------------------------------
 
@@ -1036,6 +1202,10 @@ pub enum RunnerError {
     /// The generated `ThreadId` for this run failed validation.
     #[error("invalid thread id: {0}")]
     InvalidThreadId(String),
+    /// `options.live` was set but the three-way live-mode gate refused
+    /// (D-35) -- never a silent fallback to scripted mocks.
+    #[error("live mode: {0}")]
+    Live(#[from] LiveModeError),
 }
 
 #[cfg(test)]
@@ -1482,5 +1652,184 @@ cases:
         assert_eq!(selected[0].name(), "alpha::case_one");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -- Task 3: the LiveMode gate (D-35) -----------------------------------
+    //
+    // These exercise only the GATE and CLASSIFICATION logic, never a real
+    // provider call: `live_mode_requires_flag_and_env_and_keys` is the only
+    // test in this module that reads/writes `PALADIN_EVAL_LIVE_ENV`, so it
+    // owns that env var exclusively (no other test depends on its value) --
+    // the `unsafe` blocks are edition-2024's `std::env::set_var`/`remove_var`
+    // requirement, not a signal these mutations are broadly unsafe here.
+
+    #[test]
+    fn live_mode_requires_flag_and_env_and_keys() {
+        // SAFETY: this is the ONLY test in this module (or crate) reading or
+        // writing PALADIN_EVAL_LIVE_ENV; no other test's outcome depends on
+        // its value, so this process-wide mutation cannot race a concurrent
+        // test's own assertion.
+        unsafe {
+            std::env::remove_var(PALADIN_EVAL_LIVE_ENV);
+        }
+
+        assert!(matches!(
+            check_live_mode(false),
+            Err(LiveModeError::FlagNotSet)
+        ));
+        assert!(matches!(
+            check_live_mode(true),
+            Err(LiveModeError::EnvNotSet)
+        ));
+
+        // SAFETY: see above.
+        unsafe {
+            std::env::set_var(PALADIN_EVAL_LIVE_ENV, "1");
+        }
+        // This crate's own `paladin-llm` edge is `default-features = false,
+        // features = ["mock"]` in a default (non-`live`-featured) test
+        // build, so `LlmProviderFactory::get_default_provider()` finds no
+        // compiled-in provider regardless of any real credential env var --
+        // NoProviderKey is the gate's own, correct refusal here, per
+        // ADR-0012 (never falls back to a mock).
+        assert!(matches!(
+            check_live_mode(true),
+            Err(LiveModeError::NoProviderKey)
+        ));
+
+        // SAFETY: see above.
+        unsafe {
+            std::env::remove_var(PALADIN_EVAL_LIVE_ENV);
+        }
+    }
+
+    fn content_assertion_fixtures() -> Vec<Assertion> {
+        vec![
+            Assertion::FinalStateFieldEquals {
+                field: "status".to_string(),
+                value: serde_json::json!("done"),
+            },
+            Assertion::FinalStateFieldMatches {
+                field: "status".to_string(),
+                pattern: "^do".to_string(),
+            },
+            Assertion::FieldJsonPathEquals {
+                path: "/status".to_string(),
+                value: serde_json::json!("done"),
+            },
+            Assertion::FinalStateSnapshot,
+        ]
+    }
+
+    fn structural_assertion_fixtures() -> Vec<Assertion> {
+        vec![
+            Assertion::NodeExecuted {
+                node: "worker".to_string(),
+                times: Times::Exact(1),
+            },
+            Assertion::NodeNotExecuted {
+                node: "idle".to_string(),
+            },
+            Assertion::EdgeFired {
+                from: "a".to_string(),
+                to: "b".to_string(),
+            },
+            Assertion::RouteTaken(vec!["a".to_string()]),
+            Assertion::RunStatus(RunStatusValue::Completed),
+            Assertion::TotalTokensMax(10),
+            Assertion::SuperstepsMax(10),
+            Assertion::ParleyRaised {
+                kind: "approval".to_string(),
+                node: "worker".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn content_assertions_are_skipped_in_live_mode_without_opt_in() {
+        for assertion in content_assertion_fixtures() {
+            assert!(
+                should_skip_for_live(&assertion, true, false),
+                "{assertion:?} must be skipped in live mode without the scenario's opt-in"
+            );
+        }
+    }
+
+    #[test]
+    fn content_assertions_run_in_live_mode_with_opt_in() {
+        for assertion in content_assertion_fixtures() {
+            assert!(
+                !should_skip_for_live(&assertion, true, true),
+                "{assertion:?} must run in live mode once the scenario opts in"
+            );
+        }
+    }
+
+    #[test]
+    fn structural_assertions_always_run_in_live_mode() {
+        for assertion in structural_assertion_fixtures() {
+            assert!(
+                !should_skip_for_live(&assertion, true, false),
+                "{assertion:?} is structural and must always run in live mode"
+            );
+            assert!(
+                !should_skip_for_live(&assertion, true, true),
+                "{assertion:?} is structural and must always run in live mode, opt-in or not"
+            );
+        }
+        // Sanity: never skipped outside live mode either, regardless of kind.
+        for assertion in content_assertion_fixtures()
+            .into_iter()
+            .chain(structural_assertion_fixtures())
+        {
+            assert!(!should_skip_for_live(&assertion, false, false));
+        }
+    }
+
+    #[tokio::test]
+    async fn default_test_run_never_enters_live_mode() {
+        // A plain RunOptions::default() (`live: false`, matching every
+        // eval_scenarios! harness trial) must run entirely on scripted
+        // mocks -- proven by SUCCEEDING here with no PALADIN_EVAL_LIVE_ENV
+        // set and no provider credential available at all: if this code
+        // path ever silently entered live mode, `check_live_mode` would
+        // refuse (no env var, no key) and this case would error instead of
+        // passing.
+        let scenario = minimal_scenario(
+            ScenarioTarget::GraphDoc {
+                graph_doc: PathBuf::from(
+                    "../paladin-battalion/tests/fixtures/graph_docs/linear.json",
+                ),
+            },
+            LlmScript {
+                global: vec![
+                    ScriptEntry::Text("s1".to_string()),
+                    ScriptEntry::Text("s2".to_string()),
+                    ScriptEntry::Text("s3".to_string()),
+                ],
+                ..Default::default()
+            },
+            vec![Assertion::RunStatus(RunStatusValue::Completed)],
+        );
+
+        let runner = ScenarioRunner::new();
+        let scenario_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scenario.eval.yaml");
+        assert!(
+            !RunOptions::default().live,
+            "the harness's own default options must never carry live: true"
+        );
+        let report = runner
+            .run_case(
+                &scenario_path,
+                &scenario,
+                &scenario.cases[0],
+                RunOptions::default(),
+            )
+            .await;
+        assert!(
+            report.passed(),
+            "a plain (non-live) run must succeed entirely on scripted mocks: {}",
+            report.render_failures()
+        );
     }
 }

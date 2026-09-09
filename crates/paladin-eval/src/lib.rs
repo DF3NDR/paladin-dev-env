@@ -67,8 +67,9 @@ pub use assertion::{
     AssertionContext, AssertionFailure, AssertionOutcome, CustomAssertion, evaluate,
 };
 pub use runner::{
-    AssertionResult, CaseOutcome, CaseReport, GraphConstructor, RegistriesFactory, RunOptions,
-    RunnerError, ScenarioRunner, ScriptedPorts, Verdict,
+    AssertionResult, CaseOutcome, CaseReport, GraphConstructor, LiveModeError,
+    PALADIN_EVAL_LIVE_ENV, RegistriesFactory, RunOptions, RunnerError, ScenarioRunner,
+    ScriptedPorts, Verdict, check_live_mode,
 };
 pub use scenario::{
     Assertion, Case, EVAL_SCHEMA_VERSION, LiveOptions, LlmErrorKind, LlmScript, MatchRule,

@@ -1,0 +1,133 @@
+<!doctype html>
+<!--
+  Paladin dev-ui run inspector page (28-15, D-25/D-26, 28-UI-SPEC.md).
+
+  A single static template `include_str!`-ed into `dev_ui_controller.rs` at compile time.
+  The server substitutes two markers before serving:
+    - `__INSPECTOR_DATA__` inside the `#inspector-data` <script type="application/json">
+      element -- the serialized `InspectorView` JSON, with `</` and `<!--` escaped so it
+      cannot break out of the surrounding <script> element or open an HTML comment
+      (T-28-15-02).
+    - `__MERMAID_URL__` inside the `#dev-ui-mermaid-config` <script type="application/json">
+      element -- the configured Mermaid ESM module URL
+      (`web_server.dev_ui.mermaid_url`), JSON-string-escaped by the handler.
+
+  This page makes no fetches (D-26): the only network request it issues at runtime is the
+  `import()` of the Mermaid module from the configured URL. Every other panel renders
+  synchronously from the embedded JSON, parsed once inside a single try/catch.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Paladin — Run Inspector</title>
+<style>
+  :root {
+    /* Color (28-UI-SPEC.md "Color") -- light scheme */
+    --color-bg: #ffffff;
+    --color-panel: #f4f5f7;
+    --color-accent: #2563eb;
+    --color-destructive: #b91c1c;
+    --color-text: #0b0d12;
+    --color-text-muted: #475569;
+    --color-border: #e2e8f0;
+
+    /* Outcome color set (28-UI-SPEC.md "Outcome color set") -- light scheme */
+    --outcome-success-fill: #dcfce7;   --outcome-success-stroke: #16a34a;   --outcome-success-text: #14532d;
+    --outcome-failed-fill: #fee2e2;    --outcome-failed-stroke: #dc2626;    --outcome-failed-text: #7f1d1d;
+    --outcome-parleyed-fill: #fef3c7;  --outcome-parleyed-stroke: #d97706;  --outcome-parleyed-text: #78350f;
+    --outcome-skipped-fill: #f1f5f9;   --outcome-skipped-stroke: #94a3b8;   --outcome-skipped-text: #475569;
+    --outcome-cache_hit-fill: #e0e7ff; --outcome-cache_hit-stroke: #4f46e5; --outcome-cache_hit-text: #312e81;
+
+    /* Spacing scale (28-UI-SPEC.md "Spacing Scale") */
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 16px;
+    --space-lg: 24px;
+    --space-xl: 32px;
+
+    /* Typography (28-UI-SPEC.md "Typography") */
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --font-body-size: 14px;
+    --font-label-size: 12px;
+    --font-heading-size: 18px;
+    --font-display-size: 24px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --color-bg: #0b0d12;
+      --color-panel: #171a21;
+      --color-accent: #60a5fa;
+      --color-destructive: #f87171;
+      --color-text: #f4f5f7;
+      --color-text-muted: #cbd5e1;
+      --color-border: #2a2f3a;
+
+      --outcome-success-fill: #14532d;   --outcome-success-stroke: #4ade80;   --outcome-success-text: #dcfce7;
+      --outcome-failed-fill: #7f1d1d;    --outcome-failed-stroke: #f87171;    --outcome-failed-text: #fee2e2;
+      --outcome-parleyed-fill: #78350f;  --outcome-parleyed-stroke: #fbbf24;  --outcome-parleyed-text: #fef3c7;
+      --outcome-skipped-fill: #1e293b;   --outcome-skipped-stroke: #64748b;   --outcome-skipped-text: #cbd5e1;
+      --outcome-cache_hit-fill: #312e81; --outcome-cache_hit-stroke: #818cf8; --outcome-cache_hit-text: #e0e7ff;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: var(--font-body-size);
+    font-weight: 400;
+    line-height: 1.5;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: var(--space-lg);
+  }
+
+  h1.display {
+    font-size: var(--font-display-size);
+    font-weight: 600;
+    line-height: 1.2;
+    margin: 0 0 var(--space-xl) 0;
+  }
+
+  .mono {
+    font-family: var(--font-mono);
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1 class="display"><span id="page-title-thread" class="mono"></span> <span id="page-title-status"></span></h1>
+  </header>
+
+  <main id="dev-ui-root"></main>
+
+  <script id="inspector-data" type="application/json">__INSPECTOR_DATA__</script>
+  <script id="dev-ui-mermaid-config" type="application/json">{"url": __MERMAID_URL__}</script>
+  <script type="module">
+    // Task 1 skeleton: parse the embedded payload so the page proves it can round-trip the
+    // typed JSON script element end to end. The four panels' full rendering (empty/loading/
+    // error/populated/partial/overflow/zero-one-many/long-text per 28-UI-SPEC.md) is Task 2's
+    // scope.
+    const dataEl = document.getElementById("inspector-data");
+    try {
+      const view = JSON.parse(dataEl.textContent);
+      const threadEl = document.getElementById("page-title-thread");
+      if (threadEl) threadEl.textContent = view.thread_id || "";
+    } catch (err) {
+      // Task 2 replaces this with the full payload-parse-failure UI (Copywriting Contract).
+      console.error("inspector payload could not be parsed", err);
+    }
+  </script>
+</div>
+</body>
+</html>

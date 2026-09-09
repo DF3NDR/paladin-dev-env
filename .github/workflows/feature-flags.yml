@@ -100,6 +100,10 @@ jobs:
             flags: "--no-default-features --features cli"
             description: "CLI module (isolated from library)"
 
+          - name: "dev-ui"
+            flags: "--no-default-features --features dev-ui"
+            description: "Dev UI run inspector page (feature-gated, admin-only, 28-15)"
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

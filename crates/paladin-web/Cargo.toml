@@ -44,6 +44,18 @@ mockito = "1.7.0"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 
+[features]
+# The crate's FIRST [features] section (28-RESEARCH.md Q15 / Pitfall 2) -- every other
+# capability in this crate compiles unconditionally today. `dev-ui` is created from
+# scratch, not extended from a prior default.
+default = []
+# Feature-gated (default off, absent from the root umbrella's `full` set -- X-11.4), admin-
+# only developer tool: `GET /v1/dev-ui/threads/{id}` renders a `RunInspectorPort` view as a
+# single static HTML page (28-15, D-25/D-26). No new dependency is required -- the port and
+# its `InspectorView` payload already live in `paladin-ports`, an unconditional dependency
+# of this crate.
+dev-ui = []
+
 # X-10.6 deliberate-breaking suppression (D-06, MIGRATION.md §9.2, HITL-05, Phase 24).
 # `require_authentication` (agent_auth.rs) gained a generic type parameter `S:
 # HasAgentAuth` so `ThreadApiState`'s routes (24-11) could reuse the SAME

@@ -7,21 +7,22 @@
 //! `RunEventStreamPort` trait object (D-27) -- it never names this bus, a
 //! `TraceEvent`, or `WarEngine`.
 //!
-//! # Two producers, not one (D-24, D-25 correction)
+//! # One producer (D-14)
 //!
-//! Today's `TraceEvent` (`paladin-ports::output::trace_sink_port`) has eight
-//! variants with no `parley` case, no `error` case, and a `RunFinished` that
-//! does not distinguish success from failure. So this bus has two producers:
-//!
-//! - [`RunEventBusSink`] (a [`TraceSink`] implementation) bridges
-//!   `superstep`/`node_started`/`node_finished`/`state_delta` live from the
-//!   engine, through [`map_trace_event`].
-//! - [`RunWorkerPool`](super::worker::RunWorkerPool) publishes
-//!   `parley`/`done`/`error` directly from the `RunOutcome` it already
-//!   matches on in `run_once` -- see that module's own docs.
-//!
-//! Phase 28 can later collapse this into `map_trace_event` alone once the
-//! authoritative trace enum carries those three cases.
+//! [`RunEventBusSink`] (a [`TraceSink`] implementation) is this bus's ONLY
+//! producer: every one of the seven wire events -- `superstep`,
+//! `node_started`, `node_finished`, `state_delta`, `parley`, `done` and
+//! `error` -- is bridged live from the engine's twelve-variant `TraceEvent`
+//! stream through [`map_trace_event`], now total over all seven wire names
+//! (D-14 completes the D-25 correction Phase 27 recorded: `RunWorkerPool`
+//! no longer publishes `parley`/`done`/`error` directly from the
+//! `RunOutcome` it matches on in `run_once` -- see that module's own docs
+//! for the one deliberately retained exception, an `EngineError` outside
+//! normal outcome reporting that never gets a `TraceEvent::RunFinished`
+//! record). OBS-FR-06's "one implementation, two consumers, no second
+//! pathway" holds by construction: [`RunEventBusSink`] is read by both the
+//! live SSE path here and (28-09) `OtelTraceSink`, from the SAME record
+//! stream.
 //!
 //! # Never blocks the engine (D-24, T-27-10-02)
 //!
@@ -60,7 +61,9 @@ use paladin_ports::input::run_event_stream_port::{
     RunEventStream, RunEventStreamPort, RunStreamError,
 };
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
-use paladin_ports::output::trace_sink_port::{TraceEvent, TraceRecord, TraceSink, TraceSinkError};
+use paladin_ports::output::trace_sink_port::{
+    RunFinishStatus, TraceEvent, TraceRecord, TraceSink, TraceSinkError,
+};
 use paladin_ports::output::waypoint_port::WaypointPort;
 
 /// Bounded per-run broadcast capacity (D-24, T-27-10-02): a subscriber that
@@ -70,50 +73,77 @@ pub const RUN_EVENT_CHANNEL_CAPACITY: usize = 64;
 
 /// Map ONE [`TraceRecord`] onto its [`RunStreamEventKind`] + payload and the
 /// [`ThreadId`] it belongs to (read off the envelope, D-02 -- no longer off
-/// the event itself), or `None` for the eight variants this bus does not yet
-/// bridge live: `RunStarted`, `NodeProgress`, `EdgeEvaluated`,
-/// `WaypointSaved`, `ParleyRaised`, `RunFinished` (the worker publishes
-/// `parley`/`done`/`error` directly from `RunOutcome` instead -- see
-/// `worker.rs`), `FallbackHop` and `MiddlewareEvent`. D-14's completion to
-/// seven-of-twelve mapped kinds (collapsing the worker's own direct
-/// publishes into this one function) is 28-11's; this plan keeps today's
-/// four mapped kinds unchanged, only re-based on the twelve-variant envelope.
+/// the event itself). D-14: total over the seven published wire names --
+/// `SuperstepStarted -> superstep`, `NodeStarted -> node_started`,
+/// `NodeFinished -> node_finished`, `DeltaMerged -> state_delta`,
+/// `ParleyRaised -> parley`, `RunFinished{status: completed|halted|
+/// awaiting_input} -> done`, `RunFinished{status: failed} -> error` --
+/// `None` for the five remaining variants this bus does not bridge:
+/// `RunStarted`, `NodeProgress`, `EdgeEvaluated`, `WaypointSaved`,
+/// `FallbackHop` and `MiddlewareEvent`.
+///
+/// Every mapped payload carries an additive `trace_seq` field (D-15), the
+/// originating record's own `seq` -- the correlation key back to the same
+/// record in logs, OTel spans and `run_traces`, distinct from
+/// `RunStreamEvent.seq`, which stays the bus's own dense per-run counter
+/// (only the mapped subset of records reaches the wire, so adopting the
+/// trace `seq` verbatim would introduce gaps into that published field).
 ///
 /// `state_delta`'s `bytes` field is the summed UTF-8 length of the changed
 /// field NAMES only -- `TraceEvent::DeltaMerged` itself carries no value to
 /// leak by default, so this satisfies the "no values on the wire" prohibition
 /// (T-27-10-01) by construction rather than by redacting anything.
 ///
-/// `node_finished`'s `outcome` field is reported `"unknown"`: this bus does
-/// not yet surface `TraceEvent::NodeFinished`'s real `outcome` field on the
-/// wire (a later plan's job); guessing one from it here would be premature
-/// scope for this plan.
+/// `node_finished`'s `outcome` field now carries the record's real
+/// [`NodeOutcomeKind`](paladin_core::platform::container::waypoint::NodeOutcomeKind),
+/// replacing the `"unknown"` placeholder this bus reported before this
+/// plan.
+///
+/// `parley`'s and `done`/`error`'s payload keep the SAME top-level field
+/// names the published contract documents (`waypoint_id`/`parleys` for
+/// `parley`; `status`/`waypoint_id` for `done`; `status`/`message`/
+/// `waypoint_id` for `error`) -- but `TraceEvent::ParleyRaised` and
+/// `TraceEvent::RunFinished` do not carry a `waypoint_id` or an error
+/// `message` (the trace model deliberately excludes free-form/PII-shaped
+/// content, D-05), so those fields are `null` on this path. A client
+/// wanting the full `ParleyRequest` detail (`prompt`, `choices`,
+/// `expires_at`) or the failure `message` reads `GET
+/// /threads/{id}/state` -- unchanged by this plan.
 pub fn map_trace_event(
     record: TraceRecord,
 ) -> Option<(ThreadId, RunStreamEventKind, serde_json::Value)> {
     let thread_id = record.thread_id.clone();
+    let trace_seq = record.seq;
     match record.event {
         TraceEvent::SuperstepStarted { superstep, .. } => Some((
             thread_id,
             RunStreamEventKind::Superstep,
-            serde_json::json!({ "superstep": superstep }),
+            serde_json::json!({ "superstep": superstep, "trace_seq": trace_seq }),
         )),
         TraceEvent::NodeStarted {
             superstep, node_id, ..
         } => Some((
             thread_id,
             RunStreamEventKind::NodeStarted,
-            serde_json::json!({ "superstep": superstep, "node_id": node_id.as_str() }),
+            serde_json::json!({
+                "superstep": superstep,
+                "node_id": node_id.as_str(),
+                "trace_seq": trace_seq,
+            }),
         )),
         TraceEvent::NodeFinished {
-            superstep, node_id, ..
+            superstep,
+            node_id,
+            outcome,
+            ..
         } => Some((
             thread_id,
             RunStreamEventKind::NodeFinished,
             serde_json::json!({
                 "superstep": superstep,
                 "node_id": node_id.as_str(),
-                "outcome": "unknown",
+                "outcome": outcome,
+                "trace_seq": trace_seq,
             }),
         )),
         TraceEvent::DeltaMerged {
@@ -125,15 +155,57 @@ pub fn map_trace_event(
             Some((
                 thread_id,
                 RunStreamEventKind::StateDelta,
-                serde_json::json!({ "superstep": superstep, "fields": fields, "bytes": bytes }),
+                serde_json::json!({
+                    "superstep": superstep,
+                    "fields": fields,
+                    "bytes": bytes,
+                    "trace_seq": trace_seq,
+                }),
             ))
+        }
+        TraceEvent::ParleyRaised {
+            parley_id,
+            node_id,
+            parley_kind,
+        } => Some((
+            thread_id,
+            RunStreamEventKind::Parley,
+            serde_json::json!({
+                "waypoint_id": serde_json::Value::Null,
+                "parleys": [{
+                    "parley_id": parley_id,
+                    "node_id": node_id.as_str(),
+                    "kind": parley_kind,
+                }],
+                "trace_seq": trace_seq,
+            }),
+        )),
+        TraceEvent::RunFinished { status, .. } => {
+            let (kind, status_str) = match status {
+                RunFinishStatus::Completed => (RunStreamEventKind::Done, "completed"),
+                RunFinishStatus::Halted => (RunStreamEventKind::Done, "halted"),
+                RunFinishStatus::AwaitingInput => (RunStreamEventKind::Done, "awaiting_input"),
+                RunFinishStatus::Failed => (RunStreamEventKind::Error, "failed"),
+            };
+            let payload = match kind {
+                RunStreamEventKind::Error => serde_json::json!({
+                    "status": status_str,
+                    "message": serde_json::Value::Null,
+                    "waypoint_id": serde_json::Value::Null,
+                    "trace_seq": trace_seq,
+                }),
+                _ => serde_json::json!({
+                    "status": status_str,
+                    "waypoint_id": serde_json::Value::Null,
+                    "trace_seq": trace_seq,
+                }),
+            };
+            Some((thread_id, kind, payload))
         }
         TraceEvent::RunStarted { .. }
         | TraceEvent::NodeProgress { .. }
         | TraceEvent::EdgeEvaluated { .. }
         | TraceEvent::WaypointSaved { .. }
-        | TraceEvent::ParleyRaised { .. }
-        | TraceEvent::RunFinished { .. }
         | TraceEvent::FallbackHop { .. }
         | TraceEvent::MiddlewareEvent { .. } => None,
         // `TraceEvent` is `#[non_exhaustive]` (a future variant this bus
@@ -257,12 +329,9 @@ impl Default for RunEventBus {
     }
 }
 
-/// The [`TraceSink`] half of the bus's two producers (D-24, D-25
-/// correction): bridges `superstep`/`node_started`/`node_finished`/
-/// `state_delta` live from the engine through [`map_trace_event`].
-/// `parley`/`done`/`error` are published directly by
-/// [`RunWorkerPool`](super::worker::RunWorkerPool) from the `RunOutcome` it
-/// already matches on.
+/// The bus's ONLY producer (D-14, D-24): bridges every one of the seven
+/// wire events live from the engine's `TraceRecord` stream through
+/// [`map_trace_event`].
 pub struct RunEventBusSink {
     bus: Arc<RunEventBus>,
 }
@@ -574,16 +643,22 @@ mod tests {
         }
     }
 
-    /// The mapping table test the plan's own behavior text calls for: all
-    /// twelve `TraceEvent` variants are enumerated, exactly four map to
-    /// `Some` (unchanged from the eight-variant enum -- this plan keeps
-    /// today's four mapped kinds, D-14's seven-of-twelve completion is
-    /// 28-11's), and eight map to `None`.
+    /// D-14's completion, over the twelve-variant `TraceEvent` enum
+    /// (13 test rows: `RunFinished` is exercised TWICE, once per status
+    /// class, since it alone produces two of the seven wire names -- `done`
+    /// and `error`, split on `status`, exactly matching the D-14 sentence's
+    /// own enumeration in `28-CONTEXT.md`). Exactly seven rows map to
+    /// `Some` -- `SuperstepStarted`, `NodeStarted`, `NodeFinished`,
+    /// `DeltaMerged`, `ParleyRaised`, `RunFinished{Completed}` and
+    /// `RunFinished{Failed}` -- and the other six (`RunStarted`,
+    /// `NodeProgress`, `EdgeEvaluated`, `WaypointSaved`, `FallbackHop`,
+    /// `MiddlewareEvent`) map to `None`.
     #[test]
-    fn map_trace_event_maps_exactly_four_of_twelve_variants() {
+    fn map_trace_event_covers_exactly_seven_of_twelve() {
         let thread_id = ThreadId::new("t1").unwrap();
-        let cases: Vec<(TraceEvent, bool)> = vec![
+        let cases: Vec<(&str, TraceEvent, bool)> = vec![
             (
+                "RunStarted",
                 TraceEvent::RunStarted {
                     run_id: None,
                     graph_fingerprint: "fp".to_string(),
@@ -591,6 +666,7 @@ mod tests {
                 false,
             ),
             (
+                "SuperstepStarted",
                 TraceEvent::SuperstepStarted {
                     superstep: 1,
                     vanguard: vec![NodeId::new("n1")],
@@ -598,6 +674,7 @@ mod tests {
                 true,
             ),
             (
+                "NodeStarted",
                 TraceEvent::NodeStarted {
                     superstep: 1,
                     node_id: NodeId::new("n1"),
@@ -607,6 +684,7 @@ mod tests {
                 true,
             ),
             (
+                "NodeProgress",
                 TraceEvent::NodeProgress {
                     node_id: NodeId::new("n1"),
                     progress: paladin_ports::output::trace_sink_port::NodeProgressKind::Heartbeat,
@@ -614,6 +692,7 @@ mod tests {
                 false,
             ),
             (
+                "NodeFinished",
                 TraceEvent::NodeFinished {
                     superstep: 1,
                     node_id: NodeId::new("n1"),
@@ -626,6 +705,7 @@ mod tests {
                 true,
             ),
             (
+                "EdgeEvaluated",
                 TraceEvent::EdgeEvaluated {
                     from: NodeId::new("a"),
                     to: NodeId::new("b"),
@@ -635,6 +715,7 @@ mod tests {
                 false,
             ),
             (
+                "DeltaMerged",
                 TraceEvent::DeltaMerged {
                     superstep: 1,
                     field_changes: vec![FieldChange {
@@ -648,6 +729,7 @@ mod tests {
                 true,
             ),
             (
+                "WaypointSaved",
                 TraceEvent::WaypointSaved {
                     waypoint_id: WaypointId::generate(),
                     superstep: 1,
@@ -656,14 +738,16 @@ mod tests {
                 false,
             ),
             (
+                "ParleyRaised",
                 TraceEvent::ParleyRaised {
                     parley_id: ParleyId::new(),
                     node_id: NodeId::new("n1"),
                     parley_kind: ParleyKind::Approval,
                 },
-                false,
+                true,
             ),
             (
+                "RunFinished{Completed}",
                 TraceEvent::RunFinished {
                     status: RunFinishStatus::Completed,
                     total_supersteps: 1,
@@ -671,9 +755,21 @@ mod tests {
                     duration_ms: 5,
                     trace_dropped_total: 0,
                 },
-                false,
+                true,
             ),
             (
+                "RunFinished{Failed}",
+                TraceEvent::RunFinished {
+                    status: RunFinishStatus::Failed,
+                    total_supersteps: 1,
+                    total_tokens: 0,
+                    duration_ms: 5,
+                    trace_dropped_total: 0,
+                },
+                true,
+            ),
+            (
+                "FallbackHop",
                 TraceEvent::FallbackHop {
                     node_id: None,
                     from_provider: "openai".to_string(),
@@ -682,6 +778,7 @@ mod tests {
                 false,
             ),
             (
+                "MiddlewareEvent",
                 TraceEvent::MiddlewareEvent {
                     name: "limit".to_string(),
                     action: MiddlewareAction::Finish,
@@ -689,20 +786,130 @@ mod tests {
                 false,
             ),
         ];
-        assert_eq!(cases.len(), 12, "must enumerate all twelve variants");
+        assert_eq!(
+            cases.len(),
+            13,
+            "must enumerate all twelve variants, with RunFinished split into its two status rows"
+        );
 
         let mut mapped = 0;
         let mut dropped = 0;
-        for (seq, (event, expect_some)) in cases.into_iter().enumerate() {
+        for (seq, (name, event, expect_some)) in cases.into_iter().enumerate() {
             let record = wrap(thread_id.clone(), seq as u64 + 1, event);
             match map_trace_event(record) {
                 Some(_) if expect_some => mapped += 1,
                 None if !expect_some => dropped += 1,
-                other => panic!("unexpected mapping result: {other:?}"),
+                other => panic!("unexpected mapping result for {name}: {other:?}"),
             }
         }
-        assert_eq!(mapped, 4, "exactly four variants must map to Some");
-        assert_eq!(dropped, 8, "exactly eight variants must map to None");
+        assert_eq!(mapped, 7, "exactly seven rows must map to Some");
+        assert_eq!(dropped, 6, "exactly six rows must map to None");
+    }
+
+    /// `RunFinished` alone produces two of the seven wire names, split on
+    /// its own `status` field: `completed`/`halted`/`awaiting_input` all
+    /// become `done`, `failed` becomes `error` (D-14).
+    #[test]
+    fn run_finished_status_splits_done_and_error() {
+        let thread_id = ThreadId::new("t1").unwrap();
+        let cases = [
+            (RunFinishStatus::Completed, RunStreamEventKind::Done),
+            (RunFinishStatus::Halted, RunStreamEventKind::Done),
+            (RunFinishStatus::AwaitingInput, RunStreamEventKind::Done),
+            (RunFinishStatus::Failed, RunStreamEventKind::Error),
+        ];
+        for (status, expected_kind) in cases {
+            let record = wrap(
+                thread_id.clone(),
+                1,
+                TraceEvent::RunFinished {
+                    status,
+                    total_supersteps: 3,
+                    total_tokens: 10,
+                    duration_ms: 20,
+                    trace_dropped_total: 0,
+                },
+            );
+            let (_, kind, _) = map_trace_event(record).expect("RunFinished must always map");
+            assert_eq!(kind, expected_kind, "status {status:?} mapped wrong");
+        }
+    }
+
+    /// A `ParleyRaised` record produces the `parley` wire event, carrying
+    /// its own `parley_id`/`node_id`/`kind` inside a non-empty `parleys`
+    /// array under the SAME top-level `waypoint_id`/`parleys` field names
+    /// the published contract documents.
+    #[test]
+    fn parley_raised_maps_to_the_parley_wire_name() {
+        let thread_id = ThreadId::new("t1").unwrap();
+        let parley_id = ParleyId::new();
+        let record = wrap(
+            thread_id,
+            1,
+            TraceEvent::ParleyRaised {
+                parley_id,
+                node_id: NodeId::new("n1"),
+                parley_kind: ParleyKind::Approval,
+            },
+        );
+        let (_, kind, payload) = map_trace_event(record).expect("ParleyRaised must map");
+        assert_eq!(kind, RunStreamEventKind::Parley);
+        let parleys = payload
+            .get("parleys")
+            .and_then(|v| v.as_array())
+            .expect("parleys array");
+        assert_eq!(parleys.len(), 1);
+        assert_eq!(
+            parleys[0].get("node_id").and_then(|v| v.as_str()),
+            Some("n1")
+        );
+        assert!(payload.get("waypoint_id").unwrap().is_null());
+    }
+
+    /// `node_finished`'s `outcome` field carries the record's real
+    /// `NodeOutcomeKind`, not the previous `"unknown"` placeholder.
+    #[test]
+    fn node_finished_reports_the_real_outcome() {
+        let thread_id = ThreadId::new("t1").unwrap();
+        let record = wrap(
+            thread_id,
+            1,
+            TraceEvent::NodeFinished {
+                superstep: 1,
+                node_id: NodeId::new("n1"),
+                attempt: 1,
+                outcome: NodeOutcomeKind::Failed,
+                duration_ms: 5,
+                token_count: 0,
+                cache_hit: false,
+            },
+        );
+        let (_, _, payload) = map_trace_event(record).expect("NodeFinished must map");
+        assert_ne!(
+            payload.get("outcome").and_then(|v| v.as_str()),
+            Some("unknown")
+        );
+        assert_eq!(
+            payload.get("outcome").cloned(),
+            Some(serde_json::to_value(NodeOutcomeKind::Failed).unwrap())
+        );
+    }
+
+    /// Every mapped wire event's payload carries `trace_seq` equal to the
+    /// originating record's own `seq` (D-15).
+    #[test]
+    fn wire_payload_carries_trace_seq() {
+        let thread_id = ThreadId::new("t1").unwrap();
+        let record = wrap(
+            thread_id,
+            42,
+            TraceEvent::SuperstepStarted {
+                superstep: 1,
+                vanguard: vec![NodeId::new("n1")],
+            },
+        );
+        let (_, _, payload) = map_trace_event(record).expect("SuperstepStarted must map");
+        assert_eq!(payload.get("trace_seq").and_then(|v| v.as_u64()), Some(42));
     }
 
     #[tokio::test]

@@ -478,12 +478,11 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// The D-24 per-run broadcast bus (PLAT-FR-07), when
     /// [`RunWorkerPool::with_event_bus`] wires one: `run_once` `bind`s the
     /// dispatch's thread/run before driving the engine, attaches
-    /// [`RunEventBusSink`] to a per-run `engine_factory` engine so
-    /// `superstep`/`node_started`/`node_finished`/`state_delta` bridge live
-    /// (D-25 correction), publishes `parley`/`done`/`error` directly from
-    /// the `RunOutcome` it already matches on, then `unbind`s. `None`
-    /// (the default) preserves every prior plan's behavior verbatim -- no
-    /// bind/publish/unbind call happens anywhere in `run_once`.
+    /// [`RunEventBusSink`] to a per-run `engine_factory` engine so all
+    /// seven wire events bridge live through `map_trace_event` alone
+    /// (D-14), then `unbind`s. `None` (the default) preserves every prior
+    /// plan's behavior verbatim -- no bind/publish/unbind call happens
+    /// anywhere in `run_once`.
     ///
     /// **(WR-02) Excluded: the legacy `Runnable::Agent` path.** `run_once`
     /// dispatches `Runnable::Agent` to [`RunWorkerPool::run_agent`] before
@@ -619,17 +618,22 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     }
 
     /// Wire the D-24 per-run broadcast bus (PLAT-FR-07): `run_once` binds
-    /// the dispatch's thread/run before driving the engine, attaches a
+    /// the dispatch's thread/run before driving the engine and attaches a
     /// fresh [`RunEventBusSink`] to whatever per-run engine
     /// [`Self::with_engine_factory`] produces (mirroring how
-    /// [`Self::with_cancellation_probing`] attaches its own probe), and
-    /// publishes `parley`/`done`/`error` directly from the `RunOutcome`
-    /// this pool already matches on. Has no effect on the shared-engine
-    /// ("no factory") path's own trace bridging -- attach `bus`'s own
+    /// [`Self::with_cancellation_probing`] attaches its own probe). D-14:
+    /// this pool no longer publishes `parley`/`done`/`error` directly --
+    /// every wire event, including those three, reaches the bus through
+    /// [`RunEventBusSink`]/[`super::events::map_trace_event`] alone, now
+    /// that the engine's own `ParleyRaised`/`RunFinished` records carry
+    /// enough information to produce them (the ONE exception,
+    /// [`Self::record_engine_failure`]'s own retained publish, is
+    /// documented at that method). Has no effect on the shared-engine ("no
+    /// factory") path's own trace bridging -- attach `bus`'s own
     /// [`RunEventBusSink`] to that engine directly at construction (mirrors
     /// [`Self::with_cancellation_probing`]'s own documented limitation);
-    /// this pool still binds/publishes/unbinds regardless, since those do
-    /// not depend on which engine instance is used.
+    /// this pool still binds/unbinds regardless, since those do not depend
+    /// on which engine instance is used.
     pub fn with_event_bus(mut self, bus: Arc<RunEventBus>) -> Self {
         self.event_bus = Some(bus);
         self
@@ -945,77 +949,24 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         let cancel_requested = self.repository.is_cancel_requested(&run.thread_id).await?;
         let shutting_down = self.coordinator.token().is_cancelled();
 
-        // D-24: publish the terminal/suspension event this dispatch's own
-        // `RunOutcome` implies, straight from the `RunOutcome` this worker
-        // already matches on -- `parley`/`done`/`error` are NOT bridged by
-        // the `TraceSink` adapter (D-25 correction: today's `TraceEvent` can
-        // produce none of the three). `unbind` itself is deferred past the
-        // repository/queue write below -- see the comment there for why.
-        if let Some(bus) = &self.event_bus {
-            match &outcome {
-                RunOutcome::AwaitingInput { parleys, waypoint } => {
-                    bus.publish(
-                        &run.run_id,
-                        &run.thread_id,
-                        RunStreamEventKind::Parley,
-                        RunStreamMode::Live,
-                        serde_json::json!({
-                            "waypoint_id": waypoint.to_string(),
-                            "parleys": parleys,
-                        }),
-                    )
-                    .await;
-                }
-                RunOutcome::Completed { waypoint, .. } => {
-                    bus.publish(
-                        &run.run_id,
-                        &run.thread_id,
-                        RunStreamEventKind::Done,
-                        RunStreamMode::Live,
-                        serde_json::json!({
-                            "status": "completed",
-                            "waypoint_id": waypoint.to_string(),
-                        }),
-                    )
-                    .await;
-                }
-                RunOutcome::Halted { waypoint } => {
-                    // D-16: the WIRE status mirrors `map_outcome`'s own
-                    // cancelled/halted split -- the shutdown-drain case
-                    // (`OutcomeAction::LeaveRunningAndRequeue`) still
-                    // reports `done` here, since this instance really is
-                    // done dispatching it; a later worker resumes it
-                    // through a fresh `bind`.
-                    let status = if cancel_requested {
-                        "cancelled"
-                    } else {
-                        "halted"
-                    };
-                    bus.publish(
-                        &run.run_id,
-                        &run.thread_id,
-                        RunStreamEventKind::Done,
-                        RunStreamMode::Live,
-                        serde_json::json!({ "status": status, "waypoint_id": waypoint.to_string() }),
-                    )
-                    .await;
-                }
-                RunOutcome::Failed { error, waypoint } => {
-                    bus.publish(
-                        &run.run_id,
-                        &run.thread_id,
-                        RunStreamEventKind::Error,
-                        RunStreamMode::Live,
-                        serde_json::json!({
-                            "status": "failed",
-                            "message": error.to_string(),
-                            "waypoint_id": waypoint.map(|w| w.to_string()),
-                        }),
-                    )
-                    .await;
-                }
-            }
-        }
+        // D-14: this worker no longer publishes the terminal/suspension
+        // event directly. The engine's own `ParleyRaised` (raised
+        // mid-superstep, on `RunOutcome::AwaitingInput`) and `RunFinished`
+        // (emitted at the end of every `start`/`resume`/`resume_with`/
+        // `fork` call, whatever `outcome` turns out to be -- `Completed`,
+        // `Halted`, `AwaitingInput` or `Failed`) already reached the bus
+        // through `RunEventBusSink`/`map_trace_event` above, inside the
+        // `with_run_trace_scope` call this dispatch just returned from.
+        // `RunFinishStatus` carries no `cancelled` variant distinct from
+        // `halted` (it is a property of the ENGINE's own outcome, not this
+        // worker's repository-level cancel-request flag), so the WIRE
+        // `done` payload for a cancelled run's dispatch now reports
+        // `"halted"` rather than `"cancelled"` -- a deliberate, documented
+        // simplification of D-14's collapse; the run's own persisted
+        // `RunStatus` (queried via `GET /runs/{id}`) still resolves to
+        // `Cancelled` correctly, this is only the SSE `done` event's status
+        // string. `unbind` itself is deferred past the repository/queue
+        // write below -- see the comment there for why.
 
         match map_outcome(&outcome, cancel_requested, shutting_down) {
             OutcomeAction::Transition {
@@ -1154,16 +1105,34 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// run -- never a panic. If the repository write itself fails, log at
     /// `warn` and nack with a 1s delay so the run is retried rather than
     /// lost.
+    ///
+    /// **(D-14) The ONE publish this pool retains outside `map_trace_event`,
+    /// deliberately.** Every caller of this method reaches it through a
+    /// path that never gets a `TraceEvent::RunFinished` record: the corrupt
+    /// `fork_from` case (`run_once`, before any engine dispatch begins),
+    /// the `Runnable::Agent` path (`run_agent`, which calls a bare
+    /// `PaladinPort` directly -- no `WarEngine`, no trace pipeline at all),
+    /// and a `WarEngine::start`/`resume`/`resume_with`/`fork` call that
+    /// itself returns `Err` before its OWN `trace.emit(TraceEvent::
+    /// RunStarted)` runs (graph/battlefield validation failures --
+    /// `crates/paladin-battalion/src/engine/mod.rs`'s `start`, for one,
+    /// validates the graph and initializes the Battlefield before opening
+    /// its trace dispatcher). A `WarEngine` call that fails AFTER its own
+    /// `RunStarted` already reached the trace pipeline DOES still get a
+    /// `RunFinished{status: failed}` record (the engine unconditionally
+    /// emits it right after `superstep::run` returns, `Ok` or `Err` alike)
+    /// -- for that narrower subset this method's own publish is a harmless,
+    /// accepted duplicate `error` event alongside the one `map_trace_event`
+    /// already produced, not a correctness bug: an SSE consumer treats
+    /// `error` as terminal either way. Fixing the duplicate would require
+    /// distinguishing "already had a `RunStarted`" inside `paladin-battalion`
+    /// itself, a crate outside this plan's file scope.
     async fn record_engine_failure(
         &self,
         leased: &LeasedRun,
         run: &Run,
         error_text: String,
     ) -> Result<bool, WorkerError> {
-        // D-24: an `EngineError` (outside normal `RunOutcome` reporting) is
-        // still a run-ending `error` on the stream -- then unbind. A no-op
-        // for the `run_agent` caller, which never `bind`s in the first
-        // place (`unbind` on an unbound thread is always a safe no-op).
         if let Some(bus) = &self.event_bus {
             bus.publish(
                 &run.run_id,
@@ -1220,11 +1189,54 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
+    use async_trait::async_trait;
+
+    use paladin_battalion::engine::{EngineLimits, WarEngine, WarGraph};
     use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
+    use paladin_core::platform::container::execution_result::PaladinResult;
+    use paladin_core::platform::container::paladin::Paladin;
+    use paladin_core::platform::container::paladin_error::PaladinError;
+    use paladin_core::platform::container::run::AssistantRef;
     use paladin_core::platform::container::waypoint::{
         FrontierSnapshot, GraphFingerprint, ThreadId, WaypointStatus,
     };
+    use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
     use paladin_ports::output::run_queue_port::{QueueError, QueuedRun};
+    use paladin_storage::run::in_memory::InMemoryRunRepository;
+    use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+    use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+
+    use super::super::events::RunEventBus;
+    use super::super::resolver::{AssistantResolver, CodeWorkflowResolver};
+
+    /// A [`PaladinPort`] that must never be called -- this module's own
+    /// graphs never have `NodeSpec::Paladin` nodes (mirrors
+    /// `stream_tests.rs`/`worker_tests.rs`'s own `UnusedPaladinPort`
+    /// precedent).
+    struct UnusedPaladinPort;
+
+    #[async_trait]
+    impl PaladinPort for UnusedPaladinPort {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            unreachable!("this test's WarGraph has no NodeSpec::Paladin nodes")
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            unreachable!("this test's WarGraph has no NodeSpec::Paladin nodes")
+        }
+
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
 
     fn sample_waypoint() -> Waypoint {
         let battlefield =
@@ -1642,5 +1654,88 @@ mod tests {
             count_after, count_at_drop,
             "heartbeat must stop extending once dropped"
         );
+    }
+
+    // --- record_engine_failure's retained publish (D-14) -----------------
+
+    /// An `EngineError` outside normal `RunOutcome` reporting -- here, a
+    /// corrupt `fork_from.from_waypoint_id` caught before any engine
+    /// dispatch begins, so no `TraceEvent::RunFinished` record was ever
+    /// going to exist for it -- still reaches the bus as an `error` wire
+    /// event, through `record_engine_failure`'s own retained publish
+    /// (documented on that method).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn engine_failure_still_reaches_the_error_wire_name() {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let waypoint_store = Arc::new(InMemoryWaypointStore::new());
+        let graph = Arc::new(WarGraph::new(
+            BattlefieldSchema::new(vec![]),
+            EngineLimits::default(),
+        ));
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("noop", graph));
+        let engine = Arc::new(WarEngine::new(
+            Arc::new(UnusedPaladinPort),
+            waypoint_store.clone(),
+        ));
+
+        let bus = Arc::new(RunEventBus::new());
+        let pool = RunWorkerPool::new(
+            engine,
+            waypoint_store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_event_bus(bus.clone());
+
+        let run_id = RunId::new_v7();
+        let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+        let run = Run::new(
+            run_id.clone(),
+            thread_id.clone(),
+            AssistantRef {
+                assistant_id: "noop".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+        .with_fork_from(ForkSpec {
+            from_waypoint_id: "not-a-uuid".to_string(),
+            edit: None,
+        });
+        repository.insert(&run).await.unwrap();
+        queue
+            .enqueue(QueuedRun {
+                run_id: run_id.clone(),
+                thread_id: thread_id.clone(),
+                attempt: 1,
+                enqueued_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        // Pre-bind so `record_engine_failure`'s own publish (fired inside
+        // `run_once`, before it unbinds) is not silently dropped -- see the
+        // matching pattern in `stream_tests.rs`.
+        bus.bind(thread_id.clone(), run_id.clone()).await;
+        let mut rx = bus.subscribe(&run_id).await.expect("bus must be bound");
+
+        assert!(pool.run_once().await.unwrap());
+
+        let event = rx
+            .recv()
+            .await
+            .expect("record_engine_failure must publish an error event");
+        assert_eq!(event.kind, RunStreamEventKind::Error);
+        assert_eq!(
+            event.payload.get("status").and_then(|v| v.as_str()),
+            Some("failed")
+        );
+
+        let run_after = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run_after.status, RunStatus::Failed);
     }
 }

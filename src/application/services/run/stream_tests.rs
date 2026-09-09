@@ -41,7 +41,7 @@ use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_storage::waypoint::sqlite::SqliteWaypointStore;
 
-use super::events::{RunEventBus, RunEventBusSink, RunEventStreamService};
+use super::events::{RunEventBus, RunEventBusSink, RunEventStreamService, map_trace_event};
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
 use super::worker::RunWorkerPool;
 
@@ -554,4 +554,184 @@ async fn state_delta_carries_field_names_only() {
     })
     .await
     .expect("state_delta_carries_field_names_only must finish within 10s");
+}
+
+/// D-14's completion, exercised at this integration layer too (the plan's
+/// own acceptance criteria pin this exact test name in THIS file, alongside
+/// the pure-function coverage table in `events.rs`'s own test module):
+/// `map_trace_event` is total over the twelve-variant `TraceEvent` enum,
+/// producing exactly seven of the wire kinds (`RunFinished` alone produces
+/// two, `done` and `error`, split on `status` -- thirteen rows over twelve
+/// variants).
+#[test]
+fn map_trace_event_covers_exactly_seven_of_twelve() {
+    use paladin_core::platform::container::parley::ParleyId;
+    use paladin_core::platform::container::waypoint::NodeOutcomeKind;
+    use paladin_ports::output::trace_sink_port::{
+        FieldChange, MiddlewareAction, RunFinishStatus, TraceEvent,
+    };
+
+    fn wrap(
+        thread_id: ThreadId,
+        seq: u64,
+        event: TraceEvent,
+    ) -> paladin_ports::output::trace_sink_port::TraceRecord {
+        paladin_ports::output::trace_sink_port::TraceRecord {
+            thread_id,
+            run_id: None,
+            seq,
+            at: chrono::Utc::now(),
+            event,
+        }
+    }
+
+    let thread_id = ThreadId::new("t1").unwrap();
+    let cases: Vec<(&str, TraceEvent, bool)> = vec![
+        (
+            "RunStarted",
+            TraceEvent::RunStarted {
+                run_id: None,
+                graph_fingerprint: "fp".to_string(),
+            },
+            false,
+        ),
+        (
+            "SuperstepStarted",
+            TraceEvent::SuperstepStarted {
+                superstep: 1,
+                vanguard: vec![NodeId::new("n1")],
+            },
+            true,
+        ),
+        (
+            "NodeStarted",
+            TraceEvent::NodeStarted {
+                superstep: 1,
+                node_id: NodeId::new("n1"),
+                attempt: 1,
+                muster_task_key: None,
+            },
+            true,
+        ),
+        (
+            "NodeProgress",
+            TraceEvent::NodeProgress {
+                node_id: NodeId::new("n1"),
+                progress: paladin_ports::output::trace_sink_port::NodeProgressKind::Heartbeat,
+            },
+            false,
+        ),
+        (
+            "NodeFinished",
+            TraceEvent::NodeFinished {
+                superstep: 1,
+                node_id: NodeId::new("n1"),
+                attempt: 1,
+                outcome: NodeOutcomeKind::Succeeded,
+                duration_ms: 5,
+                token_count: 0,
+                cache_hit: false,
+            },
+            true,
+        ),
+        (
+            "EdgeEvaluated",
+            TraceEvent::EdgeEvaluated {
+                from: NodeId::new("a"),
+                to: NodeId::new("b"),
+                condition_kind: "always".to_string(),
+                fired: true,
+            },
+            false,
+        ),
+        (
+            "DeltaMerged",
+            TraceEvent::DeltaMerged {
+                superstep: 1,
+                field_changes: vec![FieldChange {
+                    field: FieldName::new("x").unwrap(),
+                    dispatch: "last_write".to_string(),
+                    writers: vec![NodeId::new("n1")],
+                    value_bytes: 4,
+                    value: None,
+                }],
+            },
+            true,
+        ),
+        (
+            "WaypointSaved",
+            TraceEvent::WaypointSaved {
+                waypoint_id: paladin_core::platform::container::waypoint::WaypointId::generate(),
+                superstep: 1,
+                status: "completed".to_string(),
+            },
+            false,
+        ),
+        (
+            "ParleyRaised",
+            TraceEvent::ParleyRaised {
+                parley_id: ParleyId::new(),
+                node_id: NodeId::new("n1"),
+                parley_kind: ParleyKind::Approval,
+            },
+            true,
+        ),
+        (
+            "RunFinished{Completed}",
+            TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 1,
+                total_tokens: 0,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+            true,
+        ),
+        (
+            "RunFinished{Failed}",
+            TraceEvent::RunFinished {
+                status: RunFinishStatus::Failed,
+                total_supersteps: 1,
+                total_tokens: 0,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+            true,
+        ),
+        (
+            "FallbackHop",
+            TraceEvent::FallbackHop {
+                node_id: None,
+                from_provider: "openai".to_string(),
+                to_provider: "anthropic".to_string(),
+            },
+            false,
+        ),
+        (
+            "MiddlewareEvent",
+            TraceEvent::MiddlewareEvent {
+                name: "limit".to_string(),
+                action: MiddlewareAction::Finish,
+            },
+            false,
+        ),
+    ];
+    assert_eq!(
+        cases.len(),
+        13,
+        "must enumerate all twelve variants, with RunFinished split into its two status rows"
+    );
+
+    let mut mapped = 0;
+    let mut dropped = 0;
+    for (seq, (name, event, expect_some)) in cases.into_iter().enumerate() {
+        let record = wrap(thread_id.clone(), seq as u64 + 1, event);
+        match map_trace_event(record) {
+            Some(_) if expect_some => mapped += 1,
+            None if !expect_some => dropped += 1,
+            other => panic!("unexpected mapping result for {name}: {other:?}"),
+        }
+    }
+    assert_eq!(mapped, 7, "exactly seven rows must map to Some");
+    assert_eq!(dropped, 6, "exactly six rows must map to None");
 }

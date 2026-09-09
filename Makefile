@@ -560,6 +560,7 @@ publish-dry-run: release-check ## Run dependency-first `cargo publish --dry-run`
 	@$(CARGO) publish --dry-run -p paladin-notifications || true
 	@$(CARGO) publish --dry-run -p paladin-content || true
 	@$(CARGO) publish --dry-run -p paladin-storage || true
+	@$(CARGO) publish --dry-run -p paladin-eval || true
 	@$(CARGO) publish --dry-run -p paladin || true
 	@echo "$(YELLOW)Dry-run publish command sequence completed. See docs/RELEASE_CHECKLIST.md for interpretation and publish-order gating.$(NC)"
 

@@ -125,3 +125,46 @@ from the **post-merge run on the wave's final SHA**, which the orchestrator appe
 plan's commits (including the `CHANGELOG.md`/`.crate-names.txt`/`.project/current-exports.txt`
 fixes) merge alongside the three orchestrator-authored fix commits (`c81a5e7a`, `59c33c19`,
 `b7d0fb52`). This plan does not push and does not have access to that merged SHA's own CI run.
+
+---
+
+## Post-merge CI evidence (appended by the orchestrator at phase close-out, 2026-09-09)
+
+Two definitive pushes of `feature/phase-26` followed the pre-close-out run above. Both were plain
+branch pushes (no PR); the second superseded the first while it was still in flight.
+
+### Push 1 — `b5ba9e07` (all 17 plans merged, pre code-review-fix)
+
+| Workflow | Run | Conclusion | Notes |
+|---|---|---|---|
+| `pre-commit` | 34350681931 | **success** | |
+| `.github/workflows/feature-flags.yml` | 34350682069 | **success** | all legs incl. `otel`, `dev-ui`, `llm-all` unification (fix `59c33c19` confirmed) |
+| `.github/workflows/codeql.yml` | 34350682016 | **success** | advisory-only |
+| `.github/workflows/ci.yml` | 34350682084 | cancelled (superseded) | 32 jobs **success**, 3 skipped by `needs:`; only `Docker Build` and `Kubernetes Smoke Test` were **cancelled** by the concurrency group when push 2 landed — every other job, including `Coverage`, `API Surface Tracking`, `License & Dependency Policy`, `Semver Checks`, `MSRV`, Postgres/Redis/Ollama live suites, `sdk-clients`, and all eleven crate-isolation legs, completed green |
+
+`Coverage` (run 34350682084, `Coverage summary` step): `Lines: 107930/119558 = 90.27%` — above the
+82% floor (ADR-0006).
+
+### Push 2 — `ff78a6b5` (definitive: + code-review fixes `6c0c8b69`, `4b3a223a`, `8325accc`, `7f0dcb92`, review/fix reports)
+
+| Workflow | Run | Conclusion | Notes |
+|---|---|---|---|
+| `pre-commit` | 34356304897 | **success** | |
+| `.github/workflows/feature-flags.yml` | 34356304900 | **success** | |
+| `.github/workflows/codeql.yml` | 34356305138 | **success** | advisory-only |
+| `.github/workflows/ci.yml` | 34356304863 | **success** | 34 jobs **success**, 3 skipped (`Benchmark Regression Signal (Non-Blocking)`, `Publish Dry Run`, `End-to-End Tests` — gated on tag/manual triggers, not failures). `Docker Build` **success** (13:27→14:32 UTC; confirms fix `b7d0fb52`), `Kubernetes Smoke Test` **success** (14:32→14:37 UTC) |
+
+`Coverage` (run 34356304863, job 102482098437, `Coverage summary` step):
+`Lines: 108172/119822 = 90.28%` — above the 82% floor (ADR-0006).
+
+Local close-out gates on `ff78a6b5` (warm checkout): `make test` 3592 passed / 0 failed;
+`cargo test -p paladin-web --features dev-ui` 239 + 5 passed; `cargo test --features otel --lib
+infrastructure::telemetry` 19 passed; `cargo test --features cli --test evals` 4 passed;
+`scripts/check-api-surface.sh .project/current-exports.txt` → unchanged (3936 items); `make security`
+→ `advisories ok, bans ok, licenses ok, sources ok` (two `warning[yanked]` notices on transitive
+`chacha20`/`spin`, non-fatal); `cargo tree -p paladin-battalion --no-default-features -e normal |
+grep -c paladin-llm` = 0 (ADR-0031).
+
+**What this appendix proves:** the fully green four-workflow run with a real coverage percentage
+that the section above said was "expected from the post-merge run on the wave's final SHA" exists —
+run 34356304863 on `ff78a6b5` — and it includes the code-review fixes.

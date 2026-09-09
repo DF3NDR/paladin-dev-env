@@ -690,13 +690,13 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 28-09-PLAN.md — OTel sink: `otel` feature, span-per-attempt model, in-memory shape test, axum OTLP stub (OBS-02)
-- [ ] 28-10-PLAN.md — `ExecutionOverlay`, observed-only fallback, overlay Mermaid goldens (OBS-03)
+- [x] 28-09-PLAN.md — OTel sink: `otel` feature, span-per-attempt model, in-memory shape test, axum OTLP stub (OBS-02)
+- [x] 28-10-PLAN.md — `ExecutionOverlay`, observed-only fallback, overlay Mermaid goldens (OBS-03)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 28-11-PLAN.md — SSE collapse to one producer, `trace_seq`, `RunStreamMode::Replay`, `PersistingTraceSink` (OBS-02)
-- [ ] 28-12-PLAN.md — Eval runner (`libtest-mimic` harness), `paladin-cli eval run` with repeat/bless/gated live mode (OBS-04)
+- [x] 28-11-PLAN.md — SSE collapse to one producer, `trace_seq`, `RunStreamMode::Replay`, `PersistingTraceSink` (OBS-02)
+- [x] 28-12-PLAN.md — Eval runner (`libtest-mimic` harness), `paladin-cli eval run` with repeat/bless/gated live mode (OBS-04)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

@@ -11,8 +11,14 @@
 //! An operator silences the whole stream with either the config flag
 //! (`trace.log_sink: false`) or a log filter (`RUST_LOG=paladin::trace=off`)
 //! — no code change either way.
+//!
+//! [`build_run_sink`] is also where the `otel`-gated [`OtelTraceSink`]
+//! (28-09) joins the fan-out, behind BOTH the Cargo feature and
+//! `trace.otel.enabled` — a default build never references it (D-10/D-11).
 
 pub mod log_sink;
+#[cfg(feature = "otel")]
+pub mod otel_sink;
 
 use std::sync::Arc;
 
@@ -21,34 +27,58 @@ use paladin_ports::output::trace_sink_port::{CompositeSink, TraceSink};
 use crate::config::trace::TraceConfig;
 
 pub use log_sink::LogTraceSink;
+#[cfg(feature = "otel")]
+pub use otel_sink::OtelTraceSink;
 
 /// Assemble the sink a single run should forward its trace records to,
 /// given `config` and an optional already-built `bus_sink` (the D-24
 /// `RunEventBusSink` the worker attaches when an event bus is wired).
 ///
-/// - Neither `config.log_sink` nor `bus_sink` -> `None`: the caller must
-///   NOT attach a `TraceSink` at all, so the engine's own untraced path
-///   (D-10) is used and tracing costs nothing for this run.
-/// - Exactly one of the two -> that one sink directly, unwrapped from a
+/// - None of `config.log_sink`, `bus_sink`, and (`otel`-feature builds
+///   only) `config.otel.enabled` -> `None`: the caller must NOT attach a
+///   `TraceSink` at all, so the engine's own untraced path (D-10) is used
+///   and tracing costs nothing for this run.
+/// - Exactly one configured -> that one sink directly, unwrapped from a
 ///   `CompositeSink` -- no fan-out overhead when there is only one
 ///   consumer.
-/// - Both -> a `CompositeSink` of `[log sink, bus sink]`, in that order:
-///   every below-engine record reaches the process log AND the live SSE
-///   bus from the SAME dispatcher.
+/// - More than one -> a `CompositeSink` of the configured sinks, log sink
+///   first, then the bus sink, then (when compiled and enabled) the OTel
+///   sink -- every below-engine record reaches every configured consumer
+///   from the SAME dispatcher.
+///
+/// A failure constructing the OTel sink (`otel`-feature builds only, e.g. a
+/// malformed endpoint the exporter itself rejects at build time) is
+/// diagnostics-only: logged, then treated as "OTLP export not attached
+/// this run" rather than failing the run or this function (T-28-09-05).
 pub fn build_run_sink(
     config: &TraceConfig,
     bus_sink: Option<Arc<dyn TraceSink>>,
 ) -> Option<Arc<dyn TraceSink>> {
-    let log_sink: Option<Arc<dyn TraceSink>> = if config.log_sink {
-        Some(Arc::new(LogTraceSink::new()))
-    } else {
-        None
-    };
+    let mut sinks: Vec<Arc<dyn TraceSink>> = Vec::new();
 
-    match (log_sink, bus_sink) {
-        (None, None) => None,
-        (Some(only), None) | (None, Some(only)) => Some(only),
-        (Some(log), Some(bus)) => Some(Arc::new(CompositeSink::new(vec![log, bus]))),
+    if config.log_sink {
+        sinks.push(Arc::new(LogTraceSink::new()));
+    }
+    if let Some(bus) = bus_sink {
+        sinks.push(bus);
+    }
+    #[cfg(feature = "otel")]
+    if config.otel.enabled {
+        match OtelTraceSink::new(&config.otel) {
+            Ok(sink) => sinks.push(Arc::new(sink)),
+            Err(error) => {
+                log::error!(
+                    target: "paladin::trace",
+                    "failed to build the OTel trace sink, OTLP export is disabled for this run: {error}"
+                );
+            }
+        }
+    }
+
+    match sinks.len() {
+        0 => None,
+        1 => sinks.into_iter().next(),
+        _ => Some(Arc::new(CompositeSink::new(sinks))),
     }
 }
 

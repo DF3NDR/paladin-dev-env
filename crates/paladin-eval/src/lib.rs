@@ -13,7 +13,7 @@
 //! depends downward on `paladin-core`, `paladin-ports`, `paladin-battalion`,
 //! `paladin-llm` (`mock` feature) and `paladin-storage` (`sqlite` feature), and never on
 //! the facade `paladin-ai` — the same shape `doc-examples` uses, recorded in
-//! `.planning/decisions/0047-paladin-eval-composition-crate.md` so ADR-0031's
+//! `.planning/decisions/0048-paladin-eval-composition-crate.md` so ADR-0031's
 //! leaf-crate-independence invariant (scoped to the *extracted* leaf crates) is not
 //! misread as violated by these edges. Nothing in the workspace depends on
 //! `paladin-eval` except as a `[dev-dependencies]` entry — that is the crate's entire

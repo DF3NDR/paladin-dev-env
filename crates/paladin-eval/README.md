@@ -9,7 +9,7 @@ implementation (`ScenarioLlm`) that makes a run deterministic without touching a
 provider, and an assertion library evaluated over a captured trace record and the final
 `Battlefield`. It is a composition-tier tool crate: it depends downward on `paladin-core`,
 `paladin-ports`, `paladin-battalion`, `paladin-llm` (`mock` feature) and `paladin-storage`
-(`sqlite` feature), and never on the facade `paladin-ai` — see ADR-0047 for the
+(`sqlite` feature), and never on the facade `paladin-ai` — see ADR-0048 for the
 classification.
 
 ## Status

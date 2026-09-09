@@ -530,6 +530,12 @@ redis-cache = ["paladin-storage/redis-cache"]
 # must gain no OTel dependency.
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
 
+# Feature-gated (28-15, D-25/D-26), admin-only `dev-ui` run inspector page
+# (`GET /v1/dev-ui/threads/{id}` in `paladin-web`). Deliberately NOT part of `default`
+# or `full`'s implicit set -- see X-11.4: the default `paladin-ai` build must gain no
+# dev-ui HTML page, mirroring `otel`'s identical precedent immediately above.
+dev-ui = ["paladin-web/dev-ui"]
+
 # CLI (binary and test tooling only — not compiled into the library)
 cli = ["dep:clap", "dep:dialoguer", "dep:indicatif", "dep:console", "dep:serde_yaml", "dep:colored", "dep:comfy-table", "dep:paladin-eval", "dep:glob", "paladin-herald/table", "paladin-herald/color"]
 

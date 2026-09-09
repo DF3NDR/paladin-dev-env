@@ -23,6 +23,11 @@ pub mod assistant_controller;
 pub mod auth_middleware;
 /// Content-delivery controller handlers (axum).
 pub mod delivery_controller;
+/// Feature-gated (`dev-ui`, default off) admin developer tool: `GET
+/// /v1/dev-ui/threads/{id}` renders a [`paladin_ports::input::run_inspector_port::RunInspectorPort`]
+/// view as a single static HTML page (28-15, D-25/D-26).
+#[cfg(feature = "dev-ui")]
+pub mod dev_ui_controller;
 /// Unified API error model (structured JSON error envelope).
 pub mod error;
 /// Liveness and readiness endpoints.

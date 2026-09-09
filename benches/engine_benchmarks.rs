@@ -1,6 +1,7 @@
 // benches/engine_benchmarks.rs
 //
-// Engine Benchmarks — ENG-NFR-01 / ENG-NFR-02 (Phase 22 Plan 10)
+// Engine Benchmarks — ENG-NFR-01 / ENG-NFR-02 (Phase 22 Plan 10), sink-variant
+// overhead (28-06, D-37, PRD 07 acceptance 6)
 //
 // Two criterion groups:
 //
@@ -16,6 +17,12 @@
 //   `InMemoryWaypointStore` (no disk I/O), so the per-node execution cost is
 //   separable from the fixed per-superstep engine overhead this bench alone
 //   measures — the persistence cost is `waypoint_save`'s job, not this one's.
+//   28-06 extends this group with three SINK-VARIANT cases (`none`,
+//   `log_sink`, `composite`) at a fixed representative width, reusing
+//   `build_width_graph` unchanged, measuring the cost of default-on tracing
+//   against the untraced path (PRD 07 acceptance 6's <=3% bar, D-37). Kept
+//   OUT of any CI gate: criterion numbers on a shared runner are noise, and
+//   the recorded evidence file (not this bench's own pass/fail) is the gate.
 //
 // This project reports p50, not criterion's default mean/CI, by reading
 // criterion's own per-iteration `sample.json` after a real (non `--test`) run
@@ -49,9 +56,14 @@ use paladin_core::platform::container::waypoint::{
     FrontierSnapshot, GraphFingerprint, NodeId, ThreadId, Waypoint, WaypointStatus,
 };
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+use paladin_ports::output::trace_sink_port::{
+    CompositeSink, TraceRecord, TraceSink, TraceSinkError,
+};
 use paladin_ports::output::waypoint_port::WaypointPort;
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_storage::waypoint::sqlite::SqliteWaypointStore;
+
+use paladin::infrastructure::telemetry::LogTraceSink;
 
 /// 1 KiB — the "small" case, cheap enough that the per-row fixed cost (not
 /// the payload) dominates.
@@ -272,5 +284,97 @@ fn bench_superstep_cost(c: &mut Criterion) {
     }
 }
 
-criterion_group!(engine_benches, bench_waypoint_save, bench_superstep_cost);
+// ── 28-06: sink-variant overhead (D-37, PRD 07 acceptance 6) ────────────
+
+/// A `TraceSink` that does nothing -- the second child of the `composite`
+/// variant's `CompositeSink`, standing in for a second real consumer (e.g.
+/// the D-24 SSE bus sink) without this bench depending on that subsystem.
+struct NoopTraceSink;
+
+#[async_trait]
+impl TraceSink for NoopTraceSink {
+    async fn on_event(&self, _record: TraceRecord) -> Result<(), TraceSinkError> {
+        Ok(())
+    }
+}
+
+/// The fixed width every sink-variant case runs at: wide enough (8 nodes,
+/// the same "many nodes" case `bench_superstep_cost` already measures
+/// above) that a per-record dispatcher overhead has more than one node's
+/// worth of trace records to show up against, without this bench needing
+/// its own new fixture builder (`build_width_graph` is reused unchanged).
+const SINK_VARIANT_WIDTH: usize = 8;
+
+/// Benchmarks one `WarEngine::start` superstep of `build_width_graph(
+/// SINK_VARIANT_WIDTH)` under three sink configurations -- `none` (no
+/// `TraceSink` attached, the engine's own untraced path, D-10), `log_sink`
+/// (a single `LogTraceSink`, the facade's default-on consumer), and
+/// `composite` (`LogTraceSink` + `NoopTraceSink` fanned through a
+/// `CompositeSink`, mirroring `build_run_sink`'s own two-sink case) -- so
+/// the measured overhead of default-on tracing against the untraced
+/// baseline can be evaluated against PRD 07 acceptance 6's <=3% bar
+/// (D-37). See `.planning/phases/28-observability-tooling/28-BENCH-EVIDENCE.md`
+/// for the recorded numbers and verdict.
+fn bench_superstep_cost_sink_variants(c: &mut Criterion) {
+    let rt = Runtime::new().expect("tokio runtime for async criterion benches");
+    let graph = build_width_graph(SINK_VARIANT_WIDTH);
+
+    let variants: Vec<(&str, Option<Arc<dyn TraceSink>>)> = vec![
+        ("none", None),
+        (
+            "log_sink",
+            Some(Arc::new(LogTraceSink::new()) as Arc<dyn TraceSink>),
+        ),
+        (
+            "composite",
+            Some(Arc::new(CompositeSink::new(vec![
+                Arc::new(LogTraceSink::new()),
+                Arc::new(NoopTraceSink),
+            ])) as Arc<dyn TraceSink>),
+        ),
+    ];
+
+    for (label, sink) in variants {
+        let mut engine = WarEngine::new(
+            Arc::new(UnusedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        );
+        if let Some(sink) = sink {
+            engine = engine.with_trace_sink(sink);
+        }
+
+        // The `bench_superstep_cost` substring is deliberately part of the
+        // benchmark ID (not just this Rust function's name): criterion's
+        // own CLI filter argument matches against the ID string, and this
+        // phase's own `<verify>` command
+        // (`cargo bench -- bench_superstep_cost --test`) needs this filter
+        // to actually select these three variants.
+        c.bench_function(&format!("engine/bench_superstep_cost_sinks_{label}"), |b| {
+            b.to_async(&rt).iter_batched(
+                || {
+                    ThreadId::new(format!("engine-bench-sinks-{label}-{}", Uuid::new_v4()))
+                        .expect("uuid-suffixed thread id is valid")
+                },
+                |thread| {
+                    let engine = &engine;
+                    let graph = &graph;
+                    async move {
+                        engine
+                            .start(graph, thread, StateDelta::new())
+                            .await
+                            .expect("single-superstep graph completes");
+                    }
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+}
+
+criterion_group!(
+    engine_benches,
+    bench_waypoint_save,
+    bench_superstep_cost,
+    bench_superstep_cost_sink_variants
+);
 criterion_main!(engine_benches);

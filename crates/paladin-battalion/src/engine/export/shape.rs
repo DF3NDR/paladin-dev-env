@@ -23,6 +23,8 @@
 //! sanitizing the DIAGRAM's own identifiers (never the label content
 //! itself) is those exporters' responsibility.
 
+use std::collections::BTreeSet;
+
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::waypoint::NodeId;
 
@@ -254,13 +256,42 @@ impl GraphShape {
     /// should set `ExecutionOverlay::observed_only = true` so
     /// [`super::mermaid::to_mermaid_overlay`] carries the locked
     /// observed-only title (D-22, 28-UI-SPEC.md).
-    // RED (TDD): always returns an empty shape -- deliberately wrong, so
-    // this plan's Task 2 `<behavior>` test fails for the right reason
-    // before the GREEN commit implements the real body.
-    pub fn observed(_overlay: &ExecutionOverlay) -> Self {
+    pub fn observed(overlay: &ExecutionOverlay) -> Self {
+        let mut node_ids: BTreeSet<NodeId> = overlay.visits.keys().cloned().collect();
+        for (from, to) in overlay
+            .fired_edges
+            .iter()
+            .chain(overlay.evaluated_edges.iter())
+        {
+            node_ids.insert(from.clone());
+            node_ids.insert(to.clone());
+        }
+
+        let nodes = node_ids
+            .into_iter()
+            .map(|id| ShapeNode {
+                id,
+                kind: ShapeKind::Paladin,
+                deferred: false,
+                worker_template: false,
+                subgraph: None,
+            })
+            .collect();
+
+        let mut edge_pairs: BTreeSet<(NodeId, NodeId)> = overlay.fired_edges.clone();
+        edge_pairs.extend(overlay.evaluated_edges.iter().cloned());
+        let edges = edge_pairs
+            .into_iter()
+            .map(|(from, to)| ShapeEdge {
+                from,
+                to,
+                condition: None,
+            })
+            .collect();
+
         GraphShape {
-            nodes: Vec::new(),
-            edges: Vec::new(),
+            nodes,
+            edges,
             entry: Vec::new(),
         }
     }

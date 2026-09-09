@@ -205,14 +205,53 @@ impl ExecutionOverlay {
     /// `source` is always [`OverlaySource::Trace`]. Records are consumed in
     /// their given order; a caller supplying `run_trace_port::read`'s own
     /// `seq`-ordered result needs no re-sorting.
-    // RED (TDD): always returns an empty overlay -- deliberately wrong, so
-    // this plan's Task 2 `<behavior>` tests fail for the right reason
-    // before the GREEN commit implements the real body.
-    pub fn from_trace_records(_records: &[TraceRecord]) -> Self {
+    pub fn from_trace_records(records: &[TraceRecord]) -> Self {
+        let mut visits: BTreeMap<NodeId, Vec<Visit>> = BTreeMap::new();
+        let mut fired_edges: BTreeSet<(NodeId, NodeId)> = BTreeSet::new();
+        let mut evaluated_edges: BTreeSet<(NodeId, NodeId)> = BTreeSet::new();
+
+        for record in records {
+            match &record.event {
+                TraceEvent::NodeFinished {
+                    superstep,
+                    node_id,
+                    attempt,
+                    outcome,
+                    duration_ms,
+                    token_count,
+                    cache_hit,
+                } => {
+                    visits.entry(node_id.clone()).or_default().push(Visit {
+                        superstep: *superstep,
+                        attempt: *attempt,
+                        outcome: outcome.clone(),
+                        duration_ms: *duration_ms,
+                        tokens: *token_count,
+                        cache_hit: *cache_hit,
+                    });
+                }
+                TraceEvent::EdgeEvaluated {
+                    from, to, fired, ..
+                } => {
+                    let pair = (from.clone(), to.clone());
+                    evaluated_edges.insert(pair.clone());
+                    if *fired {
+                        fired_edges.insert(pair);
+                    }
+                }
+                // `TraceEvent` is `#[non_exhaustive]` -- every other variant
+                // (RunStarted, SuperstepStarted, NodeStarted, NodeProgress,
+                // DeltaMerged, WaypointSaved, ParleyRaised, RunFinished,
+                // FallbackHop, MiddlewareEvent, and any future addition)
+                // carries nothing an `ExecutionOverlay` renders.
+                _ => {}
+            }
+        }
+
         ExecutionOverlay {
-            visits: BTreeMap::new(),
-            fired_edges: BTreeSet::new(),
-            evaluated_edges: BTreeSet::new(),
+            visits,
+            fired_edges,
+            evaluated_edges,
             source: OverlaySource::Trace,
             observed_only: false,
         }

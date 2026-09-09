@@ -40,6 +40,11 @@ pub fn to_mermaid(shape: &GraphShape) -> String {
     out
 }
 
+/// The locked title Mermaid carries when `overlay.observed_only` is `true`
+/// (D-22, 28-UI-SPEC.md "Copywriting Contract" -- verbatim, frozen for the
+/// golden/smoke test).
+const OBSERVED_ONLY_TITLE: &str = "(observed nodes only — no graph document available)";
+
 /// Render `shape` annotated by `overlay` as a Mermaid `flowchart TD` string
 /// (D-21): the same node/edge structure [`to_mermaid`] draws, layered with
 /// outcome-`classDef` node coloring (by each node's LAST visit), a `×N`
@@ -47,14 +52,23 @@ pub fn to_mermaid(shape: &GraphShape) -> String {
 /// <tokens>tok` cost figures on every visited node, a bold link style for
 /// fired edges and a dotted one for evaluated-but-not-fired edges.
 ///
-/// `overlay.observed_only`'s locked-title handling (D-22) lands in plan
-/// 28-10's Task 2, alongside the observed-only shape builder it pairs with.
+/// When `overlay.observed_only` is `true` (D-22 -- typically paired with a
+/// shape from [`GraphShape::observed`](super::shape::GraphShape::observed)),
+/// the diagram carries the locked observed-only title, verbatim, via
+/// Mermaid's `---\ntitle: ...\n---` frontmatter directive.
 ///
 /// Calling this twice on the same `(shape, overlay)` pair returns
 /// byte-identical strings, mirroring [`to_mermaid`]'s own determinism
 /// contract.
 pub fn to_mermaid_overlay(shape: &GraphShape, overlay: &ExecutionOverlay) -> String {
-    let mut out = String::from("flowchart TD\n");
+    let mut out = String::new();
+    if overlay.observed_only {
+        out.push_str("---\n");
+        out.push_str(&format!("title: {OBSERVED_ONLY_TITLE}\n"));
+        out.push_str("---\n");
+    }
+    out.push_str("flowchart TD\n");
+
     let mut counter = 0usize;
     let mut classes: Vec<(String, ShapeKind, bool)> = Vec::new();
     let mut outcome_classes: Vec<(String, &'static str)> = Vec::new();

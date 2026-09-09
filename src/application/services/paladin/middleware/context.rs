@@ -29,7 +29,34 @@ use paladin_core::platform::container::aegis::RetryPolicy;
 use paladin_ports::output::llm_port::{
     FinishReason, FunctionCall, LlmPort, ResponseFormat, TokenUsage,
 };
+use paladin_ports::output::trace_sink_port::{MiddlewareAction, TraceEmitter, TraceEvent};
 use paladin_ports::output::vault_confined::ConfinedVault;
+
+/// Emit one [`TraceEvent::MiddlewareEvent`] through whichever [`TraceEmitter`]
+/// is available: `explicit` (a caller's own `with_trace_emitter` handle)
+/// first, falling back to the ambient
+/// `paladin_ports::output::trace_sink_port::current_trace_emitter()` a real
+/// run supplies via `RUN_TRACE_EMITTER` (28-06, D-03) -- the same
+/// precedence [`crate`]'s `FallbackLlmAdapter::record_hop` uses. Shared by
+/// [`ModelCallContext::emit_middleware_event`] and
+/// [`ToolCallContext::emit_middleware_event`] so the precedence rule lives
+/// in exactly one place.
+fn emit_middleware_event(
+    explicit: &Option<Arc<dyn TraceEmitter>>,
+    name: &str,
+    action: MiddlewareAction,
+) {
+    let Some(emitter) = explicit
+        .clone()
+        .or_else(paladin_ports::output::trace_sink_port::current_trace_emitter)
+    else {
+        return;
+    };
+    emitter.emit(TraceEvent::MiddlewareEvent {
+        name: name.to_string(),
+        action,
+    });
+}
 
 /// Where a middleware-pushed [`PromptSection`] renders relative to the
 /// fixed parts of a [`PromptAssembly`] (D-25's "after retrieved RAG context,
@@ -263,6 +290,29 @@ pub struct ModelCallContext<'p> {
     /// by a hook thereafter.
     pub vault: Option<ConfinedVault>,
     typed_state: HashMap<(String, TypeId), Box<dyn Any + Send + Sync>>,
+    /// An explicit per-run [`TraceEmitter`] handle (28-06, D-03), wired via
+    /// [`PaladinExecutionService::with_trace_emitter`](crate::application::services::paladin::paladin_execution_service::PaladinExecutionService::with_trace_emitter)
+    /// and copied onto this context once, in `execute_internal`, right
+    /// after construction. Checked FIRST by [`Self::emit_middleware_event`],
+    /// before falling back to the ambient
+    /// `current_trace_emitter()`/`RUN_TRACE_EMITTER` a real run's worker
+    /// dispatch sets -- see the module-level `emit_middleware_event` free
+    /// function's own doc comment for the shared precedence rule.
+    pub trace_emitter: Option<Arc<dyn TraceEmitter>>,
+    /// A hint a middleware sets on ITSELF (never read by the middleware
+    /// that set it) to report an action the chain driver ([`super::chain`])
+    /// cannot otherwise observe from the `MiddlewareFlow`/`ToolFlow` it
+    /// returns -- concretely, `ModelFallbackMiddleware`/`ModelRetryMiddleware`
+    /// setting `llm_override`/`retry_policy` (mapped to
+    /// [`MiddlewareAction::Fallback`]/[`MiddlewareAction::Retry`]) and
+    /// `Guardrail` redacting a prompt/response section in place (mapped to
+    /// [`MiddlewareAction::Redact`]) while still returning `Continue`.
+    /// Reset to `None` by the chain driver before every `before_model`/
+    /// `after_model` call, read (and cleared) immediately after that same
+    /// call returns -- so a middleware's own hint never leaks onto the
+    /// NEXT middleware in the chain (D-03: state lives on the context, not
+    /// the stateless middleware).
+    pub middleware_action_hint: Option<MiddlewareAction>,
 }
 
 impl<'p> ModelCallContext<'p> {
@@ -281,12 +331,22 @@ impl<'p> ModelCallContext<'p> {
             response_format: None,
             vault: None,
             typed_state: HashMap::new(),
+            trace_emitter: None,
+            middleware_action_hint: None,
         }
     }
 
     /// The Paladin being executed.
     pub fn paladin(&self) -> &Paladin {
         self.paladin
+    }
+
+    /// Emit one [`TraceEvent::MiddlewareEvent`] naming `name` and `action`
+    /// (28-06, D-03), through `self.trace_emitter` if set, else the ambient
+    /// `current_trace_emitter()` a real run's worker dispatch supplies.
+    /// A no-op with neither source available (X-03).
+    pub fn emit_middleware_event(&self, name: &str, action: MiddlewareAction) {
+        emit_middleware_event(&self.trace_emitter, name, action);
     }
 
     /// The effective [`LlmPort`] for this model call (Doc 05
@@ -404,7 +464,7 @@ pub enum ToolCallKind {
 }
 
 /// Per-tool-call context passed to `around_tool` (D-04).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToolCallContext {
     /// The call the model requested (or, for a handoff, a synthesized
     /// `ArmamentCall` carrying the same name/arguments).
@@ -423,4 +483,37 @@ pub struct ToolCallContext {
     /// tool/handoff dispatch is visible on the next -- without ever storing
     /// counter state on the middleware struct itself (D-03).
     pub scratch: HashMap<String, Value>,
+    /// A working copy of [`ModelCallContext::trace_emitter`], seeded at
+    /// dispatch time exactly like `scratch` above (28-06, D-03). Checked
+    /// FIRST by [`Self::emit_middleware_event`], falling back to the
+    /// ambient `current_trace_emitter()` a real run supplies.
+    pub trace_emitter: Option<Arc<dyn TraceEmitter>>,
+}
+
+// A manual impl (not `#[derive(Debug)]`, X-06 house convention for a type
+// carrying a `dyn Trait` field): `TraceEmitter` does not itself require
+// `Debug`, so a blanket derive would fail to compile. Mirrors
+// `FallbackLlmAdapter`'s own manual `Debug` impl
+// (`crates/paladin-llm/src/fallback.rs`) -- reports `trace_emitter`
+// presence only.
+impl std::fmt::Debug for ToolCallContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolCallContext")
+            .field("call", &self.call)
+            .field("kind", &self.kind)
+            .field("loop_index", &self.loop_index)
+            .field("run_id", &self.run_id)
+            .field("scratch", &self.scratch)
+            .field("trace_emitter", &self.trace_emitter.is_some())
+            .finish()
+    }
+}
+
+impl ToolCallContext {
+    /// Emit one [`TraceEvent::MiddlewareEvent`] naming `name` and `action`
+    /// (28-06, D-03), through `self.trace_emitter` if set, else the ambient
+    /// `current_trace_emitter()`. A no-op with neither source available.
+    pub fn emit_middleware_event(&self, name: &str, action: MiddlewareAction) {
+        emit_middleware_event(&self.trace_emitter, name, action);
+    }
 }

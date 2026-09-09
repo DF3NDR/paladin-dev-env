@@ -1532,6 +1532,7 @@ impl PaladinExecutionService {
                         loop_index: middleware_cx.loop_index,
                         run_id: execution_id,
                         scratch: middleware_cx.scratch.clone(),
+                        trace_emitter: middleware_cx.trace_emitter.clone(),
                     };
                     let flow = run_around_tool(&self.middleware, &mut tool_cx).await?;
                     // D-08: a stateful around_tool hook (e.g. ToolCallLimit)
@@ -1635,6 +1636,7 @@ impl PaladinExecutionService {
                                 loop_index: middleware_cx.loop_index,
                                 run_id: execution_id,
                                 scratch: middleware_cx.scratch.clone(),
+                                trace_emitter: middleware_cx.trace_emitter.clone(),
                             };
                             let flow = run_around_tool(&self.middleware, &mut tool_cx).await?;
                             // D-08: persist a stateful around_tool hook's

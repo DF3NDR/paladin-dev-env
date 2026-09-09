@@ -3311,6 +3311,7 @@ dependencies = [
  "dotenv",
  "env_logger",
  "futures",
+ "glob",
  "hmac",
  "http 1.4.1",
  "indicatif",

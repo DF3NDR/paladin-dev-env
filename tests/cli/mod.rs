@@ -14,6 +14,7 @@ mod helpers;
 // mod integration_tests;
 
 mod error_handling_test;
+mod eval_run_test;
 mod formation_execution_test;
 mod paladin_execution_test;
 mod phalanx_execution_test;

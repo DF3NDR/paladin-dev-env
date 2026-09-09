@@ -6,8 +6,12 @@
 //! Both exporters are pure functions over one shared, rendering-agnostic
 //! type: [`GraphShape`]. Build a shape with [`GraphShape::from_doc`] or
 //! [`GraphShape::from_graph`], then render it with [`to_mermaid`] or
-//! [`to_dot`]. The overlay (28-10), the CLI `graph export` command (28-13)
-//! and the inspector page (28-15) all render through these same functions.
+//! [`to_dot`]. [`ExecutionOverlay`] (D-21, 28-10) layers execution history
+//! -- from Waypoint history so far, a persisted-trace source and the
+//! observed-only fallback (D-22) land in a later 28-10 task -- onto a
+//! `GraphShape`, rendered by [`to_mermaid_overlay`]. The CLI `graph
+//! export`/`run export` commands (28-13) and the inspector page (28-15) all
+//! render through these same functions.
 //!
 //! # Example
 //!
@@ -45,8 +49,10 @@
 
 pub mod dot;
 pub mod mermaid;
+pub mod overlay;
 pub mod shape;
 
 pub use dot::to_dot;
-pub use mermaid::to_mermaid;
+pub use mermaid::{to_mermaid, to_mermaid_overlay};
+pub use overlay::{ExecutionOverlay, OverlaySource, Visit};
 pub use shape::{GraphShape, ShapeEdge, ShapeKind, ShapeNode};

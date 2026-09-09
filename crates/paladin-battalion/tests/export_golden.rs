@@ -14,12 +14,26 @@
 //! directly in code: a Muster worker template and a `defer: true`
 //! aggregator are not expressible in a `WarGraphDoc` (27-CONTEXT D-33), so
 //! `GraphShape::from_graph` is the only path that can render it.
+//!
+//! `overlay_goldens` (28-10, D-20/D-21) extends this file with the ONE
+//! overlay golden the plan names: a scripted run over the `branch_join`
+//! fixture (`split` routes to `branch_a`, `branch_b` never fires, `join`
+//! completes), rendered through [`ExecutionOverlay::from_waypoints`] and
+//! [`ExecutionOverlay::from_trace_records`] into two DISTINCT goldens --
+//! `branch_overlay_waypoints.mermaid` (derived fired edges, no evaluated
+//! edges) and `branch_overlay_trace.mermaid` (exact fired AND
+//! evaluated-but-not-fired edges) -- so the difference between the derived
+//! and exact sources is visible in the committed corpus itself.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use paladin_battalion::engine::export::{GraphShape, to_dot, to_mermaid};
+use chrono::Utc;
+use paladin_battalion::engine::export::{
+    ExecutionOverlay, GraphShape, to_dot, to_mermaid, to_mermaid_overlay,
+};
 use paladin_battalion::engine::registries::EngineRegistries;
 use paladin_battalion::engine::{
     EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeSpec, StateNode, StateNodeError,
@@ -31,7 +45,11 @@ use paladin_core::platform::container::battlefield::{
 };
 use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
-use paladin_core::platform::container::waypoint::NodeId;
+use paladin_core::platform::container::trace::{TraceEvent, TraceRecord};
+use paladin_core::platform::container::waypoint::{
+    FrontierSnapshot, GraphFingerprint, NodeExecutionRecord, NodeId, NodeOutcomeKind, ThreadId,
+    Waypoint, WaypointStatus,
+};
 
 /// `tests/fixtures/graph_docs/` -- shared with `graph_doc_round_trip.rs`.
 fn fixtures_dir() -> PathBuf {
@@ -257,4 +275,174 @@ fn muster_renders_worker_template_and_deferred_node() {
         .expect("aggregator node present");
     assert!(aggregator_node.deferred);
     assert!(!aggregator_node.worker_template);
+}
+
+/// The overlay golden's own thread (D-20): a single scripted run over the
+/// `branch_join` fixture, shared by both the Waypoint-sourced and
+/// trace-sourced overlay builders below.
+fn overlay_thread() -> ThreadId {
+    ThreadId::new("branch-overlay-golden").expect("valid thread id")
+}
+
+/// A minimal root `Waypoint` carrying only what `ExecutionOverlay::from_waypoints`
+/// reads: `superstep`, `vanguard`, `completed`.
+fn overlay_waypoint(
+    superstep: u64,
+    vanguard: Vec<&str>,
+    completed: Vec<NodeExecutionRecord>,
+) -> Waypoint {
+    Waypoint::new_root(
+        overlay_thread(),
+        superstep,
+        GraphFingerprint::from_canonical_bytes(b"branch-overlay-golden-graph"),
+        Battlefield::new(BattlefieldSchema::new(Vec::new())),
+        vanguard.into_iter().map(NodeId::new).collect(),
+        completed,
+        WaypointStatus::Running,
+        BTreeMap::new(),
+        FrontierSnapshot::default(),
+    )
+}
+
+fn overlay_record(
+    node_id: &str,
+    outcome: NodeOutcomeKind,
+    duration_ms: u64,
+    token_count: u64,
+) -> NodeExecutionRecord {
+    NodeExecutionRecord {
+        node_id: NodeId::new(node_id),
+        paladin_id: None,
+        started_at: Utc::now(),
+        duration_ms,
+        token_count,
+        outcome,
+        attempt: 1,
+        attempts: Vec::new(),
+        cache_hit: false,
+    }
+}
+
+/// The scripted `branch_join` run's Waypoint history (D-20, D-21): `split`
+/// routes to `branch_a` (`route` contains `"a"`), `branch_b` never fires,
+/// `join` completes -- three Waypoints, one per superstep.
+fn branch_join_waypoints() -> Vec<Waypoint> {
+    vec![
+        overlay_waypoint(
+            1,
+            vec!["branch_a"],
+            vec![overlay_record("split", NodeOutcomeKind::Succeeded, 120, 45)],
+        ),
+        overlay_waypoint(
+            2,
+            vec!["join"],
+            vec![overlay_record(
+                "branch_a",
+                NodeOutcomeKind::Succeeded,
+                80,
+                30,
+            )],
+        ),
+        overlay_waypoint(
+            3,
+            vec![],
+            vec![overlay_record("join", NodeOutcomeKind::Succeeded, 60, 20)],
+        ),
+    ]
+}
+
+/// The SAME scripted `branch_join` run (D-20, D-21) as a persisted trace
+/// record stream: exact `EdgeEvaluated` records for both branches of
+/// `split` (only `branch_a` fires), so the trace-sourced overlay's
+/// `evaluated_edges` differs from the Waypoint-sourced overlay's (always
+/// empty).
+fn branch_join_trace_records() -> Vec<TraceRecord> {
+    let events = vec![
+        TraceEvent::NodeFinished {
+            superstep: 1,
+            node_id: NodeId::new("split"),
+            attempt: 1,
+            outcome: NodeOutcomeKind::Succeeded,
+            duration_ms: 120,
+            token_count: 45,
+            cache_hit: false,
+        },
+        TraceEvent::EdgeEvaluated {
+            from: NodeId::new("split"),
+            to: NodeId::new("branch_a"),
+            condition_kind: "contains".to_string(),
+            fired: true,
+        },
+        TraceEvent::EdgeEvaluated {
+            from: NodeId::new("split"),
+            to: NodeId::new("branch_b"),
+            condition_kind: "contains".to_string(),
+            fired: false,
+        },
+        TraceEvent::NodeFinished {
+            superstep: 2,
+            node_id: NodeId::new("branch_a"),
+            attempt: 1,
+            outcome: NodeOutcomeKind::Succeeded,
+            duration_ms: 80,
+            token_count: 30,
+            cache_hit: false,
+        },
+        TraceEvent::EdgeEvaluated {
+            from: NodeId::new("branch_a"),
+            to: NodeId::new("join"),
+            condition_kind: "always".to_string(),
+            fired: true,
+        },
+        TraceEvent::NodeFinished {
+            superstep: 3,
+            node_id: NodeId::new("join"),
+            attempt: 1,
+            outcome: NodeOutcomeKind::Succeeded,
+            duration_ms: 60,
+            token_count: 20,
+            cache_hit: false,
+        },
+    ];
+    events
+        .into_iter()
+        .enumerate()
+        .map(|(i, event)| TraceRecord {
+            thread_id: overlay_thread(),
+            run_id: None,
+            seq: i as u64 + 1,
+            at: Utc::now(),
+            event,
+        })
+        .collect()
+}
+
+/// The overlay golden (D-20): the ONE overlay golden the plan names -- the
+/// `branch_join` fixture with a scripted run -- rendered through BOTH
+/// overlay sources into two distinct goldens
+/// (`branch_overlay_waypoints.mermaid`, `branch_overlay_trace.mermaid`) so
+/// the derived-vs-exact difference in `evaluated_edges` is visible in the
+/// committed corpus itself (D-21), checked by the same
+/// `UPDATE_GOLDEN=1`/`compare_or_bless` idiom as the static goldens.
+#[test]
+fn overlay_goldens() {
+    let registries = EngineRegistries::new();
+    let doc = load_doc("branch_join.json");
+    let compiled = doc.compile(&registries).expect("compile branch_join.json");
+    let shape = GraphShape::from_graph(&compiled);
+
+    let waypoint_overlay = ExecutionOverlay::from_waypoints(&branch_join_waypoints(), &shape);
+    let waypoint_mermaid = to_mermaid_overlay(&shape, &waypoint_overlay);
+    compare_or_bless("branch_overlay_waypoints", "mermaid", &waypoint_mermaid);
+
+    let trace_overlay = ExecutionOverlay::from_trace_records(&branch_join_trace_records());
+    let trace_mermaid = to_mermaid_overlay(&shape, &trace_overlay);
+    compare_or_bless("branch_overlay_trace", "mermaid", &trace_mermaid);
+
+    // The two sources agree on fired edges but only the trace source knows
+    // evaluated-but-not-fired (D-21) -- the exact reason two goldens exist
+    // for the SAME scripted run.
+    assert_eq!(waypoint_overlay.fired_edges, trace_overlay.fired_edges);
+    assert!(waypoint_overlay.evaluated_edges.is_empty());
+    assert!(!trace_overlay.evaluated_edges.is_empty());
 }

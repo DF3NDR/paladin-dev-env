@@ -23,9 +23,12 @@
 //! sanitizing the DIAGRAM's own identifiers (never the label content
 //! itself) is those exporters' responsibility.
 
+use std::collections::BTreeSet;
+
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::waypoint::NodeId;
 
+use crate::engine::export::overlay::ExecutionOverlay;
 use crate::engine::graph::{NodeSpec, WarGraph};
 use crate::engine::graph_doc::{EdgeConditionDoc, NodeKindDoc, WarGraphDoc};
 
@@ -233,6 +236,63 @@ impl GraphShape {
             nodes,
             edges,
             entry,
+        }
+    }
+
+    /// Build the observed-only fallback shape (D-22): when no static graph
+    /// document is available for a thread, this reconstructs a `GraphShape`
+    /// from only what `overlay` actually saw -- the visited node ids and the
+    /// union of its `fired_edges`/`evaluated_edges`, with no entry points
+    /// (an observed subgraph has no declared entry, only what happened to
+    /// run first).
+    ///
+    /// Every observed node's kind is rendered as [`ShapeKind::Paladin`] --
+    /// the true kind is unknowable from a Waypoint/trace alone (a Waypoint
+    /// carries only a `graph_fingerprint`, D-22), and `Paladin` is this
+    /// module's existing least-assuming badge (Claude's Discretion, no
+    /// dedicated "unknown" `ShapeKind` variant -- adding one would force a
+    /// matching change in `dot.rs`, which this plan (D-21's Mermaid-only
+    /// overlay) deliberately does not touch). Callers rendering this shape
+    /// should set `ExecutionOverlay::observed_only = true` so
+    /// [`super::mermaid::to_mermaid_overlay`] carries the locked
+    /// observed-only title (D-22, 28-UI-SPEC.md).
+    pub fn observed(overlay: &ExecutionOverlay) -> Self {
+        let mut node_ids: BTreeSet<NodeId> = overlay.visits.keys().cloned().collect();
+        for (from, to) in overlay
+            .fired_edges
+            .iter()
+            .chain(overlay.evaluated_edges.iter())
+        {
+            node_ids.insert(from.clone());
+            node_ids.insert(to.clone());
+        }
+
+        let nodes = node_ids
+            .into_iter()
+            .map(|id| ShapeNode {
+                id,
+                kind: ShapeKind::Paladin,
+                deferred: false,
+                worker_template: false,
+                subgraph: None,
+            })
+            .collect();
+
+        let mut edge_pairs: BTreeSet<(NodeId, NodeId)> = overlay.fired_edges.clone();
+        edge_pairs.extend(overlay.evaluated_edges.iter().cloned());
+        let edges = edge_pairs
+            .into_iter()
+            .map(|(from, to)| ShapeEdge {
+                from,
+                to,
+                condition: None,
+            })
+            .collect();
+
+        GraphShape {
+            nodes,
+            edges,
+            entry: Vec::new(),
         }
     }
 }

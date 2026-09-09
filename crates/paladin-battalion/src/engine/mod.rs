@@ -119,7 +119,10 @@ use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 pub use bridges::{CAMPAIGN_FAN_IN_SEPARATOR, campaign_node_ids, dedicated_output_field};
 pub use directive_parser::{DirectiveParseError, DirectiveParser, OnParseError};
 pub use dispatch_registry::DispatchRegistry;
-pub use export::{GraphShape, ShapeEdge, ShapeKind, ShapeNode, to_dot, to_mermaid};
+pub use export::{
+    ExecutionOverlay, GraphShape, OverlaySource, ShapeEdge, ShapeKind, ShapeNode, Visit, to_dot,
+    to_mermaid, to_mermaid_overlay,
+};
 pub use graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
 pub use graph_doc::{CompileError, WARGRAPH_DOC_SCHEMA_VERSION, WarGraphDoc};
 pub use heartbeat::HeartbeatHandle;

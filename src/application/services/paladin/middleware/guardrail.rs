@@ -52,6 +52,7 @@ use crate::config::agent_runtime::{
     GuardrailTarget as ConfigGuardrailTarget,
 };
 use paladin_ports::output::paladin_port::StopReason;
+use paladin_ports::output::trace_sink_port::MiddlewareAction;
 
 use super::{
     ExecutionMiddleware, FinalResult, LlmResponseView, MiddlewareFlow, ModelCallContext,
@@ -403,7 +404,15 @@ impl ExecutionMiddleware for Guardrail {
                         StopReason::Completed,
                     )));
                 }
-                Some(RuleOutcome::Redacted) | None => {}
+                // 28-06, D-04: a redaction never changes the returned
+                // `MiddlewareFlow` (the sweep continues, D-09's own
+                // documented "not terminal" rule) -- report it via the
+                // hint so the chain driver still observes it (see
+                // `middleware::chain`'s own module docs).
+                Some(RuleOutcome::Redacted) => {
+                    cx.middleware_action_hint = Some(MiddlewareAction::Redact);
+                }
+                None => {}
             }
         }
         Ok(MiddlewareFlow::Continue)
@@ -411,7 +420,7 @@ impl ExecutionMiddleware for Guardrail {
 
     async fn after_model(
         &self,
-        _cx: &mut ModelCallContext<'_>,
+        cx: &mut ModelCallContext<'_>,
         resp: &mut LlmResponseView,
     ) -> Result<MiddlewareFlow, PaladinError> {
         for compiled in &self.rules {
@@ -426,7 +435,10 @@ impl ExecutionMiddleware for Guardrail {
                         StopReason::Completed,
                     )));
                 }
-                Some(RuleOutcome::Redacted) | None => {}
+                Some(RuleOutcome::Redacted) => {
+                    cx.middleware_action_hint = Some(MiddlewareAction::Redact);
+                }
+                None => {}
             }
         }
         Ok(MiddlewareFlow::Continue)

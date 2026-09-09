@@ -45,6 +45,11 @@ pub mod repositories;
 pub mod resilience;
 #[allow(missing_docs)]
 pub mod security;
+/// The facade's trace-sink composition module (OBS-02, D-10, D-11): the
+/// default-on structured [`telemetry::LogTraceSink`] and
+/// [`telemetry::build_run_sink`], the single place a run's sink fan-out is
+/// assembled.
+pub mod telemetry;
 #[cfg(feature = "web-server")]
 #[allow(missing_docs)]
 pub mod web;

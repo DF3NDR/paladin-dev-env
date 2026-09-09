@@ -100,6 +100,7 @@ use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
+use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::vault::Namespace;
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, ThreadId, WaypointId, WaypointStatus,
@@ -1517,6 +1518,17 @@ pub struct WarEngine<W: WaypointPort> {
     /// `Mutex`, not `RwLock`: every access is a quick swap/clone, never
     /// held across an `.await`.
     trace_dispatcher_cell: std::sync::Mutex<Option<Arc<TraceDispatcher>>>,
+    /// A `TraceDispatcher` pre-bound to a specific `(thread, run_id)` pair
+    /// via [`WarEngine::with_bound_trace`] (28-06, D-03), consumed by the
+    /// next `start`/`resume*` call whose own `thread` argument matches.
+    /// Closes the gap 28-03 documented on [`WarEngine::trace_emitter`]:
+    /// without this, calling `trace_emitter()` before `start()` hands a
+    /// caller a placeholder dispatcher that `start()` then orphans by
+    /// building its own fresh one. `None` by default -- every entry point
+    /// builds its own fresh dispatcher exactly as before this field
+    /// existed. `Mutex`, not `RwLock`: a quick take-or-leave, never held
+    /// across an `.await`.
+    bound_trace: std::sync::Mutex<Option<(ThreadId, Arc<TraceDispatcher>)>>,
 }
 
 // --- CF-FR-16, D-21: `+ 'static` is required here (not on the struct
@@ -1549,6 +1561,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             vault: None,
             structured_executor: None,
             trace_dispatcher_cell: std::sync::Mutex::new(None),
+            bound_trace: std::sync::Mutex::new(None),
         }
     }
 
@@ -1687,6 +1700,91 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             ))
         });
         Arc::clone(dispatcher) as Arc<dyn TraceEmitter>
+    }
+
+    /// Override the queue capacity every per-call `TraceDispatcher` is
+    /// constructed with (28-06: the facade composition root passes
+    /// `TraceConfig::channel_capacity` through here). Defaults to
+    /// `TraceDispatcher`'s own default when never called.
+    pub fn with_trace_capacity(mut self, capacity: usize) -> Self {
+        self.trace_capacity = capacity;
+        self
+    }
+
+    /// Pre-bind a `TraceDispatcher` for `thread`/`run_id` before this
+    /// engine's `start`/`resume*` is ever called (28-06, D-03): a
+    /// [`WarEngine::trace_emitter`] call made immediately AFTER this builder
+    /// step returns the SAME dispatcher instance the next matching
+    /// `start`/`resume*` call then uses for its own emissions, closing the
+    /// "orphaned placeholder" gap `trace_emitter`'s own doc comment
+    /// describes (28-03's documented known gap).
+    ///
+    /// The worker composition root knows `run.thread_id`/`run_id` before
+    /// constructing the per-run engine: call this right after
+    /// `with_trace_sink`, then `trace_emitter()` to get the handle to hand
+    /// to the fallback adapter, the middleware chain and the execution
+    /// service, THEN call `start`/`resume*` with the SAME `thread`.
+    ///
+    /// Consumed by the next matching entry-point call only -- calling this
+    /// again before that call replaces the pending binding, and a
+    /// `start`/`resume*` call whose `thread` does NOT match the pending
+    /// binding builds its own fresh dispatcher instead (D-03's per-run
+    /// `seq`-restart contract is never compromised either way).
+    pub fn with_bound_trace(self, thread: ThreadId, run_id: Option<RunId>) -> Self {
+        let dispatcher = Arc::new(TraceDispatcher::with_capacity(
+            thread.clone(),
+            run_id,
+            self.trace_sink.clone(),
+            self.trace_capacity,
+        ));
+        self.with_bound_trace_dispatcher(thread, dispatcher)
+    }
+
+    /// As [`WarEngine::with_bound_trace`], but for a caller that must build
+    /// the `TraceDispatcher` itself BEFORE this engine exists (28-06): the
+    /// worker composition root needs the SAME `Arc<TraceDispatcher>`
+    /// instance (coerced to `Arc<dyn TraceEmitter>`) to construct the
+    /// per-run `FallbackLlmAdapter`/middleware chain/execution service --
+    /// each of which is itself a dependency of this engine's own
+    /// `paladin_port` constructor argument, so the dispatcher must exist
+    /// before `WarEngine::new` is even called. Binds `dispatcher` under
+    /// `thread` exactly as `with_bound_trace` does; consumed the same way
+    /// by the next matching `start`/`resume*` call.
+    pub fn with_bound_trace_dispatcher(
+        self,
+        thread: ThreadId,
+        dispatcher: Arc<TraceDispatcher>,
+    ) -> Self {
+        self.remember_trace_dispatcher(&dispatcher);
+        *self.bound_trace.lock().expect("bound trace mutex poisoned") = Some((thread, dispatcher));
+        self
+    }
+
+    /// Returns the dispatcher pre-bound via [`WarEngine::with_bound_trace`]
+    /// when its `thread` matches `thread`, consuming the binding; otherwise
+    /// builds a fresh dispatcher exactly as every entry point did before
+    /// `with_bound_trace` existed (D-03: `seq` restarts at 1 per run either
+    /// way -- this only decides which `TraceDispatcher` INSTANCE serves that
+    /// contract, not whether it holds).
+    fn take_or_build_trace_dispatcher(&self, thread: &ThreadId) -> Arc<TraceDispatcher> {
+        if let Ok(mut bound) = self.bound_trace.lock()
+            && let Some((bound_thread, dispatcher)) = bound.take()
+            && &bound_thread == thread
+        {
+            return dispatcher;
+        }
+        // Either nothing was bound, or it was bound for a DIFFERENT thread
+        // than the one starting now -- a mismatched binding's dispatcher is
+        // simply dropped (its own `RunStarted`/`RunFinished` bracket was
+        // never emitted, so nothing observable is lost) and a fresh
+        // dispatcher is built for THIS thread, unchanged from before
+        // `with_bound_trace` existed.
+        Arc::new(TraceDispatcher::with_capacity(
+            thread.clone(),
+            None,
+            self.trace_sink.clone(),
+            self.trace_capacity,
+        ))
     }
 
     /// Set the ordered `NodeInterceptor` chain (ENG-FR-22), replacing any
@@ -1930,12 +2028,11 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
 
         // D-03: a fresh, thread-scoped dispatcher stamps `seq`/`at` for
         // every trace record this call (and everything it calls) emits.
-        let trace = Arc::new(TraceDispatcher::with_capacity(
-            thread.clone(),
-            None,
-            self.trace_sink.clone(),
-            self.trace_capacity,
-        ));
+        // 28-06: reuses a `with_bound_trace`-pre-bound dispatcher for this
+        // `thread` if one is pending, so a caller that already pulled
+        // `trace_emitter()` before this call shares the SAME dispatcher
+        // (D-03) -- otherwise builds a fresh one exactly as before.
+        let trace = self.take_or_build_trace_dispatcher(&thread);
         self.remember_trace_dispatcher(&trace);
         trace.emit(TraceEvent::RunStarted {
             run_id: None,
@@ -2073,12 +2170,9 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
 
         // D-03: a fresh, thread-scoped dispatcher for this call and
         // everything it calls (including the early-return branch below).
-        let trace = Arc::new(TraceDispatcher::with_capacity(
-            thread.clone(),
-            None,
-            self.trace_sink.clone(),
-            self.trace_capacity,
-        ));
+        // 28-06: reuses a `with_bound_trace`-pre-bound dispatcher for this
+        // `thread` if pending (see `start`'s own comment above).
+        let trace = self.take_or_build_trace_dispatcher(&thread);
         self.remember_trace_dispatcher(&trace);
         // D-02: this call's own wall-clock start, for both `RunFinished`
         // sites below (the already-`Completed` early return and the real
@@ -2311,12 +2405,9 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
 
         // D-03: a fresh, thread-scoped dispatcher for this call and every
         // early-return branch inside it.
-        let trace = Arc::new(TraceDispatcher::with_capacity(
-            thread.clone(),
-            None,
-            self.trace_sink.clone(),
-            self.trace_capacity,
-        ));
+        // 28-06: reuses a `with_bound_trace`-pre-bound dispatcher for this
+        // `thread` if pending (see `start`'s own comment above).
+        let trace = self.take_or_build_trace_dispatcher(&thread);
         self.remember_trace_dispatcher(&trace);
         // D-02: this call's own wall-clock start, for the `RunFinished`
         // site below.
@@ -2690,12 +2781,9 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         }
 
         // D-03: a fresh, thread-scoped dispatcher for this call.
-        let trace = Arc::new(TraceDispatcher::with_capacity(
-            thread.clone(),
-            None,
-            self.trace_sink.clone(),
-            self.trace_capacity,
-        ));
+        // 28-06: reuses a `with_bound_trace`-pre-bound dispatcher for this
+        // `thread` if pending (see `start`'s own comment above).
+        let trace = self.take_or_build_trace_dispatcher(thread);
         self.remember_trace_dispatcher(&trace);
         // D-02: this call's own wall-clock start, for the `RunFinished`
         // site below.
@@ -10542,6 +10630,134 @@ mod tests {
             after.iter().filter(|r| r.seq > max_seq_before).count(),
             3,
             "the three post-run records must continue the SAME seq sequence, never restart"
+        );
+    }
+
+    /// 28-06: `with_bound_trace` closes the gap `trace_emitter`'s own doc
+    /// comment describes -- a caller that pulls `trace_emitter()` BEFORE
+    /// `start()`, after pre-binding via `with_bound_trace`, gets the SAME
+    /// dispatcher `start()` itself then uses, so records emitted through
+    /// that early handle interleave into the run's own gapless `seq`
+    /// sequence rather than being orphaned on a placeholder dispatcher.
+    #[tokio::test]
+    async fn trace_emitter_before_start_uses_the_same_dispatcher_with_bound_trace() {
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let id = NodeId::new("solo");
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(out, serde_json::json!("v"))),
+        );
+        graph.add_entry(id);
+
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("trace-emitter-before-start").unwrap();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone())
+        .with_bound_trace(thread.clone(), None);
+
+        // Pulled BEFORE `start()` -- must be the SAME dispatcher `start()`
+        // itself uses, not an orphaned placeholder.
+        let emitter = engine.trace_emitter();
+        emitter.emit(TraceEvent::MiddlewareEvent {
+            name: "pre-run-probe".to_string(),
+            action: MiddlewareAction::Fallback,
+        });
+
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+
+        let probe = events
+            .iter()
+            .find(|r| matches!(&r.event, TraceEvent::MiddlewareEvent { name, .. } if name == "pre-run-probe"))
+            .expect("the pre-start probe record must have reached the run's own sink");
+        assert_eq!(
+            probe.seq, 1,
+            "the pre-start probe is this dispatcher's FIRST record, seq 1"
+        );
+
+        let run_started = events
+            .iter()
+            .find(|r| matches!(r.event, TraceEvent::RunStarted { .. }))
+            .expect("RunStarted must have been emitted through the SAME dispatcher");
+        assert_eq!(
+            run_started.seq, 2,
+            "RunStarted continues the SAME seq sequence the pre-start probe started, never restarts"
+        );
+
+        let mut seqs: Vec<u64> = events.iter().map(|r| r.seq).collect();
+        seqs.sort_unstable();
+        for pair in seqs.windows(2) {
+            assert_eq!(pair[1], pair[0] + 1, "seq must be gapless: {seqs:?}");
+        }
+    }
+
+    /// 28-06: a `with_bound_trace` binding for a DIFFERENT thread than the
+    /// one `start` is actually called with is never used -- `start` builds
+    /// its own fresh dispatcher for its own thread instead, so the run's
+    /// `seq` sequence starts at 1 regardless (D-03 is never compromised by
+    /// a mismatched binding).
+    #[tokio::test]
+    async fn mismatched_bound_trace_thread_is_not_used() {
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let id = NodeId::new("solo");
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(out, serde_json::json!("v"))),
+        );
+        graph.add_entry(id);
+
+        let sink = RecordingTraceSink::new();
+        let bound_thread = ThreadId::new("bound-thread").unwrap();
+        let real_thread = ThreadId::new("real-thread").unwrap();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone())
+        .with_bound_trace(bound_thread, None);
+
+        let outcome = engine
+            .start(&graph, real_thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        assert!(
+            events.iter().all(|r| r.thread_id == real_thread),
+            "every record must carry the REAL thread the run actually executed under"
+        );
+        let run_started = events
+            .iter()
+            .find(|r| matches!(r.event, TraceEvent::RunStarted { .. }))
+            .expect("RunStarted must have been emitted");
+        assert_eq!(
+            run_started.seq, 1,
+            "a fresh dispatcher for the real thread starts its own seq at 1"
         );
     }
 }

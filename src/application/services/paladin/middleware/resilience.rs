@@ -49,6 +49,7 @@ use async_trait::async_trait;
 use paladin_core::platform::container::aegis::RetryPolicy;
 use paladin_llm::fallback::{FallbackChainError, FallbackLlmAdapter};
 use paladin_ports::output::llm_port::LlmPort;
+use paladin_ports::output::trace_sink_port::MiddlewareAction;
 
 use crate::application::services::paladin::error::PaladinError;
 
@@ -109,6 +110,12 @@ impl ExecutionMiddleware for ModelFallbackMiddleware {
         cx: &mut ModelCallContext<'_>,
     ) -> Result<MiddlewareFlow, PaladinError> {
         cx.llm_override = Some(Arc::clone(&self.adapter));
+        // 28-06, D-04: installing the fallback chain as this call's
+        // effective port never changes the returned `MiddlewareFlow`
+        // (always `Continue`), so the chain driver cannot observe this
+        // action structurally -- report it via the hint instead (see
+        // `middleware::chain`'s own module docs for the full mechanism).
+        cx.middleware_action_hint = Some(MiddlewareAction::Fallback);
         Ok(MiddlewareFlow::Continue)
     }
 
@@ -160,6 +167,10 @@ impl ExecutionMiddleware for ModelRetryMiddleware {
         cx: &mut ModelCallContext<'_>,
     ) -> Result<MiddlewareFlow, PaladinError> {
         cx.retry_policy = Some(self.policy.clone());
+        // 28-06, D-04: see `ModelFallbackMiddleware::before_model`'s own
+        // comment -- installing a retry policy never changes the returned
+        // `MiddlewareFlow`, so the driver reports it via the hint.
+        cx.middleware_action_hint = Some(MiddlewareAction::Retry);
         Ok(MiddlewareFlow::Continue)
     }
 

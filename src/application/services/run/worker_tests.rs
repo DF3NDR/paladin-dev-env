@@ -979,3 +979,207 @@ async fn agent_kind_run_with_a_webhook_enqueues_no_delivery() {
         page.items.len()
     );
 }
+
+// --- 28-06: per-run trace composition (Task 1) --------------------------
+
+/// Build a `RunWorkerPool` over a fresh `InMemoryWaypointStore`/repository/
+/// queue, wired with an `engine_factory` (required for per-run trace
+/// composition, D-24's own documented limitation) and the given
+/// `trace_config`/`event_bus`. Returns the pool plus the pieces a test
+/// needs to submit a run and inspect its outcome.
+#[allow(clippy::type_complexity)]
+fn build_traced_pool(
+    trace_config: crate::config::trace::TraceConfig,
+    event_bus: Option<Arc<super::events::RunEventBus>>,
+) -> (
+    RunWorkerPool<InMemoryWaypointStore>,
+    Arc<dyn RunRepositoryPort>,
+    Arc<dyn RunQueuePort>,
+    Arc<InMemoryWaypointStore>,
+    Vec<Arc<AtomicUsize>>,
+) {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let (graph, counters) = build_chain_graph(2, Duration::ZERO);
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("chain", graph));
+    let base_engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+
+    let factory_store = store.clone();
+    let engine_factory: Arc<
+        dyn Fn(tokio_util::sync::CancellationToken) -> WarEngine<InMemoryWaypointStore>
+            + Send
+            + Sync,
+    > = Arc::new(move |token| {
+        WarEngine::new(Arc::new(UnusedPaladinPort), factory_store.clone())
+            .with_cancellation_token(token)
+    });
+
+    let mut pool = RunWorkerPool::new(
+        base_engine,
+        store.clone(),
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_engine_factory(engine_factory)
+    .with_trace_config(trace_config);
+    if let Some(bus) = event_bus {
+        pool = pool.with_event_bus(bus);
+    }
+
+    (pool, repository, queue, store, counters)
+}
+
+/// Behavior (Task 1): with `trace.log_sink` on and an event bus present,
+/// the run's bus sink is live -- proving the worker attached a composite
+/// (or, at minimum, a sink that still forwards to the bus alongside the
+/// log sink `build_run_sink`'s own unit tests already prove is fanned into
+/// the same composite when both are configured). With `trace.log_sink`
+/// off, the run still completes and the bus sink alone still works. With
+/// neither configured, the run completes using the engine's own untraced
+/// path (no sink attached at all).
+#[tokio::test]
+async fn worker_builds_one_composite_per_run() {
+    use crate::application::services::run::events::RunEventBus;
+    use crate::config::trace::TraceConfig;
+
+    // --- Both `log_sink` and the event bus configured: the bus sink must
+    // still receive every record, proving it is part of whatever sink
+    // `build_run_sink` assembled (its own unit tests prove that assembly
+    // is a `CompositeSink` of both when both are configured).
+    let bus = Arc::new(RunEventBus::new());
+    let (pool, repository, queue, _store, _counters) = build_traced_pool(
+        TraceConfig {
+            log_sink: true,
+            ..TraceConfig::default()
+        },
+        Some(bus.clone()),
+    );
+    let (run_id, thread_id) = submit(&repository, &queue, "chain").await;
+    // Pre-bind so a subscriber can attach before `run_once`'s own `bind`
+    // call re-affirms the SAME channel (`bind` is idempotent -- see
+    // `RunEventBus::bind`'s own doc comment).
+    bus.bind(thread_id.clone(), run_id.clone()).await;
+    let mut rx = bus
+        .subscribe(&run_id)
+        .await
+        .expect("the channel exists once bound");
+
+    assert!(pool.run_once().await.unwrap());
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+
+    let mut saw_any_event = false;
+    while let Ok(event) = rx.try_recv() {
+        let _ = event;
+        saw_any_event = true;
+    }
+    assert!(
+        saw_any_event,
+        "the bus sink must have received at least one record through whatever sink \
+         build_run_sink assembled for this run"
+    );
+
+    // --- `trace.log_sink` off, bus still present: the bus-only path still
+    // works (build_run_sink returns the bus sink alone, unwrapped).
+    let bus2 = Arc::new(RunEventBus::new());
+    let (pool2, repository2, queue2, _store2, _counters2) = build_traced_pool(
+        TraceConfig {
+            log_sink: false,
+            ..TraceConfig::default()
+        },
+        Some(bus2.clone()),
+    );
+    let (run_id2, thread_id2) = submit(&repository2, &queue2, "chain").await;
+    bus2.bind(thread_id2.clone(), run_id2.clone()).await;
+    let mut rx2 = bus2
+        .subscribe(&run_id2)
+        .await
+        .expect("the channel exists once bound");
+    assert!(pool2.run_once().await.unwrap());
+    let run2 = repository2.get(&run_id2).await.unwrap().unwrap();
+    assert_eq!(run2.status, RunStatus::Completed);
+    assert!(
+        rx2.try_recv().is_ok(),
+        "the bus sink alone (log_sink off) must still receive records"
+    );
+
+    // --- Neither configured: the run still completes -- the engine's own
+    // untraced path (no `TraceSink` attached at all) never affects
+    // correctness.
+    let (pool3, repository3, queue3, _store3, _counters3) = build_traced_pool(
+        TraceConfig {
+            log_sink: false,
+            ..TraceConfig::default()
+        },
+        None,
+    );
+    let (run_id3, _thread_id3) = submit(&repository3, &queue3, "chain").await;
+    assert!(pool3.run_once().await.unwrap());
+    let run3 = repository3.get(&run_id3).await.unwrap().unwrap();
+    assert_eq!(run3.status, RunStatus::Completed);
+}
+
+/// Behavior (Task 1, prohibition): enabling any sink combination MUST NOT
+/// change a run's outcome or its final executed node count -- the same
+/// fixture graph, dispatched once with sinks fully off and once with both
+/// `trace.log_sink` and an event bus on, must reach the SAME terminal
+/// status and each of its two chain nodes must have executed EXACTLY once
+/// either way.
+#[tokio::test]
+async fn worker_run_result_is_identical_with_and_without_sinks() {
+    use crate::application::services::run::events::RunEventBus;
+    use crate::config::trace::TraceConfig;
+
+    // Sinks fully off.
+    let (pool_off, repository_off, queue_off, _store_off, counters_off) = build_traced_pool(
+        TraceConfig {
+            log_sink: false,
+            ..TraceConfig::default()
+        },
+        None,
+    );
+    let (run_id_off, _thread_id_off) = submit(&repository_off, &queue_off, "chain").await;
+    assert!(pool_off.run_once().await.unwrap());
+    let run_off = repository_off.get(&run_id_off).await.unwrap().unwrap();
+
+    // Both sinks on.
+    let bus = Arc::new(RunEventBus::new());
+    let (pool_on, repository_on, queue_on, _store_on, counters_on) = build_traced_pool(
+        TraceConfig {
+            log_sink: true,
+            ..TraceConfig::default()
+        },
+        Some(bus),
+    );
+    let (run_id_on, _thread_id_on) = submit(&repository_on, &queue_on, "chain").await;
+    assert!(pool_on.run_once().await.unwrap());
+    let run_on = repository_on.get(&run_id_on).await.unwrap().unwrap();
+
+    assert_eq!(
+        run_off.status, run_on.status,
+        "the run's terminal status must be identical with and without sinks"
+    );
+    assert_eq!(run_off.status, RunStatus::Completed);
+
+    assert_eq!(
+        counters_off.len(),
+        counters_on.len(),
+        "the same fixture graph must have the same node count either way"
+    );
+    for (off, on) in counters_off.iter().zip(counters_on.iter()) {
+        assert_eq!(
+            off.load(Ordering::SeqCst),
+            on.load(Ordering::SeqCst),
+            "each node's own execution count must be identical with and without sinks"
+        );
+        assert_eq!(
+            off.load(Ordering::SeqCst),
+            1,
+            "each of this chain's two nodes must execute exactly once"
+        );
+    }
+}

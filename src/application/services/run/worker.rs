@@ -37,7 +37,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
-use paladin_battalion::engine::{EngineError, RunOutcome, WarEngine};
+use paladin_battalion::engine::{EngineError, RunOutcome, TraceDispatcher, WarEngine};
 use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{ParleyRequest, ParleyResponse};
@@ -52,8 +52,12 @@ use paladin_ports::output::run_queue_port::{LeaseToken, LeasedRun, RunQueuePort}
 use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunRepositoryError, RunRepositoryPort,
 };
+use paladin_ports::output::trace_sink_port::{RUN_TRACE_EMITTER, TraceEmitter, TraceSink};
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
+
+use crate::config::trace::TraceConfig;
+use crate::infrastructure::telemetry::build_run_sink;
 
 use super::cancel::{DbCancellationProbe, LocalRunTokens};
 use super::events::{RunEventBus, RunEventBusSink};
@@ -67,6 +71,36 @@ use super::webhook::{WebhookPayload, WebhookPayloadAssistant};
 /// superstep's trailing live trace event before its bus channel disappears.
 /// See the `run_once` call site's own comment for the full rationale.
 const TRACE_DRAIN_GRACE_PERIOD: Duration = Duration::from_millis(100);
+
+/// Runs `fut` inside a [`RUN_TRACE_EMITTER`] scope when `emitter` is
+/// `Some`, so every nested `.await` inside `fut` -- including a call
+/// through the deeply shared `Arc<dyn PaladinPort>` singleton
+/// (`FallbackLlmAdapter`, the middleware chain, `PaladinExecutionService`)
+/// -- can read back the SAME per-run handle via
+/// `paladin_ports::output::trace_sink_port::current_trace_emitter` (28-06,
+/// D-03). Runs `fut` unscoped when `emitter` is `None` (no sink configured
+/// for this run -- the untraced path, D-10).
+async fn with_run_trace_scope<F: std::future::Future>(
+    emitter: &Option<Arc<dyn TraceEmitter>>,
+    fut: F,
+) -> F::Output {
+    match emitter {
+        Some(emitter) => RUN_TRACE_EMITTER.scope(Arc::clone(emitter), fut).await,
+        None => fut.await,
+    }
+}
+
+/// The per-run engine [`RunWorkerPool::run_once`] dispatches through, the
+/// local-token registration (if any) it must clean up when the dispatch
+/// finishes, and the trace emitter (if a sink was configured) below-engine
+/// producers can read via `RUN_TRACE_EMITTER` for the duration of this
+/// dispatch (28-06). Factored into a named alias purely to keep the
+/// three-tuple readable at its one call site.
+type RunDispatchEngine<W> = (
+    Arc<WarEngine<W>>,
+    Option<RunId>,
+    Option<Arc<dyn TraceEmitter>>,
+);
 
 /// Errors a single [`RunWorkerPool::run_once`] iteration can surface.
 #[derive(Debug, Error)]
@@ -482,6 +516,14 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// return paths, that test goes red and this doc must move with it. A
     /// caller needing webhook delivery today should poll the run instead.
     webhook_deliveries: Option<Arc<dyn WebhookDeliveryRepositoryPort>>,
+    /// The trace pipeline configuration (OBS-02, D-11), wired via
+    /// [`RunWorkerPool::with_trace_config`]. Defaults to
+    /// [`TraceConfig::default`] (`log_sink: true`) -- a pool that never
+    /// calls the builder still gets the default-on log sink for every run
+    /// dispatched through [`Self::engine_factory`]. Has no effect on the
+    /// shared-engine ("no factory") path, exactly like `event_bus` above:
+    /// per-run trace composition needs a per-run engine to attach to.
+    trace_config: TraceConfig,
 }
 
 impl<W: WaypointPort + 'static> RunWorkerPool<W> {
@@ -519,6 +561,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             cancellation_probe: None,
             event_bus: None,
             webhook_deliveries: None,
+            trace_config: TraceConfig::default(),
         }
     }
 
@@ -589,6 +632,17 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// not depend on which engine instance is used.
     pub fn with_event_bus(mut self, bus: Arc<RunEventBus>) -> Self {
         self.event_bus = Some(bus);
+        self
+    }
+
+    /// Wire the trace pipeline configuration (OBS-02, D-11): `run_once`
+    /// reads `trace.log_sink`/`channel_capacity` from `config` to build each
+    /// per-run `CompositeSink`/`TraceDispatcher` via
+    /// [`crate::infrastructure::telemetry::build_run_sink`]. Only takes
+    /// effect on the [`Self::with_engine_factory`] path -- see that field's
+    /// own doc comment.
+    pub fn with_trace_config(mut self, config: TraceConfig) -> Self {
+        self.trace_config = config;
         self
     }
 
@@ -748,7 +802,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // caller's factory closure never needs to know about probes at
         // all. Otherwise (the default), fall back to the ONE shared engine
         // exactly as 27-04 left it, with no local-token registration.
-        let (run_engine, local_token_guard): (Arc<WarEngine<W>>, Option<RunId>) =
+        let (run_engine, local_token_guard, run_trace_emitter): RunDispatchEngine<W> =
             match &self.engine_factory {
                 Some(factory) => {
                     let child_token = self.coordinator.token().child_token();
@@ -759,13 +813,51 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     if let Some(probe) = &self.cancellation_probe {
                         engine = engine.with_cancellation_probe(Arc::clone(probe));
                     }
-                    if let Some(bus) = &self.event_bus {
-                        engine =
-                            engine.with_trace_sink(Arc::new(RunEventBusSink::new(Arc::clone(bus))));
-                    }
-                    (Arc::new(engine), Some(run.run_id.clone()))
+                    // --- 28-06 (OBS-02, D-03, D-11): one CompositeSink, one
+                    // TraceDispatcher, per run. `build_run_sink` is the single
+                    // place a run's sink fan-out (the default-on log sink
+                    // alongside the D-24 bus sink, when wired) is assembled.
+                    // The dispatcher is built HERE, before the engine exists,
+                    // because the SAME `Arc<dyn TraceEmitter>` handle must also
+                    // reach the fallback adapter/middleware chain/execution
+                    // service below the engine -- `with_bound_trace_dispatcher`
+                    // then hands this exact instance to the engine too, so
+                    // every record in this run comes from the ONE counter
+                    // (D-03), never two independent dispatchers racing.
+                    let bus_sink = self.event_bus.as_ref().map(|bus| {
+                        Arc::new(RunEventBusSink::new(Arc::clone(bus))) as Arc<dyn TraceSink>
+                    });
+                    let run_trace_emitter = match build_run_sink(&self.trace_config, bus_sink) {
+                        Some(sink) => {
+                            let dispatcher = Arc::new(TraceDispatcher::with_capacity(
+                                run.thread_id.clone(),
+                                Some(run.run_id.clone()),
+                                Some(sink.clone()),
+                                self.trace_config.channel_capacity,
+                            ));
+                            engine = engine
+                                .with_trace_sink(sink)
+                                .with_trace_capacity(self.trace_config.channel_capacity)
+                                .with_bound_trace_dispatcher(run.thread_id.clone(), dispatcher);
+                            // `trace_emitter()` returns the SAME dispatcher
+                            // `with_bound_trace_dispatcher` just bound
+                            // (28-06's own `with_bound_trace`/
+                            // `trace_emitter` doc comments): the canonical
+                            // accessor, not a second cast of the local
+                            // `dispatcher` variable, so this handle is
+                            // provably the one `start`/`resume*` itself
+                            // will use once dispatch begins below.
+                            Some(engine.trace_emitter())
+                        }
+                        None => None,
+                    };
+                    (
+                        Arc::new(engine),
+                        Some(run.run_id.clone()),
+                        run_trace_emitter,
+                    )
                 }
-                None => (Arc::clone(&self.engine), None),
+                None => (Arc::clone(&self.engine), None, None),
             };
 
         // D-24: bind THIS thread/run on the bus before dispatch, so a
@@ -779,15 +871,25 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         let heartbeat = LeaseHeartbeat::spawn(self.queue.clone(), leased.token.clone(), self.lease);
         let outcome_result = match dispatch {
             WorkerDispatch::Start => {
-                run_engine
-                    .start(&graph, run.thread_id.clone(), StateDelta::new())
-                    .await
+                with_run_trace_scope(
+                    &run_trace_emitter,
+                    run_engine.start(&graph, run.thread_id.clone(), StateDelta::new()),
+                )
+                .await
             }
-            WorkerDispatch::Resume => run_engine.resume(&graph, run.thread_id.clone()).await,
+            WorkerDispatch::Resume => {
+                with_run_trace_scope(
+                    &run_trace_emitter,
+                    run_engine.resume(&graph, run.thread_id.clone()),
+                )
+                .await
+            }
             WorkerDispatch::ResumeWith(responses) => {
-                let result = run_engine
-                    .resume_with(&graph, run.thread_id.clone(), responses)
-                    .await;
+                let result = with_run_trace_scope(
+                    &run_trace_emitter,
+                    run_engine.resume_with(&graph, run.thread_id.clone(), responses),
+                )
+                .await;
                 if result.is_ok() {
                     self.repository.clear_pending_responses(&run.run_id).await?;
                 }
@@ -796,9 +898,11 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             WorkerDispatch::Fork { from, edit } => match parse_fork_waypoint_id(&from) {
                 Some(waypoint_id) => {
                     let delta = fork_edit_to_state_delta(edit);
-                    run_engine
-                        .fork(&graph, &run.thread_id, waypoint_id, delta)
-                        .await
+                    with_run_trace_scope(
+                        &run_trace_emitter,
+                        run_engine.fork(&graph, &run.thread_id, waypoint_id, delta),
+                    )
+                    .await
                 }
                 None => {
                     // D-45: `from` is this service's own prior write

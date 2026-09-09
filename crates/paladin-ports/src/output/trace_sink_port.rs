@@ -59,15 +59,20 @@
 
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
+use chrono::Utc;
 use futures::FutureExt;
 use thiserror::Error;
+use tokio::sync::mpsc;
 
+use paladin_core::platform::container::run::RunId;
 pub use paladin_core::platform::container::trace::{
     FieldChange, MiddlewareAction, NodeProgressKind, RunFinishStatus, TRACE_SCHEMA_VERSION,
     TraceEvent, TraceRecord,
 };
+use paladin_core::platform::container::waypoint::ThreadId;
 
 /// Errors a [`TraceSink`] implementation may report from its own handling of
 /// an event.
@@ -189,6 +194,127 @@ impl TraceSink for CompositeSink {
             ));
         }
         Ok(())
+    }
+}
+
+tokio::task_local! {
+    /// The active run's [`TraceEmitter`] handle (28-06, D-03), set for the
+    /// duration of one engine dispatch by the worker's own composition root
+    /// (the facade crate's `RunWorkerPool::run_once`).
+    ///
+    /// ## Why a task-local, not only a struct field
+    ///
+    /// `FallbackLlmAdapter`, the facade's `ExecutionMiddleware` chain, and
+    /// `PaladinExecutionService` are each reachable through a deeply
+    /// shared, long-lived `Arc<dyn PaladinPort>` singleton the facade's own
+    /// composition root builds ONCE and hands to EVERY concurrent run. A
+    /// per-instance mutable field for "this run's emitter" would race
+    /// across concurrent runs sharing that one singleton -- exactly the
+    /// failure the facade's own
+    /// `concurrent_runs_keep_independent_context_state` test proves the
+    /// architecture must never allow. A `tokio::task_local!` sidesteps this
+    /// entirely: each tokio task has its OWN independent value, so setting
+    /// it once at the top of one run's dispatch (`RUN_TRACE_EMITTER.scope(
+    /// emitter, ..).await`) and awaiting the engine call inside that scope
+    /// makes the SAME handle observable to every nested `.await` inside
+    /// that one task -- including a call through the shared singleton --
+    /// with zero cross-run interference.
+    ///
+    /// Absent (no active scope) outside a run's own dispatch -- e.g. a
+    /// below-engine producer constructed and called standalone, in a unit
+    /// test or otherwise. [`current_trace_emitter`] is the read side.
+    pub static RUN_TRACE_EMITTER: Arc<dyn TraceEmitter>;
+}
+
+/// Read the active run's [`TraceEmitter`] if this task is currently running
+/// inside a [`RUN_TRACE_EMITTER`] scope, `None` otherwise.
+///
+/// A caller that also carries its own explicit `with_trace_emitter`-style
+/// field should check that field FIRST and fall back to this function only
+/// when the field is unset -- an explicit handle always takes precedence
+/// over ambient task-local context (X-03: nothing wired is nothing wired).
+pub fn current_trace_emitter() -> Option<Arc<dyn TraceEmitter>> {
+    RUN_TRACE_EMITTER.try_with(Arc::clone).ok()
+}
+
+/// A minimal, self-contained [`TraceEmitter`] for a producer that has no
+/// engine-owned [`TraceDispatcher`](paladin_battalion) to reach (28-06,
+/// D-03): a bare `FallbackLlmAdapter` under unit test, or any below-engine
+/// producer constructed standalone (outside a run the worker's own
+/// composition root wired).
+///
+/// Stamps its own gapless, 1-based `seq` counter under a fixed `thread_id`/
+/// `run_id` pair, exactly like `TraceDispatcher` stamps one per run --
+/// `StandaloneEmitter` is simply a dispatcher scoped to "this producer's own
+/// process lifetime" instead of "this run". With no sink attached, `emit` is
+/// a zero-cost no-op (no channel, no consumer task) — the same untraced-path
+/// guarantee `TraceDispatcher::new` gives with `sink: None`. With a sink
+/// attached, one background task (spawned at construction) drains an
+/// unbounded channel and forwards each record — this is a low-volume,
+/// standalone producer, not a run-scale queue, so no drop-oldest bound is
+/// needed here the way `TraceDispatcher`'s own queue needs one.
+pub struct StandaloneEmitter {
+    thread_id: ThreadId,
+    run_id: Option<RunId>,
+    seq: AtomicU64,
+    sender: Option<mpsc::UnboundedSender<TraceRecord>>,
+}
+
+impl StandaloneEmitter {
+    /// Construct a `StandaloneEmitter` stamping every record with
+    /// `thread_id`/`run_id`, forwarding to `sink` if attached. `None`
+    /// spawns no background task and allocates no channel.
+    pub fn new(
+        thread_id: ThreadId,
+        run_id: Option<RunId>,
+        sink: Option<Arc<dyn TraceSink>>,
+    ) -> Self {
+        let Some(sink) = sink else {
+            return Self {
+                thread_id,
+                run_id,
+                seq: AtomicU64::new(0),
+                sender: None,
+            };
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel::<TraceRecord>();
+        tokio::spawn(async move {
+            while let Some(record) = rx.recv().await {
+                let outcome = AssertUnwindSafe(sink.on_event(record)).catch_unwind().await;
+                if outcome.is_err() {
+                    log::error!(
+                        target: "paladin::trace",
+                        "a TraceSink panicked while handling a StandaloneEmitter record; the consumer task continues"
+                    );
+                }
+            }
+        });
+        Self {
+            thread_id,
+            run_id,
+            seq: AtomicU64::new(0),
+            sender: Some(tx),
+        }
+    }
+}
+
+impl TraceEmitter for StandaloneEmitter {
+    fn emit(&self, event: TraceEvent) {
+        let Some(sender) = &self.sender else {
+            return;
+        };
+        let seq = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let record = TraceRecord {
+            thread_id: self.thread_id.clone(),
+            run_id: self.run_id.clone(),
+            seq,
+            at: Utc::now(),
+            event,
+        };
+        // Fire-and-forget: an unbounded channel's `send` never blocks and
+        // fails only if the consumer task has already been dropped, which
+        // never happens while `self` (which owns `sender`) is alive.
+        let _ = sender.send(record);
     }
 }
 
@@ -371,5 +497,53 @@ mod tests {
             }
             _ => panic!("expected FallbackHop"),
         }
+    }
+
+    /// 28-06: `StandaloneEmitter` stamps its own gapless, 1-based `seq`
+    /// sequence and forwards every record to its attached sink -- a
+    /// below-engine producer constructed with no run-scoped
+    /// `TraceDispatcher` at all still produces well-formed records.
+    #[tokio::test]
+    async fn standalone_emitter_stamps_its_own_gapless_sequence() {
+        let sink = RecordingSink::new();
+        let emitter = StandaloneEmitter::new(
+            ThreadId::new("standalone").unwrap(),
+            None,
+            Some(sink.clone()),
+        );
+
+        emitter.emit(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        });
+        emitter.emit(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        });
+
+        // The background consumer task drains asynchronously -- give it a
+        // chance to run before asserting.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let events = sink.events.lock().await;
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].seq, 1);
+        assert_eq!(events[1].seq, 2);
+        assert_eq!(events[0].thread_id, ThreadId::new("standalone").unwrap());
+    }
+
+    /// With no sink attached, `emit` is a zero-cost no-op: no channel, no
+    /// consumer task, and `seq` never observably advances (mirrors
+    /// `TraceDispatcher`'s own no-sink contract).
+    #[test]
+    fn standalone_emitter_with_no_sink_is_a_no_op() {
+        let emitter = StandaloneEmitter::new(ThreadId::new("standalone").unwrap(), None, None);
+        emitter.emit(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        });
+        // No panic, no observable effect -- nothing further to assert
+        // without a sink to inspect.
     }
 }

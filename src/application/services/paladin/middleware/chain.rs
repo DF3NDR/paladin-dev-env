@@ -13,8 +13,35 @@
 //! propagates `e` unchanged; no `catch_unwind` anywhere. The empty slice is
 //! not a special case -- the same loop runs for zero, one and many
 //! middleware.
+//!
+//! # `MiddlewareEvent` emission (28-06, D-03, D-04)
+//!
+//! Every one of the six [`MiddlewareAction`] values is emitted as one
+//! `TraceEvent::MiddlewareEvent` naming the middleware that took it, at
+//! the point the driver OBSERVES that action:
+//!
+//! - [`MiddlewareAction::Finish`]/[`MiddlewareAction::Fail`] — observed
+//!   directly from the returned [`MiddlewareFlow`], both in `run_before`
+//!   and `run_after`.
+//! - [`MiddlewareAction::Deny`]/[`MiddlewareAction::Redact`] — observed
+//!   directly from the returned [`ToolFlow`] in `run_around_tool`
+//!   (`Deny`/`Rewrite` respectively — a rewritten call IS a redaction of
+//!   the request).
+//! - [`MiddlewareAction::Retry`]/[`MiddlewareAction::Fallback`] — these
+//!   never change the returned `MiddlewareFlow` (`ModelRetryMiddleware`/
+//!   `ModelFallbackMiddleware` both return plain `Continue` after setting
+//!   `cx.retry_policy`/`cx.llm_override`), so the driver cannot observe
+//!   them structurally. Both middleware instead set
+//!   [`ModelCallContext::middleware_action_hint`] on themselves before
+//!   returning; the driver reads (and clears) that hint immediately after
+//!   EVERY `before_model`/`after_model` call, emitting it if present. This
+//!   is a general mechanism, not special-cased to those two: any future
+//!   middleware whose action the driver cannot structurally observe uses
+//!   the same hint.
 
 use std::sync::Arc;
+
+use paladin_ports::output::trace_sink_port::MiddlewareAction;
 
 use crate::application::services::paladin::error::PaladinError;
 
@@ -22,6 +49,19 @@ use super::{
     ExecutionMiddleware, FinalResult, LlmResponseView, MiddlewareFlow, ModelCallContext,
     ToolCallContext, ToolFlow,
 };
+
+/// Emit `cx`'s pending [`ModelCallContext::middleware_action_hint`] (if
+/// any) as a `TraceEvent::MiddlewareEvent` for `middleware_name`, then
+/// clear it -- called after EVERY `before_model`/`after_model` invocation,
+/// regardless of the `MiddlewareFlow` it returned, so a hint set alongside
+/// a `Continue` (the common case: `ModelRetryMiddleware`/
+/// `ModelFallbackMiddleware`, `Guardrail`'s in-place redaction) is never
+/// lost, and never leaks onto the NEXT middleware's own call.
+fn emit_pending_hint(cx: &mut ModelCallContext<'_>, middleware_name: &str) {
+    if let Some(action) = cx.middleware_action_hint.take() {
+        cx.emit_middleware_event(middleware_name, action);
+    }
+}
 
 /// The result of running a chain's `before_model` pass.
 #[derive(Debug)]
@@ -52,15 +92,22 @@ pub async fn run_before(
     cx: &mut ModelCallContext<'_>,
 ) -> Result<BeforeOutcome, PaladinError> {
     for (index, middleware) in chain.iter().enumerate() {
-        match middleware.before_model(cx).await? {
+        cx.middleware_action_hint = None;
+        let flow = middleware.before_model(cx).await?;
+        emit_pending_hint(cx, middleware.name());
+        match flow {
             MiddlewareFlow::Continue => {}
             MiddlewareFlow::Finish(result) => {
+                cx.emit_middleware_event(middleware.name(), MiddlewareAction::Finish);
                 return Ok(BeforeOutcome::Finish {
                     result,
                     reached: index,
                 });
             }
-            MiddlewareFlow::Fail(error) => return Err(error),
+            MiddlewareFlow::Fail(error) => {
+                cx.emit_middleware_event(middleware.name(), MiddlewareAction::Fail);
+                return Err(error);
+            }
         }
     }
     Ok(BeforeOutcome::Continue {
@@ -82,10 +129,19 @@ pub async fn run_after(
     reached: usize,
 ) -> Result<Option<FinalResult>, PaladinError> {
     for middleware in chain[..reached].iter().rev() {
-        match middleware.after_model(cx, resp).await? {
+        cx.middleware_action_hint = None;
+        let flow = middleware.after_model(cx, resp).await?;
+        emit_pending_hint(cx, middleware.name());
+        match flow {
             MiddlewareFlow::Continue => {}
-            MiddlewareFlow::Finish(result) => return Ok(Some(result)),
-            MiddlewareFlow::Fail(error) => return Err(error),
+            MiddlewareFlow::Finish(result) => {
+                cx.emit_middleware_event(middleware.name(), MiddlewareAction::Finish);
+                return Ok(Some(result));
+            }
+            MiddlewareFlow::Fail(error) => {
+                cx.emit_middleware_event(middleware.name(), MiddlewareAction::Fail);
+                return Err(error);
+            }
         }
     }
     Ok(None)
@@ -102,9 +158,20 @@ pub async fn run_around_tool(
     cx: &mut ToolCallContext,
 ) -> Result<ToolFlow, PaladinError> {
     for middleware in chain {
-        match middleware.around_tool(cx).await? {
+        let flow = middleware.around_tool(cx).await?;
+        match &flow {
             ToolFlow::Allow => {}
-            other => return Ok(other),
+            ToolFlow::Deny { .. } => {
+                cx.emit_middleware_event(middleware.name(), MiddlewareAction::Deny);
+                return Ok(flow);
+            }
+            ToolFlow::Rewrite(_) => {
+                // A rewritten call IS a redaction of the request -- the
+                // model's original arguments never reach the Arsenal/
+                // handoff dispatch unchanged.
+                cx.emit_middleware_event(middleware.name(), MiddlewareAction::Redact);
+                return Ok(flow);
+            }
         }
     }
     Ok(ToolFlow::Allow)
@@ -370,5 +437,189 @@ mod tests {
             .await
             .unwrap();
         assert!(after_outcome.is_none());
+    }
+
+    // ── 28-06: MiddlewareEvent emission (D-03, D-04) ─────────────────────
+
+    /// A middleware that sets `cx.middleware_action_hint` to a fixed
+    /// [`MiddlewareAction`] and returns `Continue` -- the general mechanism
+    /// `ModelFallbackMiddleware`/`ModelRetryMiddleware`/`Guardrail`'s
+    /// in-place redaction all use for an action the driver cannot observe
+    /// structurally from the returned `MiddlewareFlow` (see this module's
+    /// own docs).
+    struct HintMiddleware {
+        name: &'static str,
+        action: MiddlewareAction,
+    }
+
+    #[async_trait::async_trait]
+    impl ExecutionMiddleware for HintMiddleware {
+        async fn before_model(
+            &self,
+            cx: &mut ModelCallContext<'_>,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            cx.middleware_action_hint = Some(self.action);
+            Ok(MiddlewareFlow::Continue)
+        }
+
+        fn name(&self) -> &str {
+            self.name
+        }
+    }
+
+    /// A middleware whose `before_model` always finishes the run.
+    struct AlwaysFinishMiddleware(&'static str);
+    #[async_trait::async_trait]
+    impl ExecutionMiddleware for AlwaysFinishMiddleware {
+        async fn before_model(
+            &self,
+            _cx: &mut ModelCallContext<'_>,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            Ok(MiddlewareFlow::Finish(FinalResult::new(
+                "done",
+                paladin_ports::output::paladin_port::StopReason::Completed,
+            )))
+        }
+        fn name(&self) -> &str {
+            self.0
+        }
+    }
+
+    /// A middleware whose `around_tool` always denies the call.
+    struct AlwaysDenyMiddleware(&'static str);
+    #[async_trait::async_trait]
+    impl ExecutionMiddleware for AlwaysDenyMiddleware {
+        async fn around_tool(&self, _cx: &mut ToolCallContext) -> Result<ToolFlow, PaladinError> {
+            Ok(ToolFlow::Deny {
+                reason: "denied".to_string(),
+            })
+        }
+        fn name(&self) -> &str {
+            self.0
+        }
+    }
+
+    fn make_tool_context(
+        run_id: Uuid,
+        trace_emitter: Arc<dyn paladin_ports::output::trace_sink_port::TraceEmitter>,
+    ) -> ToolCallContext {
+        use crate::core::platform::container::arsenal::ArmamentCall;
+        use std::collections::HashMap;
+
+        ToolCallContext {
+            call: ArmamentCall::new("noop", HashMap::new()),
+            kind: super::super::ToolCallKind::Armament,
+            loop_index: 0,
+            run_id,
+            scratch: HashMap::new(),
+            trace_emitter: Some(trace_emitter),
+        }
+    }
+
+    /// D-04: a table test driving the chain through each of the six
+    /// `MiddlewareAction` values produces exactly one `MiddlewareEvent` per
+    /// action, carrying the acting middleware's own `name()` and the
+    /// matching `MiddlewareAction`.
+    #[tokio::test]
+    async fn middleware_emits_one_event_per_action() {
+        use paladin_core::platform::container::waypoint::ThreadId;
+        use paladin_ports::output::trace_sink_port::{
+            StandaloneEmitter, TraceEvent, TraceRecord, TraceSink, TraceSinkError,
+        };
+
+        #[derive(Default)]
+        struct RecordingSink {
+            events: Mutex<Vec<TraceRecord>>,
+        }
+        #[async_trait::async_trait]
+        impl TraceSink for RecordingSink {
+            async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+                self.events.lock().unwrap().push(record);
+                Ok(())
+            }
+        }
+
+        async fn events_eventually(sink: &RecordingSink, expected_len: usize) -> Vec<TraceRecord> {
+            for _ in 0..200 {
+                let events = sink.events.lock().unwrap().clone();
+                if events.len() >= expected_len {
+                    return events;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            sink.events.lock().unwrap().clone()
+        }
+
+        let sink = Arc::new(RecordingSink::default());
+        let emitter: Arc<dyn paladin_ports::output::trace_sink_port::TraceEmitter> =
+            Arc::new(StandaloneEmitter::new(
+                ThreadId::new("chain-test").unwrap(),
+                None,
+                Some(sink.clone() as Arc<dyn TraceSink>),
+            ));
+
+        // Finish, Fail: observed directly from `run_before`'s own
+        // `MiddlewareFlow`.
+        let paladin = make_paladin();
+        let mut cx = make_context(&paladin);
+        cx.trace_emitter = Some(emitter.clone());
+        let finish_chain: Vec<Arc<dyn ExecutionMiddleware>> =
+            vec![Arc::new(AlwaysFinishMiddleware("finisher"))];
+        let _ = run_before(&finish_chain, &mut cx).await.unwrap();
+
+        let mut cx = make_context(&paladin);
+        cx.trace_emitter = Some(emitter.clone());
+        let fail_chain: Vec<Arc<dyn ExecutionMiddleware>> = vec![Arc::new(FailingMiddleware)];
+        let _ = run_before(&fail_chain, &mut cx).await;
+
+        // Deny: observed directly from `run_around_tool`'s own `ToolFlow`.
+        let mut tool_cx = make_tool_context(cx.run_id, emitter.clone());
+        let deny_chain: Vec<Arc<dyn ExecutionMiddleware>> =
+            vec![Arc::new(AlwaysDenyMiddleware("denier"))];
+        let _ = run_around_tool(&deny_chain, &mut tool_cx).await.unwrap();
+
+        // Redact, Retry, Fallback: observed via `cx.middleware_action_hint`
+        // (the mechanism `Guardrail`/`ModelFallbackMiddleware`/
+        // `ModelRetryMiddleware` each use in production).
+        for (name, action) in [
+            ("redactor", MiddlewareAction::Redact),
+            ("retrier", MiddlewareAction::Retry),
+            ("hopper", MiddlewareAction::Fallback),
+        ] {
+            let mut cx = make_context(&paladin);
+            cx.trace_emitter = Some(emitter.clone());
+            let hint_chain: Vec<Arc<dyn ExecutionMiddleware>> =
+                vec![Arc::new(HintMiddleware { name, action })];
+            let outcome = run_before(&hint_chain, &mut cx).await.unwrap();
+            assert!(matches!(outcome, BeforeOutcome::Continue { .. }));
+        }
+
+        let events = events_eventually(&sink, 6).await;
+        assert_eq!(events.len(), 6, "{events:?}");
+
+        let observed: Vec<(String, MiddlewareAction)> = events
+            .iter()
+            .map(|record| match &record.event {
+                TraceEvent::MiddlewareEvent { name, action } => (name.clone(), *action),
+                other => panic!("unexpected non-MiddlewareEvent record: {other:?}"),
+            })
+            .collect();
+
+        let expect_exactly_one = |name: &str, action: MiddlewareAction| {
+            let count = observed
+                .iter()
+                .filter(|(n, a)| n == name && *a == action)
+                .count();
+            assert_eq!(
+                count, 1,
+                "expected exactly one {action:?} event named {name:?}, observed: {observed:?}"
+            );
+        };
+        expect_exactly_one("finisher", MiddlewareAction::Finish);
+        expect_exactly_one("failing", MiddlewareAction::Fail);
+        expect_exactly_one("denier", MiddlewareAction::Deny);
+        expect_exactly_one("redactor", MiddlewareAction::Redact);
+        expect_exactly_one("retrier", MiddlewareAction::Retry);
+        expect_exactly_one("hopper", MiddlewareAction::Fallback);
     }
 }

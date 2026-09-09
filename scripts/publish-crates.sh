@@ -152,6 +152,7 @@ CRATES=(
     paladin-notifications
     paladin-content
     paladin-storage
+    paladin-eval
     paladin-ai
 )
 

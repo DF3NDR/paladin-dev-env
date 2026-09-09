@@ -326,6 +326,16 @@ jobs:
 
       # Every publishable crate, addressed by its crates.io PACKAGE name (see
       # the job comment above) -- never a `crates/` directory path.
+      #
+      # `paladin-eval` (the twelfth publishable crate, ADR-0048, landed
+      # Phase 28) is DELIBERATELY EXCLUDED from this list. It first shipped
+      # in this same v0.10.0 cycle and has no published 0.9.0 baseline on
+      # crates.io to diff against -- `cargo semver-checks check-release
+      # --baseline-version 0.9.0` would ERROR for a nonexistent baseline,
+      # not skip cleanly. It is still registered in
+      # `scripts/publish-crates.sh`'s dependency-ordered array and the
+      # `Makefile`'s `publish-dry-run` target; this omission is scoped to
+      # the semver-diff check only.
       - name: Check semver against the published v0.9.0 baseline
         run: |
           set -euo pipefail

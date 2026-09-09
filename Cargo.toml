@@ -299,6 +299,12 @@ opentelemetry_sdk = { version = "0.32.1", features = ["testing"] }
 # `http-proto` feature already requests (no `tonic`/gRPC).
 opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
 prost = "0.14"
+# D-32: the `evals` harness target (`tests/evals.rs`) needs `ScenarioRunner`
+# unconditionally, independent of the `cli` feature -- `cargo test --test
+# evals` must work with no `--features` at all. paladin-eval's own default
+# build depends downward only (paladin-core/ports/battalion/llm-mock/storage-
+# sqlite), never on this facade (D-27) -- this is a one-way dev-only edge.
+paladin-eval = { version = "0.9.0", path = "crates/paladin-eval" }
 
 # Integration test configuration
 [[test]]
@@ -403,6 +409,17 @@ path = "tests/integration/e2e_compensation_chain_test.rs"
 [[test]]
 name = "aegis_retry_stress"
 path = "tests/integration/aegis_retry_stress_test.rs"
+
+# D-32 (28-RESEARCH.md Q4): the FIRST `harness = false` `[[test]]` target in
+# this workspace -- every other `harness = false` hit in this manifest is a
+# `[[bench]]`. `tests/evals.rs` expands `paladin_eval::eval_scenarios!` into
+# its own `fn main()`; `libtest-mimic` tolerates the coverage script's
+# trailing `--test-threads=1` (a no-op it accepts rather than an
+# unrecognised-flag failure), so no CI change is needed for this target.
+[[test]]
+name = "evals"
+harness = false
+path = "tests/evals.rs"
 
 [[example]]
 name = "vision_analysis"

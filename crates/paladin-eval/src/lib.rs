@@ -3,9 +3,10 @@
 //! `paladin-eval` provides a serde scenario file format (`.eval.yaml`, see
 //! [`scenario::Scenario`]), a scripted [`paladin_ports::output::llm_port::LlmPort`]
 //! implementation ([`scripted_llm::ScenarioLlm`]) that makes a run deterministic without
-//! touching a real provider, and (in later plans of Phase 28) an assertion library
-//! evaluated over the captured trace record and the final `Battlefield`, plus a
-//! `cargo test`-integrable runner.
+//! touching a real provider, an assertion library ([`assertion`]) evaluated over the
+//! captured trace record and the final `Battlefield`, and [`runner::ScenarioRunner`] --
+//! the `cargo test`-integrable driver plans 28-12/28-17's `[[test]] name = "evals"
+//! harness = false` target and `paladin-cli eval run` both build on.
 //!
 //! ## Hexagonal position (D-27)
 //!
@@ -16,9 +17,13 @@
 //! `.planning/decisions/0048-paladin-eval-composition-crate.md` so ADR-0031's
 //! leaf-crate-independence invariant (scoped to the *extracted* leaf crates) is not
 //! misread as violated by these edges. Nothing in the workspace depends on
-//! `paladin-eval` except as a `[dev-dependencies]` entry — that is the crate's entire
-//! purpose: a downstream team building their own agent graph on Paladin takes this
-//! crate as a dev-dependency to write deterministic evaluation scenarios for it.
+//! `paladin-eval` except as a `[dev-dependencies]` entry, WITH ONE NAMED EXCEPTION
+//! (D-33, plan 28-12): the facade's own OPTIONAL `cli` feature adds `paladin-eval` as
+//! an optional `[dependencies]` entry too, so `paladin-cli eval run` can build a
+//! `ScenarioRunner` -- the facade's DEFAULT build (no `cli` feature) still gains no
+//! edge to this crate. Outside that one opt-in exception, a downstream team building
+//! their own agent graph on Paladin takes this crate as a dev-dependency to write
+//! deterministic evaluation scenarios for it.
 //!
 //! ## Safety (T-28-05-01)
 //!
@@ -54,11 +59,16 @@
 #![warn(missing_docs)]
 
 pub mod assertion;
+pub mod runner;
 pub mod scenario;
 pub mod scripted_llm;
 
 pub use assertion::{
     AssertionContext, AssertionFailure, AssertionOutcome, CustomAssertion, evaluate,
+};
+pub use runner::{
+    AssertionResult, CaseOutcome, CaseReport, GraphConstructor, RegistriesFactory, RunOptions,
+    RunnerError, ScenarioRunner, ScriptedPorts, Verdict,
 };
 pub use scenario::{
     Assertion, Case, EVAL_SCHEMA_VERSION, LiveOptions, LlmErrorKind, LlmScript, MatchRule,

@@ -52,9 +52,28 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+# The `evals` `[[test]] harness = false` custom-harness runner (D-32,
+# 28-RESEARCH.md Q4's "first `harness = false` `[[test]]` in the workspace"
+# finding): `ScenarioRunner::trials` builds one `libtest_mimic::Trial` per
+# `(file, case)` pair. This is a LIBRARY (not dev-only) dependency -- the
+# macro `eval_scenarios!` expands to a `fn main()` calling
+# `run_eval_harness_main`, compiled into this crate, never into the caller's
+# own expansion, so the caller (`tests/evals.rs`, the root facade's
+# `[dev-dependencies]` entry) never needs `libtest-mimic` or `glob` itself.
+libtest-mimic = "0.8.2"
+# `ScenarioRunner::trials` globs its pattern argument AT RUNTIME (not a
+# manifest-time `include!`), so `evals/` growing between builds needs no
+# Cargo.toml change.
+glob = "0.3.4"
+# `ScenarioRunner`'s own engine-driving code (`tokio::time::sleep` to let a
+# per-run `TraceDispatcher`'s async consumer drain before reading captured
+# records back out, `tokio::sync::mpsc` for `ScenarioPaladinPort::execute_stream`)
+# and `trials()`'s per-trial `tokio::runtime::Builder` (D-32: one FRESH
+# single-threaded runtime per trial, never a shared one) are library code, not
+# test-only -- promoted out of `[dev-dependencies]` below to here.
+tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
 # Not a [workspace.dependencies] entry -- mirrors the root facade manifest's
 # own `insta = "1.34"` pin (Cargo.toml:218, its own [dev-dependencies]), the
 # same non-workspace-table precedent `serde_yaml` above already follows.

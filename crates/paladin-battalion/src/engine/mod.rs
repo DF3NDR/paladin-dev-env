@@ -1732,6 +1732,24 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.trace_sink.clone(),
             self.trace_capacity,
         ));
+        self.with_bound_trace_dispatcher(thread, dispatcher)
+    }
+
+    /// As [`WarEngine::with_bound_trace`], but for a caller that must build
+    /// the `TraceDispatcher` itself BEFORE this engine exists (28-06): the
+    /// worker composition root needs the SAME `Arc<TraceDispatcher>`
+    /// instance (coerced to `Arc<dyn TraceEmitter>`) to construct the
+    /// per-run `FallbackLlmAdapter`/middleware chain/execution service --
+    /// each of which is itself a dependency of this engine's own
+    /// `paladin_port` constructor argument, so the dispatcher must exist
+    /// before `WarEngine::new` is even called. Binds `dispatcher` under
+    /// `thread` exactly as `with_bound_trace` does; consumed the same way
+    /// by the next matching `start`/`resume*` call.
+    pub fn with_bound_trace_dispatcher(
+        self,
+        thread: ThreadId,
+        dispatcher: Arc<TraceDispatcher>,
+    ) -> Self {
         self.remember_trace_dispatcher(&dispatcher);
         *self.bound_trace.lock().expect("bound trace mutex poisoned") = Some((thread, dispatcher));
         self

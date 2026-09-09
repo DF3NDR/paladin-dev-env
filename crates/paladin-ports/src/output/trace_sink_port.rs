@@ -197,6 +197,46 @@ impl TraceSink for CompositeSink {
     }
 }
 
+tokio::task_local! {
+    /// The active run's [`TraceEmitter`] handle (28-06, D-03), set for the
+    /// duration of one engine dispatch by the worker's own composition root
+    /// (the facade crate's `RunWorkerPool::run_once`).
+    ///
+    /// ## Why a task-local, not only a struct field
+    ///
+    /// `FallbackLlmAdapter`, the facade's `ExecutionMiddleware` chain, and
+    /// `PaladinExecutionService` are each reachable through a deeply
+    /// shared, long-lived `Arc<dyn PaladinPort>` singleton the facade's own
+    /// composition root builds ONCE and hands to EVERY concurrent run. A
+    /// per-instance mutable field for "this run's emitter" would race
+    /// across concurrent runs sharing that one singleton -- exactly the
+    /// failure the facade's own
+    /// `concurrent_runs_keep_independent_context_state` test proves the
+    /// architecture must never allow. A `tokio::task_local!` sidesteps this
+    /// entirely: each tokio task has its OWN independent value, so setting
+    /// it once at the top of one run's dispatch (`RUN_TRACE_EMITTER.scope(
+    /// emitter, ..).await`) and awaiting the engine call inside that scope
+    /// makes the SAME handle observable to every nested `.await` inside
+    /// that one task -- including a call through the shared singleton --
+    /// with zero cross-run interference.
+    ///
+    /// Absent (no active scope) outside a run's own dispatch -- e.g. a
+    /// below-engine producer constructed and called standalone, in a unit
+    /// test or otherwise. [`current_trace_emitter`] is the read side.
+    pub static RUN_TRACE_EMITTER: Arc<dyn TraceEmitter>;
+}
+
+/// Read the active run's [`TraceEmitter`] if this task is currently running
+/// inside a [`RUN_TRACE_EMITTER`] scope, `None` otherwise.
+///
+/// A caller that also carries its own explicit `with_trace_emitter`-style
+/// field should check that field FIRST and fall back to this function only
+/// when the field is unset -- an explicit handle always takes precedence
+/// over ambient task-local context (X-03: nothing wired is nothing wired).
+pub fn current_trace_emitter() -> Option<Arc<dyn TraceEmitter>> {
+    RUN_TRACE_EMITTER.try_with(Arc::clone).ok()
+}
+
 /// A minimal, self-contained [`TraceEmitter`] for a producer that has no
 /// engine-owned [`TraceDispatcher`](paladin_battalion) to reach (28-06,
 /// D-03): a bare `FallbackLlmAdapter` under unit test, or any below-engine

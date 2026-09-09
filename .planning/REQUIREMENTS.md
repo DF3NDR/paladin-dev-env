@@ -268,7 +268,7 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   opt-in `run_traces` persistence upgrading post-hoc stream replay to full fidelity, sharing
   ENG-05 retention (OBS-FR-04…07)
 
-- [x] **OBS-03**: Graphs and runs are visualizable: golden-tested `WarGraphDoc → Mermaid/DOT`
+- [ ] **OBS-03**: Graphs and runs are visualizable: golden-tested `WarGraphDoc → Mermaid/DOT`
   exporters, an execution-overlay export annotating outcomes/visit counts/fired edges/durations,
   `paladin-cli graph export` and `run export` commands, and a minimal auth-gated `dev-ui`
   inspector page from which a human can answer "which branch fired and why did node X run 3
@@ -387,7 +387,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | PLAT-06 | Phase 27 | Complete |
 | OBS-01 | Phase 28 | Complete |
 | OBS-02 | Phase 28 | Pending |
-| OBS-03 | Phase 28 | Complete |
+| OBS-03 | Phase 28 | Pending |
 | OBS-04 | Phase 28 | Pending |
 | SHIP-01 | Phase 29 | Pending |
 | SHIP-02 | Phase 29 | Pending |

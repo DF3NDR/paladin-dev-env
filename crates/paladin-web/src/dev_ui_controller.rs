@@ -151,9 +151,14 @@ pub async fn dev_ui_inspector_page(
     // JSON-string-escape the Mermaid URL (quotes included) so it substitutes into
     // `{"url": __MERMAID_URL__}` as a syntactically valid JSON string value, mirroring
     // the same "typed JSON script element" pattern the inspector payload itself uses --
-    // never string-interpolated directly into a JS literal.
-    let mermaid_url_json =
-        serde_json::to_string(&state.mermaid_url).unwrap_or_else(|_| "\"\"".to_string());
+    // never string-interpolated directly into a JS literal. WR-02 (28-REVIEW): also run
+    // through `escape_for_script`, exactly like `escaped_json` above -- `serde_json::
+    // to_string` alone does not escape `/` or `<`, so an operator-configured
+    // `web_server.dev_ui.mermaid_url` containing `</script>`/`<!--` would otherwise break
+    // out of this `<script type="application/json">` element unescaped (D-26/T-28-15-02).
+    let mermaid_url_json = escape_for_script(
+        &serde_json::to_string(&state.mermaid_url).unwrap_or_else(|_| "\"\"".to_string()),
+    );
 
     let page = INSPECTOR_TEMPLATE
         .replacen(INSPECTOR_DATA_MARKER, &escaped_json, 1)
@@ -295,6 +300,12 @@ mod tests {
             .with_inspector(Arc::new(MockInspector { outcome }))
     }
 
+    /// WR-02 (28-REVIEW): like [`state_with`], but with a caller-supplied `mermaid_url` --
+    /// used to prove `mermaid_url_json` is escaped exactly like `escaped_json` is.
+    fn state_with_mermaid_url(outcome: MockOutcome, mermaid_url: &str) -> DevUiState {
+        DevUiState::new(mermaid_url).with_inspector(Arc::new(MockInspector { outcome }))
+    }
+
     // --- Mock `AuthPort` -----------------------------------------------------------
 
     struct MockAuthPort {
@@ -426,6 +437,38 @@ mod tests {
         // The raw breakout sequences must never appear verbatim inside the script element.
         assert!(!body.contains("</script><!--pwned-->"));
         assert!(!body.contains("<!--pwned-->"));
+        // The escaped forms must be present instead.
+        assert!(body.contains("<\\/script>"));
+        assert!(body.contains("<\\!--pwned-->"));
+    }
+
+    /// WR-02 (28-REVIEW): the sibling `#dev-ui-mermaid-config` payload must be escaped
+    /// exactly like `#inspector-data` is -- before the fix, `mermaid_url_json` only went
+    /// through `serde_json::to_string`, so a `web_server.dev_ui.mermaid_url` containing
+    /// `</script>`/`<!--` would break out of that `<script type="application/json">`
+    /// element unescaped.
+    #[tokio::test]
+    async fn dev_ui_page_escapes_the_mermaid_url_payload() {
+        let malicious_url = "https://example.com/mermaid.mjs</script><!--pwned-->";
+        let app = admin_router(state_with_mermaid_url(
+            MockOutcome::View(branching_fixture_view()),
+            malicious_url,
+        ));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/dev-ui/threads/t-branch")
+                    .header("Authorization", "Bearer admin-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(response).await;
+
+        // The raw breakout sequences must never appear verbatim inside the script element.
+        assert!(!body.contains("mermaid.mjs</script><!--pwned-->"));
         // The escaped forms must be present instead.
         assert!(body.contains("<\\/script>"));
         assert!(body.contains("<\\!--pwned-->"));

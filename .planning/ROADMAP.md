@@ -684,9 +684,9 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 28-06-PLAN.md — Log sink, facade telemetry module, per-run composition, below-engine producers, bench + overhead evidence (OBS-02)
-- [ ] 28-07-PLAN.md — `GraphShape`, Mermaid/DOT exporters, five golden fixtures, `make bless-golden` (OBS-03)
-- [ ] 28-08-PLAN.md — Eval assertion library (twelve kinds) with snapshot-frozen failure rendering (OBS-04)
+- [x] 28-06-PLAN.md — Log sink, facade telemetry module, per-run composition, below-engine producers, bench + overhead evidence (OBS-02)
+- [x] 28-07-PLAN.md — `GraphShape`, Mermaid/DOT exporters, five golden fixtures, `make bless-golden` (OBS-03)
+- [x] 28-08-PLAN.md — Eval assertion library (twelve kinds) with snapshot-frozen failure rendering (OBS-04)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

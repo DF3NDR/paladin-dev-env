@@ -55,7 +55,7 @@ use paladin_core::platform::container::battlefield::{Battlefield, FieldName};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId, Waypoint};
 use paladin_ports::input::run_inspector_port::{
     CompletedRow, InspectorError, InspectorSource, InspectorView, RunInspectorPort, SuperstepRow,
-    VisitSummary,
+    SuperstepStatus, VisitSummary,
 };
 use paladin_ports::output::run_repository_port::{RunQuery, RunRepositoryPort};
 use paladin_ports::output::run_trace_port::RunTracePort;
@@ -287,8 +287,10 @@ fn build_supersteps(
                 node_id: record.node_id.clone(),
                 attempt: record.attempt,
                 outcome: record.outcome.clone(),
-                duration_ms: record.duration_ms,
-                token_count: record.token_count,
+                // TODO(Task 2 RED): always `Some`, ignoring `cache_hit` --
+                // fixed in the GREEN commit.
+                duration_ms: Some(record.duration_ms),
+                token_count: Some(record.token_count),
                 cache_hit: record.cache_hit,
             })
             .collect();
@@ -322,6 +324,9 @@ fn build_supersteps(
             completed,
             field_changes,
             fired_edges,
+            // TODO(Task 2 RED): stubbed -- fixed in the GREEN commit.
+            evaluated_edges: Vec::new(),
+            status: SuperstepStatus::Running,
         });
     }
     rows
@@ -885,5 +890,286 @@ mod tests {
             at: chrono::Utc::now(),
             event,
         }
+    }
+
+    /// Test: the view exposes both the fired-edge set and, when the
+    /// source is a trace, the evaluated-but-not-fired set on the SAME row
+    /// -- so the page can label the missing half when it is a
+    /// Waypoints-only source rather than silently omitting it.
+    #[tokio::test]
+    async fn view_distinguishes_exact_from_derived_edges() {
+        let waypoint_port: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+        let run_repo: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("wf", check_retry_graph()));
+        let trace_port: Arc<dyn RunTracePort> = Arc::new(InMemoryRunTraceStore::new());
+
+        let thread_id = thread("distinguishes-edges");
+        insert_run(&run_repo, &thread_id, "wf").await;
+
+        let wp = waypoint(
+            &thread_id,
+            1,
+            vec![],
+            vec![record("check", 1, NodeOutcomeKind::Succeeded)],
+            WaypointStatus::Completed,
+            empty_battlefield(),
+        );
+        waypoint_port.save(&wp).await.unwrap();
+
+        let records = vec![
+            trace_record(
+                &thread_id,
+                1,
+                TraceEvent::EdgeEvaluated {
+                    from: NodeId::new("check"),
+                    to: NodeId::new("retry"),
+                    condition_kind: "always".to_string(),
+                    fired: true,
+                },
+            ),
+            trace_record(
+                &thread_id,
+                2,
+                TraceEvent::EdgeEvaluated {
+                    from: NodeId::new("check"),
+                    to: NodeId::new("done"),
+                    condition_kind: "always".to_string(),
+                    fired: false,
+                },
+            ),
+        ];
+        trace_port.append(&records).await.unwrap();
+
+        let svc = service(waypoint_port.clone(), run_repo.clone(), resolver.clone())
+            .with_run_trace_port(trace_port);
+        let trace_view = svc.inspect(&thread_id).await.unwrap();
+        assert_eq!(trace_view.source, InspectorSource::Trace);
+        assert!(
+            trace_view.supersteps[0]
+                .evaluated_edges
+                .contains(&(NodeId::new("check"), NodeId::new("done")))
+        );
+
+        // Waypoints-only source (no trace port wired): `evaluated_edges`
+        // must stay empty on every row -- the page's own cue that the
+        // missing half is unavailable, not that nothing was evaluated.
+        let waypoints_svc = service(waypoint_port, run_repo, resolver);
+        let waypoints_view = waypoints_svc.inspect(&thread_id).await.unwrap();
+        assert_eq!(waypoints_view.source, InspectorSource::Waypoints);
+        for row in &waypoints_view.supersteps {
+            assert!(row.evaluated_edges.is_empty());
+        }
+    }
+
+    /// Test: `observed_only` and `source` are both present and correct --
+    /// for a thread with a resolvable graph (`observed_only: false`) and
+    /// for one with none (`observed_only: true`, no run at all).
+    #[tokio::test]
+    async fn view_carries_observed_only_and_source() {
+        let waypoint_port: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+        let run_repo: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("wf", check_retry_graph()));
+
+        let resolved_thread = thread("observed-only-resolved");
+        insert_run(&run_repo, &resolved_thread, "wf").await;
+        let wp = waypoint(
+            &resolved_thread,
+            1,
+            vec![],
+            vec![record("check", 1, NodeOutcomeKind::Succeeded)],
+            WaypointStatus::Completed,
+            empty_battlefield(),
+        );
+        waypoint_port.save(&wp).await.unwrap();
+
+        let svc = service(waypoint_port.clone(), run_repo.clone(), resolver.clone());
+        let resolved_view = svc.inspect(&resolved_thread).await.unwrap();
+        assert!(!resolved_view.observed_only);
+        assert_eq!(resolved_view.source, InspectorSource::Waypoints);
+
+        // A thread known only via Waypoint history (no `Run` row at all)
+        // has no assistant to resolve a graph from -- always observed-only.
+        let unresolved_thread = thread("observed-only-unresolved");
+        let wp2 = waypoint(
+            &unresolved_thread,
+            1,
+            vec![],
+            vec![record("check", 1, NodeOutcomeKind::Succeeded)],
+            WaypointStatus::Completed,
+            empty_battlefield(),
+        );
+        waypoint_port.save(&wp2).await.unwrap();
+        let view = svc.inspect(&unresolved_thread).await.unwrap();
+        assert!(view.observed_only);
+    }
+
+    /// Test: a cache-hit attempt yields `None` in `duration_ms`/
+    /// `token_count` rather than a (possibly stale, possibly zero) number
+    /// -- the page renders a dash and the row is never omitted. A
+    /// non-cache-hit attempt still carries `Some` real figures.
+    #[tokio::test]
+    async fn completed_row_partial_values_are_representable() {
+        let waypoint_port: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+        let run_repo: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("wf", empty_graph()));
+
+        let thread_id = thread("partial-values");
+        insert_run(&run_repo, &thread_id, "wf").await;
+
+        let wp = waypoint(
+            &thread_id,
+            1,
+            vec![],
+            vec![
+                record_with_cost("cached", 1, NodeOutcomeKind::Succeeded, 999, 999, true),
+                record_with_cost("executed", 1, NodeOutcomeKind::Succeeded, 42, 7, false),
+            ],
+            WaypointStatus::Completed,
+            empty_battlefield(),
+        );
+        waypoint_port.save(&wp).await.unwrap();
+
+        let svc = service(waypoint_port, run_repo, resolver);
+        let view = svc.inspect(&thread_id).await.unwrap();
+
+        let row = &view.supersteps[0];
+        let cached = row
+            .completed
+            .iter()
+            .find(|c| c.node_id == NodeId::new("cached"))
+            .unwrap();
+        assert!(cached.cache_hit);
+        assert_eq!(cached.duration_ms, None);
+        assert_eq!(cached.token_count, None);
+
+        let executed = row
+            .completed
+            .iter()
+            .find(|c| c.node_id == NodeId::new("executed"))
+            .unwrap();
+        assert!(!executed.cache_hit);
+        assert_eq!(executed.duration_ms, Some(42));
+        assert_eq!(executed.token_count, Some(7));
+    }
+
+    /// Test: a Gate suspension yields a superstep row with an empty
+    /// `completed` list and a `status` the page can label
+    /// (`SuperstepStatus::AwaitingInput`), not a missing row.
+    #[tokio::test]
+    async fn superstep_awaiting_input_has_an_empty_completed_list() {
+        let waypoint_port: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+        let run_repo: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("wf", empty_graph()));
+
+        let thread_id = thread("awaiting-input");
+        insert_run(&run_repo, &thread_id, "wf").await;
+
+        let parley = paladin_core::platform::container::parley::ParleyRequest {
+            parley_id: paladin_core::platform::container::parley::ParleyId::new(),
+            node_id: NodeId::new("gate"),
+            kind: paladin_core::platform::container::parley::ParleyKind::Approval,
+            prompt: "Proceed?".to_string(),
+            payload: serde_json::Value::Null,
+            choices: None,
+            expires_at: None,
+            created_at: chrono::Utc::now(),
+            on_expire: paladin_core::platform::container::parley::OnExpire::FailRun,
+        };
+        let wp = waypoint(
+            &thread_id,
+            1,
+            vec![],
+            vec![],
+            WaypointStatus::AwaitingInput {
+                parleys: vec![parley],
+                responses: vec![],
+            },
+            empty_battlefield(),
+        );
+        waypoint_port.save(&wp).await.unwrap();
+
+        let svc = service(waypoint_port, run_repo, resolver);
+        let view = svc.inspect(&thread_id).await.unwrap();
+
+        let row = &view.supersteps[0];
+        assert!(row.completed.is_empty());
+        assert_eq!(row.status, SuperstepStatus::AwaitingInput);
+    }
+
+    /// Test: the whole view serializes to JSON and deserializes back to an
+    /// equal value -- the page embeds exactly this payload.
+    #[tokio::test]
+    async fn view_is_serializable_and_round_trips() {
+        let waypoint_port: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+        let run_repo: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("wf", check_retry_graph()));
+
+        let thread_id = thread("round-trips");
+        insert_run(&run_repo, &thread_id, "wf").await;
+        let wp = waypoint(
+            &thread_id,
+            1,
+            vec!["retry"],
+            vec![record("check", 1, NodeOutcomeKind::Succeeded)],
+            WaypointStatus::Running,
+            empty_battlefield(),
+        );
+        waypoint_port.save(&wp).await.unwrap();
+
+        let svc = service(waypoint_port, run_repo, resolver);
+        let view = svc.inspect(&thread_id).await.unwrap();
+
+        let json = serde_json::to_string(&view).unwrap();
+        let round_tripped: InspectorView = serde_json::from_str(&json).unwrap();
+        assert_eq!(view, round_tripped);
+    }
+
+    /// Test: serializing a view for a run whose Battlefield held a
+    /// distinctive secret-shaped string yields JSON that does not contain
+    /// it -- the type-level guarantee (T-28-14-01) proven over the ACTUAL
+    /// wire payload, not just `Debug` output (see `field_changes_are_names_only`
+    /// for the Task 1 analog).
+    #[tokio::test]
+    async fn serialized_view_contains_no_field_values() {
+        let waypoint_port: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+        let run_repo: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("wf", empty_graph()));
+
+        let thread_id = thread("serialized-no-values");
+        insert_run(&run_repo, &thread_id, "wf").await;
+
+        let field = FieldName::new("secret_field").unwrap();
+        let secret_value = "AAAA_SENSITIVE_SERIALIZED_VALUE_AAAA";
+        let schema = single_field_schema(&field);
+        let bf1 = Battlefield::new(schema.clone());
+        let bf2 = merged_battlefield(schema, &field, secret_value);
+
+        let wp1 = waypoint(&thread_id, 1, vec![], vec![], WaypointStatus::Running, bf1);
+        let wp2 = waypoint(
+            &thread_id,
+            2,
+            vec![],
+            vec![],
+            WaypointStatus::Completed,
+            bf2,
+        );
+        waypoint_port.save(&wp1).await.unwrap();
+        waypoint_port.save(&wp2).await.unwrap();
+
+        let svc = service(waypoint_port, run_repo, resolver);
+        let view = svc.inspect(&thread_id).await.unwrap();
+
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(
+            !json.contains(secret_value),
+            "the secret value must never appear in the serialized view: {json}"
+        );
+        assert!(json.contains("secret_field"));
     }
 }

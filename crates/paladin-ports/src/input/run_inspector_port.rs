@@ -58,6 +58,8 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+use serde::{Deserialize, Serialize};
+
 use paladin_core::platform::container::battlefield::FieldName;
 use paladin_core::platform::container::run::{RunId, RunStatus};
 use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, ThreadId, WaypointId};
@@ -66,7 +68,7 @@ use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, Threa
 /// inspector page. Mirrors
 /// [`NodeExecutionRecord`](paladin_core::platform::container::waypoint::NodeExecutionRecord)'s
 /// fields but never carries a `Battlefield` value.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompletedRow {
     /// The node that ran.
     pub node_id: NodeId,
@@ -74,19 +76,47 @@ pub struct CompletedRow {
     pub attempt: u32,
     /// This attempt's outcome.
     pub outcome: NodeOutcomeKind,
-    /// How long this attempt took, in milliseconds.
-    pub duration_ms: u64,
-    /// Tokens consumed by this attempt.
-    pub token_count: u64,
+    /// How long this attempt took, in milliseconds. `None` when
+    /// [`Self::cache_hit`] is `true` -- a cache-served attempt's stored
+    /// duration is not a meaningful execution figure, so the page renders
+    /// a dash instead of a misleading number (28-UI-SPEC.md E2 "partial").
+    pub duration_ms: Option<u64>,
+    /// Tokens consumed by this attempt. `None` under the same
+    /// [`Self::cache_hit`] rule as [`Self::duration_ms`].
+    pub token_count: Option<u64>,
     /// Whether this attempt's outcome was served from the node cache
     /// (FT-06) rather than by executing the node.
     pub cache_hit: bool,
 }
 
+/// A superstep's status, as the inspector page labels it (28-UI-SPEC.md
+/// E4 "partial": an awaiting-input superstep renders `-- (awaiting
+/// input)` in its completed column rather than an unlabeled blank).
+/// Mirrors [`WaypointStatus`](paladin_core::platform::container::waypoint::WaypointStatus)'s
+/// own variants, restated without their payloads (this view never carries
+/// a `ParleyRequest`/`ParleyResponse`/error string -- those stay behind
+/// `GET /threads/{id}/state`, unchanged by this port).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SuperstepStatus {
+    /// More supersteps pending.
+    Running,
+    /// The run finished normally as of this superstep.
+    Completed,
+    /// The run failed as of this superstep.
+    Failed,
+    /// The run is paused awaiting external input as of this superstep --
+    /// this row's `completed` list is empty by construction (a Gate
+    /// suspension runs no node), never a missing row.
+    AwaitingInput,
+    /// The run was gracefully halted as of this superstep.
+    Halted,
+}
+
 /// One superstep's row on the inspector's superstep table (D-24): the
 /// waypoint it produced, what was dispatched into it, what ran, which
-/// fields changed (by NAME only), and which edges fired into it.
-#[derive(Debug, Clone, PartialEq)]
+/// fields changed (by NAME only), and which edges fired into and were
+/// evaluated for it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SuperstepRow {
     /// The superstep index this row describes.
     pub superstep: u64,
@@ -95,24 +125,35 @@ pub struct SuperstepRow {
     /// The nodes dispatched into this superstep.
     pub vanguard: Vec<NodeId>,
     /// Every node execution this superstep, in `Waypoint::completed`
-    /// order.
+    /// order. Empty for an awaiting-input superstep (see
+    /// [`Self::status`]) -- never a missing row.
     pub completed: Vec<CompletedRow>,
     /// The Battlefield fields this superstep's merge changed, by NAME
     /// only (T-28-14-01) -- never a value, regardless of whether a
     /// persisted trace carries one.
     pub field_changes: Vec<FieldName>,
     /// The edges that fired FROM a node completed this superstep --
-    /// derived (Waypoints source) or exact (Trace source), matching
-    /// [`ExecutionOverlay`](https://docs.rs/paladin-ai-battalion)'s own
-    /// per-overlay `fired_edges` set, filtered to this row's own
-    /// completed nodes.
+    /// derived (Waypoints source) or exact (Trace source), filtered to
+    /// this row's own completed nodes.
     pub fired_edges: Vec<(NodeId, NodeId)>,
+    /// The edges that were evaluated FROM a node completed this superstep
+    /// but did NOT fire. Always empty for a
+    /// [`InspectorSource::Waypoints`] view (that source carries no
+    /// rejected-candidate data at all, mirroring the battalion crate's
+    /// own `ExecutionOverlay::evaluated_edges` contract) -- a
+    /// [`InspectorSource::Trace`] view's page labels the difference
+    /// explicitly rather than presenting a Waypoints-only row as if it
+    /// were exact (T-28-14-04).
+    pub evaluated_edges: Vec<(NodeId, NodeId)>,
+    /// This superstep's status, so the page can label an awaiting-input
+    /// row rather than rendering a silently empty one.
+    pub status: SuperstepStatus,
 }
 
 /// A node's aggregate visit history across the whole thread (D-24): answers
 /// the OBS-03 acceptance question ("node X ran 3 times: supersteps 2, 4,
 /// 6") without the caller re-deriving it from [`SuperstepRow`]s.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VisitSummary {
     /// The visited node.
     pub node_id: NodeId,
@@ -125,19 +166,24 @@ pub struct VisitSummary {
 /// Where an [`InspectorView`]'s data came from (mirrors the battalion
 /// crate's own `OverlaySource`'s two variants, restated here core-typed so
 /// this port never names the battalion orchestration crate, ADR-0031).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InspectorSource {
-    /// Built from Waypoint history alone: `fired_edges` is derived.
+    /// Built from Waypoint history alone: `fired_edges` is derived,
+    /// `evaluated_edges` is always empty on every row.
     Waypoints,
-    /// Built from a persisted trace: `fired_edges` is exact.
+    /// Built from a persisted trace: both edge sets are exact.
     Trace,
 }
 
 /// Everything the `dev-ui` inspector page needs for one thread (D-24,
 /// OBS-FR-10): the rendered diagram, the superstep table, and the
 /// aggregate visit summaries -- one call, no follow-up query, no graph
-/// vocabulary leaked to the caller.
-#[derive(Debug, Clone, PartialEq)]
+/// vocabulary leaked to the caller. `Serialize`/`Deserialize` so the page
+/// can embed this payload verbatim in its `<script id="inspector-data"
+/// type="application/json">` tag (D-26); [`SuperstepRow::field_changes`]'s
+/// `Vec<FieldName>` type keeps the serialized JSON free of any Battlefield
+/// field value by construction (T-28-14-01).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InspectorView {
     /// The inspected thread.
     pub thread_id: ThreadId,

@@ -15,3 +15,6 @@ pub mod maneuver;
 
 // Evaluation harness CLI (28-12, D-33): `paladin-cli eval run`.
 pub mod eval;
+
+// Graph export CLI (28-13, D-23): `paladin-cli graph export`.
+pub mod graph;

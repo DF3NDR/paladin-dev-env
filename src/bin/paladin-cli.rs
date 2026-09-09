@@ -7,6 +7,7 @@ use paladin::application::cli::commands::{
     council,
     eval::{EvalCommands, run_eval},
     features,
+    graph::{GraphCommands, run_graph_export},
     maneuver::{ManeuverCommands, handle_maneuver_command},
     muster, onboarding, setup_check,
 };
@@ -95,6 +96,11 @@ enum Commands {
         #[command(subcommand)]
         action: EvalCommands,
     },
+    /// Graph document operations (export to Mermaid/DOT)
+    Graph {
+        #[command(subcommand)]
+        action: GraphCommands,
+    },
     /// Run a council discussion
     Council {
         /// Discussion topic
@@ -167,6 +173,11 @@ async fn main() {
                     args.registries,
                 )
                 .await
+            }
+        },
+        Commands::Graph { action } => match action {
+            GraphCommands::Export(args) => {
+                run_graph_export(args.format, args.file, args.assistant, args.out).await
             }
         },
         Commands::Muster {

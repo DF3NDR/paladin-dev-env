@@ -16,6 +16,7 @@ mod helpers;
 mod error_handling_test;
 mod eval_run_test;
 mod formation_execution_test;
+mod graph_export_test;
 mod paladin_execution_test;
 mod phalanx_execution_test;
 mod tool_integration_test;

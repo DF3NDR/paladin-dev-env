@@ -26,6 +26,7 @@
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::waypoint::NodeId;
 
+use crate::engine::export::overlay::ExecutionOverlay;
 use crate::engine::graph::{NodeSpec, WarGraph};
 use crate::engine::graph_doc::{EdgeConditionDoc, NodeKindDoc, WarGraphDoc};
 
@@ -233,6 +234,34 @@ impl GraphShape {
             nodes,
             edges,
             entry,
+        }
+    }
+
+    /// Build the observed-only fallback shape (D-22): when no static graph
+    /// document is available for a thread, this reconstructs a `GraphShape`
+    /// from only what `overlay` actually saw -- the visited node ids and the
+    /// union of its `fired_edges`/`evaluated_edges`, with no entry points
+    /// (an observed subgraph has no declared entry, only what happened to
+    /// run first).
+    ///
+    /// Every observed node's kind is rendered as [`ShapeKind::Paladin`] --
+    /// the true kind is unknowable from a Waypoint/trace alone (a Waypoint
+    /// carries only a `graph_fingerprint`, D-22), and `Paladin` is this
+    /// module's existing least-assuming badge (Claude's Discretion, no
+    /// dedicated "unknown" `ShapeKind` variant -- adding one would force a
+    /// matching change in `dot.rs`, which this plan (D-21's Mermaid-only
+    /// overlay) deliberately does not touch). Callers rendering this shape
+    /// should set `ExecutionOverlay::observed_only = true` so
+    /// [`super::mermaid::to_mermaid_overlay`] carries the locked
+    /// observed-only title (D-22, 28-UI-SPEC.md).
+    // RED (TDD): always returns an empty shape -- deliberately wrong, so
+    // this plan's Task 2 `<behavior>` test fails for the right reason
+    // before the GREEN commit implements the real body.
+    pub fn observed(_overlay: &ExecutionOverlay) -> Self {
+        GraphShape {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            entry: Vec::new(),
         }
     }
 }

@@ -15,16 +15,32 @@
 //! were considered and rejected), so that set stays empty and `source` is
 //! [`OverlaySource::Waypoints`].
 //!
-//! A persisted-trace source (`ExecutionOverlay::from_trace_records`, an
-//! exact upgrade over Waypoint history) lands in plan 28-10's Task 2.
+//! [`ExecutionOverlay::from_trace_records`] builds from persisted
+//! [`TraceRecord`]s (28-01/28-03/28-04) -- an upgrade available only when a
+//! trace was persisted for the run -- and both edge sets are **exact**,
+//! read straight from `TraceEvent::EdgeEvaluated`. `source` is
+//! [`OverlaySource::Trace`]. Carrying `source` on the overlay itself (rather
+//! than only in `evaluated_edges`' emptiness) means a Waypoints-derived
+//! overlay is never mistaken for an exact one downstream (T-28-10-02).
 //!
 //! # Security (T-28-10-01)
 //!
 //! [`Visit`] carries superstep, attempt, outcome, duration, tokens and the
-//! cache-hit flag only -- never a `Battlefield` field VALUE.
+//! cache-hit flag only -- never a `Battlefield` field VALUE. `DeltaMerged`
+//! trace events (which DO carry opt-in field values, D-05) are not read by
+//! either overlay constructor.
+//!
+//! # No DOT overlay
+//!
+//! Only [`super::mermaid::to_mermaid_overlay`] exists -- there is no DOT
+//! overlay renderer. The PRD names Mermaid for the execution overlay
+//! specifically (D-21); this omission is deliberate, not an oversight a
+//! future reader should "fix" by adding one without a requirement driving
+//! it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use paladin_core::platform::container::trace::{TraceEvent, TraceRecord};
 use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, Waypoint};
 
 use crate::engine::export::shape::GraphShape;
@@ -59,7 +75,7 @@ pub enum OverlaySource {
     /// Built from [`Waypoint`] history alone: `fired_edges` is derived,
     /// `evaluated_edges` is always empty.
     Waypoints,
-    /// Built from persisted `TraceRecord`s: both edge sets are exact.
+    /// Built from persisted [`TraceRecord`]s: both edge sets are exact.
     Trace,
 }
 
@@ -86,9 +102,9 @@ pub struct ExecutionOverlay {
     pub evaluated_edges: BTreeSet<(NodeId, NodeId)>,
     /// Where this overlay's data came from.
     pub source: OverlaySource,
-    /// Whether the [`GraphShape`] this overlay was rendered onto is the
-    /// observed-only fallback shape (D-22, plan 28-10 Task 2) -- i.e. no
-    /// static graph document was available for the thread.
+    /// Whether the [`GraphShape`] this overlay was rendered onto was built
+    /// by [`GraphShape::observed`](super::shape::GraphShape::observed) --
+    /// i.e. no static graph document was available for the thread (D-22).
     pub observed_only: bool,
 }
 
@@ -168,6 +184,36 @@ impl ExecutionOverlay {
             fired_edges,
             evaluated_edges: BTreeSet::new(),
             source: OverlaySource::Waypoints,
+            observed_only: false,
+        }
+    }
+
+    /// Build an `ExecutionOverlay` from persisted [`TraceRecord`]s (D-21):
+    /// available only when a trace was persisted for the run, but both edge
+    /// sets are **exact**.
+    ///
+    /// Visits: one per `TraceEvent::NodeFinished` (one per attempt, D-16) --
+    /// the paired `NodeStarted` establishes when the attempt began, but
+    /// every value a [`Visit`] needs (`outcome`, `duration_ms`,
+    /// `token_count`, `cache_hit`) is already carried on `NodeFinished`
+    /// itself.
+    ///
+    /// Edges: every `TraceEvent::EdgeEvaluated` is added to `evaluated_edges`
+    /// unconditionally, and to `fired_edges` too when `fired` is `true` --
+    /// no derivation, read straight from the record.
+    ///
+    /// `source` is always [`OverlaySource::Trace`]. Records are consumed in
+    /// their given order; a caller supplying `run_trace_port::read`'s own
+    /// `seq`-ordered result needs no re-sorting.
+    // RED (TDD): always returns an empty overlay -- deliberately wrong, so
+    // this plan's Task 2 `<behavior>` tests fail for the right reason
+    // before the GREEN commit implements the real body.
+    pub fn from_trace_records(_records: &[TraceRecord]) -> Self {
+        ExecutionOverlay {
+            visits: BTreeMap::new(),
+            fired_edges: BTreeSet::new(),
+            evaluated_edges: BTreeSet::new(),
+            source: OverlaySource::Trace,
             observed_only: false,
         }
     }
@@ -478,5 +524,228 @@ mod tests {
             !rendered.contains("-.->"),
             "no dotted arrow with a Waypoints source: {rendered}"
         );
+    }
+
+    #[test]
+    fn overlay_from_trace_is_exact() {
+        let records = vec![
+            trace_record(
+                1,
+                TraceEvent::NodeFinished {
+                    superstep: 1,
+                    node_id: NodeId::new("check"),
+                    attempt: 1,
+                    outcome: NodeOutcomeKind::Succeeded,
+                    duration_ms: 10,
+                    token_count: 5,
+                    cache_hit: false,
+                },
+            ),
+            trace_record(
+                2,
+                TraceEvent::EdgeEvaluated {
+                    from: NodeId::new("check"),
+                    to: NodeId::new("retry"),
+                    condition_kind: "contains".to_string(),
+                    fired: true,
+                },
+            ),
+            trace_record(
+                3,
+                TraceEvent::EdgeEvaluated {
+                    from: NodeId::new("check"),
+                    to: NodeId::new("done"),
+                    condition_kind: "contains".to_string(),
+                    fired: false,
+                },
+            ),
+        ];
+
+        let overlay = ExecutionOverlay::from_trace_records(&records);
+
+        assert_eq!(overlay.source, OverlaySource::Trace);
+        assert_eq!(overlay.evaluated_edges.len(), 2);
+        assert_eq!(overlay.fired_edges.len(), 1);
+        assert!(
+            overlay
+                .fired_edges
+                .contains(&(NodeId::new("check"), NodeId::new("retry")))
+        );
+        assert!(
+            overlay
+                .evaluated_edges
+                .contains(&(NodeId::new("check"), NodeId::new("done")))
+        );
+    }
+
+    #[test]
+    fn trace_overlay_shows_evaluated_but_not_fired() {
+        let shape = check_retry_shape();
+        let records = vec![
+            trace_record(
+                1,
+                TraceEvent::EdgeEvaluated {
+                    from: NodeId::new("check"),
+                    to: NodeId::new("retry"),
+                    condition_kind: "contains".to_string(),
+                    fired: true,
+                },
+            ),
+            trace_record(
+                2,
+                TraceEvent::EdgeEvaluated {
+                    from: NodeId::new("check"),
+                    to: NodeId::new("done"),
+                    condition_kind: "contains".to_string(),
+                    fired: false,
+                },
+            ),
+        ];
+        let overlay = ExecutionOverlay::from_trace_records(&records);
+
+        assert!(
+            overlay
+                .evaluated_edges
+                .contains(&(NodeId::new("check"), NodeId::new("done")))
+        );
+        assert!(
+            !overlay
+                .fired_edges
+                .contains(&(NodeId::new("check"), NodeId::new("done")))
+        );
+
+        let rendered = to_mermaid_overlay(&shape, &overlay);
+        assert!(
+            rendered.contains("-.->"),
+            "evaluated-not-fired must render dotted: {rendered}"
+        );
+    }
+
+    #[test]
+    fn observed_shape_is_built_when_no_graph_is_available() {
+        let records = vec![
+            trace_record(
+                1,
+                TraceEvent::NodeFinished {
+                    superstep: 1,
+                    node_id: NodeId::new("check"),
+                    attempt: 1,
+                    outcome: NodeOutcomeKind::Succeeded,
+                    duration_ms: 10,
+                    token_count: 5,
+                    cache_hit: false,
+                },
+            ),
+            trace_record(
+                2,
+                TraceEvent::EdgeEvaluated {
+                    from: NodeId::new("check"),
+                    to: NodeId::new("retry"),
+                    condition_kind: "contains".to_string(),
+                    fired: true,
+                },
+            ),
+        ];
+        let mut overlay = ExecutionOverlay::from_trace_records(&records);
+        overlay.observed_only = true;
+
+        let observed = GraphShape::observed(&overlay);
+        assert!(observed.nodes.iter().any(|n| n.id == NodeId::new("check")));
+        assert!(observed.nodes.iter().any(|n| n.id == NodeId::new("retry")));
+        assert!(
+            observed
+                .edges
+                .iter()
+                .any(|e| e.from == NodeId::new("check") && e.to == NodeId::new("retry"))
+        );
+
+        let rendered = to_mermaid_overlay(&observed, &overlay);
+        let title_line = rendered
+            .lines()
+            .find(|line| line.contains("observed nodes only"))
+            .expect("observed-only title line present");
+        assert_eq!(
+            title_line,
+            "title: (observed nodes only — no graph document available)"
+        );
+    }
+
+    #[test]
+    fn waypoint_and_trace_overlays_of_the_same_run_differ_only_in_evaluated_edges() {
+        let shape = check_retry_shape();
+        let waypoints = vec![
+            waypoint(
+                2,
+                vec!["retry"],
+                vec![record("check", 1, NodeOutcomeKind::Succeeded)],
+            ),
+            waypoint(
+                3,
+                vec![],
+                vec![record("retry", 1, NodeOutcomeKind::Succeeded)],
+            ),
+        ];
+        let waypoint_overlay = ExecutionOverlay::from_waypoints(&waypoints, &shape);
+
+        let trace_records = vec![
+            trace_record(
+                1,
+                TraceEvent::NodeFinished {
+                    superstep: 2,
+                    node_id: NodeId::new("check"),
+                    attempt: 1,
+                    outcome: NodeOutcomeKind::Succeeded,
+                    duration_ms: 10,
+                    token_count: 5,
+                    cache_hit: false,
+                },
+            ),
+            trace_record(
+                2,
+                TraceEvent::EdgeEvaluated {
+                    from: NodeId::new("check"),
+                    to: NodeId::new("retry"),
+                    condition_kind: "contains".to_string(),
+                    fired: true,
+                },
+            ),
+            trace_record(
+                3,
+                TraceEvent::EdgeEvaluated {
+                    from: NodeId::new("check"),
+                    to: NodeId::new("done"),
+                    condition_kind: "contains".to_string(),
+                    fired: false,
+                },
+            ),
+            trace_record(
+                4,
+                TraceEvent::NodeFinished {
+                    superstep: 3,
+                    node_id: NodeId::new("retry"),
+                    attempt: 1,
+                    outcome: NodeOutcomeKind::Succeeded,
+                    duration_ms: 10,
+                    token_count: 5,
+                    cache_hit: false,
+                },
+            ),
+        ];
+        let trace_overlay = ExecutionOverlay::from_trace_records(&trace_records);
+
+        assert_eq!(waypoint_overlay.fired_edges, trace_overlay.fired_edges);
+        assert!(waypoint_overlay.evaluated_edges.is_empty());
+        assert!(!trace_overlay.evaluated_edges.is_empty());
+        assert_ne!(waypoint_overlay.source, trace_overlay.source);
+    }
+
+    fn trace_record(seq: u64, event: TraceEvent) -> TraceRecord {
+        TraceRecord {
+            thread_id: thread(),
+            run_id: None,
+            seq,
+            at: Utc::now(),
+            event,
+        }
     }
 }

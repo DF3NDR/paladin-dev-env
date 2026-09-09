@@ -1,0 +1,10 @@
+digraph WarGraph {
+  subgraph cluster_n0 {
+    label="conversation «workflow»";
+    "n1" [label="writer «paladin»"];
+    "n2" [label="review «gate»", shape=diamond];
+    "n1" -> "n2";
+    "n2" -> "n1" [label="contains(\"false\")"];
+    "n2" -> "n2" [label="contains(\"true\")"];
+  }
+}

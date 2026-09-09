@@ -1,0 +1,86 @@
+{
+  "schema_version": "1",
+  "entry": [
+    "drafter"
+  ],
+  "nodes": [
+    {
+      "id": "drafter",
+      "kind": "paladin",
+      "paladin": {
+        "name": "Drafter",
+        "model": "gpt-4",
+        "system_prompt": "Draft a short reply about {topic}.",
+        "stop_words": [],
+        "input_template": "{topic}",
+        "output_field": "draft"
+      },
+      "defer": false
+    },
+    {
+      "id": "critique",
+      "kind": "gate",
+      "gate": {
+        "parley": "approval",
+        "prompt_template": "Approve this draft? {draft}",
+        "on_expire": {
+          "type": "fail_run"
+        },
+        "output_field": "approved"
+      },
+      "defer": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "drafter",
+      "to": "critique"
+    },
+    {
+      "from": "critique",
+      "to": "drafter",
+      "condition": {
+        "type": "contains",
+        "value": "false"
+      }
+    },
+    {
+      "from": "critique",
+      "to": "critique",
+      "condition": {
+        "type": "contains",
+        "value": "true"
+      }
+    }
+  ],
+  "schema": {
+    "fields": [
+      {
+        "name": "topic",
+        "kind": "string",
+        "reducer": "last_write",
+        "default": "widgets",
+        "required": false
+      },
+      {
+        "name": "draft",
+        "kind": "string",
+        "reducer": "last_write",
+        "required": false
+      },
+      {
+        "name": "approved",
+        "kind": "boolean",
+        "reducer": "last_write",
+        "default": false,
+        "required": false
+      }
+    ]
+  },
+  "limits": {
+    "max_supersteps": 50,
+    "max_node_visits": 25,
+    "run_timeout_secs": null,
+    "max_muster_tasks": 100
+  }
+}

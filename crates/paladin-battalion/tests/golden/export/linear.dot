@@ -1,0 +1,7 @@
+digraph WarGraph {
+  "n0" [label="start «paladin»"];
+  "n1" [label="middle «paladin»"];
+  "n2" [label="end «paladin»"];
+  "n0" -> "n1";
+  "n1" -> "n2";
+}

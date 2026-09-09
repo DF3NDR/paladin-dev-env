@@ -1,0 +1,7 @@
+digraph WarGraph {
+  "n0" [label="drafter «paladin»"];
+  "n1" [label="critique «gate»", shape=diamond];
+  "n0" -> "n1";
+  "n1" -> "n0" [label="contains(\"false\")"];
+  "n1" -> "n1" [label="contains(\"true\")"];
+}

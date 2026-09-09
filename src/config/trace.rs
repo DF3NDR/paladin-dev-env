@@ -404,17 +404,19 @@ mod tests {
             Err(TraceConfigError::ZeroValueCapBytes)
         ));
 
-        // This workspace has no `otel` Cargo feature declared yet (28-09's
-        // scope), so `otel.enabled` alone is always rejected as
-        // `FeatureNotCompiled` -- exercised directly below rather than via
-        // a non-http(s) scheme, since that branch is unreachable until the
-        // feature exists.
+        // `otel.enabled` on a build WITHOUT the `otel` Cargo feature (28-09)
+        // is the typed `FeatureNotCompiled` error, never a silent no-op; on a
+        // build WITH the feature the same config is valid (default endpoint is
+        // http). The assertion therefore branches on the feature.
         config = TraceConfig::default();
         config.otel.enabled = true;
+        #[cfg(not(feature = "otel"))]
         assert!(matches!(
             config.validate_typed(),
             Err(TraceConfigError::FeatureNotCompiled { feature: "otel" })
         ));
+        #[cfg(feature = "otel")]
+        assert!(config.validate_typed().is_ok());
     }
 
     /// Behavior: setting all nine `PALADIN_TRACE_*` variables and calling

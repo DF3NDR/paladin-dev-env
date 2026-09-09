@@ -1729,16 +1729,25 @@ cases:
         unsafe {
             std::env::set_var(PALADIN_EVAL_LIVE_ENV, "1");
         }
-        // This crate's own `paladin-llm` edge is `default-features = false,
-        // features = ["mock"]` in a default (non-`live`-featured) test
-        // build, so `LlmProviderFactory::get_default_provider()` finds no
-        // compiled-in provider regardless of any real credential env var --
-        // NoProviderKey is the gate's own, correct refusal here, per
-        // ADR-0012 (never falls back to a mock).
-        assert!(matches!(
-            check_live_mode(true),
-            Err(LiveModeError::NoProviderKey)
-        ));
+        // The third stage depends on which providers are compiled in. This
+        // crate's own `paladin-llm` edge is `default-features = false,
+        // features = ["mock"]`, so a crate-local test build has no provider
+        // and the gate refuses with `NoProviderKey` (ADR-0012: never a mock
+        // fallback). In a WORKSPACE build cargo's feature unification can
+        // compile real providers in (e.g. `--features llm-all` brings Ollama,
+        // which needs no key), and then `get_default_provider()` is `Some`
+        // and the gate correctly passes -- assert whichever this build
+        // actually is, so the test is honest under every feature set the CI
+        // matrix runs.
+        let compiled_provider =
+            paladin_llm::provider_factory::LlmProviderFactory::get_default_provider();
+        match compiled_provider {
+            None => assert!(matches!(
+                check_live_mode(true),
+                Err(LiveModeError::NoProviderKey)
+            )),
+            Some(_) => assert!(check_live_mode(true).is_ok()),
+        }
 
         // SAFETY: see above.
         unsafe {

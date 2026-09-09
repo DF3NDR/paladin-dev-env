@@ -81,6 +81,7 @@ use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::structured::render_instruction_block;
 use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::vault::Namespace;
+use paladin_core::platform::container::waypoint::NodeId;
 use paladin_llm::fallback::SERVED_BY_METADATA_KEY;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
@@ -95,6 +96,9 @@ use paladin_ports::output::structured_executor_port::{
     Structured, StructuredExecutorPort, StructuredOptions, run_structured,
 };
 use paladin_ports::output::token_counter_port::TokenCounterPort;
+use paladin_ports::output::trace_sink_port::{
+    NodeProgressKind, TraceEmitter, TraceEvent, current_trace_emitter,
+};
 use paladin_ports::output::vault_port::VaultPort;
 #[cfg(feature = "vision")]
 use paladin_ports::output::vision_port::VisionPort;
@@ -215,6 +219,15 @@ pub struct PaladinExecutionService {
     /// behavior, not a new default. Set via
     /// [`PaladinExecutionService::with_tool_error_config`].
     tool_error_config: ToolErrorConfig,
+
+    /// An explicit per-run [`TraceEmitter`] handle (28-06, D-03), wired via
+    /// [`PaladinExecutionService::with_trace_emitter`]. Copied onto every
+    /// [`ModelCallContext`] this service constructs; checked FIRST by
+    /// `NodeProgress::StreamChunk`/`ToolCall` emission, falling back to the
+    /// ambient `current_trace_emitter()` a real run's worker dispatch sets.
+    /// `None` by default -- a service with nothing wired emits nothing,
+    /// exactly like every other observability seam in this phase (X-03).
+    trace_emitter: Option<Arc<dyn TraceEmitter>>,
 }
 
 /// D-16: the latest-summary-wins effective-history rule.
@@ -376,6 +389,7 @@ impl PaladinExecutionService {
             default_vault_namespace: None,
             vault_tools_enabled: false,
             tool_error_config: ToolErrorConfig::default(),
+            trace_emitter: None,
         }
     }
 
@@ -783,6 +797,19 @@ impl PaladinExecutionService {
             middleware.name()
         );
         self.middleware.push(middleware);
+        self
+    }
+
+    /// Attach an explicit [`TraceEmitter`] handle (28-06, D-03), copied onto
+    /// every [`ModelCallContext`] this service constructs and checked
+    /// FIRST -- before the ambient `current_trace_emitter()` a real run's
+    /// worker dispatch supplies -- when emitting
+    /// `NodeProgress::StreamChunk`/`ToolCall`. Typically used by a caller
+    /// with no ambient per-run context (a unit test, or a standalone
+    /// construction outside any run), mirroring
+    /// `FallbackLlmAdapter::with_trace_emitter`'s own precedence rule.
+    pub fn with_trace_emitter(mut self, emitter: Arc<dyn TraceEmitter>) -> Self {
+        self.trace_emitter = Some(emitter);
         self
     }
 
@@ -1349,6 +1376,11 @@ impl PaladinExecutionService {
             paladin,
             PromptAssembly::new(effective_system_prompt.clone(), input, "", vec![], None),
         );
+        // 28-06, D-03: this service's own explicit handle (if wired via
+        // `with_trace_emitter`) takes precedence over the ambient
+        // `current_trace_emitter()` a real run's worker dispatch sets --
+        // see `ModelCallContext::trace_emitter`'s own doc comment.
+        middleware_cx.trace_emitter = self.trace_emitter.clone();
         // D-22: resolved BEFORE `confined_vault` is moved into
         // `middleware_cx.vault` below, from a clone of the same handle --
         // so the tool-call branch and `VaultRecallMiddleware` observe the
@@ -1557,6 +1589,9 @@ impl PaladinExecutionService {
                             let effective_function_call =
                                 Self::armament_call_to_function_call(&effective_call);
 
+                            // 28-06, D-04: the handoff is about to dispatch.
+                            self.emit_tool_call_progress(&middleware_cx, &effective_call.tool_name);
+
                             // Execute handoff via HandoffService with retry logic
                             match self
                                 .execute_handoff(
@@ -1657,6 +1692,13 @@ impl PaladinExecutionService {
                                         ToolFlow::Rewrite(rewritten) => rewritten,
                                         _ => call,
                                     };
+
+                                    // 28-06, D-04: the Armament call is
+                                    // about to dispatch.
+                                    self.emit_tool_call_progress(
+                                        &middleware_cx,
+                                        &effective_call.tool_name,
+                                    );
 
                                     let tool_outcome = self
                                         .handle_tool_call(
@@ -2751,6 +2793,46 @@ impl PaladinExecutionService {
             arguments: serde_json::to_string(&call.arguments).unwrap_or_default(),
         }
     }
+
+    /// The placeholder `NodeId` stamped on every `NodeProgress` record this
+    /// service emits (28-06). `PaladinExecutionService` sits below the
+    /// superstep engine and has no real node context of its own -- the
+    /// same limitation `FallbackLlmAdapter::record_hop` documents for
+    /// `FallbackHop`'s `node_id: None` -- except `NodeProgress::node_id`
+    /// is NOT `Option<NodeId>` (D-04's shape), so a fixed, documented
+    /// placeholder is used instead of a value this service cannot know.
+    fn placeholder_node_id() -> NodeId {
+        NodeId::new("paladin-execution-service")
+    }
+
+    /// Emit `TraceEvent::NodeProgress { progress: NodeProgressKind::ToolCall
+    /// { tool } }` (28-06, D-04) through whichever `TraceEmitter` is
+    /// available: `cx.trace_emitter` first, then the ambient
+    /// `current_trace_emitter()` a real run's worker dispatch supplies. A
+    /// no-op with neither source available (X-03).
+    fn emit_tool_call_progress(&self, cx: &ModelCallContext<'_>, tool: &str) {
+        let Some(emitter) = cx.trace_emitter.clone().or_else(current_trace_emitter) else {
+            return;
+        };
+        emitter.emit(TraceEvent::NodeProgress {
+            node_id: Self::placeholder_node_id(),
+            progress: NodeProgressKind::ToolCall {
+                tool: tool.to_string(),
+            },
+        });
+    }
+
+    /// Emit `TraceEvent::NodeProgress { progress: NodeProgressKind::StreamChunk
+    /// { bytes } }` (28-06, D-04, D-05) through `emitter` -- called from the
+    /// streaming path's own forwarding loop with the chunk's serialized
+    /// byte count, NEVER the text itself (D-05: no values on the trace by
+    /// default).
+    fn emit_stream_chunk_progress(emitter: &Arc<dyn TraceEmitter>, bytes: u64) {
+        emitter.emit(TraceEvent::NodeProgress {
+            node_id: Self::placeholder_node_id(),
+            progress: NodeProgressKind::StreamChunk { bytes },
+        });
+    }
 }
 
 /// Implementation of `PaladinExecutorPort` for `PaladinExecutionService`
@@ -2920,6 +3002,7 @@ impl PaladinExecutionService {
         let assembly = PromptAssembly::new(String::new(), "", "", Vec::new(), None);
         let mut cx = ModelCallContext::new(execution_id, paladin, assembly);
         cx.response_format = Some(response_format);
+        cx.trace_emitter = self.trace_emitter.clone();
 
         let response = self
             .execute_with_retry_and_temperature(
@@ -3005,6 +3088,7 @@ impl PaladinExecutionService {
         let assembly =
             PromptAssembly::new(paladin.node.system_prompt.clone(), input, "", vec![], None);
         let mut middleware_cx = ModelCallContext::new(run_id, paladin, assembly);
+        middleware_cx.trace_emitter = self.trace_emitter.clone();
         let before_outcome = run_before(&self.middleware, &mut middleware_cx).await?;
 
         let prompt = match before_outcome {
@@ -3068,6 +3152,17 @@ impl PaladinExecutionService {
 
         let (tx, rx) = mpsc::channel::<Result<PaladinStreamChunk, PaladinError>>(64);
 
+        // 28-06, D-04, D-05: resolved ONCE, before the chunk-forwarding
+        // task is spawned -- `tokio::spawn` starts a genuinely new task
+        // that does NOT inherit the current task's `RUN_TRACE_EMITTER`
+        // scope (task-locals are per-task, never propagated across a
+        // spawn boundary), so the ambient handle must be captured HERE,
+        // on the calling task, and moved in explicitly.
+        let stream_trace_emitter = middleware_cx
+            .trace_emitter
+            .clone()
+            .or_else(current_trace_emitter);
+
         tokio::spawn(async move {
             use futures::StreamExt;
             let mut stream = Box::into_pin(provider_stream);
@@ -3075,6 +3170,11 @@ impl PaladinExecutionService {
                 match item {
                     Ok(resp) => {
                         let is_final = resp.finish_reason.is_some();
+                        // D-05: byte count only, never the delta text
+                        // itself, on the trace.
+                        if let Some(emitter) = &stream_trace_emitter {
+                            Self::emit_stream_chunk_progress(emitter, resp.delta.len() as u64);
+                        }
                         let chunk = PaladinStreamChunk {
                             text: resp.delta,
                             is_final,
@@ -3745,6 +3845,129 @@ mod tests {
             "at least one beat per streamed content chunk, got {}",
             stream_heartbeat.beats()
         );
+    }
+
+    /// D-04, D-05 (28-06): a tool invocation emits
+    /// `NodeProgress::ToolCall { tool }` naming the tool, and a streamed
+    /// completion emits `NodeProgress::StreamChunk { bytes }` carrying only
+    /// the chunk's byte count -- never the text itself.
+    #[tokio::test]
+    async fn stream_and_tool_progress_are_emitted() {
+        use paladin_core::platform::container::paladin::MaxLoops;
+        use paladin_core::platform::container::waypoint::ThreadId;
+        use paladin_ports::output::trace_sink_port::{
+            NodeProgressKind, StandaloneEmitter, TraceEmitter, TraceEvent, TraceRecord, TraceSink,
+            TraceSinkError,
+        };
+
+        #[derive(Default)]
+        struct RecordingSink {
+            events: std::sync::Mutex<Vec<TraceRecord>>,
+        }
+        #[async_trait]
+        impl TraceSink for RecordingSink {
+            async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+                self.events.lock().unwrap().push(record);
+                Ok(())
+            }
+        }
+        async fn events_eventually(sink: &RecordingSink, expected_len: usize) -> Vec<TraceRecord> {
+            for _ in 0..300 {
+                let events = sink.events.lock().unwrap().clone();
+                if events.len() >= expected_len {
+                    return events;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            sink.events.lock().unwrap().clone()
+        }
+
+        let sink = Arc::new(RecordingSink::default());
+        let emitter: Arc<dyn TraceEmitter> = Arc::new(StandaloneEmitter::new(
+            ThreadId::new("exec-service-progress-test").unwrap(),
+            None,
+            Some(sink.clone() as Arc<dyn TraceSink>),
+        ));
+
+        // --- ToolCall progress: one Armament dispatch.
+        let arsenal = Arc::new(CountingArsenal::default());
+        let tool_llm: Arc<dyn LlmPort> = Arc::new(ToolCallingLlmPort { chunks: 0 });
+        let tool_service = PaladinExecutionService::new(
+            tool_llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            Some(arsenal.clone() as Arc<dyn ArsenalPort>),
+        )
+        .with_trace_emitter(emitter.clone());
+        let mut paladin = create_test_paladin();
+        paladin.node.max_loops = MaxLoops::Fixed(1);
+        tool_service.execute(&paladin, "hello").await.unwrap();
+
+        // --- StreamChunk progress: 2 content deltas plus the final marker.
+        let stream_llm: Arc<dyn LlmPort> = Arc::new(ToolCallingLlmPort { chunks: 2 });
+        let stream_service = PaladinExecutionService::new(
+            stream_llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+        .with_trace_emitter(emitter.clone());
+        let mut stream = stream_service.execute_stream(&paladin, "hi").await.unwrap();
+        while stream.recv().await.is_some() {}
+
+        // 1 ToolCall + 3 StreamChunk (2 deltas + 1 final empty-delta marker).
+        let events = events_eventually(&sink, 4).await;
+        assert_eq!(events.len(), 4, "{events:?}");
+
+        let tool_calls: Vec<&TraceRecord> = events
+            .iter()
+            .filter(|r| {
+                matches!(
+                    &r.event,
+                    TraceEvent::NodeProgress {
+                        progress: NodeProgressKind::ToolCall { .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(tool_calls.len(), 1, "{events:?}");
+        match &tool_calls[0].event {
+            TraceEvent::NodeProgress {
+                progress: NodeProgressKind::ToolCall { tool },
+                ..
+            } => assert_eq!(tool, "lookup"),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let stream_chunks: Vec<&TraceRecord> = events
+            .iter()
+            .filter(|r| {
+                matches!(
+                    &r.event,
+                    TraceEvent::NodeProgress {
+                        progress: NodeProgressKind::StreamChunk { .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(stream_chunks.len(), 3, "{events:?}");
+        for record in &stream_chunks {
+            match &record.event {
+                TraceEvent::NodeProgress {
+                    progress: NodeProgressKind::StreamChunk { bytes },
+                    ..
+                } => {
+                    // D-05: only a byte count is ever on the trace -- there
+                    // is no field here that could carry the chunk text, so
+                    // this assertion is a structural witness of that, not a
+                    // runtime search for leaked text.
+                    let _ = bytes;
+                }
+                other => panic!("unexpected: {other:?}"),
+            }
+        }
     }
 
     /// Where a [`FailingLlmPort`] surfaces its `LlmError`.

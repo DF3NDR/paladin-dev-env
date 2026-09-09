@@ -2812,6 +2812,40 @@ impl PaladinExecutionService {
     /// `FallbackHop`'s `node_id: None` -- except `NodeProgress::node_id`
     /// is NOT `Option<NodeId>` (D-04's shape), so a fixed, documented
     /// placeholder is used instead of a value this service cannot know.
+    ///
+    /// # False-precision risk (WR-03, 28-REVIEW) -- read before adding a
+    /// `NodeProgress` consumer
+    ///
+    /// This is not merely "there is no node" (a harmless absence): **every**
+    /// `NodeProgress` record this service EVER emits, for EVERY Paladin node
+    /// in EVERY run, carries this SAME literal `NodeId`. One
+    /// `PaladinExecutionService` singleton is shared by every concurrent
+    /// Paladin node in a Phalanx/parallel dispatch across the whole process
+    /// (`PaladinPort` is a single `Arc<dyn PaladinPort>` per `WarEngine` --
+    /// see this trait's own module docs), so two DIFFERENT nodes streaming
+    /// or calling tools concurrently in the SAME run produce `NodeProgress`
+    /// records that are byte-identical on `node_id`. A future consumer
+    /// naively grouping or attributing `NodeProgress` records BY `node_id`
+    /// will silently merge unrelated nodes' activity rather than erroring or
+    /// warning -- there is no signal anywhere that this field is a
+    /// placeholder rather than a real identity. As of this writing, no
+    /// consumer reads it (`OtelTraceSink::on_event` explicitly no-ops
+    /// `NodeProgress`; the SSE bus drops it via `map_trace_event`), so this
+    /// is latent, not yet user-visible.
+    ///
+    /// The real fix -- threading the dispatching node's actual `NodeId`
+    /// through `PaladinPort::execute_observed`/`execute_scoped` down to this
+    /// service (e.g. via `ModelCallContext`, alongside `trace_emitter`) --
+    /// was evaluated and deferred: it requires either a breaking change to
+    /// the public `PaladinPort` trait signature (every implementor across
+    /// `paladin-ports`, `paladin-battalion` and this crate) or a new
+    /// cross-crate task-local mirroring `RUN_TRACE_EMITTER`, whose
+    /// correctness would need separate verification against the engine's
+    /// own per-node `tokio::spawn` concurrency (`crate::engine::superstep`'s
+    /// per-vanguard-node dispatch), since a plain task-local does not
+    /// propagate across a `tokio::spawn` boundary the way it does across a
+    /// same-task `.await`. Neither is a same-plan-scope change; both are
+    /// tracked as follow-up work, not silently absorbed here.
     fn placeholder_node_id() -> NodeId {
         NodeId::new("paladin-execution-service")
     }

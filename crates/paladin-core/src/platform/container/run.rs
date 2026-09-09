@@ -503,13 +503,28 @@ impl RunStreamEventKind {
 }
 
 /// Whether a [`RunStreamEvent`] was bridged live from the executing engine,
-/// or synthesized by polling persisted Waypoints because the run executes on
-/// another instance (or is already terminal) (D-26).
+/// replayed from persisted `run_traces` rows, or synthesized by polling
+/// persisted Waypoints because the run executes on another instance (or is
+/// already terminal) (D-26, D-16).
+///
+/// `#[non_exhaustive]` (X-10.2): `Replay` was added in the same change that
+/// applies this marker -- new-in-0.10 (Phase 27), so this is a
+/// deliberate-zero migration note rather than a `MIGRATION.md` §9.6 row (see
+/// that file's own header for the distinction). Its only two consumers,
+/// `RunWorkerPool` and `RunEventStreamService` (both `paladin-ai`), are
+/// updated in the SAME change that adds this marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RunStreamMode {
     /// Bridged live from the executing engine via the per-run broadcast bus.
     Live,
+    /// Replayed from persisted `run_traces` rows through the same mapping
+    /// function the live path uses, with each record's own original `at`
+    /// and `trace_seq` (D-16). Used when the run is not bound on this
+    /// instance AND persisted rows exist for its thread; falls back to
+    /// [`Self::Degraded`] when no rows are available.
+    Replay,
     /// Synthesized by polling `WaypointPort` + `RunRepositoryPort`; gives no
     /// ordering guarantee relative to the live path and may coalesce
     /// supersteps (D-26).
@@ -563,6 +578,33 @@ impl RunStreamEvent {
             kind,
             seq,
             at: Utc::now(),
+            mode,
+            dropped,
+            payload,
+        }
+    }
+
+    /// Construct a `RunStreamEvent` with an explicit `at` (D-16): the
+    /// replay path stamps this with the ORIGINAL `TraceRecord`'s own `at`,
+    /// not the moment the event is replayed, so a client can tell exactly
+    /// when the underlying event actually happened.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_at(
+        run_id: RunId,
+        thread_id: ThreadId,
+        kind: RunStreamEventKind,
+        seq: u64,
+        at: DateTime<Utc>,
+        mode: RunStreamMode,
+        dropped: u64,
+        payload: serde_json::Value,
+    ) -> Self {
+        Self {
+            run_id,
+            thread_id,
+            kind,
+            seq,
+            at,
             mode,
             dropped,
             payload,

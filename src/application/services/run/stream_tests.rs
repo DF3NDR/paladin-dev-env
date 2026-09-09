@@ -34,14 +34,19 @@ use paladin_ports::input::run_event_stream_port::RunEventStreamPort;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::run_queue_port::{QueuedRun, RunQueuePort};
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
+use paladin_ports::output::run_trace_port::{RunTraceError, RunTracePort};
+use paladin_ports::output::trace_sink_port::{CompositeSink, TraceEvent, TraceRecord, TraceSink};
 use paladin_ports::output::waypoint_port::WaypointPort;
 use paladin_storage::run::in_memory::InMemoryRunRepository;
 use paladin_storage::run::sqlite::SqliteRunRepository;
 use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+use paladin_storage::run_trace::in_memory::InMemoryRunTraceStore;
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_storage::waypoint::sqlite::SqliteWaypointStore;
 
-use super::events::{RunEventBus, RunEventBusSink, RunEventStreamService};
+use crate::infrastructure::telemetry::PersistingTraceSink;
+
+use super::events::{RunEventBus, RunEventBusSink, RunEventStreamService, map_trace_event};
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
 use super::worker::RunWorkerPool;
 
@@ -554,4 +559,557 @@ async fn state_delta_carries_field_names_only() {
     })
     .await
     .expect("state_delta_carries_field_names_only must finish within 10s");
+}
+
+/// D-14's completion, exercised at this integration layer too (the plan's
+/// own acceptance criteria pin this exact test name in THIS file, alongside
+/// the pure-function coverage table in `events.rs`'s own test module):
+/// `map_trace_event` is total over the twelve-variant `TraceEvent` enum,
+/// producing exactly seven of the wire kinds (`RunFinished` alone produces
+/// two, `done` and `error`, split on `status` -- thirteen rows over twelve
+/// variants).
+#[test]
+fn map_trace_event_covers_exactly_seven_of_twelve() {
+    use paladin_core::platform::container::parley::ParleyId;
+    use paladin_core::platform::container::waypoint::NodeOutcomeKind;
+    use paladin_ports::output::trace_sink_port::{
+        FieldChange, MiddlewareAction, RunFinishStatus, TraceEvent,
+    };
+
+    fn wrap(
+        thread_id: ThreadId,
+        seq: u64,
+        event: TraceEvent,
+    ) -> paladin_ports::output::trace_sink_port::TraceRecord {
+        paladin_ports::output::trace_sink_port::TraceRecord {
+            thread_id,
+            run_id: None,
+            seq,
+            at: chrono::Utc::now(),
+            event,
+        }
+    }
+
+    let thread_id = ThreadId::new("t1").unwrap();
+    let cases: Vec<(&str, TraceEvent, bool)> = vec![
+        (
+            "RunStarted",
+            TraceEvent::RunStarted {
+                run_id: None,
+                graph_fingerprint: "fp".to_string(),
+            },
+            false,
+        ),
+        (
+            "SuperstepStarted",
+            TraceEvent::SuperstepStarted {
+                superstep: 1,
+                vanguard: vec![NodeId::new("n1")],
+            },
+            true,
+        ),
+        (
+            "NodeStarted",
+            TraceEvent::NodeStarted {
+                superstep: 1,
+                node_id: NodeId::new("n1"),
+                attempt: 1,
+                muster_task_key: None,
+            },
+            true,
+        ),
+        (
+            "NodeProgress",
+            TraceEvent::NodeProgress {
+                node_id: NodeId::new("n1"),
+                progress: paladin_ports::output::trace_sink_port::NodeProgressKind::Heartbeat,
+            },
+            false,
+        ),
+        (
+            "NodeFinished",
+            TraceEvent::NodeFinished {
+                superstep: 1,
+                node_id: NodeId::new("n1"),
+                attempt: 1,
+                outcome: NodeOutcomeKind::Succeeded,
+                duration_ms: 5,
+                token_count: 0,
+                cache_hit: false,
+            },
+            true,
+        ),
+        (
+            "EdgeEvaluated",
+            TraceEvent::EdgeEvaluated {
+                from: NodeId::new("a"),
+                to: NodeId::new("b"),
+                condition_kind: "always".to_string(),
+                fired: true,
+            },
+            false,
+        ),
+        (
+            "DeltaMerged",
+            TraceEvent::DeltaMerged {
+                superstep: 1,
+                field_changes: vec![FieldChange {
+                    field: FieldName::new("x").unwrap(),
+                    dispatch: "last_write".to_string(),
+                    writers: vec![NodeId::new("n1")],
+                    value_bytes: 4,
+                    value: None,
+                }],
+            },
+            true,
+        ),
+        (
+            "WaypointSaved",
+            TraceEvent::WaypointSaved {
+                waypoint_id: paladin_core::platform::container::waypoint::WaypointId::generate(),
+                superstep: 1,
+                status: "completed".to_string(),
+            },
+            false,
+        ),
+        (
+            "ParleyRaised",
+            TraceEvent::ParleyRaised {
+                parley_id: ParleyId::new(),
+                node_id: NodeId::new("n1"),
+                parley_kind: ParleyKind::Approval,
+            },
+            true,
+        ),
+        (
+            "RunFinished{Completed}",
+            TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 1,
+                total_tokens: 0,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+            true,
+        ),
+        (
+            "RunFinished{Failed}",
+            TraceEvent::RunFinished {
+                status: RunFinishStatus::Failed,
+                total_supersteps: 1,
+                total_tokens: 0,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+            true,
+        ),
+        (
+            "FallbackHop",
+            TraceEvent::FallbackHop {
+                node_id: None,
+                from_provider: "openai".to_string(),
+                to_provider: "anthropic".to_string(),
+            },
+            false,
+        ),
+        (
+            "MiddlewareEvent",
+            TraceEvent::MiddlewareEvent {
+                name: "limit".to_string(),
+                action: MiddlewareAction::Finish,
+            },
+            false,
+        ),
+    ];
+    assert_eq!(
+        cases.len(),
+        13,
+        "must enumerate all twelve variants, with RunFinished split into its two status rows"
+    );
+
+    let mut mapped = 0;
+    let mut dropped = 0;
+    for (seq, (name, event, expect_some)) in cases.into_iter().enumerate() {
+        let record = wrap(thread_id.clone(), seq as u64 + 1, event);
+        match map_trace_event(record) {
+            Some(_) if expect_some => mapped += 1,
+            None if !expect_some => dropped += 1,
+            other => panic!("unexpected mapping result for {name}: {other:?}"),
+        }
+    }
+    assert_eq!(mapped, 7, "exactly seven rows must map to Some");
+    assert_eq!(dropped, 6, "exactly six rows must map to None");
+}
+
+// --- Replay mode (D-16) --------------------------------------------------
+
+/// Poll `store` until it holds a `RunFinished` record for `thread_id`, or
+/// panic after `timeout` -- `paladin-battalion`'s `TraceDispatcher` is
+/// deliberately fire-and-forget (ENG-FR-21), so a run's `run_once` return
+/// does not guarantee its trailing records already landed in the store.
+async fn wait_for_run_finished_persisted(
+    store: &InMemoryRunTraceStore,
+    thread_id: &ThreadId,
+    timeout: Duration,
+) {
+    tokio::time::timeout(timeout, async {
+        loop {
+            let rows = store.read(thread_id, 0, 1024).await.unwrap();
+            if rows
+                .iter()
+                .any(|r| matches!(r.event, TraceEvent::RunFinished { .. }))
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("RunFinished must be persisted within the timeout");
+}
+
+/// Behavior: a finished run with `run_traces` rows streams every mapped
+/// record with `mode: replay`, and terminates with `done` (D-16).
+#[tokio::test(flavor = "multi_thread")]
+async fn terminal_run_with_rows_replays() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let trace_store = Arc::new(InMemoryRunTraceStore::new());
+        let graph = build_chain_graph(3, Duration::from_millis(5));
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("chain", graph));
+
+        let run_bus = Arc::new(RunEventBus::new());
+        let trace_sink: Arc<dyn TraceSink> = Arc::new(CompositeSink::new(vec![
+            Arc::new(RunEventBusSink::new(run_bus.clone())),
+            Arc::new(PersistingTraceSink::new(
+                trace_store.clone() as Arc<dyn RunTracePort>
+            )),
+        ]));
+        let engine = Arc::new(
+            WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()).with_trace_sink(trace_sink),
+        );
+        let pool = RunWorkerPool::new(
+            engine,
+            store.clone(),
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_event_bus(run_bus.clone());
+
+        let (run_id, thread_id) = submit(&repository, &queue, "chain").await;
+        run_bus.bind(thread_id.clone(), run_id.clone()).await;
+
+        assert!(pool.run_once().await.unwrap());
+        wait_for_run_finished_persisted(&trace_store, &thread_id, Duration::from_secs(5)).await;
+
+        // The replay service's OWN bus is never bound for this run --
+        // guarantees the live path is unreachable regardless of the
+        // producing pool's own unbind timing.
+        let service_bus = Arc::new(RunEventBus::new());
+        let waypoints_dyn: Arc<dyn WaypointPort> = store;
+        let service = RunEventStreamService::new(
+            service_bus,
+            repository.clone(),
+            waypoints_dyn,
+            Duration::from_millis(20),
+        )
+        .with_replay(trace_store.clone() as Arc<dyn RunTracePort>);
+
+        let mut stream = service.stream(&run_id).await.unwrap();
+        let mut saw_done = false;
+        let mut saw_superstep = false;
+        while let Some(event) = stream.next().await {
+            assert_eq!(event.mode, RunStreamMode::Replay);
+            match event.kind {
+                RunStreamEventKind::Superstep => saw_superstep = true,
+                RunStreamEventKind::Done => {
+                    saw_done = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_superstep, "the replay must include superstep events");
+        assert!(saw_done, "a terminal run's replay must end with done");
+    })
+    .await
+    .expect("terminal_run_with_rows_replays must finish within 10s");
+}
+
+/// Behavior: for one run, the live stream and a subsequent replay of the
+/// SAME run yield the same ordered sequence of wire kinds and payload
+/// fields, apart from `mode` (D-16) -- both routes read the SAME
+/// dispatcher's record stream (one live, through the bus; one persisted,
+/// through `run_traces`), so `map_trace_event` produces byte-identical
+/// payloads for the same underlying records.
+#[tokio::test(flavor = "multi_thread")]
+async fn replay_and_live_produce_the_same_wire_sequence() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let trace_store = Arc::new(InMemoryRunTraceStore::new());
+        let graph = build_chain_graph(3, Duration::from_millis(5));
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("chain", graph));
+
+        let run_bus = Arc::new(RunEventBus::new());
+        let trace_sink: Arc<dyn TraceSink> = Arc::new(CompositeSink::new(vec![
+            Arc::new(RunEventBusSink::new(run_bus.clone())),
+            Arc::new(PersistingTraceSink::new(
+                trace_store.clone() as Arc<dyn RunTracePort>
+            )),
+        ]));
+        let engine = Arc::new(
+            WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()).with_trace_sink(trace_sink),
+        );
+        let pool = RunWorkerPool::new(
+            engine,
+            store.clone(),
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_event_bus(run_bus.clone());
+
+        let (run_id, thread_id) = submit(&repository, &queue, "chain").await;
+        run_bus.bind(thread_id.clone(), run_id.clone()).await;
+        let mut live_rx = run_bus.subscribe(&run_id).await.unwrap();
+
+        let run_task = tokio::spawn(async move { pool.run_once().await });
+
+        let mut live_sequence = Vec::new();
+        loop {
+            match live_rx.recv().await {
+                Ok(event) => {
+                    let is_done = event.kind == RunStreamEventKind::Done;
+                    live_sequence.push((event.kind, event.payload));
+                    if is_done {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+        assert!(run_task.await.unwrap().unwrap());
+
+        wait_for_run_finished_persisted(&trace_store, &thread_id, Duration::from_secs(5)).await;
+
+        let service_bus = Arc::new(RunEventBus::new());
+        let waypoints_dyn: Arc<dyn WaypointPort> = store;
+        let service = RunEventStreamService::new(
+            service_bus,
+            repository.clone(),
+            waypoints_dyn,
+            Duration::from_millis(20),
+        )
+        .with_replay(trace_store.clone() as Arc<dyn RunTracePort>);
+        let mut stream = service.stream(&run_id).await.unwrap();
+
+        let mut replay_sequence = Vec::new();
+        while let Some(event) = stream.next().await {
+            assert_eq!(event.mode, RunStreamMode::Replay);
+            let is_done = event.kind == RunStreamEventKind::Done;
+            replay_sequence.push((event.kind, event.payload));
+            if is_done {
+                break;
+            }
+        }
+
+        assert_eq!(
+            live_sequence, replay_sequence,
+            "the live and replayed sequences (kind, payload) must be identical"
+        );
+    })
+    .await
+    .expect("replay_and_live_produce_the_same_wire_sequence must finish within 10s");
+}
+
+/// Behavior: with persistence off (no rows for the thread at all), a
+/// terminal run's stream falls straight through to the existing degraded
+/// Waypoint-polling path, unchanged -- and its synthesized events carry no
+/// `trace_seq` (D-16).
+#[tokio::test]
+async fn terminal_run_without_rows_falls_back_to_degraded() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let waypoints: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+        let bus = Arc::new(RunEventBus::new());
+        let empty_trace_store: Arc<dyn RunTracePort> = Arc::new(InMemoryRunTraceStore::new());
+
+        let run = Run::new(
+            RunId::new_v7(),
+            ThreadId::new("t-terminal-no-rows").unwrap(),
+            AssistantRef {
+                assistant_id: "a1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+        .with_status(RunStatus::Completed);
+        let run_id = run.run_id.clone();
+        repository.insert(&run).await.unwrap();
+
+        let service = RunEventStreamService::new(
+            bus,
+            repository.clone(),
+            waypoints,
+            Duration::from_millis(20),
+        )
+        .with_replay(empty_trace_store);
+        let mut stream = service.stream(&run_id).await.unwrap();
+
+        let mut saw_done = false;
+        while let Some(event) = stream.next().await {
+            assert_eq!(event.mode, RunStreamMode::Degraded);
+            assert!(
+                event.payload.get("trace_seq").is_none(),
+                "a degraded-mode event must never carry trace_seq"
+            );
+            if event.kind == RunStreamEventKind::Done {
+                saw_done = true;
+                break;
+            }
+        }
+        assert!(
+            saw_done,
+            "an already-terminal run with no persisted rows must still fall back to degraded \
+             and end with done"
+        );
+    })
+    .await
+    .expect("terminal_run_without_rows_falls_back_to_degraded must finish within 5s");
+}
+
+/// A [`RunTracePort`] wrapping a real [`InMemoryRunTraceStore`] but capping
+/// every `read`'s effective page size to `page_size`, regardless of the
+/// caller's requested `limit` -- proves the replay loop actually issues
+/// MULTIPLE `read` calls to walk a run's full record set, rather than
+/// assuming one call returns everything.
+struct PagingSpy {
+    inner: Arc<InMemoryRunTraceStore>,
+    page_size: usize,
+    read_calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl RunTracePort for PagingSpy {
+    async fn append(&self, records: &[TraceRecord]) -> Result<(), RunTraceError> {
+        self.inner.append(records).await
+    }
+
+    async fn read(
+        &self,
+        thread: &ThreadId,
+        after_seq: u64,
+        limit: u32,
+    ) -> Result<Vec<TraceRecord>, RunTraceError> {
+        self.read_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let capped = (self.page_size as u32).min(limit);
+        self.inner.read(thread, after_seq, capped).await
+    }
+
+    async fn prune_thread(
+        &self,
+        thread: &ThreadId,
+        before_superstep: u64,
+    ) -> Result<u64, RunTraceError> {
+        self.inner.prune_thread(thread, before_superstep).await
+    }
+}
+
+/// Behavior: a run with more records than one `read` page size is replayed
+/// completely, in order, with no repeats -- proven against a backend
+/// deliberately capped to a page size of 2 over 6 persisted records
+/// (T-28-11-03).
+#[tokio::test]
+async fn replay_paginates_through_the_port() {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let waypoints: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+    let inner = Arc::new(InMemoryRunTraceStore::new());
+    let read_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let spy: Arc<dyn RunTracePort> = Arc::new(PagingSpy {
+        inner: inner.clone(),
+        page_size: 2,
+        read_calls: read_calls.clone(),
+    });
+
+    let run = Run::new(
+        RunId::new_v7(),
+        ThreadId::new("t-paginate").unwrap(),
+        AssistantRef {
+            assistant_id: "a1".to_string(),
+            version: 1,
+        },
+        serde_json::json!({}),
+    )
+    .with_status(RunStatus::Completed);
+    let run_id = run.run_id.clone();
+    let thread_id = run.thread_id.clone();
+    repository.insert(&run).await.unwrap();
+
+    let mut records: Vec<TraceRecord> = (1..=5u64)
+        .map(|seq| TraceRecord {
+            thread_id: thread_id.clone(),
+            run_id: None,
+            seq,
+            at: chrono::Utc::now(),
+            event: TraceEvent::SuperstepStarted {
+                superstep: seq,
+                vanguard: vec![],
+            },
+        })
+        .collect();
+    records.push(TraceRecord {
+        thread_id: thread_id.clone(),
+        run_id: None,
+        seq: 6,
+        at: chrono::Utc::now(),
+        event: TraceEvent::RunFinished {
+            status: paladin_ports::output::trace_sink_port::RunFinishStatus::Completed,
+            total_supersteps: 5,
+            total_tokens: 0,
+            duration_ms: 1,
+            trace_dropped_total: 0,
+        },
+    });
+    inner.append(&records).await.unwrap();
+
+    let bus = Arc::new(RunEventBus::new());
+    let service = RunEventStreamService::new(
+        bus,
+        repository.clone(),
+        waypoints,
+        Duration::from_millis(10),
+    )
+    .with_replay(spy);
+    let mut stream = service.stream(&run_id).await.unwrap();
+
+    let mut kinds = Vec::new();
+    while let Some(event) = stream.next().await {
+        assert_eq!(event.mode, RunStreamMode::Replay);
+        let is_done = event.kind == RunStreamEventKind::Done;
+        kinds.push(event.kind);
+        if is_done {
+            break;
+        }
+    }
+    assert_eq!(
+        kinds.len(),
+        6,
+        "all five superstep records plus the terminal done must be replayed: {kinds:?}"
+    );
+    assert!(
+        read_calls.load(std::sync::atomic::Ordering::SeqCst) >= 3,
+        "a page size of 2 over 6 records must take at least 3 read calls, got {}",
+        read_calls.load(std::sync::atomic::Ordering::SeqCst)
+    );
 }

@@ -206,6 +206,26 @@ tokio-cron-scheduler = "0.13"
 # default; native and Docker builds keep using the system OpenSSL.
 openssl = { version = "0.10", optional = true }
 
+# OTLP trace export (28-09, D-12/D-13, X-11.4): all three optional, gated by
+# the `otel` feature declared below -- absent from `default` and from
+# `full`'s explicit member list, mirroring the `storage-postgres`/
+# `redis-cache` precedent. `default-features = false` on each: only the
+# `trace` signal is used (no metrics/logs export), and
+# `opentelemetry-otlp`'s DEFAULT feature set pulls in reqwest's *blocking*
+# client feature, which is NOT the async client D-12 specifies --
+# `reqwest-client` (the async one) is enabled explicitly instead.
+opentelemetry = { version = "0.32.0", default-features = false, features = ["trace"], optional = true }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["trace"], optional = true }
+# `reqwest-client` needs an ASYNC `reqwest` client at the SAME major version
+# `opentelemetry-http` depends on internally (0.13.x) -- not this crate's
+# own default `reqwest` line above (0.12.x). `reqwest_mcp` (below, an
+# existing unconditional dependency for the Arsenal MCP client) already
+# resolves to that exact 0.13.x line, so `otel_sink.rs` reuses
+# `reqwest_mcp::Client` for its no-redirect OTLP HTTP client rather than
+# declaring a second reqwest-0.13 alias here -- one compiled `reqwest`
+# 0.13.x unit serves both, not two.
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["http-proto", "reqwest-client", "trace"], optional = true }
+
 [dev-dependencies]
 mockito = "1.7.0"
 tempfile = "3.0"
@@ -255,6 +275,20 @@ paladin-web = { workspace = true }
 # `crates/paladin-battalion/Cargo.toml`'s identical extra-feature dev-dependency
 # precedent.
 tokio = { workspace = true, features = ["test-util"] }
+# `opentelemetry_sdk::trace::InMemorySpanExporter` (28-09, D-13a) -- the
+# `[dependencies]` entry above is `optional = true` behind the `otel`
+# feature and deliberately does NOT enable `testing` (a dev-only need, per
+# X-11.4, must not leak into the production `otel` feature's dependency
+# set); this dev-dependency entry adds ONLY that feature for test builds.
+# `src/infrastructure/telemetry/otel_sink.rs`'s own tests are still gated
+# `#[cfg(feature = "otel")]`, so this crate is compiled for test binaries
+# but never actually exercised unless `--features otel` is also passed --
+# mirroring `paladin-web`/`tower` above, this is a KNOWN, accepted
+# dev-build-only widening: `cargo tree` run against a TEST target (not a
+# plain `cargo build`) will show it regardless of `otel`; the `otel`
+# feature gate is what keeps it out of the compiled `paladin` library/
+# binary artifacts (X-11.4's actual scope), recorded in 28-09-SUMMARY.md.
+opentelemetry_sdk = { version = "0.32.1", features = ["testing"] }
 
 # Integration test configuration
 [[test]]
@@ -452,6 +486,11 @@ storage = ["storage-mysql", "storage-postgres"]
 # default `paladin-ai` build must gain no Redis driver beyond what `redis-queue`
 # already opts in separately.
 redis-cache = ["paladin-storage/redis-cache"]
+
+# OTLP trace export (28-09, D-12/D-13). Deliberately NOT part of `default`
+# or `full`'s implicit set -- see X-11.4: the default `paladin-ai` build
+# must gain no OTel dependency.
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
 
 # CLI (binary and test tooling only — not compiled into the library)
 cli = ["dep:clap", "dep:dialoguer", "dep:indicatif", "dep:console", "dep:serde_yaml", "dep:colored", "dep:comfy-table", "paladin-herald/table", "paladin-herald/color"]

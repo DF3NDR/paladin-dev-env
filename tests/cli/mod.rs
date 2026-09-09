@@ -19,6 +19,7 @@ mod formation_execution_test;
 mod graph_export_test;
 mod paladin_execution_test;
 mod phalanx_execution_test;
+mod run_export_test;
 mod tool_integration_test;
 
 // CLI output snapshot tests (Task 4.0 - Epic 24)

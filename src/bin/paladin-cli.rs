@@ -9,7 +9,9 @@ use paladin::application::cli::commands::{
     features,
     graph::{GraphCommands, run_graph_export},
     maneuver::{ManeuverCommands, handle_maneuver_command},
-    muster, onboarding, setup_check,
+    muster, onboarding,
+    run::{RunCommands, run_run_export},
+    setup_check,
 };
 use paladin::application::cli::error::CliError;
 use std::process;
@@ -101,6 +103,11 @@ enum Commands {
         #[command(subcommand)]
         action: GraphCommands,
     },
+    /// Run/thread execution overlay operations (export to Mermaid)
+    Run {
+        #[command(subcommand)]
+        action: RunCommands,
+    },
     /// Run a council discussion
     Council {
         /// Discussion topic
@@ -178,6 +185,11 @@ async fn main() {
         Commands::Graph { action } => match action {
             GraphCommands::Export(args) => {
                 run_graph_export(args.format, args.file, args.assistant, args.out).await
+            }
+        },
+        Commands::Run { action } => match action {
+            RunCommands::Export(args) => {
+                run_run_export(args.thread, args.waypoint, args.run, args.graph, args.out).await
             }
         },
         Commands::Muster {

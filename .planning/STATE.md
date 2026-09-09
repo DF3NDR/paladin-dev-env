@@ -2,33 +2,33 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 28
-current_phase_name: Observability & Tooling
-status: executing
-stopped_at: Phase 28 UI-SPEC approved
-last_updated: "2026-09-08T21:38:00.909Z"
-last_activity: 2026-09-08
-last_activity_desc: Phase 28 execution started
+current_phase: 29
+current_phase_name: Program Gates & Release
+status: planning
+stopped_at: Phase 28 complete, ready to plan Phase 29
+last_updated: "2026-09-09T22:19:22.954Z"
+last_activity: 2026-09-09
+last_activity_desc: Phase 28 complete, transitioned to Phase 29
 progress:
   total_phases: 8
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 128
-  completed_plans: 111
+  completed_plans: 128
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-08 after Phase 27)
+See: .planning/PROJECT.md (updated 2026-09-09 after Phase 28)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 28 — Observability & Tooling
+**Current focus:** Phase 29 — Program Gates & Release (SHIP-01…04, the v0.10.0 close)
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
-**Progress:** [████████░░] v0.10.0 — 7 of 9 phases complete (22, 22.1, 23, 24, 25, 26, 27); 111/111 planned plans executed
+**Progress:** [█████████░] v0.10.0 — 8 of 9 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28); 128/128 planned plans executed
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -51,16 +51,16 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 28 (Observability & Tooling) — EXECUTING
-Plan: 1 of 17
-Status: Executing Phase 28
-Last activity: 2026-09-08 — Phase 28 execution started
+Phase: 29 — Program Gates & Release
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-09 — Phase 28 complete, transitioned to Phase 29
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 298
+- Total plans completed: 315
 - Average duration: —
 - Total execution time: —
 
@@ -94,6 +94,7 @@ Last activity: 2026-09-08 — Phase 28 execution started
 | 25 | 14 | - | - |
 | 26 | 21 | - | - |
 | 27 | 26 | - | - |
+| 28 | 17 | - | - |
 
 *Updated after each plan completion*
 
@@ -126,6 +127,31 @@ Last activity: 2026-09-08 — Phase 28 execution started
 ## Accumulated Context
 
 ### Decisions
+
+**Phase 28 (closed 2026-09-09) — recorded as D-01 … D-41 in `28-CONTEXT.md`; the ones later
+phases must honor:**
+
+- D-02/D-03: `TraceRecord` is a `#[serde(flatten)]` envelope over the `#[serde(tag = "kind")]`
+  `TraceEvent`; one per-run `seq` authority (the engine's `TraceDispatcher`) reached only through
+  `TraceEmitter` handles (below-engine producers via the `RUN_TRACE_EMITTER` task-local). The
+  `NodeProgress`/`ParleyRaised` payload fields are `progress`/`parley_kind`, not the PRD's literal
+  `kind` (it would collide with the enum tag).
+
+- D-05: state values are never traced by default — opt-in, redacted before truncation, then capped.
+
+- D-14/D-15/D-16: the run event bus has one producer (`RunEventBusSink`); the wire `seq` stays the
+  bus counter and payloads carry `trace_seq`; `RunStreamMode::Replay` reads persisted `run_traces`
+  (migration 006, pruned with Waypoint retention).
+
+- D-27/D-33 + ADR-0048: `paladin-eval` is a published composition crate depending downward on the
+  leaf crates; the facade's only dependency on it is optional, behind `cli`.
+
+- D-35: live eval mode needs `--live` AND `PALADIN_EVAL_LIVE=1` AND a provider key — never in
+  default CI.
+
+- D-37: the ≤3 % tracing-overhead bar was measured and FAILED (log sink +22.18 %, composite
+  +18.46 %, `28-BENCH-EVIDENCE.md`); non-CI-gating by decision, accepted by maintainer sign-off at
+  close-out UAT (2026-09-09).
 
 **Phase 23 (closed 2026-09-04) — recorded as D-01 … D-30 in `23-CONTEXT.md`; the ones later
 phases must honor:**
@@ -360,6 +386,21 @@ Entering them here would fabricate authority the corpus does not contain.
 None yet.
 
 ### Blockers/Concerns
+
+**Phase 28 close (2026-09-09): no blockers.** 17 plans in 8 waves; verification `passed` 4/4 roadmap
+truths (51/51 artifacts, 32/32 key links); UAT 2/2 human checkpoints passed (`28-UAT.md`,
+`a9d4a2ee`); `28-SECURITY.md` `verified`, `threats_open: 0` (75/75); `28-VALIDATION.md` present.
+Close-out gates (`28-17-SUMMARY.md`, `28-CI-EVIDENCE.md`): coverage 90.28 % on `ff78a6b5`,
+api-surface baseline regenerated (3936 items — closes the carried Phase 25/26 concern), semver
+allowlist set-equality PASS, ADR-0048, `MIGRATION.md` §9.2–9.7 filled. Carried concerns: (1) PRD 07
+criterion 6 (≤3 % tracing overhead) measured FAIL at +22.18 %/+18.46 % on the synthetic
+all-Function-node bench — the maintainer signed it off at UAT, but no WINDOWS.md entry records the
+adjudication (only #33/#34 exist for this phase); add one if a written record is wanted before
+v0.10.0 ships. (2) Production-wiring caveat from `28-SECURITY.md`: replay, trace persistence and the
+`dev-ui` router are not wired at the composition root — re-secure whichever phase wires them.
+(3) The OTel sink uses `SimpleSpanProcessor` (one OTLP POST per span), unoptimized. (4) WINDOWS
+#33 (reduced `parley`/`done` SSE payload content) and #34 (`run export` derives no fired edges from
+Waypoints without a real graph) remain open.
 
 **Phase 26 close (2026-09-07): no blockers.** 21 plans in 14 waves (two executors in flight at most; per-executor worktree merges), verification `passed` 10/10 and re-verified after the code-review fix pass (`26-REVIEW.md`: CR-01 unredacted `ArmamentResult` text, CR-02 dropped after_model Finish, WR-01 `key=` false positives, WR-02 structured path bypasses middleware [documented], WR-03 unredacted tool output — all closed in `26-REVIEW-FIX.md`; IN-01 JWT heuristic false positive left open, advisory). Release gates recorded in `26-21-SUMMARY.md`: coverage 89.58 %, semver 11/11, MSRV 1.88, `make security`, api-surface regenerated (3057). Carried concerns: (1) CI "Check documentation" fails on ~60 pre-existing rustdoc warnings (none from Phase 26 after `93f22cce`); (2) Docker tiers CI/UAT-only; (3) Resolved: `26-SECURITY.md` written 2026-09-07 (`eb9051a2`, status `verified`, `threats_open: 0`). Learnings folded into `~/.claude/projects/-workspace/memory/gsd-run-mechanics-paladin.md`.
 
@@ -846,14 +887,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 28 UI-SPEC approved
+**Stopped at:** Phase 28 complete (UAT 2/2, verification `passed`, security `verified`), ready to plan Phase 29
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-08T20:43:10.483Z
-Resume file: .planning/phases/28-observability-tooling/28-UI-SPEC.md
+Last session: 2026-09-09T22:22:11.000Z
+Resume file: None
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**
@@ -914,5 +955,5 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
-- `28-SECURITY.md` written 2026-09-09 — `verified`, `threats_open: 0` (75/75 closed; `26-SECURITY.md` `eb9051a2` and `27-SECURITY.md` `849acdb1` likewise). Security step for Phases 26–28 is done; note the recorded production-wiring caveat (replay / trace persistence / `dev-ui` router not wired at the composition root — re-secure the phase that wires them).
-- Phase 28 close-out after the security audit: `/gsd-ship` / Phase 29 (SHIP-01…04)
+- Phase 28 closed 2026-09-09: UAT 2/2 passed (`28-UAT.md`, `a9d4a2ee`), `28-VERIFICATION.md` `passed`, `28-SECURITY.md` `verified` (`threats_open: 0`, 75/75). Carried: the production-wiring caveat (replay / trace persistence / `dev-ui` router not wired at the composition root — re-secure the phase that wires them) and the D-37 bench-overhead deviation signed off at UAT without a WINDOWS.md entry.
+- Next: `/gsd-discuss-phase 29` (no `29-CONTEXT.md` yet) then `/gsd-plan-phase 29` — SHIP-01…04, the v0.10.0 release phase. `/gsd-ship 28` is available for the feature-branch PR.

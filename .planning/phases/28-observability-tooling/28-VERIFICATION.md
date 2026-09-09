@@ -1,14 +1,16 @@
 ---
 phase: 28-observability-tooling
 verified: 2026-09-09T13:27:03Z
-status: human_needed
+status: passed
 score: 4/4 roadmap truths verified (all 17 plans' must_have truths independently spot-checked against code and tests; 6 judgment-tier prohibitions confirmed by code inspection, non-authoritative)
 behavior_unverified: 0
 overrides_applied: 0
 human_verification:
+
   - test: "Adjudicate PRD 07 acceptance criterion 6 (≤3% superstep-overhead-with-tracing bar, D-37) against the measured result in 28-BENCH-EVIDENCE.md: log_sink +22.18%, composite +18.46% vs the untraced baseline."
     expected: "A maintainer decision: (a) accept the deviation for v0.10.0 and record it as a closed WINDOWS.md/ADR item, (b) re-scope the acceptance bar to an I/O-bound (LLM-call) superstep rather than the synthetic all-Function-node microbenchmark, or (c) require follow-up optimization of `TraceDispatcher::emit`/`LogTraceSink` serialization before shipping. The measurement and its honest FAIL verdict are correctly recorded (28-BENCH-EVIDENCE.md, 28-06-SUMMARY.md, docs/src/operations/observability.md's Known Limitations section) — what's missing is the close-out adjudication D-37 itself calls for (\"This FAIL is flagged... for the phase close-out to adjudicate\") and a WINDOWS.md entry (only #33/#34 exist for this phase; no entry logs the bench-overhead FAIL)."
     why_human: "This is an explicit, PRD-named numeric acceptance bar that the implementation itself measured and failed by a wide margin (6-7x over budget). CONTEXT D-37 deliberately made this non-CI-gating (\"the record is the gate\") and directed the FAIL to be adjudicated at close-out — that adjudication has not happened. A verifier cannot make this policy call; a maintainer must decide whether v0.10.0 ships with this overhead, the bar is re-scoped, or the hot path is optimized first."
+
   - test: "Confirm the six judgment-tier safety/privacy prohibitions across the phase's must_haves (28-01 state-values-never-default, 28-05 scenario-file-not-an-execution-vector, 28-06 observability-never-load-bearing, 28-09 OTel-header-redaction-and-no-redirect, 28-12 live-mode-never-in-default-CI, 28-15 dev-ui-auth-gate-and-no-values-shown) against the codebase."
     expected: "Each prohibition holds. This verifier's own code inspection (recorded below) found supporting evidence for all six: redact-before-truncate ordering (`superstep.rs:3570-3574`), no `serde` derive on `CustomAssertion` (`assertion.rs:250-255`), `BlockingTraceSink`/`PanickingTraceSink`/the 500ms-sink timing test (`hooks.rs`), the OTel client's `Policy::none()` plus a passing `otlp_client_does_not_follow_redirects` test and `OtelConfig`'s manual redacting `Debug` impl, the three-way `--live` AND `PALADIN_EVAL_LIVE` AND provider-key gate with a passing test, and `dev_ui_unauthenticated_request_is_rejected` plus the `field_changes: Vec<FieldName>`-only (never values) `InspectorView` shape. This assessment is a non-authoritative LLM-judge verdict, per the judgment-tier prohibition policy — a human sign-off is the authoritative closure."
     why_human: "All six prohibitions are `verification: judgment` in the PLAN frontmatter, not `verification: test`-tier with an automated enforcement gate. Per the escalation-gate policy for judgment-tier prohibitions, this verifier's code-level confirmation is recorded but is explicitly non-authoritative; formal closure is a human sign-off, not a silent pass."
@@ -20,7 +22,7 @@ deferred: []
 
 **Phase Goal:** Every run emits a machine-consumable trace that reaches real consumers, graphs and runs are visualizable, and agent behavior is regression-testable.
 **Verified:** 2026-09-09T13:27:03Z
-**Status:** human_needed
+**Status:** passed (both human verification items signed off in `28-UAT.md`, 2026-09-09)
 **Re-verification:** No — initial verification
 
 ## Goal Achievement

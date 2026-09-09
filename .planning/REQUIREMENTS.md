@@ -262,19 +262,19 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
   whose slow/panicking implementations cannot stall or fail a run (bounded channel, drop-oldest,
   counted; catch_unwind; never awaited), with `CompositeSink` fan-out (OBS-FR-01…03)
 
-- [ ] **OBS-02**: Traces reach real consumers: a default-on structured-log sink; an `otel`-gated
+- [x] **OBS-02**: Traces reach real consumers: a default-on structured-log sink; an `otel`-gated
   OpenTelemetry exporter with span-per-attempt trees verified against a collector stub; the SSE
   bridge for `GET /runs/{id}/stream` as a TraceSink adapter (one pathway, two consumers); and
   opt-in `run_traces` persistence upgrading post-hoc stream replay to full fidelity, sharing
   ENG-05 retention (OBS-FR-04…07)
 
-- [ ] **OBS-03**: Graphs and runs are visualizable: golden-tested `WarGraphDoc → Mermaid/DOT`
+- [x] **OBS-03**: Graphs and runs are visualizable: golden-tested `WarGraphDoc → Mermaid/DOT`
   exporters, an execution-overlay export annotating outcomes/visit counts/fired edges/durations,
   `paladin-cli graph export` and `run export` commands, and a minimal auth-gated `dev-ui`
   inspector page from which a human can answer "which branch fired and why did node X run 3
   times" on the fixture run (OBS-FR-08…10)
 
-- [ ] **OBS-04**: Agent behavior is regression-testable: the new `paladin-eval` crate with a
+- [x] **OBS-04**: Agent behavior is regression-testable: the new `paladin-eval` crate with a
   scenario file format (scripted mock LLM behavior), an assertion library over the trace record
 
   + final Battlefield, a `cargo test`-integrable runner macro and `paladin-cli eval run` with
@@ -386,9 +386,9 @@ Which phases cover which requirements. Populated during roadmap creation.
 | PLAT-05 | Phase 27 | Complete |
 | PLAT-06 | Phase 27 | Complete |
 | OBS-01 | Phase 28 | Complete |
-| OBS-02 | Phase 28 | Pending |
-| OBS-03 | Phase 28 | Pending |
-| OBS-04 | Phase 28 | Pending |
+| OBS-02 | Phase 28 | Complete |
+| OBS-03 | Phase 28 | Complete |
+| OBS-04 | Phase 28 | Complete |
 | SHIP-01 | Phase 29 | Pending |
 | SHIP-02 | Phase 29 | Pending |
 | SHIP-03 | Phase 29 | Pending |

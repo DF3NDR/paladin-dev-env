@@ -109,6 +109,21 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 28 complete (2026-09-09)** — observability-tooling, the v0.10.0 milestone's seventh planned
+phase (OBS-01…04): the authoritative `TraceRecord`/`TraceEvent` stream with a per-run gapless `seq`,
+panic-isolated `CompositeSink` fan-out and a default-on structured-log sink; an `otel`-gated OTLP
+exporter with span-per-attempt trees verified against an axum collector stub; persisted `run_traces`
+(migration 006, three backends) feeding `RunStreamMode::Replay` on the one-producer SSE bus;
+golden-tested `WarGraphDoc → Mermaid/DOT` exporters with an execution overlay reachable via
+`paladin-cli graph export`/`run export` and an admin-gated `dev-ui` inspector page; and the new
+`paladin-eval` composition crate (ADR-0048) running `.eval.yaml` scenarios through a `libtest-mimic`
+harness and `paladin-cli eval run --repeat/--bless`, with E2E-1/2/3 dogfooded as eval scenarios.
+17 plans in 8 waves; verification `passed` 4/4; UAT 2/2 human checkpoints; `28-SECURITY.md`
+`verified` (75/75 threats closed); coverage 90.28 % on `ff78a6b5`; api-surface baseline regenerated
+(3936 items). Known deviation: PRD 07 criterion 6's ≤3 % tracing-overhead bar measured at
++22.18 % (log sink) / +18.46 % (composite) on the synthetic all-Function-node bench — non-CI-gating by
+D-37 and accepted by maintainer sign-off at close-out UAT.
+
 **Phase 27 complete (2026-09-08)** — platform-api, the v0.10.0 milestone's sixth planned phase: durable background runs (`Run` status machine, `RunRepositoryPort` SQLite/Postgres, `RunQueuePort` InMemory/Redis with Lua lease claims), a worker pool with lease heartbeats, resume-not-restart redelivery and cross-instance cancellation, Parley `AwaitingInput` release and same-`run_id` resume, live SSE streaming with a documented polling degraded mode, append-only versioned assistants with `WarGraphDoc` compile and a restart-stable fingerprint, cron schedules, HMAC-signed webhook delivery behind an SSRF guard, and the production-shaped HTTP surface (auth, rate limits, scopes, pagination, regenerated `openapi.json`, generated Python/TypeScript clients smoke-tested in CI). 26 plans (18 planned + 8 gap-closure), verification passed 6/6 after a gap-closure cycle whose live proof is `27-CI-EVIDENCE.md` (CI run 34245093476 @ `2bf43cd2`: `redis-queue` 19/19 live, `postgres-integration` 87/87 live, coverage 89.98 % ≥ 82 % floor, `sdk-clients` both generated clients reach `completed`, `api-surface` unchanged at 3763 items on CI's own nightly via the new `normalize-api-bounds.py` canonicaliser, new `e2e-platform-api` job 1/1). Code review of the gap-closure set: CR-01/WR-01…04 remediated; the second-pass advisories WR-27-01 (the `Ok(None)` signing-key arm in `webhook/service.rs`, fixed `4b6592de`) and IN-27-01 (stale eslint comment in `smoke.ts`, fixed `b5ee33d4`) are both closed in `27-REVIEW-FIX.md`. Security: `27-SECURITY.md` is `verified` with `threats_open: 0` — 107/107 threats closed at ASVS L1, the one blocking `high` (T-27-22-02, the WR-27-01 arm) re-audited closed on 2026-09-08 (`849acdb1`). Carried concerns: WINDOWS.md rows 31/32 track the deferred `Agent`-kind webhook/live-bus delivery and the unscoped run-read routes; webhook SSRF DNS rebinding remains a documented limitation.
 
 **Phase 26 complete (2026-09-07)** — agent-runtime-enhancements, the v0.10.0 milestone's
@@ -654,7 +669,7 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
   structured output, provider-conformance close-out, reasoning_agent preset (Doc 05)
 - [x] **PLAT-01 … PLAT-06** (✓ Phase 27, 2026-09-08) — Background runs, worker pool + queue, parley/streaming integration,
   versioned assistants, schedules + webhooks, API cross-cutting + generated-client gate (Doc 06)
-- [ ] **OBS-01 … OBS-04** — Trace event model + sinks, visualization export, eval harness (Doc 07)
+- [x] **OBS-01 … OBS-04** (✓ Phase 28, 2026-09-09) — Trace event model + sinks, visualization export, eval harness (Doc 07)
 - [ ] **SHIP-01 … SHIP-04** — `MIGRATION.md` complete, compat proofs (v0.9-config boot test,
   `openapi.json` golden diff), program acceptance audit, v0.10.0 release readiness (overview §5, §9)
 
@@ -1625,3 +1640,7 @@ requirements, 86 forward requirements across 16 phases, 60 variant entries acros
 ---
 *Last updated: 2026-09-08 after Phase 27 completion (v0.10.0 milestone; next: Phase 28
 observability & tooling).*
+
+---
+*Last updated: 2026-09-09 after Phase 28 completion (v0.10.0 milestone; OBS-01…04 validated;
+next: Phase 29 program gates & release — SHIP-01…04, the milestone's final phase).*

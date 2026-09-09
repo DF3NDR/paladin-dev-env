@@ -201,7 +201,7 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 - [x] **Phase 25: Node-Level Fault Tolerance** - Typed error transience, per-node Aegis retry, wall/idle timeouts, typed compensation handlers, provider fallback, and node result caching (completed 2026-09-06)
 - [x] **Phase 26: Agent Runtime Enhancements** - Execution middleware chain, context-window management, cross-session Vault memory, structured output, provider conformance close-out, and a one-line reasoning agent (completed 2026-09-07)
 - [x] **Phase 27: Platform API** - Durable background runs on a worker pool, Parley/streaming integration, versioned assistants, and API-managed schedules/webhooks (completed 2026-09-08)
-- [ ] **Phase 28: Observability & Tooling** - Machine-consumable trace stream, OTel/log/SSE consumers, graph/run visualization, and the paladin-eval regression harness
+- [x] **Phase 28: Observability & Tooling** - Machine-consumable trace stream, OTel/log/SSE consumers, graph/run visualization, and the paladin-eval regression harness (completed 2026-09-09)
 - [ ] **Phase 29: Program Gates & Release** - Complete MIGRATION.md, proven backward compatibility, the program acceptance audit, and a releasable v0.10.0
 
 ## Phase Details
@@ -668,7 +668,7 @@ Plans:
   3. Golden-tested `WarGraphDoc → Mermaid/DOT` exporters and an execution-overlay export let a human answer "which branch fired and why did node X run 3 times" via `paladin-cli graph export`/`run export` and a minimal auth-gated `dev-ui` inspector page (OBS-03)
   4. The new `paladin-eval` crate runs scripted mock-LLM scenario files through a `cargo test`-integrable runner macro and `paladin-cli eval run --repeat`/`--bless`, with the three program E2E fixtures dogfooded as eval scenarios (OBS-04)
 
-**Plans:** 17 plans
+**Plans:** 17/17 plans complete
 
 Plans:
 **Wave 1**
@@ -755,7 +755,7 @@ Plans:
 | 25. Node-Level Fault Tolerance | v0.10.0 | 14/14 | Complete    | 2026-09-06 |
 | 26. Agent Runtime Enhancements | v0.10.0 | 21/21 | Complete    | 2026-09-07 |
 | 27. Platform API | v0.10.0 | 26/26 | Complete    | 2026-09-08 |
-| 28. Observability & Tooling | v0.10.0 | 0/0 | Not started | - |
+| 28. Observability & Tooling | v0.10.0 | 17/17 | Complete    | 2026-09-09 |
 | 29. Program Gates & Release | v0.10.0 | 0/0 | Not started | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits

@@ -1,0 +1,57 @@
+[package]
+name = "paladin-eval"
+version = "0.9.0"
+edition = "2024"
+rust-version.workspace = true
+authors = ["Am0rfu5"]
+license = "MIT OR Apache-2.0"
+description = "Deterministic evaluation harness for Paladin agent graphs — a serde scenario file format, a scripted LlmPort, and assertions evaluated over a captured trace record (OBS-04)."
+readme = "README.md"
+repository = "https://github.com/DF3NDR/paladin-dev-env"
+keywords = ["ai", "agents", "testing", "evaluation", "orchestration"]
+categories = ["development-tools::testing", "development-tools", "asynchronous"]
+documentation = "https://docs.rs/paladin-eval"
+# D-27 (28-CONTEXT.md, checkpoint:decision Task 1 auto-resolved option-a,
+# 2026-09-08): paladin-eval is published so a downstream team can take it as
+# a [dev-dependencies] entry, the crate's stated purpose. It depends downward
+# on the leaf crates only and never on the facade `paladin-ai` (D-27) --
+# see this manifest's [dependencies] below.
+publish = true
+
+[dependencies]
+# Leaf-crate dependency shape (D-27): paladin-core, paladin-ports,
+# paladin-battalion, paladin-llm (mock feature only) and paladin-storage
+# (sqlite feature, for the E2E fixtures' temp-file stores). Never
+# paladin-ai -- a dependency cycle through dev-deps is legal but a
+# maintenance trap the crate's own tests must not create.
+paladin-core = { package = "paladin-ai-core", version = "0.9.0", path = "../paladin-core" }
+paladin-ports = { version = "0.9.0", path = "../paladin-ports" }
+paladin-battalion = { version = "0.9.0", path = "../paladin-battalion" }
+paladin-llm = { version = "0.9.0", path = "../paladin-llm", default-features = false, features = [
+    "mock",
+] }
+paladin-storage = { version = "0.9.0", path = "../paladin-storage", features = [
+    "sqlite",
+] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Not a [workspace.dependencies] entry -- mirrors the root facade manifest's
+# own `serde_yaml = { version = "0.9", optional = true }` pin (Cargo.toml:193),
+# except non-optional here: the scenario file format's primary spelling is
+# YAML (D-28).
+serde_yaml = "0.9"
+regex = { workspace = true }
+# schemars derives Scenario's golden JSON Schema (D-28). Pinned to the same
+# "1.2" string already resolved workspace-wide via rmcp/paladin-ai and
+# paladin-battalion's own schemars edge (paladin-battalion/Cargo.toml:45) --
+# a new dependency EDGE on an already-resolved package, never a new package
+# in the lock file.
+schemars = "1.2"
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

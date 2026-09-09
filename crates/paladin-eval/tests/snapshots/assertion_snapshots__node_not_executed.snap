@@ -1,0 +1,11 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: node_not_executed { node: "planner" }
+  expected: zero executions
+  observed: 1 execution(s)
+  seq: 3..=3
+  detail:
+    visits (seq / superstep / attempt / outcome):
+      seq=3 superstep=1 attempt=1 outcome=Succeeded

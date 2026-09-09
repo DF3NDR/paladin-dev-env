@@ -438,6 +438,17 @@ impl TraceDispatcher {
     pub fn thread_id(&self) -> &ThreadId {
         &self.thread_id
     }
+
+    /// The Platform API run every record this dispatcher stamps belongs to,
+    /// when known (CR-01, 28-REVIEW): mirrors [`TraceDispatcher::thread_id`]
+    /// for the `run_id` this dispatcher was constructed with, so an emit
+    /// site that only holds `&TraceDispatcher` can stamp
+    /// `TraceEvent::RunStarted.run_id` from the SAME value already recorded
+    /// on every `TraceRecord` envelope this dispatcher produces, rather than
+    /// hardcoding `None`.
+    pub fn run_id(&self) -> Option<&RunId> {
+        self.run_id.as_ref()
+    }
 }
 
 impl TraceEmitter for TraceDispatcher {

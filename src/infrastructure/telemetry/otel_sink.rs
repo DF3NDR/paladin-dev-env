@@ -458,7 +458,13 @@ impl TraceSink for OtelTraceSink {
                 run_id,
                 graph_fingerprint,
             } => {
-                self.start_run_span(&thread_id, run_id.as_ref(), at, graph_fingerprint);
+                // CR-01 (28-REVIEW): fall back to the envelope's own
+                // `record.run_id` when the event-level field is `None` --
+                // defense-in-depth so a future producer that repeats the
+                // hardcoded-`None` mistake doesn't silently reintroduce a
+                // missing `paladin.run_id` on the OTel root span.
+                let run_id = run_id.as_ref().or(record.run_id.as_ref());
+                self.start_run_span(&thread_id, run_id, at, graph_fingerprint);
             }
             TraceEvent::NodeStarted {
                 superstep,
@@ -674,6 +680,57 @@ mod tests {
                 .iter()
                 .any(|kv| kv.key.as_str() == "paladin.trace.partial")
         );
+    }
+
+    /// CR-01 (28-REVIEW): when `TraceEvent::RunStarted.run_id` is `None`
+    /// but the envelope's own `TraceRecord.run_id` is populated (the shape
+    /// every hardcoded-`None` emit site produced before the fix), the root
+    /// span must still carry `paladin.run_id` from the envelope fallback --
+    /// defense-in-depth against a future producer repeating the mistake.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn run_started_falls_back_to_envelope_run_id_when_event_field_is_none() {
+        let (sink, exporter) = sink_and_exporter("run-id-fallback-test");
+        let t = thread("t-run-id-fallback");
+        let run_id = RunId::new_v7();
+        let start = Utc::now();
+        let end = start + ChronoDuration::milliseconds(10);
+
+        sink.on_event(TraceRecord {
+            thread_id: t.clone(),
+            run_id: Some(run_id.clone()),
+            seq: 1,
+            at: start,
+            event: TraceEvent::RunStarted {
+                run_id: None,
+                graph_fingerprint: "fp".into(),
+            },
+        })
+        .await
+        .unwrap();
+        sink.on_event(TraceRecord {
+            thread_id: t,
+            run_id: Some(run_id.clone()),
+            seq: 2,
+            at: end,
+            event: TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 0,
+                total_tokens: 0,
+                duration_ms: 10,
+                trace_dropped_total: 0,
+            },
+        })
+        .await
+        .unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1, "exactly one root span: {spans:?}");
+        let run_id_attr = spans[0]
+            .attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == "paladin.run_id")
+            .expect("paladin.run_id must be set from the envelope's run_id fallback");
+        assert_eq!(run_id_attr.value.as_str(), run_id.to_string());
     }
 
     /// Behavior: `retried_node_produces_sibling_attempt_spans` -- a node

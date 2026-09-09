@@ -2038,7 +2038,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         let trace = self.take_or_build_trace_dispatcher(&thread);
         self.remember_trace_dispatcher(&trace);
         trace.emit(TraceEvent::RunStarted {
-            run_id: None,
+            run_id: trace.run_id().cloned(),
             graph_fingerprint: graph.fingerprint().to_string(),
         });
         // D-02: this call's own wall-clock start, for `RunFinished
@@ -2184,7 +2184,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
 
         if matches!(latest.status, WaypointStatus::Completed) {
             trace.emit(TraceEvent::RunStarted {
-                run_id: None,
+                run_id: trace.run_id().cloned(),
                 graph_fingerprint: expected.to_string(),
             });
             // D-02, D-04: nothing executed on this call (the thread was
@@ -2271,7 +2271,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         graph.validate_structured_executor_backend(self.structured_executor.is_some())?;
 
         trace.emit(TraceEvent::RunStarted {
-            run_id: None,
+            run_id: trace.run_id().cloned(),
             graph_fingerprint: expected.to_string(),
         });
         // --- CF-FR-12, D-14: a mid-muster progress Waypoint re-enters the
@@ -2619,7 +2619,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         }
 
         trace.emit(TraceEvent::RunStarted {
-            run_id: None,
+            run_id: trace.run_id().cloned(),
             graph_fingerprint: expected.to_string(),
         });
         // --- D-08: the persisted `AwaitingInput` Waypoint's OWN `vanguard`
@@ -2792,7 +2792,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         // site below.
         let run_started_at = tokio::time::Instant::now();
         trace.emit(TraceEvent::RunStarted {
-            run_id: None,
+            run_id: trace.run_id().cloned(),
             graph_fingerprint: expected.to_string(),
         });
         let outcome = superstep::run_with_namespace(
@@ -10708,6 +10708,70 @@ mod tests {
         for pair in seqs.windows(2) {
             assert_eq!(pair[1], pair[0] + 1, "seq must be gapless: {seqs:?}");
         }
+    }
+
+    /// CR-01 (28-REVIEW): `TraceEvent::RunStarted.run_id` must carry the
+    /// run's real `RunId`, not a hardcoded `None`, whenever `start()`'s own
+    /// dispatcher was bound to one via `with_bound_trace` -- the same
+    /// pattern the production worker uses (`worker.rs`, `Some(run.run_id
+    /// .clone())`). Before the fix, every `RunStarted` emit site in this
+    /// file wrote the literal `None`, so this assertion would have failed.
+    #[tokio::test]
+    async fn run_started_carries_the_bound_run_id() {
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let id = NodeId::new("solo");
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(out, serde_json::json!("v"))),
+        );
+        graph.add_entry(id);
+
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("run-started-carries-run-id").unwrap();
+        let run_id = RunId::new_v7();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone())
+        .with_bound_trace(thread.clone(), Some(run_id.clone()));
+
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+
+        let run_started = events
+            .iter()
+            .find(|r| matches!(r.event, TraceEvent::RunStarted { .. }))
+            .expect("RunStarted must have been emitted");
+        match &run_started.event {
+            TraceEvent::RunStarted {
+                run_id: event_run_id,
+                ..
+            } => {
+                assert_eq!(
+                    event_run_id,
+                    &Some(run_id.clone()),
+                    "RunStarted.run_id must carry the dispatcher's own bound run_id, not None"
+                );
+            }
+            other => panic!("expected RunStarted, got {other:?}"),
+        }
+        // The envelope-level field must agree too -- both are now the same
+        // value, stamped from the same dispatcher.
+        assert_eq!(run_started.run_id, Some(run_id));
     }
 
     /// 28-06: a `with_bound_trace` binding for a DIFFERENT thread than the

@@ -223,6 +223,6 @@ shape.
 
 LLM child spans; `FallbackHop.node_id` enrichment; live SSE attach in the inspector; DOT overlay;
 `WarGraphDoc` Function-node registry; LLM-as-judge; `tracing` migration; values on the SSE wire;
-per-`run_traces` retention tunables; vendored Mermaid; Phase 27 open items (`27-SECURITY.md`,
-WR-27-01, IN-27-01, WINDOWS.md 31/32); SHIP-01…04; carried review warnings. Reviewed-not-folded
+per-`run_traces` retention tunables; vendored Mermaid; Phase 27 items (`27-SECURITY.md`,
+WR-27-01, IN-27-01 — already closed; WINDOWS.md 31/32 still open); SHIP-01…04; carried review warnings. Reviewed-not-folded
 todo: local coverage reproduction (no match ≥ 0.4).

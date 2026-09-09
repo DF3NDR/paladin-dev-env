@@ -51,8 +51,8 @@ discipline), the `MIGRATION.md` §9 rows this phase owes, and the release gates
 diff and the program acceptance audit (SHIP-01…04, Phase 29); a graphical IDE or live-editing
 studio, a hosted trace product, browser-automation tests of the inspector, and LLM-as-judge eval
 scoring (PRD 07 §5); LLM-call child spans under attempt spans (PRD 07 OBS-FR-05 "MAY, not
-required"); `27-SECURITY.md` (`/gsd-secure-phase 27` is a separate, still-open step — see
-STATE.md). Any behavioral change to an existing public surface discovered mid-implementation is
+required"); `27-SECURITY.md` (Phase 27's own audit, not this phase's — already `verified`, `threats_open: 0`
+as of `849acdb1`, 2026-09-08). Any behavioral change to an existing public surface discovered mid-implementation is
 an X-03 stop-and-flag event, not a judgment call.
 
 </domain>
@@ -816,8 +816,9 @@ Decision numbering continues the house style (D-01 …). Each carries the PRD 07
 - **Per-`run_traces` retention tunables** — D-17 shares the Waypoint policy by design.
 - **Vendoring Mermaid** — D-26's rejected alternative; revisit only if a CDN-free build is
   demanded.
-- **`27-SECURITY.md`** (`/gsd-secure-phase 27`), WR-27-01 (`Ok(None)` signing-key arm),
-  IN-27-01, WINDOWS.md rows 31/32 — Phase 27's open items, not this phase's.
+- **`27-SECURITY.md`**, WR-27-01, IN-27-01 — Phase 27's items, not this phase's; all three were
+  already closed when this context was captured (`849acdb1`, `4b6592de`, `b5ee33d4`).
+  WINDOWS.md rows 31/32 remain Phase 27's genuinely open carry-forwards.
 - **`MIGRATION.md` §9 finalisation, the v0.9-config boot test, openapi golden diff, program
   acceptance audit, v0.10.0 version bump** — SHIP-01…04 (Phase 29). This phase fills its rows
   (D-39); Phase 29 proves they are complete.

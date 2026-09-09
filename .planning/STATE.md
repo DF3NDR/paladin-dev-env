@@ -361,7 +361,7 @@ None yet.
 
 ### Blockers/Concerns
 
-**Phase 26 close (2026-09-07): no blockers.** 21 plans in 14 waves (two executors in flight at most; per-executor worktree merges), verification `passed` 10/10 and re-verified after the code-review fix pass (`26-REVIEW.md`: CR-01 unredacted `ArmamentResult` text, CR-02 dropped after_model Finish, WR-01 `key=` false positives, WR-02 structured path bypasses middleware [documented], WR-03 unredacted tool output — all closed in `26-REVIEW-FIX.md`; IN-01 JWT heuristic false positive left open, advisory). Release gates recorded in `26-21-SUMMARY.md`: coverage 89.58 %, semver 11/11, MSRV 1.88, `make security`, api-surface regenerated (3057). Carried concerns: (1) CI "Check documentation" fails on ~60 pre-existing rustdoc warnings (none from Phase 26 after `93f22cce`); (2) Docker tiers CI/UAT-only; (3) `26-SECURITY.md` not yet written — `/gsd-secure-phase 26` is the next step. Learnings folded into `~/.claude/projects/-workspace/memory/gsd-run-mechanics-paladin.md`.
+**Phase 26 close (2026-09-07): no blockers.** 21 plans in 14 waves (two executors in flight at most; per-executor worktree merges), verification `passed` 10/10 and re-verified after the code-review fix pass (`26-REVIEW.md`: CR-01 unredacted `ArmamentResult` text, CR-02 dropped after_model Finish, WR-01 `key=` false positives, WR-02 structured path bypasses middleware [documented], WR-03 unredacted tool output — all closed in `26-REVIEW-FIX.md`; IN-01 JWT heuristic false positive left open, advisory). Release gates recorded in `26-21-SUMMARY.md`: coverage 89.58 %, semver 11/11, MSRV 1.88, `make security`, api-surface regenerated (3057). Carried concerns: (1) CI "Check documentation" fails on ~60 pre-existing rustdoc warnings (none from Phase 26 after `93f22cce`); (2) Docker tiers CI/UAT-only; (3) Resolved: `26-SECURITY.md` written 2026-09-07 (`eb9051a2`, status `verified`, `threats_open: 0`). Learnings folded into `~/.claude/projects/-workspace/memory/gsd-run-mechanics-paladin.md`.
 
 **Phase 25 close (2026-09-06): no blockers.** UAT 76/76 passed (`25-UAT.md`: 72 deliverables
 auto-passed from SUMMARY coverage blocks, 4 human checkpoints; the CI-only Redis node-cache and
@@ -914,5 +914,5 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
-- `/gsd-secure-phase 26` — security enforcement is on and no `26-SECURITY.md` exists yet (D-41 posture evidence is in `26-21-SUMMARY.md`)
-- `/gsd-discuss-phase 27` — gather context for Phase 27 Platform API (no CONTEXT.md exists yet), then `/gsd-plan-phase 27`
+- `/gsd-secure-phase 28` — security enforcement is on and no `28-SECURITY.md` exists yet. (`26-SECURITY.md` `eb9051a2` and `27-SECURITY.md` `849acdb1` are both `verified`, `threats_open: 0` — those steps are done.)
+- Phase 28 close-out after the security audit: `/gsd-ship` / Phase 29 (SHIP-01…04)

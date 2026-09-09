@@ -832,17 +832,22 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                             let dispatcher = Arc::new(TraceDispatcher::with_capacity(
                                 run.thread_id.clone(),
                                 Some(run.run_id.clone()),
-                                Some(Arc::clone(&sink)),
+                                Some(sink.clone()),
                                 self.trace_config.channel_capacity,
                             ));
                             engine = engine
                                 .with_trace_sink(sink)
                                 .with_trace_capacity(self.trace_config.channel_capacity)
-                                .with_bound_trace_dispatcher(
-                                    run.thread_id.clone(),
-                                    Arc::clone(&dispatcher),
-                                );
-                            Some(dispatcher as Arc<dyn TraceEmitter>)
+                                .with_bound_trace_dispatcher(run.thread_id.clone(), dispatcher);
+                            // `trace_emitter()` returns the SAME dispatcher
+                            // `with_bound_trace_dispatcher` just bound
+                            // (28-06's own `with_bound_trace`/
+                            // `trace_emitter` doc comments): the canonical
+                            // accessor, not a second cast of the local
+                            // `dispatcher` variable, so this handle is
+                            // provably the one `start`/`resume*` itself
+                            // will use once dispatch begins below.
+                            Some(engine.trace_emitter())
                         }
                         None => None,
                     };

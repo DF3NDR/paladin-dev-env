@@ -16,6 +16,8 @@
 - [Content Processing](user-guides/content-processing.md)
 - [Agent ↔ Orchestrator Bridge](user-guides/agent-orchestrator-bridge.md)
 - [Arsenal Tools](user-guides/arsenal-tools.md)
+- [Graph Visualization](user-guides/graph-visualization.md)
+- [Eval Harness](user-guides/eval-harness.md)
 - [Garrison Memory](user-guides/garrison-memory.md)
 - [Sanctum Vector Memory](user-guides/sanctum-vector-memory.md)
 - [Herald Output](user-guides/herald-output.md)
@@ -55,6 +57,7 @@
 
 # Operations
 
+- [Observability: Traces, Sinks and Persistence](operations/observability.md)
 - [Logging](operations/logging.md)
 - [Monitoring](operations/monitoring.md)
 - [Performance Tuning](operations/performance-tuning.md)

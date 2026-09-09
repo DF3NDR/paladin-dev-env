@@ -5,12 +5,12 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 29
 current_phase_name: Program Gates & Release
 status: planning
-stopped_at: Phase 28 complete, ready to plan Phase 29
-last_updated: "2026-09-09T22:19:22.954Z"
+stopped_at: Phase 29 context gathered
+last_updated: "2026-09-09T22:39:52.871Z"
 last_activity: 2026-09-09
 last_activity_desc: Phase 28 complete, transitioned to Phase 29
 progress:
-  total_phases: 8
+  total_phases: 9
   completed_phases: 8
   total_plans: 128
   completed_plans: 128
@@ -887,14 +887,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 28 complete (UAT 2/2, verification `passed`, security `verified`), ready to plan Phase 29
+**Stopped at:** Phase 29 context gathered
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-09T22:22:11.000Z
-Resume file: None
+Last session: 2026-09-09T22:39:52.815Z
+Resume file: .planning/phases/29-program-gates-release/29-CONTEXT.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

@@ -14,14 +14,19 @@
 //!
 //! [`build_run_sink`] is also where the `otel`-gated [`OtelTraceSink`]
 //! (28-09) joins the fan-out, behind BOTH the Cargo feature and
-//! `trace.otel.enabled` — a default build never references it (D-10/D-11).
+//! `trace.otel.enabled` — a default build never references it (D-10/D-11),
+//! and where [`PersistingTraceSink`] (28-11, OBS-FR-07) joins it behind
+//! `trace.persist` AND an available [`RunTracePort`] -- a build/run with no
+//! persistence backend wired never attaches it either.
 
 pub mod log_sink;
 #[cfg(feature = "otel")]
 pub mod otel_sink;
+pub mod persisting_sink;
 
 use std::sync::Arc;
 
+use paladin_ports::output::run_trace_port::RunTracePort;
 use paladin_ports::output::trace_sink_port::{CompositeSink, TraceSink};
 
 use crate::config::trace::TraceConfig;
@@ -29,22 +34,32 @@ use crate::config::trace::TraceConfig;
 pub use log_sink::LogTraceSink;
 #[cfg(feature = "otel")]
 pub use otel_sink::OtelTraceSink;
+pub use persisting_sink::PersistingTraceSink;
 
 /// Assemble the sink a single run should forward its trace records to,
-/// given `config` and an optional already-built `bus_sink` (the D-24
-/// `RunEventBusSink` the worker attaches when an event bus is wired).
+/// given `config`, an optional already-built `bus_sink` (the D-24
+/// `RunEventBusSink` the worker attaches when an event bus is wired) and an
+/// optional `run_trace_port` (the durable backend a
+/// [`PersistingTraceSink`] writes through, when `trace.persist` is set).
 ///
-/// - None of `config.log_sink`, `bus_sink`, and (`otel`-feature builds
-///   only) `config.otel.enabled` -> `None`: the caller must NOT attach a
-///   `TraceSink` at all, so the engine's own untraced path (D-10) is used
-///   and tracing costs nothing for this run.
+/// - None of `config.log_sink`, `bus_sink`, `config.persist` (with a port
+///   available), and (`otel`-feature builds only) `config.otel.enabled` ->
+///   `None`: the caller must NOT attach a `TraceSink` at all, so the
+///   engine's own untraced path (D-10) is used and tracing costs nothing
+///   for this run.
 /// - Exactly one configured -> that one sink directly, unwrapped from a
 ///   `CompositeSink` -- no fan-out overhead when there is only one
 ///   consumer.
 /// - More than one -> a `CompositeSink` of the configured sinks, log sink
-///   first, then the bus sink, then (when compiled and enabled) the OTel
-///   sink -- every below-engine record reaches every configured consumer
-///   from the SAME dispatcher.
+///   first, then the bus sink, then the persisting sink, then (when
+///   compiled and enabled) the OTel sink -- every below-engine record
+///   reaches every configured consumer from the SAME dispatcher.
+///
+/// `trace.persist` with NO `run_trace_port` available is a no-op for this
+/// function (never attaches [`PersistingTraceSink`]) -- the caller (the
+/// worker's own composition root) is responsible for only setting
+/// `trace.persist` when it also wires a `RunTracePort`; this function does
+/// not treat a missing port as an error.
 ///
 /// A failure constructing the OTel sink (`otel`-feature builds only, e.g. a
 /// malformed endpoint the exporter itself rejects at build time) is
@@ -53,6 +68,7 @@ pub use otel_sink::OtelTraceSink;
 pub fn build_run_sink(
     config: &TraceConfig,
     bus_sink: Option<Arc<dyn TraceSink>>,
+    run_trace_port: Option<Arc<dyn RunTracePort>>,
 ) -> Option<Arc<dyn TraceSink>> {
     let mut sinks: Vec<Arc<dyn TraceSink>> = Vec::new();
 
@@ -61,6 +77,11 @@ pub fn build_run_sink(
     }
     if let Some(bus) = bus_sink {
         sinks.push(bus);
+    }
+    if config.persist
+        && let Some(port) = run_trace_port
+    {
+        sinks.push(Arc::new(PersistingTraceSink::new(port)));
     }
     #[cfg(feature = "otel")]
     if config.otel.enabled {
@@ -106,7 +127,7 @@ mod tests {
             log_sink: false,
             ..TraceConfig::default()
         };
-        assert!(build_run_sink(&config, None).is_none());
+        assert!(build_run_sink(&config, None, None).is_none());
     }
 
     /// Behavior: `trace.log_sink` on with no bus sink returns exactly one
@@ -117,7 +138,7 @@ mod tests {
             log_sink: true,
             ..TraceConfig::default()
         };
-        let sink = build_run_sink(&config, None);
+        let sink = build_run_sink(&config, None, None);
         assert!(sink.is_some());
     }
 
@@ -130,7 +151,7 @@ mod tests {
             ..TraceConfig::default()
         };
         let bus: Arc<dyn TraceSink> = Arc::new(NoopSink);
-        assert!(build_run_sink(&config, Some(bus)).is_some());
+        assert!(build_run_sink(&config, Some(bus), None).is_some());
     }
 
     /// Behavior: both configured -- the composite fans out to both,
@@ -167,7 +188,7 @@ mod tests {
             count: std::sync::atomic::AtomicUsize::new(0),
         });
         let bus_sink: Arc<dyn TraceSink> = bus_recorder.clone();
-        let sink = build_run_sink(&config, Some(bus_sink)).expect("both configured");
+        let sink = build_run_sink(&config, Some(bus_sink), None).expect("both configured");
 
         let record = paladin_ports::output::trace_sink_port::TraceRecord {
             thread_id: paladin_core::platform::container::waypoint::ThreadId::new("t1").unwrap(),

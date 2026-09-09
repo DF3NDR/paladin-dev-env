@@ -52,6 +52,7 @@ use paladin_ports::output::run_queue_port::{LeaseToken, LeasedRun, RunQueuePort}
 use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunRepositoryError, RunRepositoryPort,
 };
+use paladin_ports::output::run_trace_port::RunTracePort;
 use paladin_ports::output::trace_sink_port::{RUN_TRACE_EMITTER, TraceEmitter, TraceSink};
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
@@ -523,6 +524,15 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// shared-engine ("no factory") path, exactly like `event_bus` above:
     /// per-run trace composition needs a per-run engine to attach to.
     trace_config: TraceConfig,
+    /// The durable trace-persistence backend (OBS-02, D-17), wired via
+    /// [`RunWorkerPool::with_run_trace_port`]: `run_once` passes this to
+    /// [`crate::infrastructure::telemetry::build_run_sink`] so a
+    /// [`PersistingTraceSink`](crate::infrastructure::telemetry::PersistingTraceSink)
+    /// joins the per-run composite whenever `trace_config.persist` is also
+    /// set. `None` (the default) means `build_run_sink` never attaches one,
+    /// regardless of `trace_config.persist` -- matching that function's own
+    /// documented "no port available is a no-op, not an error" contract.
+    run_trace_port: Option<Arc<dyn RunTracePort>>,
 }
 
 impl<W: WaypointPort + 'static> RunWorkerPool<W> {
@@ -561,6 +571,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             event_bus: None,
             webhook_deliveries: None,
             trace_config: TraceConfig::default(),
+            run_trace_port: None,
         }
     }
 
@@ -647,6 +658,21 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// own doc comment.
     pub fn with_trace_config(mut self, config: TraceConfig) -> Self {
         self.trace_config = config;
+        self
+    }
+
+    /// Wire the durable trace-persistence backend (OBS-02, D-17): `run_once`
+    /// passes `port` to [`crate::infrastructure::telemetry::build_run_sink`]
+    /// so a
+    /// [`PersistingTraceSink`](crate::infrastructure::telemetry::PersistingTraceSink)
+    /// joins the per-run composite whenever [`Self::with_trace_config`]'s
+    /// `persist` flag is also set. Only takes effect on the
+    /// [`Self::with_engine_factory`] path, exactly like
+    /// [`Self::with_trace_config`] itself. A pool that never calls this
+    /// builder leaves `trace_config.persist` a no-op, matching
+    /// `build_run_sink`'s own "no port available" contract.
+    pub fn with_run_trace_port(mut self, port: Arc<dyn RunTracePort>) -> Self {
+        self.run_trace_port = Some(port);
         self
     }
 
@@ -806,32 +832,35 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // caller's factory closure never needs to know about probes at
         // all. Otherwise (the default), fall back to the ONE shared engine
         // exactly as 27-04 left it, with no local-token registration.
-        let (run_engine, local_token_guard, run_trace_emitter): RunDispatchEngine<W> =
-            match &self.engine_factory {
-                Some(factory) => {
-                    let child_token = self.coordinator.token().child_token();
-                    self.local_tokens
-                        .register(run.run_id.clone(), child_token.clone())
-                        .await;
-                    let mut engine = factory(child_token);
-                    if let Some(probe) = &self.cancellation_probe {
-                        engine = engine.with_cancellation_probe(Arc::clone(probe));
-                    }
-                    // --- 28-06 (OBS-02, D-03, D-11): one CompositeSink, one
-                    // TraceDispatcher, per run. `build_run_sink` is the single
-                    // place a run's sink fan-out (the default-on log sink
-                    // alongside the D-24 bus sink, when wired) is assembled.
-                    // The dispatcher is built HERE, before the engine exists,
-                    // because the SAME `Arc<dyn TraceEmitter>` handle must also
-                    // reach the fallback adapter/middleware chain/execution
-                    // service below the engine -- `with_bound_trace_dispatcher`
-                    // then hands this exact instance to the engine too, so
-                    // every record in this run comes from the ONE counter
-                    // (D-03), never two independent dispatchers racing.
-                    let bus_sink = self.event_bus.as_ref().map(|bus| {
-                        Arc::new(RunEventBusSink::new(Arc::clone(bus))) as Arc<dyn TraceSink>
-                    });
-                    let run_trace_emitter = match build_run_sink(&self.trace_config, bus_sink) {
+        let (run_engine, local_token_guard, run_trace_emitter): RunDispatchEngine<W> = match &self
+            .engine_factory
+        {
+            Some(factory) => {
+                let child_token = self.coordinator.token().child_token();
+                self.local_tokens
+                    .register(run.run_id.clone(), child_token.clone())
+                    .await;
+                let mut engine = factory(child_token);
+                if let Some(probe) = &self.cancellation_probe {
+                    engine = engine.with_cancellation_probe(Arc::clone(probe));
+                }
+                // --- 28-06 (OBS-02, D-03, D-11): one CompositeSink, one
+                // TraceDispatcher, per run. `build_run_sink` is the single
+                // place a run's sink fan-out (the default-on log sink
+                // alongside the D-24 bus sink, when wired) is assembled.
+                // The dispatcher is built HERE, before the engine exists,
+                // because the SAME `Arc<dyn TraceEmitter>` handle must also
+                // reach the fallback adapter/middleware chain/execution
+                // service below the engine -- `with_bound_trace_dispatcher`
+                // then hands this exact instance to the engine too, so
+                // every record in this run comes from the ONE counter
+                // (D-03), never two independent dispatchers racing.
+                let bus_sink = self.event_bus.as_ref().map(|bus| {
+                    Arc::new(RunEventBusSink::new(Arc::clone(bus))) as Arc<dyn TraceSink>
+                });
+                let run_trace_emitter =
+                    match build_run_sink(&self.trace_config, bus_sink, self.run_trace_port.clone())
+                    {
                         Some(sink) => {
                             let dispatcher = Arc::new(TraceDispatcher::with_capacity(
                                 run.thread_id.clone(),
@@ -855,14 +884,14 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                         }
                         None => None,
                     };
-                    (
-                        Arc::new(engine),
-                        Some(run.run_id.clone()),
-                        run_trace_emitter,
-                    )
-                }
-                None => (Arc::clone(&self.engine), None, None),
-            };
+                (
+                    Arc::new(engine),
+                    Some(run.run_id.clone()),
+                    run_trace_emitter,
+                )
+            }
+            None => (Arc::clone(&self.engine), None, None),
+        };
 
         // D-24: bind THIS thread/run on the bus before dispatch, so a
         // `TraceSink` callback firing mid-superstep has somewhere to

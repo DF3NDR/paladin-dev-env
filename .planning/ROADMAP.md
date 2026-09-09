@@ -710,7 +710,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 28-17-PLAN.md — Docs, ADR-0048, `MIGRATION.md` rows, crate-list registration, close-out gates + CI evidence (all)
+- [x] 28-17-PLAN.md — Docs, ADR-0048, `MIGRATION.md` rows, crate-list registration, close-out gates + CI evidence (all)
 
 **UI hint**: yes
 

@@ -36,15 +36,35 @@
 //! lagging subscriber DOES receive (see [`RunEventStreamPort::stream`]'s live
 //! path, `receiver_to_stream`).
 //!
+//! # Replay mode (D-16)
+//!
+//! When [`RunEventStreamService::with_replay`] wires a
+//! [`RunTracePort`](paladin_ports::output::run_trace_port::RunTracePort)
+//! AND that port has persisted rows for the thread, a run not bound on THIS
+//! instance replays those rows through the SAME [`map_trace_event`],
+//! `mode: replay`, each record's own original `at` and `trace_seq`
+//! (D-15) -- full trace fidelity instead of the coarser degraded
+//! synthesis below. Reading is paginated (`RunTracePort::read`) so an
+//! unbounded run never gets loaded into memory in one shot
+//! (T-28-11-03). When no rows exist yet but the run is not terminal (still
+//! executing elsewhere), the replay stream polls for more exactly like the
+//! degraded path does, and falls back to synthesizing a terminal event from
+//! [`Run::status`] if the run reaches a terminal status through a path that
+//! never produced a `TraceEvent::RunFinished` record (mirrors
+//! `record_engine_failure`'s own documented exception, `worker.rs`) --
+//! never an unbounded hang. With NO rows at all (persistence off, or a run
+//! older than retention) the stream falls straight through to the degraded
+//! path below, unchanged.
+//!
 //! # Degraded mode (D-26)
 //!
 //! When a run is not bound on THIS instance (executing elsewhere, or already
-//! terminal), [`RunEventStreamService::stream`] falls back to polling
-//! `RunRepositoryPort::get` + `WaypointPort::latest` at `poll_interval`,
-//! synthesizing `superstep`/`parley`/`done`/`error` events from what it
-//! observes. This path gives NO ordering guarantee relative to the live path
-//! and may coalesce several supersteps into one event, but always ends with
-//! `done` or `error`.
+//! terminal) AND replay is unavailable or empty, [`RunEventStreamService::stream`]
+//! falls back to polling `RunRepositoryPort::get` + `WaypointPort::latest` at
+//! `poll_interval`, synthesizing `superstep`/`parley`/`done`/`error` events
+//! from what it observes. This path gives NO ordering guarantee relative to
+//! the live path and may coalesce several supersteps into one event, but
+//! always ends with `done` or `error`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -61,6 +81,7 @@ use paladin_ports::input::run_event_stream_port::{
     RunEventStream, RunEventStreamPort, RunStreamError,
 };
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
+use paladin_ports::output::run_trace_port::RunTracePort;
 use paladin_ports::output::trace_sink_port::{
     RunFinishStatus, TraceEvent, TraceRecord, TraceSink, TraceSinkError,
 };
@@ -561,21 +582,194 @@ fn degraded_stream(
     }))
 }
 
+/// Records fetched per [`RunTracePort::read`] call while replaying (D-16,
+/// T-28-11-03): an unbounded run is paginated, never loaded into memory in
+/// one shot.
+const REPLAY_PAGE_LIMIT: u32 = 256;
+
+/// Facade-internal state the replay polling loop threads through
+/// `futures::stream::unfold` (D-16).
+struct ReplayState {
+    run_id: RunId,
+    thread_id: ThreadId,
+    port: Arc<dyn RunTracePort>,
+    run_repo: Arc<dyn RunRepositoryPort>,
+    pending: std::collections::VecDeque<TraceRecord>,
+    after_seq: u64,
+    poll_interval: Duration,
+    seq: u64,
+    finished: bool,
+}
+
+impl ReplayState {
+    fn next_seq(&mut self) -> u64 {
+        self.seq += 1;
+        self.seq
+    }
+}
+
+/// Build the replay stream for a run not bound on this instance, with at
+/// least one already-fetched `first_batch` of persisted records (D-16):
+/// replays every record through [`map_trace_event`] with `mode: replay` and
+/// its own original `at`, paginating through `port` (T-28-11-03) as the
+/// buffered batch drains. When the port has no more rows and the run is
+/// not yet terminal (still executing elsewhere), polls at `poll_interval`
+/// exactly like [`degraded_stream`]. If the run reaches a terminal status
+/// without ever producing a `TraceEvent::RunFinished` record (the
+/// `record_engine_failure` exception `worker.rs` documents), synthesizes
+/// the terminal event from [`Run::status`] via [`terminal_payload`] instead
+/// of hanging forever waiting for a record that will never arrive.
+fn replay_stream(
+    run_id: RunId,
+    thread_id: ThreadId,
+    port: Arc<dyn RunTracePort>,
+    run_repo: Arc<dyn RunRepositoryPort>,
+    first_batch: Vec<TraceRecord>,
+    poll_interval: Duration,
+) -> RunEventStream {
+    let after_seq = first_batch.last().map(|r| r.seq).unwrap_or(0);
+    let state = ReplayState {
+        run_id,
+        thread_id,
+        port,
+        run_repo,
+        pending: first_batch.into(),
+        after_seq,
+        poll_interval,
+        seq: 0,
+        finished: false,
+    };
+    Box::pin(futures::stream::unfold(state, |mut state| async move {
+        loop {
+            if state.finished {
+                return None;
+            }
+
+            if let Some(record) = state.pending.pop_front() {
+                let at = record.at;
+                let is_run_finished = matches!(record.event, TraceEvent::RunFinished { .. });
+                match map_trace_event(record) {
+                    Some((_, kind, payload)) => {
+                        if is_run_finished {
+                            state.finished = true;
+                        }
+                        let seq = state.next_seq();
+                        let event = RunStreamEvent::new_at(
+                            state.run_id.clone(),
+                            state.thread_id.clone(),
+                            kind,
+                            seq,
+                            at,
+                            RunStreamMode::Replay,
+                            0,
+                            payload,
+                        );
+                        return Some((event, state));
+                    }
+                    // An unmapped record (one of the five wire-silent
+                    // variants) contributes nothing to the wire -- keep
+                    // draining the buffer without yielding an event for it.
+                    None => continue,
+                }
+            }
+
+            match state
+                .port
+                .read(&state.thread_id, state.after_seq, REPLAY_PAGE_LIMIT)
+                .await
+            {
+                Ok(rows) if !rows.is_empty() => {
+                    state.after_seq = rows.last().map(|r| r.seq).unwrap_or(state.after_seq);
+                    state.pending.extend(rows);
+                    continue;
+                }
+                Ok(_) => {
+                    // No new rows right now. If the run is already
+                    // terminal, there never will be more worth waiting
+                    // for -- synthesize the terminal event from `Run`
+                    // itself (mirrors `degraded_stream`'s own fallback)
+                    // rather than polling forever for a `RunFinished`
+                    // record that may not exist for this run at all.
+                    match state.run_repo.get(&state.run_id).await {
+                        Ok(Some(run)) if run.status.is_terminal() => {
+                            state.finished = true;
+                            let (kind, payload) = terminal_payload(&run);
+                            let seq = state.next_seq();
+                            let event = RunStreamEvent::new_at(
+                                state.run_id.clone(),
+                                state.thread_id.clone(),
+                                kind,
+                                seq,
+                                chrono::Utc::now(),
+                                RunStreamMode::Replay,
+                                0,
+                                payload,
+                            );
+                            return Some((event, state));
+                        }
+                        Ok(_) => {
+                            // Still executing elsewhere -- wait and poll
+                            // again, exactly like the degraded path.
+                            tokio::time::sleep(state.poll_interval).await;
+                            continue;
+                        }
+                        Err(error) => {
+                            state.finished = true;
+                            let seq = state.next_seq();
+                            let event = RunStreamEvent::new_at(
+                                state.run_id.clone(),
+                                state.thread_id.clone(),
+                                RunStreamEventKind::Error,
+                                seq,
+                                chrono::Utc::now(),
+                                RunStreamMode::Replay,
+                                0,
+                                serde_json::json!({
+                                    "status": "failed",
+                                    "message": error.to_string(),
+                                }),
+                            );
+                            return Some((event, state));
+                        }
+                    }
+                }
+                Err(error) => {
+                    state.finished = true;
+                    let seq = state.next_seq();
+                    let event = RunStreamEvent::new_at(
+                        state.run_id.clone(),
+                        state.thread_id.clone(),
+                        RunStreamEventKind::Error,
+                        seq,
+                        chrono::Utc::now(),
+                        RunStreamMode::Replay,
+                        0,
+                        serde_json::json!({ "status": "failed", "message": error.to_string() }),
+                    );
+                    return Some((event, state));
+                }
+            }
+        }
+    }))
+}
+
 /// The facade [`RunEventStreamPort`] implementation (D-27): decides live vs
-/// degraded, but names neither the engine nor `TraceEvent` in its own
-/// interface -- `paladin-web` sees only [`Self::stream`]'s
+/// replay vs degraded, but names neither the engine nor `TraceEvent` in its
+/// own interface -- `paladin-web` sees only [`Self::stream`]'s
 /// [`RunEventStream`] return type.
 pub struct RunEventStreamService {
     bus: Arc<RunEventBus>,
     run_repo: Arc<dyn RunRepositoryPort>,
     waypoints: Arc<dyn WaypointPort>,
     poll_interval: Duration,
+    run_trace_port: Option<Arc<dyn RunTracePort>>,
 }
 
 impl RunEventStreamService {
     /// Construct a service reading `run_repo`/`waypoints` for the degraded
     /// path and `bus` for the live path, polling at `poll_interval` when
-    /// degraded (D-26 recommends `1s` in production).
+    /// degraded (D-26 recommends `1s` in production). No replay port wired
+    /// -- see [`Self::with_replay`].
     pub fn new(
         bus: Arc<RunEventBus>,
         run_repo: Arc<dyn RunRepositoryPort>,
@@ -587,7 +781,18 @@ impl RunEventStreamService {
             run_repo,
             waypoints,
             poll_interval,
+            run_trace_port: None,
         }
+    }
+
+    /// Wire the D-16 replay path: a run not bound on this instance first
+    /// tries reading `port` for persisted rows before falling back to the
+    /// degraded Waypoint-polling path. Additive -- a service constructed
+    /// via [`Self::new`] alone never attempts replay, matching every prior
+    /// plan's behavior verbatim.
+    pub fn with_replay(mut self, port: Arc<dyn RunTracePort>) -> Self {
+        self.run_trace_port = Some(port);
+        self
     }
 }
 
@@ -607,6 +812,23 @@ impl RunEventStreamPort for RunEventStreamService {
 
         if let Some(rx) = self.bus.subscribe(run_id).await {
             return Ok(receiver_to_stream(rx));
+        }
+
+        if let Some(port) = &self.run_trace_port {
+            let first_batch = port
+                .read(&run.thread_id, 0, REPLAY_PAGE_LIMIT)
+                .await
+                .unwrap_or_default();
+            if !first_batch.is_empty() {
+                return Ok(replay_stream(
+                    run_id.clone(),
+                    run.thread_id.clone(),
+                    Arc::clone(port),
+                    self.run_repo.clone(),
+                    first_batch,
+                    self.poll_interval,
+                ));
+            }
         }
 
         Ok(degraded_stream(

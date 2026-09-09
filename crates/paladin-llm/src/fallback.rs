@@ -25,15 +25,34 @@
 //! unchanged: a partial answer is never silently completed by a different
 //! model.
 //!
-//! ## Per-hop observability (D-25, T-25-34)
+//! ## Per-hop observability (D-25, T-25-34, 28-06 D-03)
 //!
 //! Each hop emits [`TraceEvent::FallbackHop`] (`node_id: None` — a port
-//! below the superstep engine cannot know which node it serves) through the
-//! optional [`FallbackLlmAdapter::with_trace_sink`] sink, plus a
-//! `log::warn!` naming both providers. A successful response is stamped
-//! with the serving provider under [`SERVED_BY_METADATA_KEY`] in the
-//! existing `LlmResponse.metadata` map (D-26); `PaladinExecutionService`
-//! copies it into `PaladinResult.served_by`.
+//! below the superstep engine cannot know which node it serves) through
+//! whichever [`TraceEmitter`] handle is available, plus a `log::warn!`
+//! naming both providers. Two sources, checked in order:
+//!
+//! 1. An explicit handle set via [`FallbackLlmAdapter::with_trace_emitter`]
+//!    — takes precedence, for a caller (typically a unit test, or any
+//!    standalone construction) that has no ambient per-run context.
+//! 2. `paladin_ports::output::trace_sink_port::current_trace_emitter` — the
+//!    run's own [`TraceEmitter`], set for the duration of one engine
+//!    dispatch by the worker's own composition root
+//!    (`RUN_TRACE_EMITTER.scope`). This is how a REAL run reaches this
+//!    adapter: `FallbackLlmAdapter` is composed once, at boot, into a
+//!    deeply shared `Arc<dyn PaladinPort>` singleton every concurrent run
+//!    calls through, so there is no per-run FIELD to set — the task-local
+//!    is what lets one hop stamp into THIS run's own `seq` sequence without
+//!    racing a different concurrent run sharing the same singleton.
+//!
+//! With neither source available, a hop still logs its `warn!` line but
+//! emits no `TraceEvent` — exactly like today's "sink not attached" case
+//! (X-03).
+//!
+//! A successful response is stamped with the serving provider under
+//! [`SERVED_BY_METADATA_KEY`] in the existing `LlmResponse.metadata` map
+//! (D-26); `PaladinExecutionService` copies it into
+//! `PaladinResult.served_by`.
 //!
 //! ## Circuit breakers sit ABOVE this adapter (D-24)
 //!
@@ -60,11 +79,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt};
 use paladin_core::platform::container::transience::Transience;
-use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
 };
-use paladin_ports::output::trace_sink_port::{TraceEvent, TraceRecord, TraceSink};
+use paladin_ports::output::trace_sink_port::{TraceEmitter, TraceEvent, current_trace_emitter};
 use thiserror::Error;
 
 /// The `LlmResponse.metadata` key under which the adapter records the
@@ -115,7 +133,7 @@ type StreamItem = Result<StreamingResponse, LlmError>;
 #[derive(Clone)]
 pub struct FallbackLlmAdapter {
     chain: Vec<Arc<dyn LlmPort>>,
-    trace_sink: Option<Arc<dyn TraceSink>>,
+    trace_emitter: Option<Arc<dyn TraceEmitter>>,
 }
 
 impl fmt::Debug for FallbackLlmAdapter {
@@ -129,7 +147,7 @@ impl fmt::Debug for FallbackLlmAdapter {
                     .map(|provider| provider.get_provider_name())
                     .collect::<Vec<_>>(),
             )
-            .field("trace_sink", &self.trace_sink.is_some())
+            .field("trace_emitter", &self.trace_emitter.is_some())
             .finish()
     }
 }
@@ -147,15 +165,19 @@ impl FallbackLlmAdapter {
         }
         Ok(Self {
             chain,
-            trace_sink: None,
+            trace_emitter: None,
         })
     }
 
-    /// Attach a [`TraceSink`] that receives one [`TraceEvent::FallbackHop`]
-    /// per hop. The sink is awaited inline and its `Result` is discarded —
-    /// a failing sink can never fail a request.
-    pub fn with_trace_sink(mut self, sink: Arc<dyn TraceSink>) -> Self {
-        self.trace_sink = Some(sink);
+    /// Attach an explicit [`TraceEmitter`] handle that receives one
+    /// [`TraceEvent::FallbackHop`] per hop (28-06, D-03), taking precedence
+    /// over the ambient `current_trace_emitter()` a real run supplies via
+    /// `RUN_TRACE_EMITTER` -- see the module docs' "Per-hop observability"
+    /// section for the full precedence rule. Typically used by a caller
+    /// with no ambient per-run context (a unit test, or a standalone
+    /// construction outside any run).
+    pub fn with_trace_emitter(mut self, emitter: Arc<dyn TraceEmitter>) -> Self {
+        self.trace_emitter = Some(emitter);
         self
     }
 
@@ -172,39 +194,24 @@ impl FallbackLlmAdapter {
     }
 
     /// Record one hop from `from` to `to`: a `warn!` naming both providers
-    /// plus a [`TraceEvent::FallbackHop`] if a sink is attached.
-    ///
-    /// This adapter sits below the superstep engine and has no `ThreadId`
-    /// of its own (D-03) -- `with_trace_sink` here is a placeholder shape
-    /// this plan keeps compiling as-is; the `with_trace_sink` ->
-    /// `with_trace_emitter` rename that lets a caller wire the SAME
-    /// per-run `TraceEmitter` handle the engine uses (so this hop stamps
-    /// from the run's own `seq` counter, under the run's own `thread_id`)
-    /// is 28-06's (D-03). Until then, a bare placeholder thread id is
-    /// stamped so the record still satisfies `TraceRecord`'s shape.
+    /// plus a [`TraceEvent::FallbackHop`] through whichever [`TraceEmitter`]
+    /// is available (see the module docs' "Per-hop observability" section
+    /// for the explicit-field-then-task-local precedence rule). `emit`
+    /// never awaits and never fails visibly (D-03's own contract) -- with
+    /// neither source available, only the `warn!` line is produced.
     async fn record_hop(&self, from: &'static str, to: &'static str, err: &LlmError) {
         log::warn!(
             "Fallback chain hopping from provider '{from}' to '{to}' after {transience:?} error: {err}",
             transience = err.transience()
         );
-        let Some(sink) = &self.trace_sink else {
+        let Some(emitter) = self.trace_emitter.clone().or_else(current_trace_emitter) else {
             return;
         };
-        let event = TraceEvent::FallbackHop {
+        emitter.emit(TraceEvent::FallbackHop {
             node_id: None,
             from_provider: from.to_string(),
             to_provider: to.to_string(),
-        };
-        let record = TraceRecord {
-            thread_id: ThreadId::new("fallback-adapter").expect("valid thread id"),
-            run_id: None,
-            seq: 0,
-            at: chrono::Utc::now(),
-            event,
-        };
-        if let Err(sink_err) = sink.on_event(record).await {
-            log::debug!("trace sink rejected FallbackHop event: {sink_err}");
-        }
+        });
     }
 
     /// Decide what happens after chain element `index` (named `from`)
@@ -347,7 +354,10 @@ mod tests {
     use super::*;
     use crate::mock::MockLlmAdapter;
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-    use paladin_ports::output::trace_sink_port::TraceSinkError;
+    use paladin_core::platform::container::waypoint::ThreadId;
+    use paladin_ports::output::trace_sink_port::{
+        StandaloneEmitter, TraceRecord, TraceSink, TraceSinkError,
+    };
     use std::time::Duration;
 
     /// A [`TraceSink`] that records every record it receives, in order.
@@ -361,8 +371,28 @@ mod tests {
             self.events.lock().await.clone()
         }
 
-        async fn hops(&self) -> Vec<(Option<String>, String, String)> {
-            self.events()
+        /// As [`RecordingSink::events`], but polls (up to a 2s guard)
+        /// until at least `expected_len` records have arrived --
+        /// `StandaloneEmitter`'s background consumer task drains
+        /// asynchronously (28-06), so a test reading straight after
+        /// `adapter.generate(..).await` returns needs to wait for that
+        /// task to run at least once rather than racing it.
+        async fn events_eventually(&self, expected_len: usize) -> Vec<TraceRecord> {
+            for _ in 0..200 {
+                let events = self.events().await;
+                if events.len() >= expected_len {
+                    return events;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            self.events().await
+        }
+
+        async fn hops_eventually(
+            &self,
+            expected_len: usize,
+        ) -> Vec<(Option<String>, String, String)> {
+            self.events_eventually(expected_len)
                 .await
                 .into_iter()
                 .filter_map(|record| match record.event {
@@ -383,6 +413,19 @@ mod tests {
             self.events.lock().await.push(record);
             Ok(())
         }
+    }
+
+    /// Wrap `sink` behind a [`StandaloneEmitter`] (28-06) so it can be
+    /// attached via [`FallbackLlmAdapter::with_trace_emitter`] -- the test
+    /// double's shape (a bare [`TraceSink`] recording every record) needs
+    /// no change of its own; only the attachment mechanism changed from a
+    /// raw sink to an emitter handle.
+    fn emitter_over(sink: Arc<RecordingSink>) -> Arc<dyn TraceEmitter> {
+        Arc::new(StandaloneEmitter::new(
+            ThreadId::new("fallback-test").unwrap(),
+            None,
+            Some(sink),
+        ))
     }
 
     fn request() -> LlmRequest {
@@ -455,7 +498,8 @@ mod tests {
         let p2 = failing("anthropic", transient("anthropic", 503));
         let p3 = provider("deepseek");
         let sink = Arc::new(RecordingSink::default());
-        let adapter = chain(&[p1.clone(), p2.clone(), p3.clone()]).with_trace_sink(sink.clone());
+        let adapter = chain(&[p1.clone(), p2.clone(), p3.clone()])
+            .with_trace_emitter(emitter_over(sink.clone()));
 
         let response = adapter.generate(request()).await.unwrap();
 
@@ -471,7 +515,7 @@ mod tests {
             (p1.call_count(), p2.call_count(), p3.call_count()),
             (1, 1, 1)
         );
-        let hops = sink.hops().await;
+        let hops = sink.hops_eventually(2).await;
         assert_eq!(hops.len(), 2, "{hops:?}");
         assert_eq!(
             hops[0],
@@ -494,7 +538,8 @@ mod tests {
         let p2 = provider("anthropic");
         let p3 = provider("deepseek");
         let sink = Arc::new(RecordingSink::default());
-        let adapter = chain(&[p1.clone(), p2.clone(), p3.clone()]).with_trace_sink(sink.clone());
+        let adapter = chain(&[p1.clone(), p2.clone(), p3.clone()])
+            .with_trace_emitter(emitter_over(sink.clone()));
 
         let result = adapter.generate(request()).await;
 
@@ -613,7 +658,8 @@ mod tests {
             .with_provider_name("anthropic")
             .with_stream_items(vec![Ok("Hello".to_string()), Ok(" world".to_string())]);
         let sink = Arc::new(RecordingSink::default());
-        let adapter = chain(&[p1.clone(), p2.clone()]).with_trace_sink(sink.clone());
+        let adapter =
+            chain(&[p1.clone(), p2.clone()]).with_trace_emitter(emitter_over(sink.clone()));
 
         let stream = adapter.generate_stream(request()).await.unwrap();
         let items = collect(stream).await;
@@ -624,7 +670,7 @@ mod tests {
             .collect();
         assert_eq!(deltas, ["Hello", " world"]);
         assert_eq!((p1.call_count(), p2.call_count()), (1, 1));
-        assert_eq!(sink.hops().await.len(), 1);
+        assert_eq!(sink.hops_eventually(1).await.len(), 1);
     }
 
     /// Test 7b: `generate_stream` itself returning `Err` also falls through.
@@ -658,7 +704,8 @@ mod tests {
             .with_provider_name("anthropic")
             .with_stream_items(vec![Ok("never".to_string())]);
         let sink = Arc::new(RecordingSink::default());
-        let adapter = chain(&[p1.clone(), p2.clone()]).with_trace_sink(sink.clone());
+        let adapter =
+            chain(&[p1.clone(), p2.clone()]).with_trace_emitter(emitter_over(sink.clone()));
 
         let stream = adapter.generate_stream(request()).await.unwrap();
         let items = collect(stream).await;
@@ -744,11 +791,11 @@ mod tests {
         let p2 = failing("anthropic", LlmError::Timeout("1s".to_string()));
         let p3 = provider("deepseek");
         let sink = Arc::new(RecordingSink::default());
-        let adapter = chain(&[p1, p2, p3]).with_trace_sink(sink.clone());
+        let adapter = chain(&[p1, p2, p3]).with_trace_emitter(emitter_over(sink.clone()));
 
         adapter.generate(request()).await.unwrap();
 
-        let events = sink.events().await;
+        let events = sink.events_eventually(2).await;
         assert_eq!(events.len(), 2);
         for (event, (from, to)) in events
             .iter()
@@ -780,6 +827,124 @@ mod tests {
         assert!(
             matches!(&err, LlmError::AllProvidersFailed { attempts, .. } if attempts.len() == 1),
             "{err:?}"
+        );
+    }
+
+    /// D-03 (28-06): a `FallbackHop` emitted while running inside a
+    /// `RUN_TRACE_EMITTER` scope (the ambient per-run handle a real worker
+    /// dispatch sets, `paladin_ports::output::trace_sink_port`) lands in
+    /// that run's OWN `seq` sequence -- between the surrounding
+    /// `NodeStarted`/`NodeFinished` records the "run" itself emits, not a
+    /// competing sequence of its own. The adapter carries no explicit
+    /// `with_trace_emitter` handle of its own here: it must fall back to
+    /// the ambient one.
+    #[tokio::test]
+    async fn fallback_hop_lands_in_the_run_sequence() {
+        use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind};
+        use paladin_ports::output::trace_sink_port::RUN_TRACE_EMITTER;
+
+        let sink = Arc::new(RecordingSink::default());
+        let run_emitter: Arc<dyn TraceEmitter> = emitter_over(sink.clone());
+
+        let p1 = failing("openai", transient("openai", 503));
+        let p2 = provider("anthropic");
+        let adapter = chain(&[p1, p2]);
+
+        RUN_TRACE_EMITTER
+            .scope(run_emitter.clone(), async {
+                run_emitter.emit(TraceEvent::NodeStarted {
+                    superstep: 1,
+                    node_id: NodeId::new("n1"),
+                    attempt: 1,
+                    muster_task_key: None,
+                });
+                adapter.generate(request()).await.unwrap();
+                run_emitter.emit(TraceEvent::NodeFinished {
+                    superstep: 1,
+                    node_id: NodeId::new("n1"),
+                    attempt: 1,
+                    outcome: NodeOutcomeKind::Succeeded,
+                    duration_ms: 0,
+                    token_count: 0,
+                    cache_hit: false,
+                });
+            })
+            .await;
+
+        let events = sink.events_eventually(3).await;
+        assert_eq!(events.len(), 3, "{events:?}");
+
+        let mut seqs: Vec<u64> = events.iter().map(|record| record.seq).collect();
+        seqs.sort_unstable();
+        assert_eq!(seqs, vec![1, 2, 3], "one gapless sequence, no restart");
+
+        let started_seq = events
+            .iter()
+            .find(|r| matches!(r.event, TraceEvent::NodeStarted { .. }))
+            .expect("NodeStarted must have been recorded")
+            .seq;
+        let hop_seq = events
+            .iter()
+            .find(|r| matches!(r.event, TraceEvent::FallbackHop { .. }))
+            .expect("the hop must have been recorded")
+            .seq;
+        let finished_seq = events
+            .iter()
+            .find(|r| matches!(r.event, TraceEvent::NodeFinished { .. }))
+            .expect("NodeFinished must have been recorded")
+            .seq;
+        assert!(
+            started_seq < hop_seq && hop_seq < finished_seq,
+            "the hop must land BETWEEN NodeStarted and NodeFinished: \
+             started={started_seq} hop={hop_seq} finished={finished_seq}"
+        );
+    }
+
+    /// A bare `FallbackLlmAdapter` under unit test, with NO ambient
+    /// `RUN_TRACE_EMITTER` scope and NO explicit `with_trace_emitter`
+    /// handle, records no `TraceEvent` at all -- `record_hop`'s own
+    /// `let Some(emitter) = ... else { return; }` short-circuit, proven
+    /// directly rather than merely by absence of a panic.
+    #[tokio::test]
+    async fn no_emitter_available_records_nothing() {
+        let p1 = failing("openai", transient("openai", 503));
+        let p2 = provider("anthropic");
+        let adapter = chain(&[p1, p2]);
+
+        let response = adapter.generate(request()).await.unwrap();
+        assert_eq!(response.content, "answer from anthropic");
+        // No sink was ever attached and no scope was ever entered -- there
+        // is nothing to assert beyond "this did not panic and the call
+        // still succeeded", which is the whole point: observability is
+        // never load-bearing.
+    }
+
+    /// A bare `FallbackLlmAdapter` in a unit test, wired with a
+    /// `StandaloneEmitter` (28-06) -- no engine, no worker, no ambient
+    /// `RUN_TRACE_EMITTER` scope -- still produces well-formed records
+    /// under its OWN gapless `seq` counter.
+    #[tokio::test]
+    async fn standalone_emitter_is_used_when_no_engine_is_present() {
+        let sink = Arc::new(RecordingSink::default());
+        let emitter = emitter_over(sink.clone());
+
+        let p1 = failing("openai", transient("openai", 503));
+        let p2 = failing("anthropic", transient("anthropic", 503));
+        let p3 = provider("deepseek");
+        let adapter = chain(&[p1, p2, p3]).with_trace_emitter(emitter);
+
+        let response = adapter.generate(request()).await.unwrap();
+        assert_eq!(response.content, "answer from deepseek");
+
+        let events = sink.events_eventually(2).await;
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0].seq, 1);
+        assert_eq!(events[1].seq, 2);
+        assert!(
+            events
+                .iter()
+                .all(|r| matches!(r.event, TraceEvent::FallbackHop { .. })),
+            "{events:?}"
         );
     }
 }

@@ -1,0 +1,75 @@
+schema_version: "1"
+# .project/v0.10.0/00-program-overview.md §6, E2E-3: a planner musters 5
+# worker tasks that run concurrently in one superstep; one worker fails
+# transiently twice before succeeding under its own Aegis retry policy; a
+# deferred aggregator runs exactly once after all 5 resolve; the aggregated
+# field holds all 5 results in deterministic task_key order. Graph:
+# tests/helpers/e2e_fixtures.rs::build_muster_defer_order_graph_with_a_template_per_task
+# (retry attached) -- the SAME builder
+# tests/integration/e2e_muster_defer_order_test.rs's
+# `one_worker_recovers_by_real_per_task_retry` test uses (plan 28-16, D-34).
+#
+# The recovering-worker fixture registers one worker TEMPLATE per task
+# (w1..w5, keyed to task_key "a".."e") rather than a single shared "worker"
+# id -- see e2e_fixtures.rs's own module doc for why (the engine dispatches
+# every mustered task under its worker TEMPLATE's own identity, so a single
+# shared template could not single out "the third task" for the recovering
+# port/script). `w3` is the recovering worker: two scripted transient
+# errors, then success -- three NodeStarted records (attempts 1, 2, 3)
+# under its own per-task Aegis retry policy (`max_attempts: 3`, DEFAULT
+# `TransientOnly` predicate, never widened). Every other worker succeeds on
+# its first attempt. Total dispatch across w1..w5 is 1+1+3+1+1 = 7 calls --
+# "the worker node executed at least seven times" from the five individual
+# per-node counts below, since this fixture has no single shared "worker"
+# node id to assert against directly.
+target:
+  registered: "e2e-3-map-reduce-fault-tolerance"
+llm:
+  per_node:
+    w1:
+      - text: "result-a"
+    w2:
+      - text: "result-b"
+    w3:
+      - error: transient
+      - error: transient
+      - text: "result-c"
+    w4:
+      - text: "result-d"
+    w5:
+      - text: "result-e"
+cases:
+  - name: recovering_worker
+    assertions:
+      - node_executed:
+          node: "planner"
+          times:
+            exact: 1
+      - node_executed:
+          node: "w1"
+          times:
+            exact: 1
+      - node_executed:
+          node: "w2"
+          times:
+            exact: 1
+      - node_executed:
+          node: "w3"
+          times:
+            exact: 3
+      - node_executed:
+          node: "w4"
+          times:
+            exact: 1
+      - node_executed:
+          node: "w5"
+          times:
+            exact: 1
+      - node_executed:
+          node: "aggregator"
+          times:
+            exact: 1
+      - final_state_field_equals:
+          field: "aggregated"
+          value: ["result-a", "result-b", "result-c", "result-d", "result-e"]
+      - run_status: completed

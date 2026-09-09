@@ -52,7 +52,7 @@ use async_trait::async_trait;
 
 use paladin_battalion::engine::{ExecutionOverlay, GraphShape, OverlaySource, to_mermaid_overlay};
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName};
-use paladin_core::platform::container::waypoint::{NodeId, ThreadId, Waypoint};
+use paladin_core::platform::container::waypoint::{NodeId, ThreadId, Waypoint, WaypointStatus};
 use paladin_ports::input::run_inspector_port::{
     CompletedRow, InspectorError, InspectorSource, InspectorView, RunInspectorPort, SuperstepRow,
     SuperstepStatus, VisitSummary,
@@ -287,10 +287,12 @@ fn build_supersteps(
                 node_id: record.node_id.clone(),
                 attempt: record.attempt,
                 outcome: record.outcome.clone(),
-                // TODO(Task 2 RED): always `Some`, ignoring `cache_hit` --
-                // fixed in the GREEN commit.
-                duration_ms: Some(record.duration_ms),
-                token_count: Some(record.token_count),
+                // A cache-served attempt's stored duration/token figures
+                // are not a meaningful execution measurement -- `None`
+                // rather than a possibly-stale or possibly-zero number
+                // (28-UI-SPEC.md E2 "partial").
+                duration_ms: (!record.cache_hit).then_some(record.duration_ms),
+                token_count: (!record.cache_hit).then_some(record.token_count),
                 cache_hit: record.cache_hit,
             })
             .collect();
@@ -300,6 +302,13 @@ fn build_supersteps(
 
         let fired_edges: Vec<(NodeId, NodeId)> = overlay
             .fired_edges
+            .iter()
+            .filter(|(from, _)| completed_ids.contains(from))
+            .cloned()
+            .collect();
+
+        let evaluated_edges: Vec<(NodeId, NodeId)> = overlay
+            .evaluated_edges
             .iter()
             .filter(|(from, _)| completed_ids.contains(from))
             .cloned()
@@ -324,12 +333,28 @@ fn build_supersteps(
             completed,
             field_changes,
             fired_edges,
-            // TODO(Task 2 RED): stubbed -- fixed in the GREEN commit.
-            evaluated_edges: Vec::new(),
-            status: SuperstepStatus::Running,
+            evaluated_edges,
+            status: superstep_status(&wp.status),
         });
     }
     rows
+}
+
+/// Map a Waypoint's own [`WaypointStatus`] to the view's payload-free
+/// [`SuperstepStatus`] (28-UI-SPEC.md E4 "partial": an awaiting-input
+/// superstep is labelable, not a silently blank row).
+fn superstep_status(status: &WaypointStatus) -> SuperstepStatus {
+    match status {
+        WaypointStatus::Running => SuperstepStatus::Running,
+        WaypointStatus::Completed => SuperstepStatus::Completed,
+        WaypointStatus::Failed { .. } => SuperstepStatus::Failed,
+        WaypointStatus::AwaitingInput { .. } => SuperstepStatus::AwaitingInput,
+        WaypointStatus::Halted => SuperstepStatus::Halted,
+        // `WaypointStatus` is `#[non_exhaustive]`: a future variant this
+        // view does not yet understand is treated as `Running` rather
+        // than panicking or failing the whole inspect call.
+        _ => SuperstepStatus::Running,
+    }
 }
 
 /// Every `TraceEvent::DeltaMerged` record's field names (T-28-14-01: names

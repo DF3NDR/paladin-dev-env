@@ -13,6 +13,11 @@ pub mod cancel;
 /// producers) and `RunEventStreamService` (the facade `RunEventStreamPort`
 /// implementation, live/degraded) -- D-24..D-27, PLAT-FR-07.
 pub mod events;
+/// `RunInspectorService` -- the facade `RunInspectorPort` implementation
+/// (D-24, OBS-03 / OBS-FR-10): builds an `InspectorView` on top of the
+/// execution overlay, Waypoint history and (when persisted) exact trace
+/// records.
+pub mod inspector;
 /// The seam every assistant source plugs into, plus this slice's
 /// code-registered implementation (D-32).
 pub mod resolver;
@@ -31,6 +36,7 @@ pub mod worker;
 
 pub use cancel::{DbCancellationProbe, LocalRunTokens};
 pub use events::{RunEventBus, RunEventBusSink, RunEventStreamService, map_trace_event};
+pub use inspector::RunInspectorService;
 pub use resolver::{
     AssistantResolver, CodeWorkflowResolver, ResolveError, ResolvedAssistant, Runnable,
 };

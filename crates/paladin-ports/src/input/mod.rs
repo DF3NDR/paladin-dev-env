@@ -20,6 +20,10 @@ pub mod rpc_port;
 /// `paladin-web` can depend on it without a default-build edge to
 /// `paladin-battalion` (ADR-0031).
 pub mod run_event_stream_port;
+/// Run inspector port (D-24, OBS-03 / OBS-FR-10) — core-typed only, so
+/// `paladin-web` can render the `dev-ui` run inspector page without a
+/// default-build edge to `paladin-battalion` (ADR-0031).
+pub mod run_inspector_port;
 /// Run submission port (D-12) — core-typed only, so `paladin-web` can
 /// depend on it without a default-build edge to `paladin-battalion`
 /// (ADR-0031).

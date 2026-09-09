@@ -289,6 +289,16 @@ tokio = { workspace = true, features = ["test-util"] }
 # feature gate is what keeps it out of the compiled `paladin` library/
 # binary artifacts (X-11.4's actual scope), recorded in 28-09-SUMMARY.md.
 opentelemetry_sdk = { version = "0.32.1", features = ["testing"] }
+# `tests/integration/otel_transport_test.rs` (28-09 Task 2, D-13b) decodes
+# the OTLP/HTTP protobuf body an axum stub captures, to assert the
+# resource's `service.name`. Both crates are ALREADY resolved transitively
+# via `opentelemetry-otlp`'s `http-proto` feature (`[dependencies]` above)
+# whenever `--features otel` is passed -- this dev-dependency entry adds no
+# new package, only names them directly for the test file to `use`. Same
+# `gen-tonic-messages`/`trace` feature pair `opentelemetry-otlp`'s own
+# `http-proto` feature already requests (no `tonic`/gRPC).
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
+prost = "0.14"
 
 # Integration test configuration
 [[test]]

@@ -67,6 +67,8 @@ pub mod openai_embedding_tests;
 #[cfg(feature = "llm-openai")]
 pub mod openai_provider_test;
 pub mod orchestrator_workflow_lifecycle_test;
+#[cfg(feature = "otel")]
+pub mod otel_transport_test;
 pub mod paladin_garrison_integration_test;
 pub mod paladin_integration_test;
 pub mod provider_switching_test;

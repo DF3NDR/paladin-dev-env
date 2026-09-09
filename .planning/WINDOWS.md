@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 24
+open_count: 25
 waived_count: 4
 fixed_count: 5
-total_count: 33
-last_updated: 2026-09-09T03:42:33.069Z
+total_count: 34
+last_updated: 2026-09-09T04:57:28.596Z
 ---
 
 # Broken Windows Ledger
@@ -48,6 +48,7 @@ last_updated: 2026-09-09T03:42:33.069Z
 | 31 | 27 | deviation | src/application/services/run/worker.rs |  | (WR-02) A run against a code-registered Runnable::Agent assistant is excluded from both the D-24 live event bus and the PLAT-FR-14 webhook delivery hook -- run_agent's two return paths write status/outcome and ack/nack directly, never reaching event_bus.bind/publish or webhook_deliveries.enqueue. Documented on the event_bus/webhook_deliveries field docs and on run_agent itself (worker.rs), mirrored in webhook/mod.rs's WebhookPayload docs and in docs/src/api-reference/platform-api.md's Webhooks Known limitations subsection, and pinned by agent_kind_run_with_a_webhook_enqueues_no_delivery (worker_tests.rs). Closing condition: wire both hooks into run_agent's two return paths (success and record_engine_failure) and invert the pinning test so it asserts a delivery IS enqueued. | open |  | 2026-09-08T13:48:16.000Z |  |
 | 32 | 27 | deviation | crates/paladin-web/src/run_controller.rs |  | (WR-03) The three run read routes (GET /runs, GET /runs/{run_id}, GET /runs/{run_id}/webhook-deliveries) require authentication only -- RunQuery carries no caller identity and neither RunRepositoryPort::list/get nor WebhookDeliveryRepositoryPort::list_for_run applies a requester-derived filter, so any authenticated principal of any role can read every run in the deployment, including another caller's webhook target URL (secret redacted, URL not) and run_id enumeration is easier than for a random identifier since run_id is a time-ordered UUIDv7. Documented in run_controller.rs's module docs (Read scope section) and in docs/src/api-reference/platform-api.md's Authentication and scopes section. Accepted for v0.10 as a single-tenant/mutually-trusted-principal deployment model (T-27-23-02). Closing condition: a per-caller/tenant filter on RunQuery/get/list_for_run across the controller and the repository adapters. | open |  | 2026-09-08T13:48:16.000Z |  |
 | 33 | 28 | deviation | src/application/services/run/events.rs |  | map_trace_event's ParleyRaised->parley and RunFinished->done/error payloads keep the top-level waypoint_id/parleys/status/message field NAMES but carry null/reduced content (no prompt/choices/expires_at, no cancelled-vs-halted distinction) since TraceEvent::ParleyRaised/RunFinished do not carry that data by design (D-05); full detail still reachable via GET /threads/{id}/state. | open |  | 2026-09-09T03:42:33.069Z |  |
+| 34 | 28 | stub | src/application/cli/commands/run.rs | 268 | run_run_export: Waypoints-source + no-real-graph resolution derives no fired edges (visits only) -- empty placeholder GraphShape passed to from_waypoints when no real graph is resolved yet | open |  | 2026-09-09T04:57:28.596Z |  |
 
 ````json
 [
@@ -445,6 +446,18 @@ last_updated: 2026-09-09T03:42:33.069Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-09T03:42:33.069Z",
+    "resolved_at": null
+  },
+  {
+    "id": 34,
+    "kind": "stub",
+    "phase": "28",
+    "file": "src/application/cli/commands/run.rs",
+    "line": 268,
+    "description": "run_run_export: Waypoints-source + no-real-graph resolution derives no fired edges (visits only) -- empty placeholder GraphShape passed to from_waypoints when no real graph is resolved yet",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-09T04:57:28.596Z",
     "resolved_at": null
   }
 ]

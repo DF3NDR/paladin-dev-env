@@ -1,0 +1,27 @@
+---
+source: tests/cli/run_export_test.rs
+expression: rendered
+---
+source: waypoints (always-available history, derived fired edges, no evaluated edges)
+graph: observed-only (no graph document available)
+---
+title: (observed nodes only — no graph document available)
+---
+flowchart TD
+n0["middle «paladin» ✓<br/>10ms · 5tok"]
+n1["start «paladin» ✓<br/>10ms · 5tok"]
+classDef paladinKind fill:#eef2ff,stroke:#4338ca,color:#1e1b4b;
+classDef functionKind fill:#ecfeff,stroke:#0891b2,color:#164e63;
+classDef gateKind fill:#fefce8,stroke:#ca8a04,color:#713f12;
+classDef workflowKind fill:#fdf4ff,stroke:#a21caf,color:#4a044e;
+classDef workerKind fill:#f0fdf4,stroke:#15803d,color:#052e16;
+classDef dashed stroke-dasharray: 5 5;
+classDef outcomeSuccess fill:#dcfce7,stroke:#16a34a,color:#14532d;
+classDef outcomeFailed fill:#fee2e2,stroke:#dc2626,color:#7f1d1d;
+classDef outcomeParleyed fill:#fef3c7,stroke:#d97706,color:#78350f;
+classDef outcomeSkipped fill:#f1f5f9,stroke:#94a3b8,color:#475569;
+classDef outcomeCacheHit fill:#e0e7ff,stroke:#4f46e5,color:#312e81;
+class n0 paladinKind
+class n1 paladinKind
+class n0 outcomeSuccess
+class n1 outcomeSuccess

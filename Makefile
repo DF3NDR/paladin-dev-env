@@ -370,6 +370,12 @@ openapi: ## Regenerate the committed OpenAPI baseline (crates/paladin-web/openap
 	@UPDATE_OPENAPI=1 $(CARGO) test -p paladin-web --lib openapi_matches_committed_baseline -- --quiet
 	@echo "Wrote crates/paladin-web/openapi.json"
 
+.PHONY: bless-golden
+bless-golden: ## Regenerate the committed graph-export goldens (crates/paladin-battalion/tests/golden/export/)
+	@echo "$(CYAN)Regenerating graph-export goldens...$(NC)"
+	@UPDATE_GOLDEN=1 $(CARGO) test -p paladin-battalion --test export_golden golden_exports -- --quiet
+	@echo "Wrote crates/paladin-battalion/tests/golden/export/"
+
 .PHONY: keys
 keys: ## Show which LLM API credentials are available (never prints values)
 	@# paladin-env.sh is bash; make's default shell is dash, so invoke bash.

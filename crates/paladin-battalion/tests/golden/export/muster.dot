@@ -1,0 +1,6 @@
+digraph WarGraph {
+  "n0" [label="planner «function»"];
+  "n1" [label="worker «worker»", style=dashed];
+  "n2" [label="aggregator «function»", style=dashed];
+  "n1" -> "n2";
+}

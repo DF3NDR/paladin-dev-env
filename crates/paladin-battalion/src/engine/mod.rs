@@ -56,6 +56,10 @@ pub mod bridges;
 pub mod cache_key;
 pub mod directive_parser;
 pub mod dispatch_registry;
+/// `GraphShape`, `to_mermaid`, `to_dot` (OBS-03, OBS-FR-08, D-18): rendering
+/// a [`graph::WarGraph`] or [`graph_doc::WarGraphDoc`] as a Mermaid
+/// flowchart or a Graphviz digraph for a human to read.
+pub mod export;
 pub mod graph;
 /// `WarGraphDoc` -- the serde/schemars document form of a [`graph::WarGraph`]
 /// (PLAT-FR-12, D-31/D-33/D-34): what an assistant version persists, and
@@ -114,6 +118,7 @@ use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 pub use bridges::{CAMPAIGN_FAN_IN_SEPARATOR, campaign_node_ids, dedicated_output_field};
 pub use directive_parser::{DirectiveParseError, DirectiveParser, OnParseError};
 pub use dispatch_registry::DispatchRegistry;
+pub use export::{GraphShape, ShapeEdge, ShapeKind, ShapeNode, to_dot, to_mermaid};
 pub use graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
 pub use graph_doc::{CompileError, WARGRAPH_DOC_SCHEMA_VERSION, WarGraphDoc};
 pub use heartbeat::HeartbeatHandle;

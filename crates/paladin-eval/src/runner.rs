@@ -451,7 +451,11 @@ impl ScenarioRunner {
                 .any(|a| matches!(a, Assertion::FinalStateSnapshot))
         {
             let value = battlefield_snapshot_value(&final_state);
-            let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+            // Trailing newline: keeps blessed snapshots hook-clean (`end-of-file-fixer`
+            // runs over all files in CI); comparison is JSON-based, so it is inert.
+            let mut text =
+                serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+            text.push('\n');
             if let Some(parent) = snapshot_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }

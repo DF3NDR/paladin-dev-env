@@ -444,6 +444,28 @@ jobs:
           fi
           echo "Allowlist is set-equal to the MIGRATION.md §9.2 deliberate-breaking register (crate|type pairs)."
 
+      # D-01: MIGRATION.md's §9 sections previously carried a placeholder
+      # marker naming the requirement or phase that owned closing it -- every
+      # prior phase's own verification had to recalibrate around "a marker
+      # owned by a later phase" (28-17-SUMMARY.md, 29-RESEARCH.md). This step
+      # makes the absence permanent so the pattern cannot recur in v0.11: any
+      # future edit that reintroduces the four-letter placeholder token
+      # anywhere in MIGRATION.md fails CI. Any prose describing this
+      # convention -- including this comment -- must paraphrase the token
+      # (e.g. "marker", "placeholder"), never spell it out, or it would
+      # immediately re-trip the grep below.
+      - name: Verify MIGRATION.md carries no unfilled placeholder marker
+        run: |
+          set -euo pipefail
+          test -f MIGRATION.md
+          COUNT=$(grep -c 'TBD' MIGRATION.md || true)
+          if [ "${COUNT:-0}" -gt 0 ]; then
+            echo "::error::MIGRATION.md still carries ${COUNT} unfilled placeholder marker(s) -- every §9 section must be substantive before release. Offending lines:"
+            grep -n 'TBD' MIGRATION.md
+            exit 1
+          fi
+          echo "MIGRATION.md carries no unfilled placeholder marker."
+
   # Unit tests
   test:
     name: Unit Tests
@@ -1230,8 +1252,18 @@ jobs:
   # this job its meaning -- this workspace's own documented trap is that a
   # filter selecting zero tests still exits 0, so a rename or feature-gate
   # change could otherwise turn this into a silent no-op that reads green.
+  #
+  # This job ALSO carries the SHIP-02 backward-compat boot proof (D-09, as
+  # corrected in 29-05-PLAN.md): `v0_9_config_boot` (`tests/integration/
+  # v0_9_config_boot_test.rs`) needs the same `web-server` feature and is
+  # selected by no other job -- the `test` job's scope (see its own comment
+  # above) and `--doc` step do not reach it, and `web-server` is not a
+  # default feature, so `integration-tests`' sweep does not reach it either.
+  # D-09 asks for no new workflow job; this is the only existing job that can
+  # run it, so the boot proof rides here instead of a dedicated job of its
+  # own.
   e2e-platform-api:
-    name: E2E Platform API (PRD 06 acceptance-1 lifecycle)
+    name: E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -1257,6 +1289,21 @@ jobs:
           echo "Passed: ${ACTUAL:-0}"
           if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt 1 ]; then
             echo "::error::e2e_platform_api selected zero tests -- a stale filter, a rename, or a feature-gate change would otherwise report green having run nothing."
+            exit 1
+          fi
+
+      - name: Run the v0_9_config_boot test binary (SHIP-02 backward-compat proof)
+        run: |
+          set -o pipefail
+          cargo test --features web-server --test v0_9_config_boot \
+            2>&1 | tee /tmp/v0-9-config-boot-test.log
+
+      - name: Fail if the v0_9_config_boot run selected fewer than the full test set
+        run: |
+          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/v0-9-config-boot-test.log | tail -1)
+          echo "Passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt 9 ]; then
+            echo "::error::v0_9_config_boot selected fewer than 9 tests -- a stale filter, a rename, or a feature-gate change would otherwise report green having run less than the full SHIP-02 boot proof."
             exit 1
           fi
 

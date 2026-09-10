@@ -749,7 +749,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 29-08-PLAN.md — SHIP-03: WINDOWS.md triage — 25 open rows dispositioned with citations, plus the overhead-deviation row
+- [x] 29-08-PLAN.md — SHIP-03: WINDOWS.md triage — 25 open rows dispositioned with citations, plus the overhead-deviation row
 
 **Wave 5** *(blocked on Wave 4)*
 

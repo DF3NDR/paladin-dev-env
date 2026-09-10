@@ -50,8 +50,7 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   phase; the header note is rewritten to describe the *closed* state. Rejected: recording a
   one-off grep in the audit — every prior phase's VERIFICATION had to recalibrate around
   "TBDs owned by a later phase", and a gate is what stops the pattern recurring in v0.11.
-- **D-02: §9.8 is one ordered, copy-pasteable list, each step naming the concrete command or
-  file, verified against the shipped tree.** Order per overview §9.8: back up state dirs/DBs →
+- **D-02: §9.8 is one ordered, copy-pasteable list, each step naming the concrete command or file, verified against the shipped tree.** Order per overview §9.8: back up state dirs/DBs →
   apply migrations (every migration in §9.4 runs automatically at adapter construction via
   `sqlx::migrate!`, so this step is "start the new binary once against a backup" plus the
   Postgres note) → update config (nothing required; §9.5's disabled-by-default claim, now
@@ -62,9 +61,7 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   (health, graph validate, `eval run`) and the checklist names only those; if no graph-validate
   command exists, the step names the nearest real check rather than inventing one. Rejected:
   per-subsystem sub-checklists — an operator upgrading reads one list top to bottom.
-- **D-03: The mdBook "Upgrading" page is a new, hand-written
-  `docs/src/api-reference/upgrading.md`, registered in `docs/src/SUMMARY.md` directly above
-  the existing "Migration Guide" entry, linking `MIGRATION.md` by its repository URL.** It
+- **D-03: The mdBook "Upgrading" page is a new, hand-written `docs/src/api-reference/upgrading.md`, registered in `docs/src/SUMMARY.md` directly above the existing "Migration Guide" entry, linking `MIGRATION.md` by its repository URL.** It
   carries a two-paragraph orientation, the §9.1 behavioral-change table (M-B-01…04, one line
   each), a verbatim mirror of the §9.8 checklist, and the link. `docs/src/api-reference/
   migration-guide.md` (which stops at v0.5.0) gains a short "v0.10.0 (from v0.9.x)" section at
@@ -89,9 +86,7 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   for the audit (D-12), fixed in `MIGRATION.md` or the allowlist, never by loosening the check.
   Rejected: keeping crate-level plus a one-time manual audit — the claim would decay the day
   after release.
-- **D-05: §9.2's 28 rows are audited row-by-row against `cargo semver-checks` output AND a
-  public-API diff against v0.9.0, with the diff produced from the existing api-surface
-  machinery.** The doc-08 step-6 "manual `cargo public-api`-style diff" is
+- **D-05: §9.2's 28 rows are audited row-by-row against `cargo semver-checks` output AND a public-API diff against v0.9.0, with the diff produced from the existing api-surface machinery.** The doc-08 step-6 "manual `cargo public-api`-style diff" is
   `git show v0.9.0:.project/current-exports.txt` diffed against the regenerated
   `.project/current-exports.txt` (`scripts/extract-public-api.sh`, 3936 items at 28-17; the
   `api-surface` CI job keeps it honest on nightly). Every pre-existing item whose signature
@@ -109,9 +104,7 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   no tags, so reading the tag at test time is not an option. Rejected: a hand-trimmed
   "minimal v0.9 config" — the claim is about the *sample config a v0.9 operator actually has*.
   — **Reversibility:** reversible — a fixture file.
-- **D-07: "Legacy behavior" is asserted at two levels, in one new root integration test target
-  `tests/integration/v0_9_config_boot_test.rs` (registered as `[[test]] name =
-  "v0_9_config_boot"`, no Docker, runs in the `test` job).** (1) *Config resolution:*
+- **D-07: "Legacy behavior" is asserted at two levels, in one new root integration test target `tests/integration/v0_9_config_boot_test.rs` (registered as `[[test]] name = "v0_9_config_boot"`, no Docker, runs in the `test` job).** (1) *Config resolution:*
   `Settings::load_from_file` on the fixture succeeds, and every config struct added in v0.10
   (`agent_runtime`, `trace`, `web_server`, and the `Option<…>` fields for run queue/store/worker/
   stream, schedules, webhooks, assistants, waypoint store/retention, node cache, engine — the
@@ -129,8 +122,7 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   behavior" is a behavioral claim, and Phase 27 designed the platform routes to be unmounted
   when their config is absent precisely so this test can pass by construction
   (27-DISCUSSION-LOG line 216).
-- **D-08: The OpenAPI golden diff is path-restricted deep equality with `$ref` closure,
-  `info.version` excluded.** `git show v0.9.0:crates/paladin-web/openapi.json` is committed as
+- **D-08: The OpenAPI golden diff is path-restricted deep equality with `$ref` closure, `info.version` excluded.** `git show v0.9.0:crates/paladin-web/openapi.json` is committed as
   `crates/paladin-web/tests/fixtures/openapi-v0.9.0.json` (same provenance header convention as
   D-06, as a sibling `.md` note since JSON has no comments). A new
   `crates/paladin-web/tests/openapi_golden_v0_9.rs` loads `openapi_spec()` (the same function
@@ -143,23 +135,20 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   `info.version`. Rejected: whole-document diff with new paths stripped — a new shared schema
   referenced only by new paths would show as a spurious addition. — **Reversibility:**
   reversible — a test and a fixture.
-- **D-09: Both compat tests are ordinary `cargo test --workspace` targets, so the `test` job
-  gates them on every PR.** No new CI job. The 28-VALIDATION recalibration note (its literal
+- **D-09: Both compat tests are ordinary `cargo test --workspace` targets, so the `test` job gates them on every PR.** No new CI job. The 28-VALIDATION recalibration note (its literal
   `grep -c TBD` was unsatisfiable because of the §9.5 marker) is closed by D-01 + D-07 together:
   once the boot test exists, the §9.5 sentence is rewritten to cite it by target name.
 
 ### Program acceptance audit (SHIP-03)
 
-- **D-10: The audit artefact is `.project/v0.10.0/09-program-acceptance-audit.md`, a new
-  corpus document beside doc 08, with a pointer file in the phase directory.** The corpus is
+- **D-10: The audit artefact is `.project/v0.10.0/09-program-acceptance-audit.md`, a new corpus document beside doc 08, with a pointer file in the phase directory.** The corpus is
   the program's source of truth and is not archived per milestone the way `.planning/phases/`
   is; doc 08 calls this "the post-implementation audit" and reserves the number. The phase dir
   gets `29-ACCEPTANCE-AUDIT.md` containing only the link and the verdict line, so the GSD
   verifier finds it. Structure mirrors doc-08's ten protocol steps, one `##` per step, each
   ending in a `Verdict:` line (`PASS` / `PASS with findings` / `FAIL`) and a findings list.
   — **Reversibility:** reversible — a document.
-- **D-11: FR-to-test evidence is a per-FR table with named test anchors, seeded from artefacts
-  that already exist, script-assisted and human-curated.** Every phase already carries the
+- **D-11: FR-to-test evidence is a per-FR table with named test anchors, seeded from artefacts that already exist, script-assisted and human-curated.** Every phase already carries the
   mapping: `2x-VERIFICATION.md` (must-have truths → tests), `2x-VALIDATION.md` (requirement →
   test id → command) and doc-08's own rows (e.g. the G-08 row lists seven anchors by
   `file#test_name`). The audit table has columns `FR | owning phase/plan | test anchor(s) |
@@ -169,22 +158,19 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   is either "anchor added" (a doc-comment citing the FR on an existing test — a comment, not a
   behavior change) or "test written" — the latter only when a genuine gap exists, recorded as a
   deviation. Rejected: per-phase summary only — doc-08 step 5 is per-FR.
-- **D-12: Findings from every audit step are recorded, not fixed silently, and the fix set is
-  bounded.** Allowed fixes in this phase: documentation, test additions, FR-citation comments,
+- **D-12: Findings from every audit step are recorded, not fixed silently, and the fix set is bounded.** Allowed fixes in this phase: documentation, test additions, FR-citation comments,
   `MIGRATION.md`/allowlist corrections, CI gate tightening, changelog text. Anything requiring
   a production code change is an X-03 stop-and-flag item recorded in the audit with a proposed
   disposition (fix in v0.10.0 with a recorded decision, or defer to v0.10.1/v0.11 with a
   WINDOWS.md row) — the executor halts for that decision rather than making it.
-- **D-13: Orphan-behavior scope is the set of integration/E2E test targets added since
-  v0.9.0, plus the four `paladin-eval` scenarios.** Concretely: every `[[test]]` block present
+- **D-13: Orphan-behavior scope is the set of integration/E2E test targets added since v0.9.0, plus the four `paladin-eval` scenarios.** Concretely: every `[[test]]` block present
   in HEAD's `Cargo.toml` and each crate's `Cargo.toml` but absent at `v0.9.0`, every file under
   `tests/integration/` and `crates/*/tests/` added since the tag, and `tests/evals.rs`'s
   registered scenarios. Each must trace to at least one FR (or to an X-rule / a BUG-0x fix,
   which count as owners). Unit tests inside `#[cfg(test)]` modules are out of scope — thousands
   of them, and doc-08 step 5's "orphan behavior" targets *behaviors*, which integration tests
   are the witnesses for. Rejected: every test in the tree.
-- **D-14: Ubiquitous-language conformance is checked by table + grep, and deviations are
-  FILED, never renamed this phase.** The audit carries a table of the twelve overview §4 terms
+- **D-14: Ubiquitous-language conformance is checked by table + grep, and deviations are FILED, never renamed this phase.** The audit carries a table of the twelve overview §4 terms
   (Battlefield, Dispatch, Superstep, Waypoint, Thread, Directive, Muster, Parley, Vanguard,
   Chronicle, Aegis, Vault) → the canonical Rust type/module that embodies each, plus a grep
   over public rustdoc and `docs/src/` for competing synonyms (`checkpoint` for Waypoint,
@@ -193,17 +179,14 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   `paladin-battalion::engine` alongside `compute_next_vanguard` — a naming split the audit
   records with disposition "accepted alias, rename deferred" (a public-type rename is an X-10
   break in a release-gate phase). Rejected: renaming now.
-- **D-15: BUG-01 evidence is re-verified at Phase 29 HEAD and recorded with SHAs, not
-  re-tested.** The audit cites RED `b2d05045` → GREEN `8d5ef333` (23-01-SUMMARY, doc-08's BUG-01
+- **D-15: BUG-01 evidence is re-verified at Phase 29 HEAD and recorded with SHAs, not re-tested.** The audit cites RED `b2d05045` → GREEN `8d5ef333` (23-01-SUMMARY, doc-08's BUG-01
   row), re-runs `grep -rn "defaulting to true" crates/ src/` at HEAD (expected: zero matches),
   and names the four living tests (`unregistered_custom_condition_is_rejected_before_any_
   paladin_executes`, `unregistered_custom_edge_condition_fails_graph_validation`, `every_
   unregistered_custom_name_is_listed_sorted_and_deduped`, `registered_engine_evaluator_true_
   and_false_route_correctly`). BUG-02/03/04 are confirmed as pre-release engine fixes needing
   no §9.1/§9.2 entry (overview §7's own classification), per doc-08 step 4.
-- **D-16: ⚠ The Phase 28 bench-overhead FAIL (PRD 07 acceptance 6: ≤3% superstep overhead with
-  tracing on; measured +22.18% log sink, +18.46% composite, `28-BENCH-EVIDENCE.md`) is
-  ACCEPTED for v0.10.0 as a documented deviation, with the bar re-scoped as a follow-up.**
+- **D-16: ⚠ The Phase 28 bench-overhead FAIL (PRD 07 acceptance 6 — ≤3% superstep overhead with tracing on; measured +22.18% log sink, +18.46% composite, `28-BENCH-EVIDENCE.md`) is ACCEPTED for v0.10.0 as a documented deviation, with the bar re-scoped as a follow-up.**
   28-VERIFICATION's `human_verification` item 1 asks a maintainer to choose (a) accept, (b)
   re-scope to an I/O-bound superstep, or (c) optimise first. Recommended and auto-selected:
   (a) now + (b) as the recorded follow-up, because tracing sinks are opt-in (no sink → no
@@ -214,8 +197,7 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   the number is stated), a line in the root `CHANGELOG.md` `[0.10.0]` section, and a deferred
   idea for the optimisation. **The developer may overturn this at plan review** — choosing (c)
   turns it into an X-03 stop-and-flag production change and this phase would halt on it.
-- **D-17: Judgment-tier prohibitions and other "human sign-off" items get a maintainer
-  sign-off section in the audit, left unchecked by the executor.** 28-VERIFICATION item 2 (six
+- **D-17: Judgment-tier prohibitions and other "human sign-off" items get a maintainer sign-off section in the audit, left unchecked by the executor.** 28-VERIFICATION item 2 (six
   judgment-tier safety/privacy prohibitions, LLM-verified non-authoritatively) and the M-B-04
   stop-and-flag confirmation (doc-08 step 7 says §9.1 holds M-B-01…03 "and nothing else — or
   any additional entry was raised as a stop-and-flag item with a recorded decision"; M-B-04 was
@@ -227,9 +209,7 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
 
 ### Version bump, changelogs & dry-run publish (SHIP-04)
 
-- **D-18: The 0.10.0 bump lands on this feature branch, in this phase, without a tag —
-  exactly the v0.9.0 precedent (PR #50 bumped twelve manifests, tag `v0.9.0` was cut on the
-  merge commit).** Mechanism: `cargo release version 0.10.0 --execute --no-confirm --workspace`
+- **D-18: The 0.10.0 bump lands on this feature branch, in this phase, without a tag — exactly the v0.9.0 precedent (PR #50 bumped twelve manifests, tag `v0.9.0` was cut on the merge commit).** Mechanism: `cargo release version 0.10.0 --execute --no-confirm --workspace`
   (the same command `make release` runs, `Makefile:611`), followed by `UPDATE_OPENAPI=1 cargo
   test -p paladin-web openapi_matches_committed_baseline` to regenerate the baseline whose
   `info.version` the bump invalidates (`Makefile:614-620`), and a grep that every
@@ -243,7 +223,7 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   merge, not discovered on `main`. — **Reversibility:** costly — a version bump touches twelve
   manifests, the lockfile, the OpenAPI baseline and every changelog; reverting it is one revert
   commit but every dependent artefact must move together.
-- **D-19: Changelogs: the script stamps, a human curates the root.** `make
+- **D-19: Changelogs — the script stamps, a human curates the root.** `make
   finalize-crate-changelogs VERSION=0.10.0` (`scripts/finalize-crate-changelogs.sh`) inserts a
   dated `## [0.10.0] - 2026-09-XX` section after each publishable package's `[Unreleased]`
   anchor (twelve files incl. the root; idempotent). The root `CHANGELOG.md`'s `[Unreleased]`
@@ -257,8 +237,7 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   the bump commit's date; if the tag lands on a later day the date stands (v0.9.0's section is
   dated 2026-09-01, the day of both). `scripts/check-release-consistency.sh` (clauses 1–2:
   manifest and changelog-heading agreement) is run locally with `--tag v0.10.0` as the proof.
-- **D-20: Dry-run publish evidence comes from `cargo publish --workspace --dry-run`, and `make
-  publish-dry-run` is fixed to match; `scripts/publish-crates.sh` stays the real carrier.**
+- **D-20: Dry-run publish evidence comes from `cargo publish --workspace --dry-run`, and `make publish-dry-run` is fixed to match; `scripts/publish-crates.sh` stays the real carrier.**
   Today's `publish-dry-run` target (`Makefile:552-565`) swallows every failure with `|| true`,
   addresses `paladin-core` by directory name (the package is `paladin-ai-core`, so that line can
   never succeed), omits `paladin-herald`, and its closing message points at a `docs/
@@ -277,8 +256,7 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   behaves as described on 1.97.1 and whether `release.yml`'s `dry_run` dispatch input should
   call the same thing (out of scope to change unless it is a one-line swap).
   — **Reversibility:** reversible — a Makefile target and a docs section.
-- **D-21: "The release commit" means both the PR head that carries the bump and the merge
-  commit on `main` that gets tagged; evidence is recorded for both.** Pre-merge: the `ci`,
+- **D-21: "The release commit" means both the PR head that carries the bump and the merge commit on `main` that gets tagged; evidence is recorded for both.** Pre-merge: the `ci`,
   `docs` and `feature-flags` workflow run IDs on the final feature-branch SHA (semver 11/11 vs
   0.9.0 — with the bump the tool reports `0.9.0 → 0.10.0`, minor, same allowlist; MSRV 1.88;
   coverage ≥ 82 %; api-surface; sdk-clients; e2e-platform-api; docs build + linkcheck). Post-
@@ -301,8 +279,7 @@ Decision numbering continues the house style (D-01 …). Reversibility ratings f
   `cargo +1.88 check --workspace --all-features --all-targets`, `make security`,
   `check-release-consistency.sh --tag v0.10.0`, `cargo publish --workspace --dry-run`,
   `mdbook build docs/`), then the CI-run table per D-21.
-- **D-24: `WINDOWS.md`'s 25 open rows are triaged with evidence in one dedicated plan; rows
-  are never deleted, only moved to `fixed` or `waived` with a reason.** `/gsd-ship` blocks while
+- **D-24: `WINDOWS.md`'s 25 open rows are triaged with evidence in one dedicated plan; rows are never deleted, only moved to `fixed` or `waived` with a reason.** `/gsd-ship` blocks while
   `open_count > 0`, and a "releasable" verdict should not rest on an untriaged defect register.
   Buckets: (1) rows 2–19 predate the `v0.9.0` tag and shipped inside it as accepted debt →
   `waived`, reason cites `.planning/milestones/v0.9.0-MILESTONE-AUDIT.md` (status `tech_debt`,

@@ -2,11 +2,14 @@
 
 > **Scope note:** this file is the root Markdown deliverable required by `.project/v0.10.0/00-program-overview.md`
 > §9. It is a **living document**, created in the first epic of the v0.10.0 program (Phase 22,
-> `ENG-08`) and appended to by every later epic that touches an item below. The mdBook "Upgrading"
-> page the program's Definition of Done (overview §5.4) also requires is **not** added by this
-> phase — that is Phase 29 / `SHIP-01` scope. Every `TBD` below carries the requirement or phase
-> that owns closing it; `SHIP-01` (Phase 29) is responsible for clearing every remaining `TBD`
-> before the v0.10.0 release, per overview §9's living-document contract.
+> `ENG-08`) and appended to by every later epic that touched a section below. At the v0.10.0 close
+> (Phase 29, `SHIP-01`), every section is substantive: each section that once carried a marker
+> naming the requirement or phase responsible for closing it now carries the content that
+> requirement produced — a citation of the test that proves the claim, a confirmed-empty
+> statement, or a completed checklist. No open marker remains, and this note is written so that no
+> future edit reintroduces one without also filling it. The companion mdBook "Upgrading" page
+> overview §5.4's Definition of Done also requires is added separately, by this same closing phase
+> (Phase 29, plan 29-06), and links back to this file.
 
 ## 9.1 Behavioral changes (user-visible without code changes)
 
@@ -315,7 +318,7 @@ omission: a reader who diffs this phase's changes against a type list and finds 
 
 ## 9.5 Configuration & environment
 
-Every new runtime behavior this phase introduces is tunable and **disabled or defaulted to today's behavior out of the box** (X-09), so a v0.9 configuration file boots v0.10 with identical behavior. This claim will be backed by an integration test that boots the server with the v0.9 sample config and asserts feature/config resolution to legacy behavior — TBD, owner SHIP-02, Phase 29.
+Every new runtime behavior this phase introduces is tunable and **disabled or defaulted to today's behavior out of the box** (X-09), so a v0.9 configuration file boots v0.10 with identical behavior. This claim is proven, not merely stated: the root integration test target `v0_9_config_boot` (`tests/integration/v0_9_config_boot_test.rs`, `cargo test --features web-server --test v0_9_config_boot`, gated on every PR by CI's `e2e-platform-api` job — see §9.6) asserts it at two levels. **Config resolution:** the frozen v0.9.0 fixture loads with `Settings::load_from_file` with no edits, `Settings::agent_runtime`/`trace`/`web_server` all resolve to their own `Default`, and each of the nine platform config structs the v0.9 config file never named as a field (`EngineConfig`, `WaypointStoreConfig`, `RunStoreConfig`, `RunQueueConfig`, `RunWorkerConfig`, `RunStreamConfig`, `AssistantsConfig`, `SchedulesConfig`, `WebhooksConfig`) reports its own inert `::default()` state and validates `Ok`, with `apply_env_overrides()` proven a no-op against every relevant `APP_*` variable cleared under `#[serial]` (`EngineConfig::graceful_shutdown` is the one deliberate exception — it defaults `true`, M-B-02's own recorded decision above, and the test asserts that value, not `false`). **Behavioral:** the composed real routers answer `200` for the six v0.9 `/v1/agents…` paths plus `/health`, `/ready` and `/openapi.json`, and `501` — never `404` — for every route family new in v0.10 (`/v1/runs`, `/v1/threads/*/history`, `/v1/assistants`, `/v1/schedules`); `501`, not `404`, is the documented answer for a disabled platform subsystem everywhere in this file, cross-referenced against §9.6's own response-code tables below. **Fixture note:** the file the test actually loads is the frozen `v0.9.0` `tests/fixtures/config/v0.9.0-config.test.yml`, not `config.example.yml` — a byte-identical frozen `v0.9.0-config.example.yml` is committed alongside it as documentation evidence only, because it does not parse at either the `v0.9.0` tag or HEAD (`LlmProviderConfig::api_key` is a required `String` and its `ollama:` block has never carried one — a pre-existing defect unrelated to this program, recorded in `tests/fixtures/config/README.md`).
 
 Config structs mirror the existing `CitadelConfig` shape at `src/config/citadel.rs`: `Default` + `validate()` + `EnvOverridable`.
 
@@ -428,11 +431,17 @@ purely additive (553 insertions, 0 deletions) — and every pre-existing `/v1/ag
 byte-identical, both by raw diff and by a dedicated drift-guard test
 (`openapi_pre_existing_agent_paths_are_unchanged`).
 
-**Still owed, not this phase's scope:** the golden `openapi.json` diff proof that every
-pre-existing `/v1` path is unchanged across the *whole* v0.10.0 program (not just this phase's own
-additions) is **SHIP-02, Phase 29**. The broader platform surface — background run submission,
-assistants, schedules, admin/writer scopes on these same thread routes (PLAT-06) — is
-**PLAT-01…PLAT-06, Phase 27**.
+**Golden diff, closed:** the program-wide proof that every pre-existing `/v1` path is unchanged
+across the *whole* v0.10.0 cycle (not just this phase's own additions) is
+`crates/paladin-web/tests/openapi_golden_v0_9.rs` (SHIP-02, Phase 29). It restricts both the
+generated v0.10 document and the frozen `v0.9.0` baseline
+(`crates/paladin-web/tests/fixtures/openapi-v0.9.0.json`) to the six pre-existing v0.9 paths,
+follows their transitive `$ref` closure into `components.schemas`, keeps
+`components.securitySchemes` in full, and asserts `serde_json::Value` equality with `info.version`
+— regenerated by every release bump — as the ONLY sanctioned normalisation. Gated on every PR by
+the existing `cargo test -p paladin-web` per-crate CI job; no new workflow job was needed. The
+broader platform surface — background run submission, assistants, schedules, admin/writer scopes
+on these same thread routes (PLAT-06) — is **PLAT-01…PLAT-06, Phase 27**.
 
 **`POST /v1/threads/{id}/resume` response body gains `run_id` — landed Phase 27 (PLAT-03, Plan
 27-08).** The status-code table two paragraphs above is unchanged verbatim (`202`, `400`, `401`,
@@ -570,9 +579,10 @@ change on either `POST` or `PATCH` re-runs the write-time SSRF guard (D-42, the 
 crates/paladin-web/openapi.json` walked back to the commit immediately before 27-01 and confirmed
 every change across the whole phase is either an added path/schema, or the one registered
 field-level addition this section already documents (`ResumeAcceptedResponse.run_id`, above) — no
-pre-existing path or schema was ever removed or altered. SHIP-02 (Phase 29) is still the ship-gate
-golden-diff proof that restricts itself to pre-existing paths; this review is the phase-scoped
-superset (every path this phase touched, not just the pre-existing ones).
+pre-existing path or schema was ever removed or altered. `crates/paladin-web/tests/openapi_golden_v0_9.rs`
+(SHIP-02, Phase 29) is the program-wide ship-gate golden-diff proof that restricts itself to the
+six pre-existing paths; this review is the phase-scoped superset (every path Phase 27 touched, not
+just the pre-existing ones).
 
 **Workspace line coverage (D-54, X-02):** the 82% floor (ADR-0006) is proven under CI's exact
 invocation — `cargo llvm-cov --workspace --features integration-tests,llm-all --lcov
@@ -623,8 +633,53 @@ at all.
 
 ## 9.7 Deprecations
 
-Empty — no item is marked `#[deprecated]` by any phase so far, and **Phase 25 (FT) deliberately adds none (X-03)**: the legacy Battalion `RetryPolicy`, `ErrorStrategy` and `NodeError` summary types under `paladin_core::platform::container::battalion`, and the legacy Formation/Phalanx/Campaign timeout handling, remain live and undeprecated alongside the new `Aegis` family; the retained `PaladinError::LlmError(String)` variant, now constructed by no first-party production code (25-06), is likewise left undeprecated. **Phase 28 (OBS) also adds none:** no item touched by this phase — `TraceEvent`/`TraceSink` (moved and reshaped, not deprecated), `FallbackLlmAdapter::with_trace_sink` (renamed to `with_trace_emitter`, the old name simply removed rather than kept and marked `#[deprecated]`, since both are new-in-0.10 with the only caller being the facade itself, D-39), or any other type this phase's §9.2 note records — is marked `#[deprecated]`. Entries are added here as producing epics ship theirs; this section is finalized (or confirmed empty) at closeout, owner SHIP-01, Phase 29.
+Empty — no item is marked `#[deprecated]` by any phase so far, and **Phase 25 (FT) deliberately adds none (X-03)**: the legacy Battalion `RetryPolicy`, `ErrorStrategy` and `NodeError` summary types under `paladin_core::platform::container::battalion`, and the legacy Formation/Phalanx/Campaign timeout handling, remain live and undeprecated alongside the new `Aegis` family; the retained `PaladinError::LlmError(String)` variant, now constructed by no first-party production code (25-06), is likewise left undeprecated. **Phase 28 (OBS) also adds none:** no item touched by this phase — `TraceEvent`/`TraceSink` (moved and reshaped, not deprecated), `FallbackLlmAdapter::with_trace_sink` (renamed to `with_trace_emitter`, the old name simply removed rather than kept and marked `#[deprecated]`, since both are new-in-0.10 with the only caller being the facade itself, D-39), or any other type this phase's §9.2 note records — is marked `#[deprecated]`. Entries would have been added here as producing epics shipped theirs. At the v0.10.0 close
+(SHIP-01, Phase 29) this section is confirmed empty: no phase in the program marked any item
+`#[deprecated]`.
 
 ## 9.8 Upgrade checklist
 
-TBD — a full ordered, copy-pasteable operator checklist (back up state dirs/DBs → apply migrations → update config → adjust termination grace → register custom evaluators if used → deploy → verify with `paladin-cli` health/graph-validate commands) is written once the subsystems it references exist to check against (migrations land with ENG-05; termination grace **landed with HITL-04, Phase 24** — set `terminationGracePeriodSeconds` to at least `60` (2 × the 30s default `APP_ENGINE_SHUTDOWN_GRACE_SECS`), or at least twice whatever value you configure that env var to, in every Deployment manifest before rolling out this upgrade; custom evaluator registration **landed with CF-01, Phase 23** — `CampaignExecutionService::with_evaluator` on the legacy path, `WarEngine::with_edge_evaluator` on the `WarEngine` path, see M-B-01). Finalized at closeout, owner SHIP-01, Phase 29.
+One ordered, copy-pasteable checklist for an operator upgrading a v0.9.0 deployment to v0.10.0.
+Every step below names a concrete command or file present in the shipped tree; none invents a
+subcommand that does not exist.
+
+1. **Back up state.** Snapshot every state directory and database this deployment uses: the
+   waypoint store (`SqliteWaypointStore`/`PostgresWaypointStore`'s backing file or database,
+   §9.4), the run store (`RunStoreConfig`'s SQLite file or PostgreSQL database, §9.5), the
+   Garrison SQLite database if used, and any Citadel state files — Citadel's own file format is
+   unaffected by this program (§9.4's repeated "existing state is unaffected" notes). There is no
+   destructive migration to reverse a bad upgrade against; a restored backup plus the v0.9.0
+   binary is the rollback path.
+2. **Apply migrations — by starting the new binary, not a separate command.** Every migration
+   this program added (`waypoints`, `garrison_entries.is_summary`, `vault_records`, `runs`,
+   `assistants`/`assistant_versions`, `run_schedules`, `webhook_deliveries`, `run_traces` — the
+   full list is §9.4) runs automatically at adapter construction via `sqlx::migrate!`; there is no
+   `sqlx migrate run` step for an operator to invoke by hand. Start the new `paladin-server`
+   binary once against the restored backup and confirm it comes up cleanly. **PostgreSQL note:**
+   the same automatic-migration mechanism applies to `PostgresWaypointStore`/
+   `PostgresRunRepository`/etc.; no separate manual migration step is needed there either.
+3. **Update config — nothing is required.** Every new v0.10 config surface defaults to today's
+   behavior, proven by the `v0_9_config_boot` integration test (§9.5): a v0.9 configuration file
+   boots this binary with every new subsystem inert. No `config.yml` edit is required to preserve
+   v0.9 behavior; add a section only when actually adopting a new capability.
+4. **Raise `terminationGracePeriodSeconds`.** Set it to at least `60` — twice the default
+   `APP_ENGINE_SHUTDOWN_GRACE_SECS` of 30s, or at least twice whatever value you configure that env
+   var to — in every Deployment manifest before rolling out this upgrade (M-B-02, §9.1). The
+   shipped manifests (`k8s/deployment.yaml`, `k8s/server/deployment.yaml`,
+   `k8s/server/worker-deployment.yaml`) already carry `terminationGracePeriodSeconds: 60`; an
+   operator running a forked or hand-written manifest must make the same change there.
+5. **Register a custom evaluator for every `EdgeCondition::Custom` name in use.** M-B-01's fix
+   (§9.1) makes an unregistered custom edge condition a validation failure, not a silent
+   always-true. Register one via `CampaignExecutionService::with_evaluator("name",
+   Arc::new(evaluator))` on the legacy execution path, or `WarEngine::with_edge_evaluator("name",
+   Arc::new(evaluator))` on the `WarEngine` path, before calling `execute`/`start` — M-B-01's
+   worked example above shows the exact registration call and the validation error text this step
+   avoids.
+6. **Deploy.** Roll out the new binary and manifests with the grace period and evaluator
+   registrations from steps 4-5 already in place.
+7. **Verify.** Run `paladin-cli setup-check --verbose` for an environment/toolchain/provider/
+   service connectivity check; if the deployment uses the Maneuver flow DSL, run `paladin-cli
+   maneuver validate` against its flow configuration; and run `paladin-cli eval run <glob>`
+   against a representative scenario glob for a behavioral post-deploy check. `GraphCommands`
+   exposes exactly one subcommand, `export` (`paladin-cli graph export --format mermaid|dot`), for
+   inspecting a graph's structure — there is no separate command for a runtime probe.

@@ -733,9 +733,9 @@ Plans:
 
 **Wave 1** *(no dependencies — parallel)*
 
-- [ ] 29-01-PLAN.md — SHIP-02: frozen v0.9 config fixtures and the `v0_9_config_boot` proof (config resolution + 501 route table)
-- [ ] 29-02-PLAN.md — SHIP-02: path-restricted `$ref`-closure OpenAPI golden diff against the frozen v0.9.0 baseline
-- [ ] 29-03-PLAN.md — SHIP-01/SHIP-04: row-level allowlist ↔ §9.2 CI gate, and `publish-dry-run` + release-checklist corrections
+- [x] 29-01-PLAN.md — SHIP-02: frozen v0.9 config fixtures and the `v0_9_config_boot` proof (config resolution + 501 route table)
+- [x] 29-02-PLAN.md — SHIP-02: path-restricted `$ref`-closure OpenAPI golden diff against the frozen v0.9.0 baseline
+- [x] 29-03-PLAN.md — SHIP-01/SHIP-04: row-level allowlist ↔ §9.2 CI gate, and `publish-dry-run` + release-checklist corrections
 
 **Wave 2** *(blocked on Wave 1)*
 

@@ -6,9 +6,9 @@ current_phase: 29
 current_phase_name: Program Gates & Release
 status: executing
 stopped_at: Phase 29 context gathered
-last_updated: "2026-09-10T00:14:16.063Z"
-last_activity: 2026-09-09
-last_activity_desc: Phase 28 complete, transitioned to Phase 29
+last_updated: "2026-09-10T00:16:18.383Z"
+last_activity: 2026-09-10
+last_activity_desc: Phase 29 execution started
 progress:
   total_phases: 9
   completed_phases: 8
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-09 after Phase 28)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 29 — Program Gates & Release (SHIP-01…04, the v0.10.0 close)
+**Current focus:** Phase 29 — Program Gates & Release
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
 **Progress:** [█████████░] v0.10.0 — 8 of 9 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28); 128/128 planned plans executed
@@ -51,10 +51,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 29 — Program Gates & Release
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-09 — Phase 28 complete, transitioned to Phase 29
+Phase: 29 (Program Gates & Release) — EXECUTING
+Plan: 1 of 9
+Status: Executing Phase 29
+Last activity: 2026-09-10 — Phase 29 execution started
 
 ## Performance Metrics
 

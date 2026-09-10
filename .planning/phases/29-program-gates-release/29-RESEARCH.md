@@ -533,7 +533,9 @@ plans to fix this pointer in the same edit.
 claim in this document (file contents, test names, CLI commands, script syntax, tool versions,
 route status codes) was verified directly against the tree or by execution.
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> **Resolution record (plan-phase, 2026-09-10):** both questions below are RESOLVED and adopted by the plans — Q1 (which v0.9 fixture to freeze) → option (b), the two-fixture resolution, owned by `29-01-PLAN.md` and recorded in MIGRATION.md §9.5 by `29-05-PLAN.md`; Q2 (the pre-existing 72-warning `cargo doc` step) → recorded as a named WINDOWS.md `deviation` without expanding D-25's fix scope, owned by `29-07-PLAN.md` / `29-09-PLAN.md`.
 
 1. **Which v0.9-sample-config fixture should D-06/D-07 actually freeze, given `config.example.yml`
    does not parse at either tag?**

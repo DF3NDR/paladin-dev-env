@@ -549,20 +549,10 @@ release-check: ## Check if ready for release
 	@echo "$(GREEN)✅ Release check passed!$(NC)"
 
 .PHONY: publish-dry-run
-publish-dry-run: release-check ## Run dependency-first `cargo publish --dry-run` for all crates
-	@echo "$(CYAN)Running dependency-first publish dry-runs...$(NC)"
-	@$(CARGO) publish --dry-run -p paladin-core || true
-	@$(CARGO) publish --dry-run -p paladin-ports || true
-	@$(CARGO) publish --dry-run -p paladin-battalion || true
-	@$(CARGO) publish --dry-run -p paladin-llm || true
-	@$(CARGO) publish --dry-run -p paladin-memory || true
-	@$(CARGO) publish --dry-run -p paladin-web || true
-	@$(CARGO) publish --dry-run -p paladin-notifications || true
-	@$(CARGO) publish --dry-run -p paladin-content || true
-	@$(CARGO) publish --dry-run -p paladin-storage || true
-	@$(CARGO) publish --dry-run -p paladin-eval || true
-	@$(CARGO) publish --dry-run -p paladin || true
-	@echo "$(YELLOW)Dry-run publish command sequence completed. See docs/RELEASE_CHECKLIST.md for interpretation and publish-order gating.$(NC)"
+publish-dry-run: release-check ## Verify every publishable crate packages and resolves cleanly (workspace dry run)
+	@echo "$(CYAN)Running workspace publish dry-run (all twelve publishable crates, dependency order)...$(NC)"
+	@$(CARGO) publish --workspace --dry-run
+	@echo "$(YELLOW)Dry-run publish completed. See docs/src/appendix/release-checklist.md for interpretation and publish-order gating.$(NC)"
 
 .PHONY: finalize-crate-changelogs
 finalize-crate-changelogs: ## Stamp a dated section into every publishable package's changelog (VERSION=x.y.z required)

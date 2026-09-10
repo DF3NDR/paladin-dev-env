@@ -48,20 +48,33 @@ Run and require success for:
 
 ## 5. Dry-Run Publish Validation
 
-Run dependency-first dry-runs, in the real eleven-crate order:
+Run one workspace-wide dry-run, which packages and verifies all twelve publishable crates in
+dependency order in a single command:
 
 1. paladin-ai-core
 2. paladin-ports
 3. paladin-herald
 4. paladin-battalion, paladin-llm, paladin-memory, paladin-web, paladin-notifications,
    paladin-content, paladin-storage (leaf tier)
-5. paladin-ai
+5. paladin-eval
+6. paladin-ai
 
 Use:
 
-- cargo publish --dry-run -p <crate>
+- `cargo publish --workspace --dry-run` (or `make publish-dry-run`)
 
-If upstream crates are not yet on crates.io, execute dry-runs in publish order and expect dependent dry-runs to fail until prerequisites are available. This caveat is strictly more accurate now that paladin-herald is included: it depends on both paladin-ai-core and paladin-ports being present before its own dry-run can pass.
+`paladin-doc-examples` is skipped automatically because it is marked `publish = false`.
+`paladin-eval` is included here even though the `semver` CI job excludes it from the
+published-baseline diff (it has no published `0.9.0` baseline to diff against — ADR-0048); its
+dry-run packaging and dependency resolution are still verified like every other crate.
+
+The workspace form resolves intra-workspace dependencies from local paths instead of against the
+crates.io registry, so every crate — including one that depends on a sibling not yet
+published — verifies cleanly in dependency order before anything is actually published. There is
+no "expect dependent dry-runs to fail until prerequisites are available" caveat with this
+command, unlike a per-crate `cargo publish --dry-run -p <crate>` loop, which resolves each
+dependent's pinned version against the registry and fails until its dependencies are actually
+live there.
 
 ## 6. Publish
 

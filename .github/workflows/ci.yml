@@ -364,17 +364,38 @@ jobs:
       # have a matching allowlist entry. Reads both files directly -- a
       # missing file fails this step rather than silently treating either
       # side as an empty set.
+      #
+      # ROW-LEVEL (D-04): the comparison is the SET of `crate | type` PAIRS,
+      # not just crate names -- a §9.2 row and an allowlist entry naming
+      # DIFFERENT types under the SAME crate must fail. The set is a
+      # DEDUPLICATED set, never a row count against an entry count:
+      # `paladin-ai | Settings` is deliberately marked `Y` on two separate
+      # §9.2 rows (the `agent_runtime` field, Phase 26, and the
+      # `trace`/`web_server` fields, Phase 28) that both legitimately mirror
+      # the SAME allowlist entry -- they must collapse to one set member, not
+      # report a false 10-rows-vs-9-entries mismatch.
       - name: Verify allowlist is set-equal to the MIGRATION.md §9.2 register
         run: |
           set -euo pipefail
           test -f .cargo/semver-checks-allowlist.toml
           test -f MIGRATION.md
 
-          # Deliberate-breaking §9.2 rows: the "Deliberate-breaking?" column
-          # (6th pipe-delimited field) starting with "Y". Scoped to the §9.2
-          # section only, so a "Y" elsewhere in the document can't leak in.
-          # Trimming happens inside awk (no sed backreferences) to keep this
-          # script shellcheck-clean.
+          # Register side: scoped to the §9.2 section only, so a "Y"
+          # elsewhere in the document can't leak in. Data rows are selected
+          # by a leading pipe immediately followed by a backtick, which
+          # excludes the table header and its `---` separator row. Field 2
+          # is the crate (trimmed of spaces/tabs/backticks); field 3's FIRST
+          # backtick-quoted identifier is the type, so a long parenthetical
+          # like "StopReason (defined in ...)" still reduces to `StopReason`.
+          # The deliberate-breaking marker is located by scanning fields 6
+          # through NF (never a fixed column) for a trimmed value that is
+          # exactly "Y" or begins with "Y" followed by a space, em dash or
+          # hyphen: one §9.2 row's Mitigation cell contains a literal `|`
+          # inside a backticked span, which under naive `-F'|'` splitting
+          # shifts that row's marker one field to the right -- scanning the
+          # range instead of a fixed column is what keeps that row from
+          # being silently skipped. All trimming happens inside awk (no sed
+          # backreferences) to keep this script shellcheck-clean.
           # Both greps below tolerate exit 1 (no matches: an empty register or
           # an empty allowlist is a legal state — both empty is the set-equal
           # baseline this check shipped with) while still failing on exit 2
@@ -382,31 +403,46 @@ jobs:
           # kills the step before it prints anything, which is exactly how
           # this step failed on its first-ever run.
           awk '/^## 9\.2 /{flag=1; next} /^## 9\.3 /{flag=0} flag' MIGRATION.md \
-            | { grep -E '^\|' || test $? -eq 1; } \
+            | { grep -E '^\| `' || test $? -eq 1; } \
             | awk -F'|' '{
                 crate=$2; gsub(/^[ \t`]+|[ \t`]+$/, "", crate);
-                deliberate=$6; gsub(/^[ \t]+|[ \t]+$/, "", deliberate);
-                if (deliberate ~ /^Y/) print crate
+                type=$3; ident="";
+                if (match(type, /`[^`]+`/)) ident = substr(type, RSTART+1, RLENGTH-2);
+                deliberate="";
+                for (k = 6; k <= NF; k++) {
+                  v = $k; gsub(/^[ \t]+|[ \t]+$/, "", v);
+                  if (v == "Y" || v ~ /^Y[ \t—-]/) { deliberate = "Y"; break }
+                }
+                if (deliberate == "Y") print crate " | " ident
               }' \
-            | sort -u > /tmp/migration-deliberate-crates.txt
+            | sort -u > /tmp/migration-deliberate-pairs.txt
 
-          # Allowlist entries: each [[entry]] carries a `crate = "..."` key.
-          # Extracted via awk field-splitting on the quote character rather
-          # than a sed backreference, for the same shellcheck-cleanliness reason.
-          { grep -E '^\s*crate\s*=' .cargo/semver-checks-allowlist.toml || test $? -eq 1; } \
+          # Allowlist side: each [[entry]]'s `migration_row = "crate | type"`
+          # value is split on the pipe (with surrounding whitespace), and the
+          # type portion has backticks stripped and is reduced to its first
+          # whitespace-delimited token -- e.g. `require_authentication (fn)`
+          # reduces to `require_authentication`, matching the register side's
+          # reduction of `` `require_authentication` (fn) `` to the same
+          # identifier. Same shellcheck-cleanliness reasoning as the register
+          # side: all trimming happens inside awk, never a sed backreference.
+          { grep -E '^\s*migration_row\s*=' .cargo/semver-checks-allowlist.toml || test $? -eq 1; } \
             | awk -F'"' '{print $2}' \
-            | sort -u > /tmp/allowlist-crates.txt
+            | awk -F' *\\| *' '{
+                crate=$1; type=$2; gsub(/`/, "", type); sub(/ .*$/, "", type);
+                print crate " | " type
+              }' \
+            | sort -u > /tmp/allowlist-pairs.txt
 
-          echo "MIGRATION.md §9.2 deliberate-breaking crates:"
-          cat /tmp/migration-deliberate-crates.txt
-          echo "Allowlist crates:"
-          cat /tmp/allowlist-crates.txt
+          echo "MIGRATION.md §9.2 deliberate-breaking crate|type pairs:"
+          cat /tmp/migration-deliberate-pairs.txt
+          echo "Allowlist crate|type pairs:"
+          cat /tmp/allowlist-pairs.txt
 
-          if ! diff -u /tmp/migration-deliberate-crates.txt /tmp/allowlist-crates.txt; then
-            echo "::error::Allowlist and MIGRATION.md §9.2 deliberate-breaking rows are not set-equal (see diff above)."
+          if ! diff -u /tmp/migration-deliberate-pairs.txt /tmp/allowlist-pairs.txt; then
+            echo "::error::Allowlist and MIGRATION.md §9.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
             exit 1
           fi
-          echo "Allowlist is set-equal to the MIGRATION.md §9.2 deliberate-breaking register."
+          echo "Allowlist is set-equal to the MIGRATION.md §9.2 deliberate-breaking register (crate|type pairs)."
 
   # Unit tests
   test:

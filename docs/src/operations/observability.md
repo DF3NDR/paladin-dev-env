@@ -187,7 +187,11 @@ in the other three.
   — both genuinely **fail** the ≤3% bar. This is recorded here honestly rather than softened; see
   `.planning/phases/28-observability-tooling/28-BENCH-EVIDENCE.md` for the full measurement and
   analysis. It is not gated in CI (criterion numbers on shared runners are noise) — the record is
-  the gate.
+  the gate. **v0.10.0 disposition:** accepted as a documented deviation for this release — tracing
+  sinks are opt-in (no sink configured means no overhead paid) and `trace.state_values` defaults
+  off, so no default deployment pays this cost — with the acceptance bar re-scoped to an I/O-bound
+  superstep as the tracked follow-up (`.project/v0.10.0/09-program-acceptance-audit.md`'s
+  "Accepted deviation for v0.10.0" section).
 - **`trace.heartbeat_interval_secs` is not yet wired into the engine's own rate limiter.** The
   engine hardcodes a 5-second default heartbeat interval per node; threading the configured value
   through is a documented, deliberate scope reduction (28-06), not a bug.

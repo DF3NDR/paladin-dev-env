@@ -20,9 +20,13 @@
 //! frozen historical record of the `v0.9.0` tag, not a baseline that tracks HEAD. There is nothing
 //! to regenerate it from -- see `tests/fixtures/README.md` for the exact provenance.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
+
+/// Prefix stripped from a `$ref` string to recover its `components.schemas` key.
+const SCHEMA_REF_PREFIX: &str = "#/components/schemas/";
 
 /// The six paths a v0.9 client could call, in the exact spelling `openapi_spec()` and the
 /// frozen `v0.9.0` baseline both use. This is the single source of truth for the restriction --
@@ -128,6 +132,71 @@ fn assert_deep_eq(a: &Value, b: &Value, context: &str) {
     }
 }
 
+/// The `components.schemas` object of a document.
+fn schemas_of(doc: &Value) -> &serde_json::Map<String, Value> {
+    doc.get("components")
+        .and_then(|c| c.get("schemas"))
+        .and_then(Value::as_object)
+        .expect("document has components.schemas")
+}
+
+/// The `components.securitySchemes` object of a document.
+fn security_schemes_of(doc: &Value) -> &Value {
+    doc.get("components")
+        .and_then(|c| c.get("securitySchemes"))
+        .expect("document has components.securitySchemes")
+}
+
+/// The `info` object of a document, with the `version` key removed -- the ONLY sanctioned
+/// normalisation (D-08). Any other field difference between the generated document and the
+/// frozen baseline is a real SHIP-02 failure and must never be normalised away.
+fn info_sans_version(doc: &Value) -> Value {
+    let mut info = doc
+        .get("info")
+        .cloned()
+        .expect("document has an `info` object");
+    if let Some(map) = info.as_object_mut() {
+        map.remove("version");
+    }
+    info
+}
+
+/// Recursively collect every string found under a `$ref` key within `value`.
+fn collect_refs(value: &Value, refs: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, v) in map {
+                if key == "$ref" {
+                    if let Value::String(s) = v {
+                        refs.push(s.clone());
+                    }
+                } else {
+                    collect_refs(v, refs);
+                }
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr {
+                collect_refs(v, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Compute the transitive `$ref` closure of `subtree` into `schemas`.
+///
+/// Collects every `$ref` string found anywhere in `subtree`, resolves each to its
+/// `components.schemas` entry, and recurses into that entry's own `$ref`s until the name set
+/// stops growing. Panics naming the offending `$ref` if it names a key absent from `schemas` --
+/// a silently-renamed schema must not slip through as "not in the closure".
+fn ref_closure(
+    subtree: &Value,
+    schemas: &serde_json::Map<String, Value>,
+) -> BTreeMap<String, Value> {
+    todo!("resolve the transitive $ref closure of `subtree` into `schemas` (GREEN phase)")
+}
+
 /// The restriction itself must never be vacuous: an empty or partial restriction must fail
 /// loudly here rather than let [`openapi_v0_9_paths_match_the_frozen_baseline`] pass on two
 /// empty maps (D-08, threat T-29-02-04).
@@ -166,5 +235,112 @@ fn openapi_v0_9_paths_match_the_frozen_baseline() {
         &generated,
         &baseline,
         "the six v0.9 paths' operation objects",
+    );
+}
+
+/// Every schema transitively reachable from the six v0.9 paths' operations must be deep-equal
+/// between the generated document and the frozen baseline -- a changed request/response schema
+/// reachable only through a pre-existing path is a SHIP-02 failure even though the path key
+/// itself did not change (T-29-02-02).
+#[test]
+fn ref_closure_schemas_match_the_frozen_baseline() {
+    let generated_doc = generated_spec();
+    let baseline_doc = load_baseline();
+
+    let generated_closure = ref_closure(&restrict_paths(&generated_doc), schemas_of(&generated_doc));
+    let baseline_closure = ref_closure(&restrict_paths(&baseline_doc), schemas_of(&baseline_doc));
+
+    let generated_value = serde_json::to_value(&generated_closure).expect("serialize closure");
+    let baseline_value = serde_json::to_value(&baseline_closure).expect("serialize closure");
+
+    assert_deep_eq(
+        &generated_value,
+        &baseline_value,
+        "the $ref closure of the six v0.9 paths into components.schemas",
+    );
+}
+
+/// The closure must never be vacuous, and every `$ref` it encounters must resolve to a present
+/// `components.schemas` key -- `ref_closure` itself panics naming the offending pointer on an
+/// unresolvable `$ref`, so a silently-renamed schema cannot slip through as "not in the closure"
+/// (T-29-02-04).
+#[test]
+fn ref_closure_is_non_empty_and_fully_resolved() {
+    for (label, doc) in [("generated", generated_spec()), ("baseline", load_baseline())] {
+        let closure = ref_closure(&restrict_paths(&doc), schemas_of(&doc));
+
+        assert!(
+            !closure.is_empty(),
+            "{label}: the $ref closure of the six v0.9 paths must be non-empty"
+        );
+        for name in closure.keys() {
+            assert!(
+                schemas_of(&doc).contains_key(name),
+                "{label}: closure member `{name}` must exist in components.schemas"
+            );
+        }
+    }
+}
+
+/// `components.securitySchemes` must be deep-equal between the two documents in full, with no
+/// path restriction applied -- an auth-scheme rename on a pre-existing path is a SHIP-02 failure
+/// (T-29-02-03).
+#[test]
+fn security_schemes_match_the_frozen_baseline() {
+    let generated = generated_spec();
+    let baseline = load_baseline();
+
+    assert_deep_eq(
+        security_schemes_of(&generated),
+        security_schemes_of(&baseline),
+        "components.securitySchemes",
+    );
+}
+
+/// `info.version` is the ONLY sanctioned normalisation (D-08). This is asserted explicitly,
+/// rather than implicitly relied on, so a future edit that quietly widens the normalisation set
+/// breaks this test instead of silently passing.
+#[test]
+fn info_version_is_the_only_normalisation() {
+    let generated = generated_spec();
+    let baseline = load_baseline();
+
+    // Every `info` field other than `version` must already agree with no normalisation applied
+    // -- proving `version` really is the one sanctioned exception, not a stand-in for "the info
+    // block might differ in several ways that all get waved through".
+    assert_deep_eq(
+        &info_sans_version(&generated),
+        &info_sans_version(&baseline),
+        "info fields other than `version`",
+    );
+
+    // Prove the normalisation is scoped to exactly the `version` key: a synthetic document whose
+    // `info.version` differs from the baseline's, but is otherwise identical, becomes equal
+    // after `info_sans_version`.
+    let mut version_only_diff = baseline.clone();
+    version_only_diff["info"]["version"] = Value::String("9.9.9-synthetic".to_string());
+    assert_ne!(
+        version_only_diff["info"]["version"], baseline["info"]["version"],
+        "synthetic fixture must actually differ in version to exercise the normalisation"
+    );
+    assert_deep_eq(
+        &info_sans_version(&version_only_diff),
+        &info_sans_version(&baseline),
+        "a version-only difference must normalise away",
+    );
+
+    // ...and a document that differs in ANY OTHER info field must stay unequal after the same
+    // normalisation -- so a future edit that quietly widens the normalisation set (e.g. also
+    // dropping `info.title`) breaks this test.
+    let mut other_field_diff = baseline.clone();
+    other_field_diff["info"]["title"] = Value::String("A Different Title".to_string());
+    let diff = first_difference(
+        "",
+        &info_sans_version(&other_field_diff),
+        &info_sans_version(&baseline),
+    );
+    assert!(
+        diff.is_some(),
+        "a non-version info field difference must NOT be normalised away"
     );
 }

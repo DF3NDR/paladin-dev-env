@@ -744,8 +744,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 29-06-PLAN.md — SHIP-01: the mdBook Upgrading page, SUMMARY entry, migration-guide pointer, overview §4 errata
-- [ ] 29-07-PLAN.md — SHIP-03: audit steps 6-9, the accepted tracing-overhead deviation, the maintainer sign-off checklist
+- [x] 29-06-PLAN.md — SHIP-01: the mdBook Upgrading page, SUMMARY entry, migration-guide pointer, overview §4 errata
+- [x] 29-07-PLAN.md — SHIP-03: audit steps 6-9, the accepted tracing-overhead deviation, the maintainer sign-off checklist
 
 **Wave 4** *(blocked on Wave 3)*
 

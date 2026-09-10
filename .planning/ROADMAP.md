@@ -753,7 +753,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4)*
 
-- [ ] 29-09-PLAN.md — SHIP-04: the 0.10.0 bump, changelogs, dry-run publish, CI evidence, audit step 10
+- [x] 29-09-PLAN.md — SHIP-04: the 0.10.0 bump, changelogs, dry-run publish, CI evidence, audit step 10
 
 ## Progress
 

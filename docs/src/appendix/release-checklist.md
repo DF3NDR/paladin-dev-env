@@ -85,7 +85,8 @@ Publish in dependency-first order:
 3. paladin-herald
 4. paladin-battalion, paladin-llm, paladin-memory, paladin-web, paladin-notifications,
    paladin-content, paladin-storage (leaf tier)
-5. paladin-ai
+5. paladin-eval
+6. paladin-ai
 
 After each publish, verify crate availability on crates.io before continuing.
 

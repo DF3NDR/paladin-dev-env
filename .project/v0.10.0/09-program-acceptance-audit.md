@@ -537,14 +537,220 @@ Verdict: PASS with findings
 
 ## 5. Findings pass — orphan behavior and ubiquitous-language conformance (doc-08 protocol step 5)
 
-*(placeholder — orphan-behavior and ubiquitous-language halves filled by plan 29-04 Task 3; this
-section's FR-coverage half is already recorded under Section 1 above, since every FR row there
-carries a named test anchor and the plan's own row-count criterion is recorded as a finding there.)*
+**Protocol text:** "File any FR without a passing test, any test without an FR ('orphan behavior'),
+and any deviation from the ubiquitous-language names in §4 of the overview as findings."
 
-Verdict: pending
+**FR-coverage half:** already recorded under Section 1 above — every one of the 138 globally-unique
+FRs carries a named test anchor (no FR without a passing test was found); the plan's own row-count
+criterion is recorded there as a planning-precision finding, not a coverage gap. The two halves
+below complete this step.
+
+### Orphan-behavior scope (D-13)
+
+**Scope, per D-13/`29-CONTEXT.md`:** every `[[test]]` block present in HEAD's `Cargo.toml` or a
+crate `Cargo.toml` but absent at `v0.9.0`, every file added under `tests/integration/` and
+`crates/*/tests/` since the tag, and `tests/evals.rs`'s registered scenarios. Unit tests inside
+`#[cfg(test)] mod tests { ... }` blocks are explicitly **out of scope** — there are hundreds of
+them across the workspace, and doc-08 step 5's "orphan behavior" targets *behaviors*; integration
+and E2E tests are the witnesses for behaviors (a unit test proves an internal function's logic, not
+that a program-level capability is reachable and correct end-to-end), so excluding them is a
+recorded scope decision, not an oversight.
+
+**Measured (this session), files added under `tests/` and `crates/*/tests/` since `v0.9.0`:**
+
+```bash
+git diff --diff-filter=A --name-only v0.9.0 HEAD -- tests/ 'crates/*/tests/'
+```
+
+Returns **29 paths** total, of which **22 are `.rs` test files under root `tests/`** (excluding
+`tests/helpers/e2e_fixtures.rs`, a shared fixture module several of the 22 import, not an
+independent test target itself) plus **3 non-`.rs` files under `crates/paladin-web/tests/`**
+(`fixtures/README.md`, `fixtures/openapi-v0.9.0.json`) and **3 fixture files under
+`tests/fixtures/config/`** (this phase's own plan 29-01 artefacts) — the remainder are `.snap`
+snapshot files paired with the `tests/cli/*_test.rs` files, not separate targets.
+
+```bash
+git diff --diff-filter=A --name-only v0.9.0 HEAD -- crates/paladin-web/tests/
+```
+
+Returns **1 additional `.rs` test file**: `crates/paladin-web/tests/openapi_golden_v0_9.rs` (this
+phase's own plan 29-02, SHIP-02).
+
+**Measured, `.rs` test files added: 23** (22 under root `tests/` + 1 under
+`crates/paladin-web/tests/`) — against the planning-time figure of **22** in `29-RESEARCH.md`'s
+interfaces block. The one-file difference is exactly the `+1` `29-RESEARCH.md` itself predicted:
+"this plan's own dependencies 29-01 and 29-02 add two more: `v0_9_config_boot` and
+`crates/paladin-web/tests/openapi_golden_v0_9.rs`" — `v0_9_config_boot_test.rs` was already inside
+the root-`tests/` count measured above, and `openapi_golden_v0_9.rs` is the `+1` crate-level file,
+landing the total at 23. Recorded as a measured-vs-planning-time discrepancy, per the plan's own
+instruction, not silently reconciled.
+
+**Measured, added `[[test]]` target-name lines in the root `Cargo.toml`:**
+
+```bash
+git diff v0.9.0 HEAD -- Cargo.toml | grep '^+name = '
+```
+
+```
++name = "war_engine_tracer"
++name = "e2e_crash_resume"
++name = "waypoint_retention_fault_injection"
++name = "golden_bridge_equivalence"
++name = "subgraph_formation_in_campaign"
++name = "e2e_muster_defer_order"
++name = "e2e_approval_gate"
++name = "e2e_platform_api"
++name = "v0_9_config_boot"
++name = "multi_parley_suspension"
++name = "parley_resume_stress"
++name = "e2e_compensation_chain"
++name = "aegis_retry_stress"
++name = "evals"
++name = "engine_benchmarks"
+```
+
+**14 new `[[test]]` entries** (the fifteenth line, `engine_benchmarks`, is a **`[[bench]]`** block —
+confirmed by reading its preceding `harness = false` / `[[bench]]` header directly — and is
+correctly out of D-13's scope, which names `[[test]]` blocks only, not benchmarks). This is **14**,
+not the planning-time figure of "15 added target-name lines" in `29-RESEARCH.md`'s interfaces
+block — the difference is exactly this one `[[bench]]` line the planning-time grep did not
+distinguish from a `[[test]]` line. Recorded, not silently reconciled.
+
+**The remaining 5 `.rs` test files** (`tests/integration/middleware_under_engine_test.rs`,
+`otel_transport_test.rs`, `reasoning_agent_test.rs`, `structured_engine_node_test.rs`,
+`vault_confinement_test.rs`) and the **3 new `tests/cli/*_test.rs` files**
+(`eval_run_test.rs`, `graph_export_test.rs`, `run_export_test.rs`) need no new root `[[test]]`
+entry: they are compiled as `pub mod` submodules of the pre-existing `lib` and `cli` test binaries
+respectively (`tests/lib.rs` declares `pub mod integration;`, which is
+`tests/integration/mod.rs`'s own `pub mod middleware_under_engine_test;` etc.; `tests/cli/mod.rs`
+declares `mod eval_run_test;` etc.) — confirmed directly:
+
+```bash
+grep -n "pub mod middleware_under_engine_test\|pub mod otel_transport_test\|pub mod reasoning_agent_test\|pub mod structured_engine_node_test\|pub mod vault_confinement_test" tests/integration/mod.rs
+grep -n "mod eval_run_test\|mod graph_export_test\|mod run_export_test" tests/cli/mod.rs
+```
+
+Both confirmed present. `cargo test --test lib -- --list` was run in this session and confirmed
+`integration::middleware_under_engine_test::...` entries are listed under the `lib` binary, not a
+separately-named `integration` binary — a small correction to doc-08's own G-16 citation
+("`cargo test --test integration middleware_under_engine`"), recorded here rather than left to
+propagate: the binary is `lib`, `integration` is the module path prefix within it. This does not
+change any coverage claim — the tests run and pass either way, verified in Section 1's `RT-FR-01`
+through `RT-FR-08` row's own "green" CI status, last measured green at Phase 26 close.
+
+**Per-target owner mapping — every added test target/file traces to at least one FR, X-rule, or
+BUG-0x (no orphan found):**
+
+| Target / file | Owner |
+|---|---|
+| `war_engine_tracer` | `ENG-FR-21` (trace hook) |
+| `e2e_crash_resume` | E2E-1 program scenario; `ENG-FR-11/12/15-17` (G-03) |
+| `waypoint_retention_fault_injection` | `ENG-FR-18` (retention) |
+| `golden_bridge_equivalence` | `ENG-FR-19` (legacy-service golden equivalence) |
+| `subgraph_formation_in_campaign` | `CF-FR-14…17`, `HITL-FR-12` (G-09) |
+| `e2e_muster_defer_order` | E2E-3 program scenario; `CF-FR-09…13`, `FT-FR-06` (G-08) |
+| `e2e_approval_gate` | E2E-2 program scenario; `HITL-FR-01…06` (G-05) |
+| `e2e_platform_api` | `PLAT-FR-01…07` (G-23) |
+| `v0_9_config_boot` | SHIP-02 (this phase, plan 29-01) |
+| `multi_parley_suspension` | `HITL-FR-01…06` (concurrent-parley extension of G-05) |
+| `parley_resume_stress` | `HITL-FR-01…06` / X-05 concurrency stress |
+| `e2e_compensation_chain` | `FT-FR-11…15` (G-12) |
+| `aegis_retry_stress` | `FT-FR-03…07` (G-10) / X-05 concurrency stress |
+| `evals` | `OBS-FR-15` (eval dogfood harness) |
+| `middleware_under_engine_test` (submodule) | `RT-FR-01…09` (G-16) |
+| `otel_transport_test` (submodule) | `OBS-FR-01…07` (trace/OTel) |
+| `reasoning_agent_test` (submodule) | `RT-FR-23/24` (G-21) |
+| `structured_engine_node_test` (submodule) | `RT-FR-17…19` (G-19) |
+| `vault_confinement_test` (submodule) | `RT-FR-13…16` (G-18) |
+| `eval_run_test` (cli submodule) | `OBS-FR-15` / `paladin-cli eval run` |
+| `graph_export_test` (cli submodule) | `OBS-FR-08…10` (G-27) |
+| `run_export_test` (cli submodule) | `PLAT-FR-07` / `OBS-FR-08…10` (run/trace export) |
+| `crates/paladin-web/tests/openapi_golden_v0_9.rs` | SHIP-02 (this phase, plan 29-02) |
+
+All 23 measured `.rs` test files trace to a named owner. **`v0_9_config_boot` and
+`openapi_golden_v0_9.rs` — this phase's own two new targets — are inside the orphan-behavior scope
+measured above, not exempt from it**, per the plan's own instruction.
+
+### Ubiquitous-language conformance (D-14)
+
+**The twelve overview §4 terms, each mapped to the canonical Rust type/module that embodies it:**
+
+| Term | Canonical type / module |
+|---|---|
+| Battlefield | `Battlefield` — `crates/paladin-core/src/platform/container/battlefield.rs` |
+| Dispatch | `DispatchRule` — `crates/paladin-core/src/platform/container/battlefield.rs` |
+| Superstep | the superstep loop — `crates/paladin-battalion/src/engine/superstep.rs` / `crates/paladin-battalion/src/engine/mod.rs` |
+| Waypoint | `Waypoint` — `crates/paladin-core/src/platform/container/waypoint.rs` |
+| Thread | `ThreadId` — `crates/paladin-core/src/platform/container/waypoint.rs` |
+| Directive | `Directive` — `crates/paladin-core/src/platform/container/directive.rs` |
+| Muster | `MusterTask` — `crates/paladin-core/src/platform/container/directive.rs` |
+| Parley | `ParleyRequest` — `crates/paladin-core/src/platform/container/parley.rs` |
+| Vanguard | `compute_next_vanguard` (function) operating on the `Frontier` type — both in `crates/paladin-battalion/src/engine/superstep.rs` (see naming-split disposition below) |
+| Chronicle | `src/application/services/chronicle.rs` (`ChronicleService` / chronicle history functions) |
+| Aegis | `Aegis` (fault-tolerance policy bundle) — `crates/paladin-core/src/platform/container/aegis.rs` |
+| Vault | `VaultPort` — `crates/paladin-ports/src/output/vault_port.rs` |
+
+**Grep for competing synonyms over public rustdoc and `docs/src/`:**
+
+```bash
+grep -roi 'checkpoint' docs/src/ | wc -l        # 16
+grep -roi 'frontier' docs/src/ | wc -l          # 1
+grep -rn '^\s*///.*[Ff]rontier' crates/*/src | wc -l   # 71 (rustdoc comment hits)
+grep -roi 'reducer' docs/src/ | wc -l           # 3
+grep -rn 'compute_next_vanguard' crates/ | wc -l  # 18
+```
+
+**Classification:**
+- **`reducer`** (3 hits in `docs/src/`) — a **sanctioned alias** for Dispatch, per overview §4's
+  own wording: "Called a *dispatch rule* or *reducer* interchangeably." Not a deviation.
+- **`frontier`** (1 hit in `docs/src/`, 71 rustdoc-comment hits in `crates/*/src`) — overview §4
+  itself describes Vanguard as "the frontier" in prose, sanctioning the word as description; the
+  **type name** `Frontier` (not just the word) is the substantive naming split addressed below.
+- **`checkpoint`** (16 hits in `docs/src/`) — used descriptively alongside "Waypoint" in several
+  mdBook pages (e.g., explaining Waypoints to readers coming from other frameworks' "checkpoint"
+  vocabulary) rather than as a competing type name; no Rust type or public API is named
+  `Checkpoint`. Recorded as an acceptable descriptive gloss, not a naming deviation — no code
+  defines a competing `Checkpoint` type.
+
+**The `Frontier`/`Vanguard` naming split (known candidate, per `29-CONTEXT.md`):** the public type
+`Frontier` in `paladin-battalion::engine` (`crates/paladin-battalion/src/engine/superstep.rs`),
+alongside the free function `compute_next_vanguard` operating on it, is a genuine ubiquitous-language
+divergence — the overview's own term for this concept is Vanguard, and the shipped type is named
+`Frontier`. **Disposition: accepted alias, rename deferred.** A public-type rename
+(`Frontier` → `Vanguard`) is an X-10 minor-version-breaking change in a release-gate phase (renaming
+a public struct changes every call site and downstream reference); `29-CONTEXT.md`'s Deferred Ideas
+section already names this exact rename as future work, not this phase's. **No rename is made
+here** — the disposition is filed, matching D-14's explicit prohibition against renaming a public
+type to satisfy this table.
+
+**Method limitation, stated plainly:** the greps above compare byte-wise over ASCII Rust
+identifiers and literal ASCII words. A Unicode look-alike (e.g. a homoglyph substituted into a
+doc comment) or a case variant not covered by `-i` in a context the pattern doesn't anticipate
+would not be matched by this method — so the absence of a grep hit for a given synonym is evidence
+of "not found by this search," not proof that no competing synonym exists anywhere in the tree.
+This is the same class of limitation `29-04-PLAN.md`'s own must-haves name explicitly (the
+backstop-verified truth in the plan's frontmatter), and it is stated here rather than left implicit
+so the section's own claim is honest about its reach.
+
+Verdict: PASS with findings
 
 **Findings:**
-- none
+- Measured orphan-behavior counts (23 `.rs` test files, 14 new root `[[test]]` entries) differ
+  slightly from `29-RESEARCH.md`'s planning-time figures (22 files, 15 target-name lines) — both
+  differences are fully explained (the `+1` file is exactly the `openapi_golden_v0_9.rs` addition
+  RESEARCH itself predicted; the `-1` target-line difference is `engine_benchmarks` being a
+  `[[bench]]`, not a `[[test]]`, which the planning-time grep did not distinguish). Recorded, not
+  silently reconciled; no test target is missing an owner.
+- `Frontier` (type, `paladin-battalion::engine`) vs. Vanguard (overview §4 term) is a genuine
+  ubiquitous-language naming split. Disposition: **accepted alias, rename deferred** — filed per
+  D-14, not corrected in this release-gate phase (a rename is an X-10 break); already named as a
+  deferred idea in `29-CONTEXT.md`.
+- Doc-08's own G-16 row citation ("`cargo test --test integration middleware_under_engine`") names
+  the test binary as `integration`; the actual binary, confirmed by running
+  `cargo test --test lib -- --list` in this session, is `lib` (`integration` is the module path
+  prefix inside it, via `tests/lib.rs`'s `pub mod integration;`). A citation-precision note on
+  doc-08's own prose, not a test-coverage gap — the named tests run and pass under `cargo test
+  --test lib`, confirmed by Section 1's RT-FR rows.
 
 ---
 

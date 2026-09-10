@@ -1,6 +1,6 @@
 [package]
 name = "paladin-battalion"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -13,8 +13,8 @@ categories = ["development-tools", "asynchronous", "api-bindings"]
 documentation = "https://docs.rs/paladin-battalion"
 
 [dependencies]
-paladin-core  = { package = "paladin-ai-core", version = "0.9.0", path = "../paladin-core" }
-paladin-ports = { version = "0.9.0", path = "../paladin-ports" }
+paladin-core  = { package = "paladin-ai-core", version = "0.10.0", path = "../paladin-core" }
+paladin-ports = { version = "0.10.0", path = "../paladin-ports" }
 tokio         = { workspace = true }
 async-trait   = { workspace = true }
 serde         = { workspace = true }
@@ -58,7 +58,7 @@ tokio = { workspace = true, features = ["test-util"] }
 # In-memory WaypointPort fixture for the engine module's own unit tests
 # (Phase 22 Plan 01). No cycle: paladin-storage depends on paladin-core +
 # paladin-ports only, never on paladin-battalion.
-paladin-storage = { version = "0.9.0", path = "../paladin-storage" }
+paladin-storage = { version = "0.10.0", path = "../paladin-storage" }
 # MockLlmAdapter for LlmDecisionEvaluator / Commander StrategySelection::Semantic
 # tests (CF-05, Phase 23 Plan 03) and the redaction helper the DeltaMerged
 # value tests inject (plan 28-03 post-merge fix). Dev-only on purpose:
@@ -66,7 +66,7 @@ paladin-storage = { version = "0.9.0", path = "../paladin-storage" }
 # engine code receives its redactor through `TraceDispatcher::with_state_values`
 # (`ValueRedactor`) from the facade instead. No cycle: paladin-llm depends
 # only on paladin-core + paladin-ports, never on paladin-battalion.
-paladin-llm = { version = "0.9.0", path = "../paladin-llm" }
+paladin-llm = { version = "0.10.0", path = "../paladin-llm" }
 
 [[bench]]
 name = "battalion_benchmarks"

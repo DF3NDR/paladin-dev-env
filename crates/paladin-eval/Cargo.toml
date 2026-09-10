@@ -1,6 +1,6 @@
 [package]
 name = "paladin-eval"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -24,13 +24,13 @@ publish = true
 # (sqlite feature, for the E2E fixtures' temp-file stores). Never
 # paladin-ai -- a dependency cycle through dev-deps is legal but a
 # maintenance trap the crate's own tests must not create.
-paladin-core = { package = "paladin-ai-core", version = "0.9.0", path = "../paladin-core" }
-paladin-ports = { version = "0.9.0", path = "../paladin-ports" }
-paladin-battalion = { version = "0.9.0", path = "../paladin-battalion" }
-paladin-llm = { version = "0.9.0", path = "../paladin-llm", default-features = false, features = [
+paladin-core = { package = "paladin-ai-core", version = "0.10.0", path = "../paladin-core" }
+paladin-ports = { version = "0.10.0", path = "../paladin-ports" }
+paladin-battalion = { version = "0.10.0", path = "../paladin-battalion" }
+paladin-llm = { version = "0.10.0", path = "../paladin-llm", default-features = false, features = [
     "mock",
 ] }
-paladin-storage = { version = "0.9.0", path = "../paladin-storage", features = [
+paladin-storage = { version = "0.10.0", path = "../paladin-storage", features = [
     "sqlite",
 ] }
 serde = { workspace = true }

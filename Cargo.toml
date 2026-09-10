@@ -31,16 +31,16 @@ rand = "0.8"
 base64 = "0.22"
 futures = "0.3"
 regex = "1.11.1"
-paladin-core = { package = "paladin-ai-core", version = "0.9.0", path = "crates/paladin-core" }
-paladin-ports = { version = "0.9.0", path = "crates/paladin-ports" }
-paladin-battalion = { version = "0.9.0", path = "crates/paladin-battalion" }
-paladin-herald = { version = "0.9.0", path = "crates/paladin-herald" }
-paladin-llm = { version = "0.9.0", path = "crates/paladin-llm" }
-paladin-memory = { version = "0.9.0", path = "crates/paladin-memory" }
-paladin-storage = { version = "0.9.0", path = "crates/paladin-storage" }
-paladin-notifications = { version = "0.9.0", path = "crates/paladin-notifications" }
-paladin-content = { version = "0.9.0", path = "crates/paladin-content" }
-paladin-web = { version = "0.9.0", path = "crates/paladin-web" }
+paladin-core = { package = "paladin-ai-core", version = "0.10.0", path = "crates/paladin-core" }
+paladin-ports = { version = "0.10.0", path = "crates/paladin-ports" }
+paladin-battalion = { version = "0.10.0", path = "crates/paladin-battalion" }
+paladin-herald = { version = "0.10.0", path = "crates/paladin-herald" }
+paladin-llm = { version = "0.10.0", path = "crates/paladin-llm" }
+paladin-memory = { version = "0.10.0", path = "crates/paladin-memory" }
+paladin-storage = { version = "0.10.0", path = "crates/paladin-storage" }
+paladin-notifications = { version = "0.10.0", path = "crates/paladin-notifications" }
+paladin-content = { version = "0.10.0", path = "crates/paladin-content" }
+paladin-web = { version = "0.10.0", path = "crates/paladin-web" }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "json", "migrate", "macros"] }
 qdrant-client = { version = "1.14" }
 # croner is already resolved in Cargo.lock at 2.2.0, pulled transitively via
@@ -55,7 +55,7 @@ chrono-tz = "0.10"
 
 [package]
 name = "paladin-ai"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -106,7 +106,7 @@ paladin-core = { workspace = true }
 paladin-ports = { workspace = true }
 paladin-battalion = { workspace = true }
 paladin-herald = { workspace = true }
-paladin-llm = { version = "0.9.0", path = "crates/paladin-llm", default-features = false, features = ["mock"] }
+paladin-llm = { version = "0.10.0", path = "crates/paladin-llm", default-features = false, features = ["mock"] }
 paladin-memory = { workspace = true, features = ["sqlite"] }
 paladin-storage = { workspace = true, features = ["sqlite"] }
 paladin-notifications = { workspace = true, optional = true }
@@ -199,7 +199,7 @@ dialoguer = { version = "0.11", optional = true }
 # (no `cli` feature) gains no edge to this crate; the `evals` `[[test]]`
 # target's OWN need for it (independent of `cli`) is the separate,
 # unconditional `[dev-dependencies]` entry below.
-paladin-eval = { version = "0.9.0", path = "crates/paladin-eval", optional = true }
+paladin-eval = { version = "0.10.0", path = "crates/paladin-eval", optional = true }
 # `paladin-cli eval run`'s own glob matching over its `<glob>` argument --
 # the SAME "0.3.4" pin `crates/paladin-eval/Cargo.toml` already resolved, so
 # this is a new EDGE on an already-resolved package, never a new package in
@@ -315,7 +315,7 @@ prost = "0.14"
 # evals` must work with no `--features` at all. paladin-eval's own default
 # build depends downward only (paladin-core/ports/battalion/llm-mock/storage-
 # sqlite), never on this facade (D-27) -- this is a one-way dev-only edge.
-paladin-eval = { version = "0.9.0", path = "crates/paladin-eval" }
+paladin-eval = { version = "0.10.0", path = "crates/paladin-eval" }
 
 # Integration test configuration
 [[test]]

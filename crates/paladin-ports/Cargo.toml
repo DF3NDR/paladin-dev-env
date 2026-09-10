@@ -1,6 +1,6 @@
 [package]
 name = "paladin-ports"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -13,7 +13,7 @@ categories = ["development-tools", "asynchronous", "api-bindings"]
 documentation = "https://docs.rs/paladin-ports"
 
 [dependencies]
-paladin_core = { package = "paladin-ai-core", version = "=0.9.0", path = "../paladin-core" }
+paladin_core = { package = "paladin-ai-core", version = "=0.10.0", path = "../paladin-core" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

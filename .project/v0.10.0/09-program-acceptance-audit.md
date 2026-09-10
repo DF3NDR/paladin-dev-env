@@ -302,9 +302,98 @@ Verdict: PASS with findings
 
 ## 3. Program E2E scenarios (doc-08 protocol step 3)
 
-*(placeholder — filled by plan 29-04 Task 2)*
+**Protocol text:** "Run the three program E2E scenarios (overview §6) and the eval-scenario
+dogfood copies (OBS-FR-15)."
 
-Verdict: pending
+### E2E-1: Crash-resume
+
+**Overview §6 text:** a 6-node cyclic workflow (one loop with a max-iteration bound) runs against
+a mock LLM with a durable Waypoint backend; the engine is dropped after superstep 3, a fresh
+engine resumes from the same backend/`thread_id`, and the test asserts no re-execution, Battlefield
+equality with an uninterrupted control run, and exactly one Waypoint per completed superstep.
+
+**Command run and observed output:**
+
+```bash
+cargo test --test e2e_crash_resume --test e2e_approval_gate --test e2e_muster_defer_order
+```
+
+```
+     Running tests/integration/e2e_approval_gate_test.rs (target/debug/deps/e2e_approval_gate-96baa4e344f4d0a8)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s
+     Running tests/integration/e2e_crash_resume_test.rs (target/debug/deps/e2e_crash_resume-74256b30ff505f06)
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.98s
+     Running tests/integration/e2e_muster_defer_order_test.rs (target/debug/deps/e2e_muster_defer_order-2c15d6bc17af6ff7)
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.28s
+```
+
+Three `test result: ok` lines for the three targets named in the plan's own verify command — all
+green. E2E-1's own scenario assertion lives in
+`tests/integration/e2e_crash_resume_test.rs#e2e_1_crash_resume_matches_control_run_with_no_reexecution`,
+which passed as one of the 32.
+
+### E2E-2: Human approval gate
+
+**Overview §6 text:** a workflow reaches a Parley node requesting approval of a destructive
+action; the test asserts an `AwaitingInput` outcome (not an error), the process can be fully
+dropped and re-created, and `resume(thread_id, payload)` continues to the correct branch — "no"
+routes to a cancellation node, "yes" routes to the action node, both branches asserted.
+
+**Anchors (both branches, in the same `cargo test` run above):**
+- `tests/integration/e2e_approval_gate_test.rs#e2e2_approval_branch_survives_process_drop` — the
+  "yes" (approve) branch, action node reached.
+- `tests/integration/e2e_approval_gate_test.rs#e2e2_denial_branch_survives_process_drop` — the
+  "no" (deny) branch, cancellation node reached.
+- `tests/integration/e2e_approval_gate_test.rs#e2e2_suspended_thread_holds_no_engine_resources` —
+  the `AwaitingInput` / process-drop half of the claim.
+
+All three (and the remaining 32 tests in that binary, mostly shared `helpers::` module coverage)
+passed in the same run above (`35 passed`).
+
+### E2E-3: Dynamic map-reduce with per-node fault tolerance
+
+**Overview §6 text:** a planner node's Directive musters N=5 workers (mock-derived), one worker
+fails transiently twice before succeeding, its Aegis retry policy recovers it, a deferred
+aggregation node runs exactly once after all 5 complete, and the Battlefield's list-dispatch field
+contains exactly 5 results in deterministic order.
+
+**Anchors (same run above, `tests/integration/e2e_muster_defer_order_test.rs`, `37 passed`):**
+- `#planner_musters_five_workers_and_the_deferred_aggregator_runs_once` — N=5, deferred aggregator
+  runs once.
+- `#aggregated_results_are_exactly_five_in_task_key_order` — deterministic order, exactly 5.
+- `#one_worker_recovers_by_real_per_task_retry` — the transient-failure-then-recovery half (a real
+  per-task Aegis retry, not the Phase 23 mock seam Phase 25 plan 25-12 replaced — see doc-08's own
+  G-08 row).
+- `#without_a_retry_policy_the_same_transient_failure_fails_the_run` — negative control confirming
+  the retry policy is actually load-bearing.
+
+### OBS-FR-15 eval dogfood copies
+
+**Command run and observed output:**
+
+```bash
+cargo test --test evals
+```
+
+```
+running 4 tests
+test e2e-2-approval-gate.eval::approve                        ... ok
+test e2e-2-approval-gate.eval::deny                           ... ok
+test e2e-3-map-reduce-fault-tolerance.eval::recovering_worker ... ok
+test e2e-1-crash-resume.eval::crash_after_superstep_3         ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.83s
+```
+
+`test result: ok. 4 passed` — matches the count doc-08's own G-28 note and `28-CI-EVIDENCE.md`
+recorded at Phase 28 close. The four scenario names map 1:1 onto E2E-1/2 (both branches)/3 above,
+and — per D-13/29-CONTEXT.md — exercise the **same shared fixtures**
+(`tests/helpers/e2e_fixtures.rs`), not a parallel implementation: `tests/evals.rs` registers these
+as `paladin-eval` scenarios that call into the identical fixture-construction helpers the
+`tests/integration/e2e_*_test.rs` files use, so the eval harness is a dogfood copy of the same
+scenario, not an independently-authored duplicate that could silently drift from it.
+
+Verdict: PASS
 
 **Findings:**
 - none
@@ -313,12 +402,136 @@ Verdict: pending
 
 ## 4. BUG-01 / BUG-02 re-verification (doc-08 protocol step 4)
 
-*(placeholder — filled by plan 29-04 Task 2)*
+**Protocol text:** "Confirm BUG-01's old code path is absent (grep for the warn-and-default-true
+branch) and the fix landed test-first. Confirm BUG-02's fix: `WarGraph::validate()` rejects a
+stranded self-loop-only node (run the regression test), the fix landed test-first, and no test
+fixture still works around strandedness by artificially wiring stranded nodes to entry."
 
-Verdict: pending
+### BUG-01: custom edge condition silently true
+
+**RED-then-GREEN, cited by SHA (not re-tested — the commits are the test-first proof):**
+- RED `b2d05045` — `test(23-01): reproduce BUG-01 on both custom-edge-condition paths (red)`
+- GREEN `8d5ef333` — `fix(23-01): fail closed on unregistered custom edge conditions (green)`
+
+Both commits confirmed present in this worktree's history:
+
+```bash
+git log --oneline --all | grep -i "b2d05045\|8d5ef333"
+```
+```
+8d5ef333 fix(23-01): fail closed on unregistered custom edge conditions (green)
+b2d05045 test(23-01): reproduce BUG-01 on both custom-edge-condition paths (red)
+```
+
+RED precedes GREEN in the log (RED is the parent of GREEN).
+
+**Re-run grep for the old warn-and-default-true branch at this HEAD:**
+
+```bash
+grep -rn "defaulting to true" crates/ src/ 2>/dev/null | wc -l
+```
+```
+0
+```
+
+Zero matches — the old always-true-with-a-log-warning branch is absent at Phase 29 HEAD
+`4b845009fb67cc725e42a145346bff67660d4474`.
+
+**The four living tests, run individually by exact name in this session:**
+
+```bash
+cargo test -p paladin-battalion --lib unregistered_custom_condition_is_rejected_before_any_paladin_executes
+cargo test -p paladin-battalion --lib unregistered_custom_edge_condition_fails_graph_validation
+cargo test -p paladin-battalion --lib every_unregistered_custom_name_is_listed_sorted_and_deduped
+cargo test -p paladin-battalion --lib registered_engine_evaluator_true_and_false_route_correctly
+```
+
+| Test | File | Result |
+|---|---|---|
+| `unregistered_custom_condition_is_rejected_before_any_paladin_executes` | `crates/paladin-battalion/src/campaign_service.rs` (`campaign_service::tests::`) | `ok` |
+| `unregistered_custom_edge_condition_fails_graph_validation` | `crates/paladin-battalion/src/engine/graph.rs` (`engine::graph::tests::`) | `ok` |
+| `every_unregistered_custom_name_is_listed_sorted_and_deduped` | `crates/paladin-battalion/src/engine/graph.rs` (`engine::graph::tests::`) | `ok` |
+| `registered_engine_evaluator_true_and_false_route_correctly` | `crates/paladin-battalion/src/engine/mod.rs` (`engine::tests::`) | `ok` |
+
+All four ran `1 passed; 0 failed` individually.
+
+### BUG-02: silent stranded node
+
+**Regression test, run in this session:**
+
+```bash
+cargo test -p paladin-battalion --lib validate_rejects_self_loop_only_stranded_node_naming_it
+```
+```
+running 1 test
+test engine::graph::tests::validate_rejects_self_loop_only_stranded_node_naming_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 796 filtered out; finished in 0.00s
+```
+
+`WarGraph::validate()` rejects the self-loop-only stranded node and names it in the error, confirmed
+by this test.
+
+**Test-first order, cited by SHA:**
+
+```bash
+git log --all --oneline --grep="BUG-02" -i
+```
+```
+34630e86 fix(22-16): audit and classify strandedness-adjacent fixtures (ENG-FR-02a acceptance 2a)
+31f1903e test(22-15): add failing eligible-set reachability tests for BUG-02 (red)
+a171bbb4 docs(22-16): confirm BUG-02 pre-release classification from the repository
+9e9bdb59 test(22-16): record readiness defect with runnable ignored reproduction
+```
+
+RED `31f1903e` (`test(22-15): add failing eligible-set reachability tests for BUG-02 (red)`)
+precedes GREEN `b1ac8668` (`feat(22-15): implement eligible-set reachability validation
+(ENG-FR-02a)`) in plan 22-15's own history — test-first, matching the doc-08 mandate and
+`29-CONTEXT.md` D-15.
+
+**Does any test fixture still wire a stranded node to entry to work around strandedness, instead
+of the structural fix?** **Yes — two fixtures, both already recorded in `.planning/WINDOWS.md` as
+open `deviation` rows, cross-referenced here rather than left implied:**
+
+```bash
+grep -E '^\| 2[4-5] \|' .planning/WINDOWS.md
+```
+```
+| 24 | 22 | deviation | tests/integration/e2e_crash_resume_test.rs | 112 | loop_gate self-loop node made a graph entry to sidestep the Frontier::is_ready self-loop join-deadlock property, rather than fixed structurally; flagged for plan 22-16's fixture audit (acceptance 2a) | open |
+| 25 | 22 | deviation | crates/paladin-battalion/src/engine/superstep.rs | 1220 | self_loop_graph test helper makes its looping node a graph entry to sidestep the Frontier::is_ready self-loop join-deadlock property (same root cause as e2e_crash_resume_test.rs); flagged for plan 22-16's fixture audit (acceptance 2a) | open |
+```
+
+**WINDOWS.md row 24** (`loop_gate`, `tests/integration/e2e_crash_resume_test.rs:112`) and **row 25**
+(`self_loop_graph`, `crates/paladin-battalion/src/engine/superstep.rs:1220`) both record the same
+pattern: the test's own looping node is declared a graph **entry** node specifically to avoid
+`Frontier::is_ready`'s self-loop join-deadlock property, rather than relying on the ENG-FR-02a/BUG-02
+structural fix (`validate()`'s stranded-node rejection) to make the node reachable. This is a
+distinct concern from BUG-02 itself — BUG-02 is about *rejecting* a node no path can ever reach;
+these two fixtures are about *avoiding a different, adjacent* readiness property
+(`Frontier::is_ready`'s self-loop deadlock, which is BUG-03's territory, not BUG-02's) by declaring
+the node an entry rather than exercising the general non-entry-reachable-via-upstream-edge path.
+Both rows are `open` (not yet `waived`/`fixed`) as of this HEAD; `29-CONTEXT.md` D-24 assigns their
+triage to a dedicated later plan in this phase, not to this audit task.
+
+### Overview §7 classification (cited, not re-derived)
+
+Per `.project/v0.10.0/00-program-overview.md` §7: "Since `WarGraph` is new in v0.10, this is a
+pre-release engine fix, **not** a v0.9 behavioral change — no `MIGRATION.md` entry or X-10 register
+row is required." BUG-03 and BUG-04 carry the identical classification in their own §7 entries
+(both cite that the `engine`/`waypoint` modules are absent at the `v0.9.0` tag). This audit cites
+that classification rather than re-deriving it, per doc-08 step 7's own instruction.
+
+Verdict: PASS with findings
 
 **Findings:**
-- none
+- WINDOWS.md rows 24 and 25 record two test fixtures (`loop_gate`,
+  `tests/integration/e2e_crash_resume_test.rs:112`; `self_loop_graph`,
+  `crates/paladin-battalion/src/engine/superstep.rs:1220`) that sidestep a self-loop readiness
+  property by declaring their looping node a graph entry, rather than exercising the general
+  non-entry-reachable-via-upstream-edge path the ENG-FR-02a/BUG-02 fix targets. Both rows are
+  already `open` in `.planning/WINDOWS.md`, already scoped to a dedicated triage plan by D-24
+  (`29-CONTEXT.md`) — no new finding is created here; this section cross-references the existing
+  rows by number as the plan's `<action>` text requires, rather than leaving the answer implied.
 
 ---
 

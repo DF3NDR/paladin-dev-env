@@ -727,7 +727,33 @@ Plans:
   3. E2E-1/2/3 pass green as integration tests in `tests/`, the doc-08 verification protocol confirms every FR has a passing test with no orphan behavior and ubiquitous-language names conform, and BUG-01's old warn-and-default-true path is grep-absent with the fix's failing-then-passing test order visible in history (SHIP-03)
   4. All workspace crates are at `0.10.0` with changelogs updated, `cargo publish --dry-run` is green for every publishable crate in dependency order, mdBook + rustdoc are updated with no new broken intra-doc links, and the semver and MSRV CI jobs are green on the release commit (SHIP-04)
 
-**Plans**: TBD
+**Plans**: 9 plans
+
+Plans:
+
+**Wave 1** *(no dependencies — parallel)*
+
+- [ ] 29-01-PLAN.md — SHIP-02: frozen v0.9 config fixtures and the `v0_9_config_boot` proof (config resolution + 501 route table)
+- [ ] 29-02-PLAN.md — SHIP-02: path-restricted `$ref`-closure OpenAPI golden diff against the frozen v0.9.0 baseline
+- [ ] 29-03-PLAN.md — SHIP-01/SHIP-04: row-level allowlist ↔ §9.2 CI gate, and `publish-dry-run` + release-checklist corrections
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 29-04-PLAN.md — SHIP-03: acceptance-audit skeleton, per-FR evidence table, E2E/BUG evidence, orphan-behavior and language findings
+- [ ] 29-05-PLAN.md — SHIP-01/SHIP-02: close MIGRATION.md §9.5-§9.8 and the header, add the placeholder CI gate and the boot-test CI step
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 29-06-PLAN.md — SHIP-01: the mdBook Upgrading page, SUMMARY entry, migration-guide pointer, overview §4 errata
+- [ ] 29-07-PLAN.md — SHIP-03: audit steps 6-9, the accepted tracing-overhead deviation, the maintainer sign-off checklist
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 29-08-PLAN.md — SHIP-03: WINDOWS.md triage — 25 open rows dispositioned with citations, plus the overhead-deviation row
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [ ] 29-09-PLAN.md — SHIP-04: the 0.10.0 bump, changelogs, dry-run publish, CI evidence, audit step 10
 
 ## Progress
 
@@ -757,7 +783,7 @@ Plans:
 | 26. Agent Runtime Enhancements | v0.10.0 | 21/21 | Complete    | 2026-09-07 |
 | 27. Platform API | v0.10.0 | 26/26 | Complete    | 2026-09-08 |
 | 28. Observability & Tooling | v0.10.0 | 17/17 | Complete    | 2026-09-09 |
-| 29. Program Gates & Release | v0.10.0 | 0/0 | Not started | - |
+| 29. Program Gates & Release | v0.10.0 | 0/9 | Planned | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

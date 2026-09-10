@@ -91,6 +91,8 @@ New domain terms introduced by this program (use these names consistently in cod
 | **Aegis** | Per-node fault-tolerance policy bundle: retry + timeout + error handler. (Doc 04) |
 | **Vault** | Cross-thread, namespaced long-term memory store (distinct from Garrison conversation history). (Doc 05) |
 
+> **Errata (recorded at the v0.10.0 close, Phase 29 doc sweep):** the Directive row's `Halt` mention above is imprecise. `NextStep` (`crates/paladin-core/src/platform/container/directive.rs`) has exactly five variants — `Edges`, `Goto`, `Muster`, `End`, `Parley` — and no `Halt` variant. `Halted` is a run-level outcome (`RunOutcome::Halted`, `WaypointStatus::Halted`) reached via cancellation, a distinct concept from a node's routing choice (parked for this sweep in `23-DISCUSSION-LOG.md` line 133).
+
 ## 5. Definition of Done (program level)
 
 The program is complete when:

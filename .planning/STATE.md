@@ -3,32 +3,32 @@ gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 29
-current_phase_name: Program Gates & Release
-status: executing
+status: completed
 stopped_at: Phase 29 context gathered
-last_updated: "2026-09-10T00:16:18.383Z"
+last_updated: "2026-09-10T16:51:41.135Z"
 last_activity: 2026-09-10
-last_activity_desc: Phase 29 execution started
+last_activity_desc: Phase 29 complete
 progress:
   total_phases: 9
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 137
-  completed_plans: 128
+  completed_plans: 137
+current_phase_name: Program Gates & Release
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-09 after Phase 28)
+See: .planning/PROJECT.md (updated 2026-09-10 after Phase 29)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 29 — Program Gates & Release
+**Current focus:** v0.10.0 milestone complete (all 9 phases) — next: `/gsd-complete-milestone v0.10.0`
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
-**Progress:** [█████████░] v0.10.0 — 8 of 9 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28); 128/128 planned plans executed
+**Progress:** [████████████████████] v0.10.0 — 9 of 9 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29); 137/137 plans (100%)
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -51,16 +51,16 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 29 (Program Gates & Release) — EXECUTING
-Plan: 1 of 9
-Status: Executing Phase 29
-Last activity: 2026-09-10 — Phase 29 execution started
+Phase: 29
+Plan: Not started
+Status: All phases complete
+Last activity: 2026-09-10 — Phase 29 complete
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 315
+- Total plans completed: 324
 - Average duration: —
 - Total execution time: —
 
@@ -95,6 +95,7 @@ Last activity: 2026-09-10 — Phase 29 execution started
 | 26 | 21 | - | - |
 | 27 | 26 | - | - |
 | 28 | 17 | - | - |
+| 29 | 9 | - | - |
 
 *Updated after each plan completion*
 
@@ -127,6 +128,32 @@ Last activity: 2026-09-10 — Phase 29 execution started
 ## Accumulated Context
 
 ### Decisions
+
+**Phase 29 (closed 2026-09-10) — recorded as D-01 … D-25 in `29-CONTEXT.md`; the ones later
+milestones must honor:**
+
+- D-04: the `cargo semver-checks` allowlist ↔ `MIGRATION.md` §9.2 CI check is row-level
+  (`crate | type` pair set-equality in both directions, no wildcards); D-01 makes "no TBD" in
+  `MIGRATION.md` a durable CI gate.
+
+- D-07/D-08/D-09: backward compatibility is proven by two ordinary `cargo test` targets — the
+  frozen v0.9.0 config boot test (`v0_9_config_boot`, `501` never `404` for every v0.10 route
+  family) and the path-restricted OpenAPI golden diff with `$ref` closure — gated on every PR.
+
+- D-12/D-17: audit findings are recorded, never fixed silently (fix set bounded to docs, tests
+  and citations); the seven judgment-tier sign-off boxes in the acceptance audit are ticked only
+  by a human, never by an agent.
+
+- D-16: the Phase 28 tracing-overhead FAIL (+22.18 % / +18.46 % vs ≤3 %) is accepted for
+  v0.10.0 as a documented deviation (audit, observability docs, CHANGELOG, WINDOWS.md row 35);
+  reaffirmed by the maintainer at Phase 29 UAT.
+
+- D-18/D-21: the `0.10.0` bump lands on the feature branch with no tag — the tag is cut on the
+  `main` merge commit (`release.yml` `verify-tag-source`); "the release commit" means both the
+  PR head and that merge commit, with evidence recorded for both.
+
+- D-24: `WINDOWS.md` rows are never deleted — only moved to `fixed` or `waived` with a per-row
+  reason (`open_count: 0`, 35 rows: 9 fixed, 26 waived).
 
 **Phase 28 (closed 2026-09-09) — recorded as D-01 … D-41 in `28-CONTEXT.md`; the ones later
 phases must honor:**
@@ -386,6 +413,23 @@ Entering them here would fabricate authority the corpus does not contain.
 None yet.
 
 ### Blockers/Concerns
+
+**Phase 29 close (2026-09-10): no blockers.** 9 plans in 5 waves; verification `passed` 4/4 roadmap
+truths (18/18 plan-level must-haves reproduced); UAT 3/3 human checkpoints passed (`29-UAT.md`,
+`640570eb`); `29-SECURITY.md` `verified`, `threats_open: 0` (37/37, two accepted risks: R-29-01
+test-composition auth default, R-29-02 the D-16 tracing overhead); `29-VALIDATION.md` present. Code
+review WR-01…03 fixed (`a30e1ce1`, `6891b77c`, `59e4e5f8`). Phase 28's carried concern (1) is closed:
+WINDOWS.md row 35 now records the D-16 adjudication; (4) is closed: #33/#34 waived by plan 29-08
+(`35293e6e`). Carried into the milestone close: (a) Phase 28's production-wiring caveat (replay,
+trace persistence, `dev-ui` router not wired at the composition root) and the OTel
+`SimpleSpanProcessor` note remain open follow-ups for a later milestone. (b) The real `docs.yml`
+"Build MDBook" required check and the `semver`/`msrv` jobs on the Phase 29 head SHA were passed at
+UAT Test 2 by the maintainer; `29-CI-EVIDENCE.md` still records the pre-push state and cites run
+`34365812871` on `77912ac8` — update it if a written record of the post-push run is wanted.
+(c) The seven judgment-tier sign-off boxes in `.project/v0.10.0/09-program-acceptance-audit.md`
+were accepted at UAT Test 1 but still read `- [ ]` on disk at close — tick and commit them if the
+audit file itself should carry the sign-off. (d) `tag v0.10.0` is deliberately absent; it is cut on
+the `main` merge commit by the release workflow after `/gsd-ship`.
 
 **Phase 28 close (2026-09-09): no blockers.** 17 plans in 8 waves; verification `passed` 4/4 roadmap
 truths (51/51 artifacts, 32/32 key links); UAT 2/2 human checkpoints passed (`28-UAT.md`,
@@ -887,14 +931,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 29 context gathered
+**Stopped at:** Phase 29 complete — v0.10.0 milestone 9/9 phases, 137/137 plans; ready for `/gsd-complete-milestone v0.10.0`
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-09T22:39:52.815Z
-Resume file: .planning/phases/29-program-gates-release/29-CONTEXT.md
+Last session: 2026-09-10T16:53:47Z
+Resume file: None
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**
@@ -955,5 +999,8 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
+- Phase 29 closed 2026-09-10: UAT 3/3 passed (`29-UAT.md`, `640570eb`), `29-VERIFICATION.md` `passed`, `29-SECURITY.md` `verified` (`threats_open: 0`, 37/37). **v0.10.0 milestone: all 9 phases complete.**
+- Next: `/gsd-complete-milestone v0.10.0` — archive the milestone; then `/gsd-ship 29` for the feature-branch PR (the `v0.10.0` tag is cut on the `main` merge commit by `release.yml`, never on this branch).
+- Housekeeping before the PR: tick the seven maintainer sign-off boxes in `.project/v0.10.0/09-program-acceptance-audit.md` if the file should carry them (accepted at UAT but still `- [ ]` on disk), and refresh `29-CI-EVIDENCE.md` with the post-push run identifiers.
 - Phase 28 closed 2026-09-09: UAT 2/2 passed (`28-UAT.md`, `a9d4a2ee`), `28-VERIFICATION.md` `passed`, `28-SECURITY.md` `verified` (`threats_open: 0`, 75/75). Carried: the production-wiring caveat (replay / trace persistence / `dev-ui` router not wired at the composition root — re-secure the phase that wires them) and the D-37 bench-overhead deviation signed off at UAT without a WINDOWS.md entry.
 - Next: `/gsd-discuss-phase 29` (no `29-CONTEXT.md` yet) then `/gsd-plan-phase 29` — SHIP-01…04, the v0.10.0 release phase. `/gsd-ship 28` is available for the feature-branch PR.

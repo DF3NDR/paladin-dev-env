@@ -202,7 +202,7 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 - [x] **Phase 26: Agent Runtime Enhancements** - Execution middleware chain, context-window management, cross-session Vault memory, structured output, provider conformance close-out, and a one-line reasoning agent (completed 2026-09-07)
 - [x] **Phase 27: Platform API** - Durable background runs on a worker pool, Parley/streaming integration, versioned assistants, and API-managed schedules/webhooks (completed 2026-09-08)
 - [x] **Phase 28: Observability & Tooling** - Machine-consumable trace stream, OTel/log/SSE consumers, graph/run visualization, and the paladin-eval regression harness (completed 2026-09-09)
-- [ ] **Phase 29: Program Gates & Release** - Complete MIGRATION.md, proven backward compatibility, the program acceptance audit, and a releasable v0.10.0
+- [x] **Phase 29: Program Gates & Release** - Complete MIGRATION.md, proven backward compatibility, the program acceptance audit, and a releasable v0.10.0 (completed 2026-09-10)
 
 ## Phase Details
 
@@ -783,7 +783,7 @@ Plans:
 | 26. Agent Runtime Enhancements | v0.10.0 | 21/21 | Complete    | 2026-09-07 |
 | 27. Platform API | v0.10.0 | 26/26 | Complete    | 2026-09-08 |
 | 28. Observability & Tooling | v0.10.0 | 17/17 | Complete    | 2026-09-09 |
-| 29. Program Gates & Release | v0.10.0 | 0/9 | Planned | - |
+| 29. Program Gates & Release | v0.10.0 | 9/9 | Complete    | 2026-09-10 |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

@@ -283,25 +283,25 @@ tree outranks PRD), RT-06 is scoped as conformance verification and gap-closure,
 
 ### Program Gates & Release (overview §5/§9, doc 08, epic `SHIP`)
 
-- [ ] **SHIP-01**: `MIGRATION.md` is complete: every §9 section filled with no "TBD" — M-B-01…03
+- [x] **SHIP-01**: `MIGRATION.md` is complete: every §9 section filled with no "TBD" — M-B-01…03
   resolved with chosen defaults and worked examples, the §9.2 register matching the
   `cargo semver-checks` allowlist exactly, §9.3 toolchain/deps, §9.4 schema migrations with the
   Citadel-files-unchanged statement, §9.5 config/env with the disabled-by-default claim, §9.6
   HTTP surface, §9.7 deprecations, §9.8 operator checklist — linked from the README and the
   mdBook "Upgrading" page (overview §9; DoD 4)
 
-- [ ] **SHIP-02**: Backward compatibility is proven, not asserted: an integration test boots
+- [x] **SHIP-02**: Backward compatibility is proven, not asserted: an integration test boots
   v0.10 with a v0.9 sample config and asserts legacy behavior (all new subsystems disabled by
   default), and a golden diff of `openapi.json` restricted to pre-existing paths is empty
   (overview §9.5, §9.6)
 
-- [ ] **SHIP-03**: The program acceptance audit passes: E2E-1/2/3 green as integration tests in
+- [x] **SHIP-03**: The program acceptance audit passes: E2E-1/2/3 green as integration tests in
   `tests/`, the doc-08 verification protocol run (every FR has a passing test, no orphan
   behavior, ubiquitous-language names conform), and BUG-01's old warn-and-default-true path
   grep-absent with the fix's failing-then-passing test order visible in history (overview §5-§6;
   doc 08)
 
-- [ ] **SHIP-04**: v0.10.0 is releasable: all workspace crates at `0.10.0` with changelogs
+- [x] **SHIP-04**: v0.10.0 is releasable: all workspace crates at `0.10.0` with changelogs
   updated, `cargo publish --dry-run` green for every publishable crate in dependency order,
   mdBook + rustdoc updated with no new broken intra-doc links, and the semver and MSRV CI jobs
   green on the release commit (overview §5 DoD 1, 3, 6, 7; X-08)
@@ -389,10 +389,10 @@ Which phases cover which requirements. Populated during roadmap creation.
 | OBS-02 | Phase 28 | Complete |
 | OBS-03 | Phase 28 | Complete |
 | OBS-04 | Phase 28 | Complete |
-| SHIP-01 | Phase 29 | Pending |
-| SHIP-02 | Phase 29 | Pending |
-| SHIP-03 | Phase 29 | Pending |
-| SHIP-04 | Phase 29 | Pending |
+| SHIP-01 | Phase 29 | Complete |
+| SHIP-02 | Phase 29 | Complete |
+| SHIP-03 | Phase 29 | Complete |
+| SHIP-04 | Phase 29 | Complete |
 
 **Coverage:**
 

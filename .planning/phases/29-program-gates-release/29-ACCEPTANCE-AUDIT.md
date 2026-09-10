@@ -10,5 +10,11 @@ Ten `##` sections mirror doc-08's ten-step verification protocol
 (`.project/v0.10.0/08-traceability-matrix.md` lines 98-108). Sections 1-5 are filled by plan 29-04;
 sections 6-9 by plan 29-07; section 10 by plan 29-09.
 
-**Overall verdict:** pending (sections 1-5 filled by plan 29-04 as `PASS with findings`; sections
-6-10 remain `pending` until plans 29-07 and 29-09 complete them).
+**Overall verdict:** PASS with findings. All ten sections complete: sections 1-5 (plan 29-04),
+6-9 (plan 29-07), 10 (plan 29-09) — every section carries a `PASS` or `PASS with findings` verdict,
+zero `pending`. Two carried, non-blocking items remain outside this audit's own fix scope: the
+Phase 28 tracing-overhead deviation (§10's "Accepted deviation" section, ACCEPTED per maintainer
+sign-off) and the pre-existing 72-warning `cargo doc --workspace --no-deps` condition (§8,
+`29-CI-EVIDENCE.md` row 16 — not a Phase 29 blocker per SHIP-04's own requirement text). The seven
+maintainer sign-off checkboxes (§10's "Maintainer sign-off" section) remain unticked, as designed —
+they are closed by a human at the phase's UAT / `/gsd-verify-work` step, never by this audit.

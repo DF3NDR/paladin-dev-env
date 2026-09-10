@@ -1290,13 +1290,101 @@ non-authoritative by design.
 
 ## 10. Release readiness (doc-08 protocol step 10)
 
-*(placeholder — completed by plan 29-09, the version-bump plan, per D-10/29-CONTEXT.md's
-plan-ordering note: this step needs the crates actually AT 0.10.0 to check)*
+**Protocol text:** "all crates at `0.10.0`; changelogs updated; `cargo publish --dry-run` succeeds
+in dependency order; `MIGRATION.md` contains no 'TBD'."
 
-Verdict: pending
+### All crates at 0.10.0
+
+`cargo release version 0.10.0 --execute --no-confirm --workspace` (Task 1, commit `83d219f1`)
+bumped `workspace.package.version` and every one of the twelve publishable crates' own `version`
+field (`paladin-ai`, `paladin-ai-core`, `paladin-ports`, `paladin-herald`, `paladin-battalion`,
+`paladin-llm`, `paladin-memory`, `paladin-storage`, `paladin-notifications`, `paladin-content`,
+`paladin-web`, `paladin-eval`) plus the non-publishable `paladin-doc-examples` workspace member, to
+`0.10.0`, along with `Cargo.lock`. Verified: `grep -q 'version = "0.10.0"' Cargo.toml` and, per
+crate, `grep -q '^version = "0.10.0"' crates/<name>/Cargo.toml` — all pass.
+
+Every intra-workspace path-dependency pin moved with it: `grep -rc '0\.9\.0' --include=Cargo.toml
+crates/` shows zero **pin** occurrences remaining (three residual `0.9.0` strings survive, all
+confirmed comments, not pins: root `Cargo.toml:150`'s `schemars` transitive-version note, plus two
+further comment-only references discovered during this plan's own reach-verification —
+`crates/paladin-battalion/Cargo.toml:44` (the same `schemars`-transitive-version note, mirrored in
+that crate) and `crates/paladin-web/Cargo.toml:70` (a `struct_marked_non_exhaustive` lint-suppression
+comment citing "the v0.9.0 baseline" historically). **Measured-vs-planning-time note:** the plan's
+own `<interfaces>` text names only the root-manifest schemars comment as the sanctioned exception;
+this audit records the additional two comment occurrences as a precision finding, not a defect —
+both were read in full context and confirmed non-pin before being left untouched.).
+
+`crates/paladin-web/openapi.json`'s `info.version` was regenerated via `UPDATE_OPENAPI=1 cargo test
+-p paladin-web openapi_matches_committed_baseline --quiet` to `0.10.0` — confirmed by
+`python3 -c "import json;print(json.load(open('crates/paladin-web/openapi.json'))['info']['version'])"`
+→ `0.10.0`, and the regeneration diff touched only that one field (`git diff HEAD~1 --
+crates/paladin-web/openapi.json` — 1 insertion, 1 deletion).
+
+The two occurrences that must NOT move are unchanged: `.github/workflows/ci.yml`'s
+`--baseline-version 0.9.0` literal — **measured 3 occurrences** at HEAD (lines 276, 334, 357), not
+the plan text's stated 5; the two additional line numbers it names (304, 339) carry `v0.9.0` in a
+job-name/comment string without the literal substring `baseline-version 0.9.0`, so this is another
+measured-vs-planning-time discrepancy, recorded rather than forced to match a stale count. All
+three actual occurrences are still present and unedited (`git diff --stat HEAD~2..HEAD --
+.github/workflows/ci.yml` is empty — this plan's commits never touch that file). Root
+`Cargo.toml`'s schemars comment (line 150) is unchanged.
+
+### Changelogs updated
+
+`make finalize-crate-changelogs VERSION=0.10.0` (Task 2, commit `3019ed8e`) stamped a dated
+`## [0.10.0] - 2026-09-10` section into all twelve publishable packages' changelogs (root +
+eleven crates), with `## [Unreleased]` preserved and empty in every file — confirmed:
+`for f in CHANGELOG.md crates/*/CHANGELOG.md; do grep -q '^## \[0.10.0\]' "$f" && grep -q '^##
+\[Unreleased\]' "$f"; done` exits 0 across all twelve files. The root `CHANGELOG.md`'s 270-line
+`[Unreleased]` body was curated: a new "Behavioral changes" sub-list leads the section (M-B-01
+through M-B-04, each linking `MIGRATION.md` §9.1), followed by the pre-existing grouped
+Changed/Added/Fixed sections (substance preserved, reorganised not rewritten), followed by a new
+"Known limitations" section carrying the D-16 tracing-overhead deviation (+22.18% log sink /
++18.46% composite) — completing artefact 3 of the 4-artefact cross-reference this audit's own
+"Accepted deviation" section above named as owed to plan 29-09. `crates/paladin-eval/CHANGELOG.md`'s
+"Initial release" content now sits under its own `[0.10.0]` section (its first published version,
+per ADR-0048).
+
+`./scripts/check-release-consistency.sh --tag v0.10.0` exits 0: `✅ OK: 12 publishable package(s)
+checked, all match tag version '0.10.0' with a changelog section for it.`
+
+### `cargo publish --dry-run` succeeds in dependency order
+
+`cargo publish --workspace --dry-run` (Task 3, `29-CI-EVIDENCE.md` Local sweep row 14) packaged and
+verified **twelve** crates, zero errors, each ending in `warning: aborting upload due to dry run` —
+a non-empty result, not a zero-crates-packaged false pass. Verified in dependency order:
+`paladin-ai-core` → `paladin-ports` → `paladin-llm` → `paladin-storage` → `paladin-battalion` →
+`paladin-content` → `paladin-eval` → `paladin-herald` → `paladin-memory` → `paladin-notifications`
+→ `paladin-web` → `paladin-ai`. `paladin-doc-examples` (`publish = false`) does not appear in the
+output at all — correctly skipped as unpublishable, confirmed absent rather than assumed absent.
+
+### `MIGRATION.md` contains no "TBD"
+
+`grep -c 'TBD' MIGRATION.md` → **0**. Closed by plan 29-05 (the D-01 CI gate) and re-confirmed live
+in this session, unaffected by this plan's own commits (`git diff --name-only HEAD~2..HEAD | grep
+-c MIGRATION.md` is 0 — this plan never touches the file).
+
+### Post-bump semver re-run (D-21's "record the post-bump run explicitly" instruction)
+
+`cargo semver-checks check-release --package <pkg> --default-features --baseline-version 0.9.0` was
+re-run for all eleven pre-existing publishable crates against the ACTUAL bumped `0.10.0` tree
+(`29-CI-EVIDENCE.md` Local sweep row 10) — every crate reports `Checking <pkg> v0.9.0 -> v0.10.0
+(major change)` / `Summary no semver update required`, confirming the per-crate suppressions still
+carry exactly the nine allowed changes and nothing else moved. 11/11 PASS, matching Phase 28's
+pre-bump 11/11 evidence and now additionally proving the SAME allowlist survives the version bump
+itself.
+
+Verdict: PASS
 
 **Findings:**
-- none
+- **[Precision, non-blocking]** Two additional comment-only `0.9.0` string occurrences exist beyond
+  the one the plan's `<interfaces>` text names (`crates/paladin-battalion/Cargo.toml:44`,
+  `crates/paladin-web/Cargo.toml:70`) — both confirmed non-pin, non-actionable, left untouched.
+- **[Precision, non-blocking]** `.github/workflows/ci.yml`'s literal `baseline-version 0.9.0`
+  substring count is 3 at HEAD, not the plan text's stated 5 — the two additional line numbers it
+  names carry `v0.9.0` in adjacent prose without the exact substring. All five referenced line
+  numbers (276, 304, 334, 339, 357) are present and unedited regardless of which literal count
+  applies; the file is untouched by this plan's commits either way.
 
 ---
 

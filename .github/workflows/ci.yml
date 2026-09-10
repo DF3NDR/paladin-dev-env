@@ -1300,7 +1300,14 @@ jobs:
 
       - name: Fail if the v0_9_config_boot run selected fewer than the full test set
         run: |
-          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/v0-9-config-boot-test.log | tail -1)
+          # Wrap the grep in a group tolerating exit 1 (no match) while still
+          # failing on exit 2 (a real error) -- same idiom the §9.2/allowlist
+          # set-equality step above uses. Without it, `pipefail` + the
+          # default `-e` GitHub Actions runs `run:` steps under makes a
+          # zero-match grep abort the script at this assignment, before the
+          # `::error::` diagnostic below ever prints (the job still fails,
+          # but silently, defeating the diagnostic this step exists for).
+          ACTUAL=$({ grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/v0-9-config-boot-test.log || test $? -eq 1; } | tail -1)
           echo "Passed: ${ACTUAL:-0}"
           if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt 9 ]; then
             echo "::error::v0_9_config_boot selected fewer than 9 tests -- a stale filter, a rename, or a feature-gate change would otherwise report green having run less than the full SHIP-02 boot proof."

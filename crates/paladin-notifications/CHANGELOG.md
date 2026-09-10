@@ -9,6 +9,10 @@ and this project follows lockstep workspace versioning.
 
 ## [0.10.0] - 2026-09-10
 
+No functional changes; lockstep version bump (see root `CHANGELOG.md`). The only commits
+touching this crate between the `v0.9.0` tag and this release raise the workspace MSRV floor
+(now `1.88`, §9.3) — no source file under `src/` changed.
+
 ## [0.9.0] - 2026-09-01
 
 ## [0.8.1-rc.5] - 2026-08-31

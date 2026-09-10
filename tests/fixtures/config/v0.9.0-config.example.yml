@@ -1,0 +1,190 @@
+# Example Paladin configuration for the HTTP service host (`paladin-server`).
+#
+# Copy to `config.yml` and edit. API keys are read from the ENVIRONMENT
+# (e.g. OPENAI_API_KEY / ANTHROPIC_API_KEY / DEEPSEEK_API_KEY), never from this file.
+#
+#   cp config.example.yml config.yml
+#   OPENAI_API_KEY=sk-... cargo run --bin paladin-server --features web-server
+
+# Top-level LLM fields (legacy; unused by the agent host but required by the schema).
+llm_type: "openai"
+llm_url: "https://api.openai.com/v1"
+llm_api_key: "" # unused — keys come from environment variables
+
+# Structured, per-provider LLM configuration (optional — omit entirely and every field
+# below defaults to `None`/absent, matching pre-Phase-17 config.yml files byte-for-byte).
+# Every `api_key` below uses ${ENV_VAR} indirection naming the real variable; NEVER put a
+# literal key in this file. Only the providers you actually compiled in (via the matching
+# `llm-<provider>` Cargo feature) are usable at runtime — an unused block here is inert.
+llm:
+  default_provider: "openai"
+
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    default_model: "gpt-4"
+    default_temperature: 0.7
+    timeout_seconds: 300
+    max_retries: 3
+
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+    base_url: "https://api.anthropic.com/v1"
+    default_model: "claude-3-5-sonnet-20241022"
+    default_temperature: 0.7
+    timeout_seconds: 300
+    max_retries: 3
+
+  deepseek:
+    api_key: "${DEEPSEEK_API_KEY}"
+    base_url: "https://api.deepseek.com/v1"
+    default_model: "deepseek-chat"
+    default_temperature: 0.7
+    timeout_seconds: 300
+    max_retries: 3
+
+  # Kimi (Moonshot AI). Live-verified 2026-08-22 (plan 17-19, closing G-17-4b): a live
+  # GET /models call and a generate() round trip both succeeded against api.moonshot.ai
+  # using the default model below. (Confirmed: model list + a completion round trip.)
+  kimi:
+    api_key: "${MOONSHOT_API_KEY}"
+    base_url: "https://api.moonshot.ai/v1"
+    default_model: "kimi-k3"
+    timeout_seconds: 60
+
+  # Qwen (Alibaba DashScope). Live-verified 2026-08-23 (plan 17-21 gap closure): a live
+  # GET /models call against the endpoint below returned a 162-model catalog, including
+  # the default model, and a generate() round trip succeeded. (Confirmed: model list +
+  # a completion round trip.)
+  #
+  # DashScope API keys are scoped to the Model Studio region that issued them and are
+  # REJECTED by every other region's endpoint. The base_url below is Singapore, the
+  # shipped default. If your workspace is in the US or on the mainland, you MUST set
+  # DASHSCOPE_BASE_URL to your own region's endpoint — the three known compatible-mode
+  # regional endpoints:
+  #   Singapore        (shipped default) : https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+  #   US (Virginia)                      : https://dashscope-us.aliyuncs.com/compatible-mode/v1
+  #   China (mainland)                   : https://dashscope.aliyuncs.com/compatible-mode/v1
+  qwen:
+    api_key: "${DASHSCOPE_API_KEY}"
+    base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    default_model: "qwen-plus"
+    timeout_seconds: 60
+
+  # Grok (xAI). Live-verified 2026-08-22 (plan 17-18, closing G-17-4a): a live GET
+  # /models call and a generate() round trip both succeeded against api.x.ai using the
+  # default model below. (Confirmed: model list + a completion round trip.)
+  grok:
+    api_key: "${XAI_API_KEY}"
+    base_url: "https://api.x.ai/v1"
+    default_model: "grok-4.6"
+    timeout_seconds: 60
+
+  # Ollama (self-hosted). Deliberately carries NO api_key field: Ollama requires no
+  # credential at all (D-12) — the adapter substitutes an internal placeholder value that is
+  # never read from config, so there is nothing to set here even with ${} indirection.
+  # Not applicable to the live-verification status below: self-hosted, no vendor endpoint
+  # to verify. Its live exercise is the Docker Tier 2 suite (UAT test 3), which passed on
+  # a GitHub Actions runner on 2026-08-19.
+  ollama:
+    base_url: "http://localhost:11434/v1"
+    default_model: "llama3"
+    timeout_seconds: 60
+
+  # Gemini (Google). Bespoke `generateContent` protocol, not OpenAI-compatible.
+  # Live-verified: a live GET /models call and a generate() round trip both succeeded
+  # against generativelanguage.googleapis.com. default_model was refreshed from
+  # gemini-2.5-flash (retired for new users) to gemini-3.6-flash on 2026-08-22, per
+  # the live catalog. (Confirmed: model list + a completion round trip.)
+  gemini:
+    api_key: "${GEMINI_API_KEY}"
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+    default_model: "gemini-3.6-flash"
+    timeout_seconds: 60
+
+  # Generic operator-configured OpenAI-compatible provider — points Paladin at ANY
+  # OpenAI-compatible endpoint not already named above (self-hosted vLLM/LiteLLM, Groq,
+  # Together, Mistral, Fireworks, Bedrock's OpenAI-compat mode, ...). Unlike every other
+  # block, base_url and default_model are REQUIRED here — there is no vendor default to
+  # fall back to (D-03). Capability flags (streaming/tool-calling/vision/...) are NOT part
+  # of this YAML schema today — LlmProviderConfig carries no capabilities field, so declare
+  # them via OPENAI_COMPATIBLE_SUPPORTS_* environment variables instead (see
+  # crates/paladin-llm README / OpenAiCompatibleAdapter module docs); every unset
+  # capability defaults conservatively to false.
+  openai-compatible:
+    api_key: "${OPENAI_COMPATIBLE_API_KEY}" # NOT the same variable as OPENAI_API_KEY above
+    base_url: "https://your-endpoint.example.com/v1" # required, no default
+    default_model: "your-model-name" # required, no default
+    timeout_seconds: 60
+
+max_file_size: 10485760 # 10 MiB
+sources: []
+
+# Address the HTTP server binds to.
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+# Execution timeout policy (seconds). Applied to /execute, /execute/stream, and /jobs.
+# Resolution order: per-request timeout_seconds -> per-agent timeout_seconds -> default,
+# clamped to `max`.
+timeouts:
+  default_seconds: 300
+  max_seconds: 600
+
+# Cross-cutting HTTP layers (Epic 4). All optional with safe defaults.
+http:
+  # Allowed CORS origins; omit or leave empty for permissive (dev only).
+  cors_allow_origins: []
+  # Reject request bodies larger than this many bytes (413).
+  body_limit_bytes: 1048576 # 1 MiB
+  # Coarse outer timeout (seconds) for non-streaming routes; 0 disables it.
+  # (Streaming is bounded by `timeouts` above, never by this.)
+  global_timeout_seconds: 0
+  # Per-client (IP) rate limiting; off by default.
+  rate_limit:
+    enabled: false
+    per_second: 10
+    burst: 20
+  # Authentication for the agent routes. Enabled by default: the server FAILS TO START
+  # if `enabled` is true and no credentials (api_keys / bearer_token) are configured. Set
+  # `enabled: false` for trusted/dev environments (logged as a warning). Health/readiness
+  # probes are always open.
+  auth:
+    enabled: true
+    # Static API keys (header `X-API-Key`). Put real keys in env/secrets, not in VCS.
+    # `role` is `admin` or `user`; admins may register/deregister agents at runtime.
+    api_keys:
+      - key: "${PALADIN_API_KEY_CI}" # service-to-service caller
+        name: "ci-runner"
+        role: "admin"
+      - key: "${PALADIN_API_KEY_APP}"
+        name: "frontend"
+        role: "user"
+    # Accept opaque server-issued bearer tokens via the wired AuthPort (in-process token
+    # store). A random string checked against the store's own hashed records — not a
+    # signed or self-describing token.
+    bearer_token:
+      enabled: false
+  # Interactive API docs: serve GET /openapi.json + Swagger UI at /docs (unversioned,
+  # unauthenticated — the contract is public). Set false to omit them in production.
+  docs:
+    enabled: true
+
+# Agents served behind the HTTP API. Each becomes resident at /v1/agents/<id>:
+#   POST /v1/agents/<id>/execute          — buffered run
+#   POST /v1/agents/<id>/execute/stream   — token streaming (SSE)
+#   POST /v1/agents/<id>/jobs          — async run (poll GET /v1/agents/<id>/jobs/<job_id>)
+agents:
+  - id: "researcher"
+    provider: "openai" # optional; defaults to llm.default_provider
+    model: "gpt-4"
+    system_prompt: "You research topics thoroughly."
+    temperature: 0.7 # optional
+    timeout_seconds: 120 # optional per-agent override (clamped to timeouts.max_seconds)
+    # Roles permitted to invoke this agent; omit/empty ⇒ any authenticated caller.
+    allowed_roles: ["admin", "user"]
+  - id: "summarizer"
+    model: "gpt-4"
+    system_prompt: "You write concise summaries."
+    allowed_roles: ["admin"] # restricted to admins

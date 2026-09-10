@@ -406,6 +406,11 @@ path = "tests/integration/e2e_platform_api_test.rs"
 required-features = ["web-server"]
 
 [[test]]
+name = "v0_9_config_boot"
+path = "tests/integration/v0_9_config_boot_test.rs"
+required-features = ["web-server"]
+
+[[test]]
 name = "multi_parley_suspension"
 path = "tests/integration/multi_parley_suspension_test.rs"
 

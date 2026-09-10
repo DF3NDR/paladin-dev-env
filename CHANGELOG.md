@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-10
+
+### Behavioral changes
+
+Four user-visible behavior changes ship in this release without requiring a code change. Each is
+detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes).
+
+- **M-B-01 — `EdgeCondition::Custom` no longer defaults to `true` when no evaluator is registered
+  (BUG-01 fix).** Campaign/graph validation now fails, naming every unregistered condition, before
+  any node executes. Register an evaluator via `CampaignExecutionService::with_evaluator` /
+  `WarEngine::with_edge_evaluator`, or replace the condition with `Contains`/`Regex`/`Always`.
+- **M-B-02 — Graceful shutdown is on by default.** On SIGTERM/SIGINT the process now waits up to
+  `shutdown_grace` (default 30s, env `APP_ENGINE_SHUTDOWN_GRACE_SECS`) for in-flight engine runs to
+  halt before exiting. Set `terminationGracePeriodSeconds` ≥ 2 × `shutdown_grace` in any Kubernetes
+  Deployment manifest before rolling out this upgrade (both shipped manifests already ship `60`).
+  Set `APP_ENGINE_GRACEFUL_SHUTDOWN=false` to restore the old immediate-exit behavior.
+- **M-B-03 — `tool_error_mode` defaults to `FeedToModel`, naming v0.9's existing behavior rather
+  than changing it.** A failed Arsenal/handoff tool call was always fed back to the model and the
+  run continued — that is unchanged. The only observable difference: the fed-back text is now
+  redacted (bearer tokens, API-key shapes, `key=`/`token=` values, JWT-shaped triples) before the
+  model ever sees it. Set `tool_error_mode = FailRun` to opt into failing the run on a tool error
+  instead.
+- **M-B-04 — Automatic per-superstep checkpointing for any graph executed through the new
+  `WarEngine`.** Every superstep writes one `Waypoint` (a full `Battlefield` snapshot) to whichever
+  `WaypointPort` backend is wired in. **Legacy `FormationExecutionService`, `PhalanxExecutionService`,
+  `CampaignExecutionService`, and `Commander` execution paths are completely unaffected** — they
+  write no Waypoints and their behavior is byte-for-byte unchanged. A v0.9 workflow gains no new
+  persistence unless it is explicitly rebuilt against the new engine.
+
 ### Changed
 
 - **Workspace MSRV floor raised from 1.85 to 1.88 (X-11.2 stop-and-flag resolution).** The
@@ -274,6 +303,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   even if a later `after_model` hook (e.g. a `Guardrail` rule) requested a different one. The
   `after_model` pass's own `FinalResult` now wins when present, mirroring the already-correct
   sibling post-model-call path.
+
+### Known limitations
+
+- **Tracing overhead exceeds the ≤3% bar (Phase 28, PRD 07 acceptance criterion 6).** Measured
+  superstep overhead with tracing enabled: **+22.18%** (log sink), **+18.46%** (composite sink), on
+  an all-Function-node synthetic superstep benchmark with no LLM latency to amortize against (see
+  `.planning/phases/28-observability-tooling/28-BENCH-EVIDENCE.md`). **Accepted as a documented
+  deviation for v0.10.0**, per maintainer sign-off at Phase 28 close-out UAT (2026-09-09): tracing
+  sinks are opt-in (no sink configured → no overhead) and `trace.state_values` defaults off, so no
+  v0.9 workflow and no default v0.10 deployment pays this cost. Follow-up: re-scope the bar to an
+  I/O-bound superstep and re-measure. See
+  [`docs/src/operations/observability.md`](docs/src/operations/observability.md#known-limitations)
+  for the full disposition.
 
 ## [0.9.0] - 2026-09-01
 

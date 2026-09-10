@@ -7,6 +7,8 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-10
+
 ### Added
 - Initial release: the `.eval.yaml` scenario file format (`schema_version: "1"`,
   `graph_doc`/`registered` targets, scripted `llm` sequences and `match` rules,

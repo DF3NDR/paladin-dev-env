@@ -739,8 +739,8 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 29-04-PLAN.md — SHIP-03: acceptance-audit skeleton, per-FR evidence table, E2E/BUG evidence, orphan-behavior and language findings
-- [ ] 29-05-PLAN.md — SHIP-01/SHIP-02: close MIGRATION.md §9.5-§9.8 and the header, add the placeholder CI gate and the boot-test CI step
+- [x] 29-04-PLAN.md — SHIP-03: acceptance-audit skeleton, per-FR evidence table, E2E/BUG evidence, orphan-behavior and language findings
+- [x] 29-05-PLAN.md — SHIP-01/SHIP-02: close MIGRATION.md §9.5-§9.8 and the header, add the placeholder CI gate and the boot-test CI step
 
 **Wave 3** *(blocked on Wave 2)*
 

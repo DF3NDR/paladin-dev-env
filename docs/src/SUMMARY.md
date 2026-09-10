@@ -67,6 +67,7 @@
 
 - [Crate Map & Feature Flags](api-reference/crate-map.md)
 - [Feature Flags](api-reference/feature-flags.md)
+- [Upgrading](api-reference/upgrading.md)
 - [Migration Guide](api-reference/migration-guide.md)
 - [Platform API — Runs, Threads, Assistants, Schedules, Webhooks](api-reference/platform-api.md)
 - [Stable API](api-reference/stable-api.md)

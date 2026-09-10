@@ -194,7 +194,27 @@ fn ref_closure(
     subtree: &Value,
     schemas: &serde_json::Map<String, Value>,
 ) -> BTreeMap<String, Value> {
-    todo!("resolve the transitive $ref closure of `subtree` into `schemas` (GREEN phase)")
+    let mut closure = BTreeMap::new();
+    let mut frontier: Vec<String> = Vec::new();
+    collect_refs(subtree, &mut frontier);
+
+    while let Some(reference) = frontier.pop() {
+        let name = reference
+            .strip_prefix(SCHEMA_REF_PREFIX)
+            .unwrap_or_else(|| {
+                panic!("unexpected $ref shape (not a components/schemas ref): `{reference}`")
+            });
+        if closure.contains_key(name) {
+            continue;
+        }
+        let schema = schemas.get(name).unwrap_or_else(|| {
+            panic!("$ref `{reference}` names a schema absent from components.schemas")
+        });
+        closure.insert(name.to_string(), schema.clone());
+        collect_refs(schema, &mut frontier);
+    }
+
+    closure
 }
 
 /// The restriction itself must never be vacuous: an empty or partial restriction must fail
@@ -247,7 +267,8 @@ fn ref_closure_schemas_match_the_frozen_baseline() {
     let generated_doc = generated_spec();
     let baseline_doc = load_baseline();
 
-    let generated_closure = ref_closure(&restrict_paths(&generated_doc), schemas_of(&generated_doc));
+    let generated_closure =
+        ref_closure(&restrict_paths(&generated_doc), schemas_of(&generated_doc));
     let baseline_closure = ref_closure(&restrict_paths(&baseline_doc), schemas_of(&baseline_doc));
 
     let generated_value = serde_json::to_value(&generated_closure).expect("serialize closure");
@@ -266,7 +287,10 @@ fn ref_closure_schemas_match_the_frozen_baseline() {
 /// (T-29-02-04).
 #[test]
 fn ref_closure_is_non_empty_and_fully_resolved() {
-    for (label, doc) in [("generated", generated_spec()), ("baseline", load_baseline())] {
+    for (label, doc) in [
+        ("generated", generated_spec()),
+        ("baseline", load_baseline()),
+    ] {
         let closure = ref_closure(&restrict_paths(&doc), schemas_of(&doc));
 
         assert!(

@@ -89,6 +89,13 @@ pub mod http_status;
 /// LLM-backed content analysis service orchestration.
 #[allow(missing_docs)]
 pub mod llm_analysis_service;
+/// Application-layer services composing this crate's ports (provider capabilities,
+/// [`paladin_ports::output::token_counter_port::TokenCounterPort`]) rather than
+/// implementing a provider adapter themselves. Houses [`services::commissary`], the
+/// v0.10.0-native prompt-budgeting service (fail-loud pre-flight guard + bounded,
+/// priority-ordered allocator with explicit truncation markers).
+#[allow(missing_docs)]
+pub mod services;
 /// Factory for selecting provider adapters from runtime configuration.
 #[allow(missing_docs)]
 pub mod provider_factory;

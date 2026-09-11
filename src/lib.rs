@@ -191,6 +191,16 @@ pub use paladin_llm::deepseek::{DeepSeekAdapter, DeepSeekConfig};
 
 pub use paladin_llm::mock::{MockLlmAdapter, MultiStepMockLlmPort};
 
+// Commissary (prompt-budgeting) service types (from paladin-llm crate) -- the
+// v0.10.0-native re-port of the removed Quartermaster/Convoy/apportion capability
+// (D-01/D-02): a fail-loud pre-flight guard plus a bounded, priority-ordered allocator
+// with explicit truncation markers. Not feature-gated -- `services` compiles
+// unconditionally in paladin-llm.
+pub use paladin_llm::services::commissary::{
+    Commissary, CommissaryError, CommissaryPlan, Consignment, ConsignmentItem, DispensedItem,
+    ShedItem, Stockpile,
+};
+
 // Paladin (Agent) Types
 pub use core::platform::container::paladin::{Paladin, PaladinData, PaladinStatus};
 pub use core::platform::container::paladin_config::PaladinConfig;

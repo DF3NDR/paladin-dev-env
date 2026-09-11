@@ -560,7 +560,9 @@ impl Commissary {
     ///   [`Commissary::allotted_tokens`].
     pub fn verify_fits(&self, assembled_prompt: &str) -> Result<u32, CommissaryError> {
         let allotted_tokens = self.allotted_tokens();
-        let measured_tokens = self.counter.count(assembled_prompt, &self.config.model_hint);
+        let measured_tokens = self
+            .counter
+            .count(assembled_prompt, &self.config.model_hint);
 
         if measured_tokens > allotted_tokens {
             return Err(CommissaryError::ContextOverflow {
@@ -594,4 +596,414 @@ fn truncate_marked(text: &str, max_bytes: usize, marker: &str) -> (String, bool)
 
     let head = text.get(..end).unwrap_or("");
     (format!("{head}{marker}"), true)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A deterministic, infallible stand-in [`TokenCounterPort`] for these tests: the
+    /// same `chars() / 4` approximation [`HeuristicTokenCounter`] uses, reimplemented
+    /// locally so this module's tests do not need a `paladin-memory` dev-dependency.
+    #[derive(Debug, Default, Clone, Copy)]
+    struct MockCounter;
+
+    impl TokenCounterPort for MockCounter {
+        fn count(&self, text: &str, _model: &str) -> u32 {
+            (text.chars().count() as u32).div_ceil(4)
+        }
+
+        fn name(&self) -> &str {
+            "mock"
+        }
+    }
+
+    fn counter() -> Arc<dyn TokenCounterPort> {
+        Arc::new(MockCounter)
+    }
+
+    fn capabilities_with_window(window: Option<u32>) -> ProviderCapabilities {
+        ProviderCapabilities {
+            max_context_tokens: window,
+            ..Default::default()
+        }
+    }
+
+    fn commissary(window: u32, config: CommissaryPlan) -> Commissary {
+        Commissary::new(
+            "deepseek",
+            capabilities_with_window(Some(window)),
+            counter(),
+            false,
+            config,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_fitting_consignment_sheds_nothing_and_truncates_nothing() {
+        let commissary = commissary(10_000, CommissaryPlan::default());
+        let mut consignment = Consignment::new();
+        consignment.push(ConsignmentItem {
+            label: "a".to_string(),
+            body: "short body a".to_string(),
+            priority: 1,
+        });
+        consignment.push(ConsignmentItem {
+            label: "b".to_string(),
+            body: "short body b".to_string(),
+            priority: 2,
+        });
+
+        let stockpile = commissary.dispense("", &consignment).unwrap();
+
+        assert!(stockpile.shed.is_empty());
+        assert_eq!(stockpile.dispensed.len(), 2);
+        assert!(stockpile.dispensed.iter().all(|item| !item.truncated));
+    }
+
+    #[test]
+    fn an_over_budget_consignment_sheds_the_lowest_priority_item_first() {
+        // Small window -> small byte allowance, forcing a shed.
+        let commissary = commissary(100, CommissaryPlan::default());
+        let mut consignment = Consignment::new();
+        consignment.push(ConsignmentItem {
+            label: "high-priority".to_string(),
+            body: "A".repeat(300),
+            priority: 1, // lower number == higher priority
+        });
+        consignment.push(ConsignmentItem {
+            label: "low-priority".to_string(),
+            body: "B".repeat(300),
+            priority: 2, // higher number == lower priority == shed first
+        });
+
+        let stockpile = commissary.dispense("", &consignment).unwrap();
+
+        assert_eq!(stockpile.shed.len(), 1);
+        assert_eq!(stockpile.shed[0].label, "low-priority");
+        assert_eq!(stockpile.dispensed.len(), 1);
+        assert_eq!(stockpile.dispensed[0].label, "high-priority");
+    }
+
+    #[test]
+    fn every_shed_item_is_recorded_with_its_label_and_original_size() {
+        let commissary = commissary(100, CommissaryPlan::default());
+        let mut consignment = Consignment::new();
+        consignment.push(ConsignmentItem {
+            label: "high-priority".to_string(),
+            body: "A".repeat(300),
+            priority: 1,
+        });
+        consignment.push(ConsignmentItem {
+            label: "low-priority".to_string(),
+            body: "B".repeat(300),
+            priority: 2,
+        });
+
+        let stockpile = commissary.dispense("", &consignment).unwrap();
+
+        assert_eq!(stockpile.shed.len(), 1);
+        assert_eq!(stockpile.shed[0].label, "low-priority");
+        assert_eq!(stockpile.shed[0].priority, 2);
+        assert_eq!(stockpile.shed[0].original_bytes, 300);
+    }
+
+    #[test]
+    fn swapping_caller_priorities_changes_which_item_is_shed() {
+        let commissary = commissary(100, CommissaryPlan::default());
+        let mut consignment = Consignment::new();
+        // Same bodies as the prior tests, priorities swapped.
+        consignment.push(ConsignmentItem {
+            label: "high-priority".to_string(),
+            body: "A".repeat(300),
+            priority: 2, // now lower priority
+        });
+        consignment.push(ConsignmentItem {
+            label: "low-priority".to_string(),
+            body: "B".repeat(300),
+            priority: 1, // now higher priority
+        });
+
+        let stockpile = commissary.dispense("", &consignment).unwrap();
+
+        assert_eq!(stockpile.shed.len(), 1);
+        assert_eq!(stockpile.shed[0].label, "high-priority");
+        assert_eq!(stockpile.dispensed[0].label, "low-priority");
+    }
+
+    #[test]
+    fn a_retained_item_over_its_share_is_truncated_and_marked() {
+        let config = CommissaryPlan {
+            per_item_max_bytes: 50,
+            ..Default::default()
+        };
+        let commissary = commissary(10_000, config);
+        let mut consignment = Consignment::new();
+        consignment.push(ConsignmentItem {
+            label: "only".to_string(),
+            body: "x".repeat(500),
+            priority: 1,
+        });
+
+        let stockpile = commissary.dispense("", &consignment).unwrap();
+
+        assert_eq!(stockpile.dispensed.len(), 1);
+        assert!(stockpile.dispensed[0].truncated);
+        assert!(stockpile.dispensed[0].body.ends_with("\n... (truncated)"));
+    }
+
+    #[test]
+    fn a_per_item_share_is_clamped_to_the_configured_maximum() {
+        let config = CommissaryPlan {
+            per_item_max_bytes: 10,
+            ..Default::default()
+        };
+        // Huge window so budget/n would otherwise hand each item far more than 10 bytes.
+        let commissary = commissary(1_000_000, config);
+        let mut consignment = Consignment::new();
+        consignment.push(ConsignmentItem {
+            label: "a".to_string(),
+            body: "x".repeat(5000),
+            priority: 1,
+        });
+        consignment.push(ConsignmentItem {
+            label: "b".to_string(),
+            body: "y".repeat(5000),
+            priority: 2,
+        });
+
+        let stockpile = commissary.dispense("", &consignment).unwrap();
+
+        assert!(stockpile.shed.is_empty());
+        for item in &stockpile.dispensed {
+            assert!(item.allotted_bytes <= 10 + "\n... (truncated)".len());
+        }
+    }
+
+    #[test]
+    fn truncation_lands_on_a_char_boundary_for_multibyte_input() {
+        let config = CommissaryPlan {
+            per_item_max_bytes: 5, // small enough to force a cut mid multi-byte char
+            ..Default::default()
+        };
+        let commissary = commissary(10_000, config);
+        let mut consignment = Consignment::new();
+        consignment.push(ConsignmentItem {
+            label: "multibyte".to_string(),
+            body: "你好世界👋🚀".to_string(),
+            priority: 1,
+        });
+
+        // Must not panic, and the resulting body is a valid Rust String (UTF-8) by
+        // construction — the truncation walk never lands off a char boundary.
+        let stockpile = commissary.dispense("", &consignment).unwrap();
+        assert_eq!(stockpile.dispensed.len(), 1);
+        assert!(stockpile.dispensed[0].truncated);
+    }
+
+    #[test]
+    fn an_undeclared_window_with_no_fallback_is_an_error() {
+        let result = Commissary::new(
+            "mystery-provider",
+            capabilities_with_window(None),
+            counter(),
+            false,
+            CommissaryPlan::default(),
+        );
+
+        assert!(matches!(
+            result,
+            Err(CommissaryError::UndeclaredContextWindow { .. })
+        ));
+    }
+
+    #[test]
+    fn an_undeclared_window_with_a_fallback_uses_the_fallback() {
+        let config = CommissaryPlan {
+            fallback_context_tokens: Some(2048),
+            ..Default::default()
+        };
+        let commissary = Commissary::new(
+            "mystery-provider",
+            capabilities_with_window(None),
+            counter(),
+            false,
+            config,
+        )
+        .unwrap();
+
+        assert_eq!(commissary.allotted_tokens(), 2048);
+    }
+
+    #[test]
+    fn a_reservation_larger_than_the_window_is_rejected_at_construction() {
+        let config = CommissaryPlan {
+            reserved_completion_tokens: 100,
+            ..Default::default()
+        };
+        let result = Commissary::new(
+            "deepseek",
+            capabilities_with_window(Some(100)),
+            counter(),
+            false,
+            config,
+        );
+
+        assert!(matches!(
+            result,
+            Err(CommissaryError::ReservationExceedsWindow {
+                reserved: 100,
+                window: 100
+            })
+        ));
+    }
+
+    #[test]
+    fn a_zero_ratio_is_rejected_at_construction() {
+        let config = CommissaryPlan {
+            pessimistic_tokens_per_1000_bytes: 0,
+            ..Default::default()
+        };
+        let result = Commissary::new(
+            "deepseek",
+            capabilities_with_window(Some(10_000)),
+            counter(),
+            false,
+            config,
+        );
+
+        assert!(matches!(result, Err(CommissaryError::InvalidConfig(_))));
+    }
+
+    #[test]
+    fn per_item_min_greater_than_max_is_rejected_at_construction() {
+        let config = CommissaryPlan {
+            per_item_min_bytes: 100,
+            per_item_max_bytes: 10,
+            ..Default::default()
+        };
+        let result = Commissary::new(
+            "deepseek",
+            capabilities_with_window(Some(10_000)),
+            counter(),
+            false,
+            config,
+        );
+
+        assert!(matches!(result, Err(CommissaryError::InvalidConfig(_))));
+    }
+
+    #[test]
+    fn fixed_material_over_the_allowance_errors_instead_of_clamping() {
+        // Tiny window -> tiny byte allowance.
+        let commissary = commissary(1, CommissaryPlan::default());
+        let consignment = Consignment::new();
+        let huge_fixed = "x".repeat(100_000);
+
+        let result = commissary.dispense(&huge_fixed, &consignment);
+
+        assert!(matches!(
+            result,
+            Err(CommissaryError::FixedMaterialExceedsAllowance { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_fits_reports_measured_and_allowed_on_overflow() {
+        let commissary = commissary(1, CommissaryPlan::default());
+        let huge_prompt = "x".repeat(100_000);
+
+        let result = commissary.verify_fits(&huge_prompt);
+
+        match result {
+            Err(CommissaryError::ContextOverflow {
+                measured_tokens,
+                allotted_tokens,
+                provider,
+            }) => {
+                assert!(measured_tokens > allotted_tokens);
+                assert_eq!(provider, "deepseek");
+            }
+            other => panic!("expected ContextOverflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_fits_returns_the_measured_tally_when_it_fits() {
+        let commissary = commissary(10_000, CommissaryPlan::default());
+        let result = commissary.verify_fits("a short prompt");
+
+        assert!(result.is_ok());
+        assert!(result.unwrap() > 0);
+    }
+
+    #[test]
+    fn an_empty_consignment_dispenses_zero_items() {
+        let commissary = commissary(10_000, CommissaryPlan::default());
+        let consignment = Consignment::new();
+
+        let stockpile = commissary.dispense("fixed material", &consignment).unwrap();
+
+        assert!(stockpile.dispensed.is_empty());
+        assert!(stockpile.shed.is_empty());
+    }
+
+    #[test]
+    fn exact_tally_true_is_threaded_from_the_constructor_argument() {
+        let commissary = Commissary::new(
+            "deepseek",
+            capabilities_with_window(Some(10_000)),
+            counter(),
+            /* is_exact_counter */ true,
+            CommissaryPlan::default(),
+        )
+        .unwrap();
+        let consignment = Consignment::new();
+
+        let stockpile = commissary.dispense("fixed material", &consignment).unwrap();
+
+        assert!(stockpile.exact_tally);
+    }
+
+    #[test]
+    fn exact_tally_false_is_threaded_from_the_constructor_argument() {
+        let commissary = Commissary::new(
+            "deepseek",
+            capabilities_with_window(Some(10_000)),
+            counter(),
+            /* is_exact_counter */ false,
+            CommissaryPlan::default(),
+        )
+        .unwrap();
+        let consignment = Consignment::new();
+
+        let stockpile = commissary.dispense("fixed material", &consignment).unwrap();
+
+        assert!(!stockpile.exact_tally);
+    }
+
+    #[cfg(feature = "mock")]
+    #[test]
+    fn the_window_comes_from_the_ports_declared_capabilities() {
+        use crate::mock::MockLlmAdapter;
+
+        let mock_adapter = MockLlmAdapter::new();
+        let mock_commissary =
+            Commissary::from_port(&mock_adapter, counter(), false, CommissaryPlan::default())
+                .unwrap();
+
+        let big_commissary = Commissary::new(
+            "big-provider",
+            capabilities_with_window(Some(64_000)),
+            counter(),
+            false,
+            CommissaryPlan::default(),
+        )
+        .unwrap();
+
+        // MockLlmAdapter declares max_context_tokens: Some(4096) — the window is read
+        // from the port, not hardcoded, so the two allowances differ with no source
+        // change other than which port was consulted.
+        assert!(mock_commissary.allotted_tokens() < big_commissary.allotted_tokens());
+    }
 }

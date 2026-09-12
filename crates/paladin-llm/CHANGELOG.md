@@ -7,6 +7,12 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Added
+- `Commissary` — a prompt-budgeting service that pre-flight-guards an assembled prompt
+  against a provider's declared context window (`Commissary::verify_fits`) and
+  bounded-allocates caller-prioritised material into a `Stockpile` (`Commissary::dispense`),
+  never dropping shed items silently; see `src/services/commissary.rs`.
+
 ## [0.10.0] - 2026-09-10
 
 ### Added

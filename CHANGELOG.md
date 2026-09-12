@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The Commissary prompt-budgeting types are now re-exported from the `paladin` facade:
+  `Commissary`, `CommissaryError`, `CommissaryPlan`, `Consignment`, `ConsignmentItem`,
+  `DispensedItem`, `ShedItem`, and `Stockpile`.
+
 ## [0.10.0] - 2026-09-10
 
 ### Behavioral changes

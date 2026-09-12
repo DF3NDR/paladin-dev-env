@@ -54,7 +54,7 @@ names. See MILESTONES.md.
 Phase: 29 (Program Gates & Release) — EXECUTING
 Plan: 1 of 9
 Status: Executing Phase 29
-Last activity: 2026-09-10 — Phase 29 execution started
+Last activity: 2026-09-12 — Completed quick task 260912-whj: regenerated API surface baseline (3936 → 3944) for Commissary facade exports
 
 ## Performance Metrics
 
@@ -783,6 +783,12 @@ requirement.
   API key in its body. The value was never copied into any `.planning/` file. The user has confirmed
   it is rotated. Redacting the source document and running a repository-wide secret scan is still
   recommended — the same value may appear in `.env` history or coverage artefacts.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260912-whj | Regenerate API surface snapshot so ci.yml API Surface Tracking check passes on feature/v0.10.0-web3sec-dogfooding | 2026-09-12 | 786a3ba5 | [260912-whj-regenerate-api-surface-snapshot-so-ci-ym](./quick/260912-whj-regenerate-api-surface-snapshot-so-ci-ym/) |
 
 ### Roadmap Evolution
 

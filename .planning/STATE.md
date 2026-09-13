@@ -54,7 +54,7 @@ names. See MILESTONES.md.
 Phase: 29 (Program Gates & Release) — EXECUTING
 Plan: 1 of 9
 Status: Executing Phase 29
-Last activity: 2026-09-13 — Completed quick task 260913-15w: pinned MinIO/mc images to quay.io last known-good release (Docker Hub repos removed); RustFS evaluation todo captured
+Last activity: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics
 
@@ -790,6 +790,7 @@ requirement.
 |---|-------------|------|--------|-----------|
 | 260912-whj | Regenerate API surface snapshot so ci.yml API Surface Tracking check passes on feature/v0.10.0-web3sec-dogfooding | 2026-09-12 | 786a3ba5 | [260912-whj-regenerate-api-surface-snapshot-so-ci-ym](./quick/260912-whj-regenerate-api-surface-snapshot-so-ci-ym/) |
 | 260913-15w | Pin MinIO service image to quay.io last known-good release after Docker Hub minio/minio removal | 2026-09-13 | 06765765 | [260913-15w-pin-minio-service-image-to-quay-io-last-](./quick/260913-15w-pin-minio-service-image-to-quay-io-last-/) |
+| 260913-h7l | Replace dl.min.io mc download in ci.yml with checksum-verified pinned GitHub release asset after MinIO retired community downloads | 2026-09-13 | 9d0aa7a0 | [260913-h7l-replace-dl-min-io-mc-download-in-ci-yml-](./quick/260913-h7l-replace-dl-min-io-mc-download-in-ci-yml-/) |
 
 ### Roadmap Evolution
 

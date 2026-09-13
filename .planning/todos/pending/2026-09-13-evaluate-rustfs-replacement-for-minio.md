@@ -27,6 +27,11 @@ unmaintained third-party image that will drift further from upstream and will ne
 security fix. quay.io could itself retire the repository at any time, which would reproduce the
 exact same outage this quick task just fixed, with no remaining fallback registry to pin against.
 
+MinIO's community binary downloads are gone as well as its Docker Hub images — the former
+download host now returns 410 Gone for the client binary — so quick task 260913-h7l additionally
+pinned the CI client install to a checksum-verified release asset on the archived
+`github.com/minio/mc` repository.
+
 ## Solution
 
 Evaluate RustFS — an S3-compatible, Rust-native object store — as the dev/test object-storage

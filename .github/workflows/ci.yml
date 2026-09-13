@@ -683,11 +683,22 @@ jobs:
         with:
           cache-on-failure: true
 
+      # MinIO retired its community binary downloads; its former community download host
+      # answered HTTP 410 Gone for the mc binary on 2026-09-13. The binary is now fetched
+      # from the archived github.com/minio/mc repository's release assets (assets on
+      # archived repositories remain downloadable), pinned to the same release the quay.io
+      # client image from quick task 260913-15w already carries. The checksum is the one
+      # published as that release's own .sha256sum asset. Long-term replacement tracked in .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
       - name: Install MinIO Client
         run: |
-          wget https://dl.min.io/client/mc/release/linux-amd64/mc
+          set -euo pipefail
+          MC_RELEASE="RELEASE.2025-08-13T08-35-41Z"
+          MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
+          curl -fsSL -o mc \
+            "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}"
+          echo "${MC_SHA256}  mc" | sha256sum -c -
           chmod +x mc
-          sudo mv mc /usr/local/bin/
+          sudo mv mc /usr/local/bin/mc
 
       - name: Setup MinIO buckets
         run: |
@@ -1390,11 +1401,22 @@ jobs:
         with:
           cache-on-failure: true
 
+      # MinIO retired its community binary downloads; its former community download host
+      # answered HTTP 410 Gone for the mc binary on 2026-09-13. The binary is now fetched
+      # from the archived github.com/minio/mc repository's release assets (assets on
+      # archived repositories remain downloadable), pinned to the same release the quay.io
+      # client image from quick task 260913-15w already carries. The checksum is the one
+      # published as that release's own .sha256sum asset. Long-term replacement tracked in .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
       - name: Install MinIO Client
         run: |
-          wget https://dl.min.io/client/mc/release/linux-amd64/mc
+          set -euo pipefail
+          MC_RELEASE="RELEASE.2025-08-13T08-35-41Z"
+          MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
+          curl -fsSL -o mc \
+            "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}"
+          echo "${MC_SHA256}  mc" | sha256sum -c -
           chmod +x mc
-          sudo mv mc /usr/local/bin/
+          sudo mv mc /usr/local/bin/mc
 
       - name: Setup MinIO buckets
         run: |

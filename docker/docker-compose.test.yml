@@ -16,7 +16,15 @@ services:
       retries: 5
 
   minio-test:
-    image: minio/minio:latest
+    # Pinned rather than floating: Docker Hub deleted the community MinIO
+    # repositories on 2026-09-12 and MinIO no longer publishes
+    # community-edition images. quay.io still serves this last known-good
+    # community release and no newer community tag will ever appear. Server
+    # manifest digest:
+    # sha256:cf3dadcfa1fb0324f43958bad1abba986d53c4ecc04d4d50b46c7dcda28bd3cd
+    # Long-term replacement tracked in
+    # .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
     container_name: paladin-minio-test
     ports:
       - "9010:9000"
@@ -38,7 +46,7 @@ services:
       start_period: 10s
 
   minio-test-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     container_name: paladin-minio-test-init
     depends_on:
       minio-test:

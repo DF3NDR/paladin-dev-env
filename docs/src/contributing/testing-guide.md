@@ -266,7 +266,7 @@ async fn test_minio_upload_download() {
     // Arrange: Start MinIO container
     let docker = clients::Cli::default();
     let minio = docker.run(
-        GenericImage::new("minio/minio", "latest")
+        GenericImage::new("quay.io/minio/minio", "RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772")
             .with_env_var("MINIO_ROOT_USER", "minioadmin")
             .with_env_var("MINIO_ROOT_PASSWORD", "minioadmin")
             .with_wait_for(WaitFor::message_on_stdout("API:"))
@@ -650,7 +650,7 @@ jobs:
           - 6379:6379
 
       minio:
-        image: minio/minio
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
         env:
           MINIO_ROOT_USER: minioadmin
           MINIO_ROOT_PASSWORD: minioadmin

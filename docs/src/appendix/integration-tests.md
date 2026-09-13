@@ -174,7 +174,7 @@ The `integration-tests` job uses GitHub-native **service containers**:
 | Service | Image | Port |
 |---------|-------|------|
 | Redis | `redis:7-alpine` | `localhost:6379` |
-| MinIO | `minio/minio:latest` | `localhost:9000` |
+| MinIO | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772` | `localhost:9000` |
 
 The job runs:
 

@@ -49,7 +49,7 @@ docker run -d --name redis -p 6379:6379 redis:7-alpine
 docker run -d --name minio -p 9000:9000 -p 9001:9001 \
   -e "MINIO_ROOT_USER=minioadmin" \
   -e "MINIO_ROOT_PASSWORD=minioadmin" \
-  minio/minio server /data --console-address ":9001"
+  quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772 server /data --console-address ":9001"
 
 # Run the application locally
 RUST_LOG=debug cargo run
@@ -498,7 +498,7 @@ docker run -d --name redis -p 6379:6379 redis:7-alpine
 docker run -d --name minio -p 9000:9000 -p 9001:9001 \
   -e "MINIO_ROOT_USER=minioadmin" \
   -e "MINIO_ROOT_PASSWORD=minioadmin" \
-  minio/minio server /data --console-address ":9001"
+  quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772 server /data --console-address ":9001"
 
 # Run the application locally
 RUST_LOG=debug cargo run
@@ -861,11 +861,11 @@ For production, consider MinIO in distributed mode:
 # docker-compose.prod.yml
 services:
   minio1:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
     command: server http://minio{1...4}/data{1...2}
 
   minio2:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
     command: server http://minio{1...4}/data{1...2}
 
   # ... minio3, minio4

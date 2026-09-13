@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
     container_name: paladin-minio
     ports:
       - "9000:9000"
@@ -44,7 +44,7 @@ services:
 
   # MinIO Client for bucket initialization
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     container_name: paladin-minio-init
     depends_on:
       minio:

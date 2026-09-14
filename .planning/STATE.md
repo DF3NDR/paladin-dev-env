@@ -2,35 +2,35 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 30
-current_phase_name: token-economy-vocabulary-commissary-anchoring
-status: executing
-stopped_at: Phase 30 planned (3 plans, 3 waves) — not yet executed
-last_updated: "2026-09-14T18:35:33.283Z"
+current_phase: 31
+current_phase_name: Lossless Token Accounting
+status: planning
+stopped_at: Phase 30 complete (3/3 plans, verification passed 7/7, code review 1 warning WR-01 advisory) — next: /gsd-discuss-phase 31
+last_updated: "2026-09-14T19:47:22.470Z"
 last_activity: 2026-09-14
-last_activity_desc: Phase 30 execution started
+last_activity_desc: Phase 30 complete, transitioned to Phase 31
 progress:
   total_phases: 13
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 140
-  completed_plans: 137
+  completed_plans: 140
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-10 after Phase 29)
+See: .planning/PROJECT.md (updated 2026-09-14 after Phase 30)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 30 — token-economy-vocabulary-commissary-anchoring
+**Current focus:** Phase 30 complete (docs-only vocabulary + Commissary anchoring; ADR-0049/0050/0051 landed). Next: `/gsd-discuss-phase 31` (Lossless Token Accounting). `/gsd-complete-milestone v0.10.0` moves to after Phase 33's release re-seal (COMM-04).
 `0.10.0` tag is cut (Phases 22-29 complete). Phase 30 is planned (3 plans, 3 waves). Next:
 `/gsd-execute-phase 30` (docs-only vocabulary + Commissary anchoring). `/gsd-complete-milestone v0.10.0` moves to after Phase 33's release
 re-seal (COMM-04).
 
-**Progress:** [██████████████░░░░░░] v0.10.0 — 9 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29); Phases 30-33 added 2026-09-14, not yet planned; 137/137 plans of the original nine (100%)
+**Progress:** [███████████████░░░░░] v0.10.0 — 10 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29, 30); Phases 31-33 remain (Token Economy, added 2026-09-14); 140/140 plans (100%)
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -53,17 +53,17 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 30 (token-economy-vocabulary-commissary-anchoring) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 30
-Last activity: 2026-09-14 — Phase 30 execution started
+Phase: 31 — Lossless Token Accounting
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-14 — Phase 30 complete, transitioned to Phase 31
 Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 324
+- Total plans completed: 327
 - Average duration: —
 - Total execution time: —
 
@@ -99,6 +99,7 @@ Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetch
 | 27 | 26 | - | - |
 | 28 | 17 | - | - |
 | 29 | 9 | - | - |
+| 30 | 3 | - | - |
 
 *Updated after each plan completion*
 

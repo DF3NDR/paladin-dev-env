@@ -327,42 +327,42 @@ D-8, D-9; F4 partial, F5 docs). Locked by the overview §0: `Commissary` is kept
 `TokenBudget`, `TokenCounterPort`, `TokenUsage`, `max_tokens`, `token_budget.*` are not renamed;
 `Quartermaster` stays retired; `Paymaster` is rejected; `Treasurer` is the reserved term.
 
-- [ ] **VOCAB-01**: The vocabulary rule is written into `PROJECT.md` and
+- [x] **VOCAB-01**: The vocabulary rule is written into `PROJECT.md` and
   `docs/src/architecture/domain-model.md` — units/measures (`TokenUsage`, `max_tokens`,
   `max_context_tokens`) and technical ports (`TokenCounterPort`, `LlmPort`, `EmbeddingPort`) keep
   plain names; domain roles, places and events get Medieval-Military names — and `Commissary` is
   in both the ubiquitous-language list and the domain-model table as the input-side, per-call
   window-rationing officer (PRD R1, R2; D-1, D-2)
 
-- [ ] **VOCAB-02**: A numbered ADR in `.planning/decisions/` records the `Commissary` design
+- [x] **VOCAB-02**: A numbered ADR in `.planning/decisions/` records the `Commissary` design
   (`verify_fits` guard + `dispense` allocator, fail-loud / never-silent), the
   Quartermaster→Commissary rename rationale and the explicit rejected-name list, reconstructed
   from `origin/feature/quartermaster-prompt-budgeting:.planning/decisions/0010-prompt-context-budgeting.md`
   and the port commit history (PRD R3; D-2)
 
-- [ ] **VOCAB-03**: An mdBook page for `Commissary` under `docs/src/` (concept, the
+- [x] **VOCAB-03**: An mdBook page for `Commissary` under `docs/src/` (concept, the
   `Consignment`/`Stockpile`/`ShedItem` model, a usage sketch) is linked from the architecture nav
   in `docs/src/SUMMARY.md` with the link-check green (PRD R4; D-2)
 
-- [ ] **VOCAB-04**: A one-page `Treasurer` reservation ADR: reserved (0/0 in-tree by grep), will
+- [x] **VOCAB-04**: A one-page `Treasurer` reservation ADR: reserved (0/0 in-tree by grep), will
   own cross-run / per-tenant / per-API-key allowances, per-model currency pricing, `cost_estimate`
   production and rate pacing, installs a per-run `TokenBudget` rather than replacing it, is built
   in Milestone 14 (`.project/Milestone_14-Treasurer/`), and is a framework-only word that must
   never appear as an audit-target or fixture domain term downstream (PRD R5; D-3)
 
-- [ ] **VOCAB-05**: `docs/src/getting-started/configuration.md` carries one table naming the four
+- [x] **VOCAB-05**: `docs/src/getting-started/configuration.md` carries one table naming the four
   `max_tokens` meanings (Garrison store cap, RAG injection cap, per-request completion cap,
   run-level `token_budget` cap) and states any future Treasurer cap uses a distinct `allowance`
   key; the rustdoc on `ExecutionMetadata.cost_estimate` (`paladin-core` `herald.rs`) says
   "reserved for the Treasurer (Milestone 14 / FUT-08); no in-tree producer yet" and the field is
   not removed (PRD R6, R7; D-8, D-9; F5, F7)
 
-- [ ] **VOCAB-06**: `grep -rniE '\bQuartermaster\b' crates src` returns nothing — the
+- [x] **VOCAB-06**: `grep -rniE '\bQuartermaster\b' crates src` returns nothing — the
   `src/lib.rs` provenance comment is reworded without the retired term — and the
   `SirQuartermaster` example in `.project/project-management/paladin-project-plan-final.md` is
   annotated as historical; `.planning/` phase history is untouched (PRD R8)
 
-- [ ] **VOCAB-07**: A token-economy versioning ADR records that Phases 31-33 land as clean breaks
+- [x] **VOCAB-07**: A token-economy versioning ADR records that Phases 31-33 land as clean breaks
   inside the untagged v0.10.0, superseding X-03 for those phases on the operator's 2026-09-14
   decision (single coordinated downstream consumer, pre-1.0), with every break still registered
   in `MIGRATION.md` §9.2 and the semver-checks allowlist as documentation for the downstream
@@ -554,13 +554,13 @@ Which phases cover which requirements. Populated during roadmap creation.
 | SHIP-02 | Phase 29 | Complete |
 | SHIP-03 | Phase 29 | Complete |
 | SHIP-04 | Phase 29 | Complete |
-| VOCAB-01 | Phase 30 | Not started |
-| VOCAB-02 | Phase 30 | Not started |
-| VOCAB-03 | Phase 30 | Not started |
-| VOCAB-04 | Phase 30 | Not started |
-| VOCAB-05 | Phase 30 | Not started |
-| VOCAB-06 | Phase 30 | Not started |
-| VOCAB-07 | Phase 30 | Not started |
+| VOCAB-01 | Phase 30 | Complete |
+| VOCAB-02 | Phase 30 | Complete |
+| VOCAB-03 | Phase 30 | Complete |
+| VOCAB-04 | Phase 30 | Complete |
+| VOCAB-05 | Phase 30 | Complete |
+| VOCAB-06 | Phase 30 | Complete |
+| VOCAB-07 | Phase 30 | Complete |
 | ACCT-01 | Phase 31 | Not started |
 | ACCT-02 | Phase 31 | Not started |
 | ACCT-03 | Phase 31 | Not started |
@@ -580,6 +580,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 
 - v1 requirements: 66 total (45 from the `.project/v0.10.0/` corpus, complete; 21 added
   2026-09-14 from `.project/Milestone_13-Token-Economy/`)
+
 - Mapped to phases: 66
 - Unmapped: 0 ✓
 

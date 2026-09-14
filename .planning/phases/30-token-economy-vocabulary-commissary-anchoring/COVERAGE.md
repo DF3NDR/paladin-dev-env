@@ -3,10 +3,12 @@
 **Detector:** `bin/lib/api-coverage.cjs --json` over the Phase 30 ROADMAP section + the three
 PLAN bodies.
 
-| Run | Scope | Result |
-|-----|-------|--------|
-| 1 (pre-plan) | ROADMAP Phase 30 section only | `detected: false`, `signals: []` |
-| 2 (post-plan) | ROADMAP section + `30-01/02/03-PLAN.md` | `detected: true`, one signal: verb `(surface)`, noun `api` |
+Detector runs (recorded as a list, not a table — the seal gate parses any pipe table in this file
+as coverage-matrix rows, and a declaration alongside rows is rejected as contradictory):
+
+- Run 1 (pre-plan), scope ROADMAP Phase 30 section only: `detected: false`, `signals: []`
+- Run 2 (post-plan), scope ROADMAP section + `30-01/02/03-PLAN.md`: `detected: true`, one
+  signal: verb `(surface)`, noun `api`
 
 **No external API integration: this phase writes documentation only — three ADRs, one mdBook page,
 two doc tables, five rustdoc lines and two comment edits — and adds no dependency, no client, no

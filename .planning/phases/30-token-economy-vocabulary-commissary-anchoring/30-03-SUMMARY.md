@@ -53,6 +53,7 @@ coverage:
     verification:
       - kind: other
         ref: "Task 2's own <verify> automated command (grep -c 5, all-/// check, no in-tree producer string, no Epic 5 string, three signature greps, example-comment grep, comment-only diff check, cargo doc, cargo fmt --check) — re-run at Self-Check time"
+        status: pass
       - kind: other
         ref: "cargo test --doc -p paladin-ai-core: platform::container::herald::ExecutionMetadata (line 454) ... ok — the edited doc-test example still compiles and runs"
         status: pass

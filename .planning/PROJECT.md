@@ -1235,8 +1235,14 @@ corpus:
   (`src/application/cli/`), not infrastructure — see the ADR-candidate note in Context.
 - **Ubiquitous language**: Medieval military terms (Paladin, Battalion, Formation, Phalanx,
   Campaign, Chain of Command, Conclave, Council, Grove, Maneuver, Commander, Garrison, Arsenal,
-  Armament, Citadel, Herald, Armory, Sanctum, Sentinel, Quest) are mandatory in code, docs and
-  comments — they are the domain vocabulary, not decoration.
+  Armament, Citadel, Herald, Armory, Sanctum, Sentinel, Quest, Commissary) are mandatory in code,
+  docs and comments — they are the domain vocabulary, not decoration. **The governing rule, per
+  ADR-0049:** units and measures (`TokenUsage`, `max_tokens`, `max_context_tokens`,
+  `TokenBudget`) and technical port traits (`TokenCounterPort`, `LlmPort`, `EmbeddingPort`) keep
+  plain industry names; domain roles, places and events get Medieval-Military names. `Treasurer`,
+  the reserved output-side, cross-run spend-governance officer name, is named here as reserved
+  only — it has no shipped type yet (Milestone 14) and does not join the enumerated term list
+  above.
 - **Error handling**: No `unwrap()`/`expect()`/`panic!` in library code; return `Result`. Layer-
   specific error enums converted at boundaries via `From`. `codebase/CONCERNS.md` lists existing
   violations to work down, not to imitate. Note the deliberate exception now shipping:
@@ -1347,6 +1353,7 @@ corpus:
 | [The agent route surface is `/v1`](.planning/decisions/0037-agent-route-surface-v1.md) (ADR-0037) | Four Milestone 12 Epics' unprefixed route text (`POST /agents/{id}/execute`, etc.) is superseded provenance, not a live contract; the committed `crates/paladin-web/openapi.json` drift-guard baseline settles the question by construction — all six agent paths are `/v1`-prefixed, live-tested by `spec_paths_are_versioned_under_v1` and drift-guarded by `openapi_matches_committed_baseline`. The one live consequence, `docs/src/deployment-topologies/sidecar.md:29`'s unprefixed route reference, is corrected to match. | must change — Phase 13 itself is the executor; plan 13-08 performs the `sidecar.md` correction — ORCH-03(a) |
 | [`AgentProvisioner` placement — stays in `paladin-web`](.planning/decisions/0038-agent-provisioner-placement.md) (ADR-0038) | `AgentSpec`, the type the trait's only method takes, derives `utoipa::ToSchema` and is documented as sent in the body of `POST /agents` — an OpenAPI-annotated HTTP request DTO, not a portable core type; `paladin-ports` carries no `utoipa` dependency, and promoting the trait there would be the first `paladin-ports` dependency whose entire reason to exist is web-framework documentation tooling, exactly the class ADR-0015 Decision (i) bars. Ratified at plan 13-09's blocking checkpoint by a human operator (D-00i). | conforms — Phase 13 plan 13-09 — ORCH-04(a) |
 | [Garrison and Arsenal absent from HTTP-served agents — a permanent topology property](.planning/decisions/0039-http-topology-no-garrison-no-arsenal.md) (ADR-0039) | The absence of Garrison (memory) and Arsenal (tools/MCP) wiring on HTTP-served agents, previously stated once in a Milestone 12 non-goal, is ratified as a **permanent property of the shipped topology** rather than planned scope — `AgentSpec` has no fields for memory or tool configuration, and expressing an MCP server's identity, credentials and lifetime in a JSON request body is genuine API design no milestone has scheduled. `docs/src/deployment-topologies/http-service-host.md` and `overview.md` now state the limitation in prose. Ratified at plan 13-09's blocking checkpoint by a human operator (D-00i). | must change — Phase 13 itself is the executor; plan 13-09 performs both doc-page corrections — ORCH-04(b) |
+| [`Commissary` design, rename rationale, and rejected names](.planning/decisions/0049-commissary-design-and-rename.md) (ADR-0049) | The shipped `crates/paladin-llm/src/services/commissary.rs` re-ports the abandoned branch's `Quartermaster` design (`git show origin/feature/quartermaster-prompt-budgeting:.planning/decisions/0010-prompt-context-budgeting.md`) under verified-free Medieval-Military vocabulary confirmed by port commits `348f5910`/`35fd8390`, keeping the `verify_fits` guard + `dispense` allocator, fail-loud/never-silent stance unchanged. | conforms |
 
 **v0.9.0 (Phases 18-21) minted no new ADRs.** Its decisions were recorded as per-phase locked
 decisions (`D-xx`) in each phase's `CONTEXT.md`/`DISCUSSION-LOG.md`, now archived under

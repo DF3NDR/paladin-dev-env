@@ -27,8 +27,16 @@ and discussions:
 | **Arsenal** | Tool registry | `Arsenal` domain · `crates/paladin-core/src/platform/container/arsenal/` |
 | **Armament** | A single registered tool | Part of Arsenal |
 | **Citadel** | State persistence and recovery | `Citadel` domain · `crates/paladin-core/src/platform/container/citadel.rs` |
+| **Commissary** | Input-side, per-call window-rationing officer | `Commissary` · `crates/paladin-llm/src/services/commissary.rs` |
 | **Herald** | Output formatting system | `Herald` · `crates/paladin-core/src/platform/container/herald.rs` |
 | **Quest** | A task or mission assigned to a Paladin | Informal / documentation term |
+
+**Plain vs. Medieval-Military vocabulary (ADR-0049).** Not every token-economy concept in this
+table gets a Medieval-Military name. Units and measures (`TokenUsage`, `max_tokens`,
+`max_context_tokens`, `TokenBudget`) and technical port traits (`TokenCounterPort`, `LlmPort`,
+`EmbeddingPort`) keep plain industry names — they describe quantities and technical seams, not
+domain roles. Domain roles, places and events — the rows in the table above — get
+Medieval-Military names.
 
 ## Node<T> Pattern
 

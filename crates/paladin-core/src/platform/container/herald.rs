@@ -384,7 +384,7 @@ impl StreamChunkBuilder {
 /// * `duration_ms` - Calculated execution duration in milliseconds
 /// * `model_used` - LLM model identifier (e.g., "gpt-4", "claude-3")
 /// * `token_usage` - Token consumption statistics (prompt, completion, total)
-/// * `cost_estimate` - Estimated cost in USD based on token usage and model pricing
+/// * `cost_estimate` - Reserved for the Treasurer (Milestone 14 / FUT-08); no in-tree producer yet
 /// * `error_count` - Number of errors encountered during execution
 /// * `metadata` - Extensible HashMap for custom telemetry and provider-specific data
 ///
@@ -468,7 +468,7 @@ impl StreamChunkBuilder {
 ///         completion_tokens: 2000,
 ///         total_tokens: 3000,
 ///     })
-///     .cost_estimate(0.045)  // $0.045 based on GPT-4 pricing
+///     .cost_estimate(0.045)  // illustrative value; reserved for the Treasurer (Milestone 14 / FUT-08)
 ///     .error_count(2)        // Encountered 2 retryable errors
 ///     .build()
 ///     .unwrap();
@@ -517,7 +517,7 @@ pub struct ExecutionMetadata {
     pub model_used: String,
     /// Token usage statistics
     pub token_usage: TokenUsage,
-    /// Estimated cost in USD (based on token usage)
+    /// Reserved for the Treasurer (Milestone 14 / FUT-08); no in-tree producer yet.
     pub cost_estimate: Option<f64>,
     /// Number of errors encountered during execution
     pub error_count: u32,
@@ -543,10 +543,11 @@ impl ExecutionMetadata {
         }
     }
 
-    /// Get total cost estimate based on token usage
+    /// Get the reserved cost estimate
     ///
-    /// Returns the cost estimate if available, otherwise calculates
-    /// a basic estimate based on token usage.
+    /// Returns the `cost_estimate` field as stored. The field is reserved for the
+    /// Treasurer (Milestone 14 / FUT-08); it has no in-tree producer yet, so this
+    /// returns `None` in this tree.
     pub fn total_cost(&self) -> Option<f64> {
         self.cost_estimate
     }
@@ -603,7 +604,7 @@ impl ExecutionMetadataBuilder {
         self
     }
 
-    /// Set the cost estimate
+    /// Set the cost estimate (reserved for the Treasurer, Milestone 14 / FUT-08 — no in-tree producer yet)
     pub fn cost_estimate(mut self, cost_estimate: f64) -> Self {
         self.cost_estimate = Some(cost_estimate);
         self

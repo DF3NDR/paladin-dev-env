@@ -102,7 +102,7 @@ frozen at 311 lines that two milestones made invisible.
 | **Milestone 9-12 + Deferred-QA close-out** | 12-16 | ✅ **Shipped v0.8.0 (2026-08-24)** — [archive](milestones/v0.8.0-ROADMAP.md) | Ingest run 5 (FINAL) — `.project/Milestone_9-Classic-Orchestrator-Completion` + `.project/Milestone_10-CI-Hardening-Release-Automation` + `.project/Milestone_11-Documentation-Overhaul-Publish` + `.project/Milestone_12-Web-API` + `.project/Deferred-QA-CICD-Completion` + `.project/project-management` (46 docs) |
 | **Provider Expansion** | 17 | ✅ **Shipped v0.8.0 (2026-08-24)** — [archive](milestones/v0.8.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-15 per *Roadmap Extension Protocol* item 1. |
 | **Security Tooling** | 18-21 | ✅ **Shipped v0.9.0 (2026-09-01)** — [archive](milestones/v0.9.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-24 per *Roadmap Extension Protocol* item 1, closing the Rust-SAST gap the v0.8.0 milestone audit left as its one genuinely open item; extended 2026-08-25 with Phases 19-21 (publish credential, publish operations, release artifacts). |
-| **Durable Agent Execution Runtime** | 22-29 | 🔲 Not started | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. |
+| **Durable Agent Execution Runtime** | 22-33 | 🔄 **In progress** — Phases 22-29 complete 2026-09-10 (`0.10.0` bumped on the feature branch, tag not yet cut); Phases 30-33 added 2026-09-14 | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. **Extended 2026-09-14** with Phases 30-33 (Token Economy — Commissary anchoring, lossless accounting, primitive unification, Commissary adoption), sourced from `.project/Milestone_13-Token-Economy/` (overview + Epics 1-4). Milestone 14 (Treasurer, `.project/Milestone_14-Treasurer/`) is reserved, not roadmapped. |
 
 **The ingest is complete.** All 263 documents in `.project/` are covered — 199 classified across
 five runs and 64 `tasks-*.md` measured deterministically by `intel/task-completion-state.md`. There
@@ -192,7 +192,7 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 
 </details>
 
-**Durable Agent Execution Runtime (Phases 22-29)** — in progress (added 2026-09-01)
+**Durable Agent Execution Runtime (Phases 22-33)** — in progress (added 2026-09-01; extended 2026-09-14 with Phases 30-33)
 
 - [x] **Phase 22: Battlefield State & Superstep Engine** - Typed shared state, cyclic superstep execution, and automatic per-superstep checkpointing that resumes with zero re-execution after a crash (completed 2026-09-02)
 - [x] **Phase 22.1: Engine readiness defect and MSRV follow-up (INSERTED)** - Fix the BUG-03 cycle-bootstrap starvation and BUG-04 resume-frontier defects, complete the graph fingerprint, raise the MSRV floor to a measured 1.88, and seal G-22-1 on whole-run CI evidence (completed 2026-09-03)
@@ -203,6 +203,13 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 - [x] **Phase 27: Platform API** - Durable background runs on a worker pool, Parley/streaming integration, versioned assistants, and API-managed schedules/webhooks (completed 2026-09-08)
 - [x] **Phase 28: Observability & Tooling** - Machine-consumable trace stream, OTel/log/SSE consumers, graph/run visualization, and the paladin-eval regression harness (completed 2026-09-09)
 - [x] **Phase 29: Program Gates & Release** - Complete MIGRATION.md, proven backward compatibility, the program acceptance audit, and a releasable v0.10.0 (completed 2026-09-10)
+
+**Token Economy — Commissary anchoring & lossless accounting** (added 2026-09-14, still v0.10.0 — the `0.10.0` tag is not yet cut; Phase 33 re-seals the Phase 29 release gates)
+
+- [ ] **Phase 30: Token-Economy Vocabulary & Commissary Anchoring** - Record the units-plain / roles-medieval vocabulary rule, anchor `Commissary` with an ADR and an mdBook page, reserve `Treasurer` with its downstream guardrail, document the four `max_tokens` meanings, purge the orphan `Quartermaster` references, and record the clean-break versioning decision as an ADR (docs only)
+- [ ] **Phase 31: Lossless Token Accounting** - Carry the full `TokenUsage` prompt/completion split (plus optional cache/reasoning fields) from the LLM port to `RunFinished` and a herald, remove the `from_total` zeroing from the battalion path, and prove streaming usage parity per adapter (keystone; breaking)
+- [ ] **Phase 32: Unified Token Primitives** - One counting contract (`TokenCounterPort::is_exact`, `Commissary::new` drops `is_exact_counter`, legacy `TokenCounter`/`TokenCounterFactory` retired) and one shared context-window resolver with a strict mode consumed by both `HistoryTrimmer` and `Commissary` (breaking)
+- [ ] **Phase 33: Commissary In-Tree Adoption** - Route RAG truncation through `Commissary::dispense` with shed records and a truncation marker, closing the last silent-truncation path with an integration-tested production caller, then re-seal the Phase 29 release gates on the final commit
 
 ## Phase Details
 
@@ -217,7 +224,7 @@ of the v0.9.0 Security Tooling milestone — are archived in
 [`v0.9.0-REQUIREMENTS.md`](milestones/v0.9.0-REQUIREMENTS.md) and
 [`v0.9.0-MILESTONE-AUDIT.md`](milestones/v0.9.0-MILESTONE-AUDIT.md). Only phases in the current
 and future milestones are detailed below, which is what keeps this file a constant size per
-milestone. Phases 22-29 — the current milestone, v0.10.0 "Durable Agent Execution
+milestone. Phases 22-33 — the current milestone, v0.10.0 "Durable Agent Execution
 Runtime" — are detailed in full below.*
 
 ### Phase 22: Battlefield State & Superstep Engine
@@ -755,6 +762,90 @@ Plans:
 
 - [x] 29-09-PLAN.md — SHIP-04: the 0.10.0 bump, changelogs, dry-run publish, CI evidence, audit step 10
 
+### Phase 30: Token-Economy Vocabulary & Commissary Anchoring
+
+**Goal**: The token-economy vocabulary is decided in writing and `Commissary` has a documentation home — the units-plain / roles-medieval rule is recorded, `Commissary` is anchored with an on-branch ADR and an mdBook page, `Treasurer` is reserved (not built) with its downstream guardrail, the four meanings of `max_tokens` are documented, the last orphan `Quartermaster` references are gone, and the clean-break versioning decision that Phases 31-33 rely on is an ADR rather than an assumption.
+**Depends on**: Phase 29 (docs-only; can land alone and first)
+**Requirements**: VOCAB-01, VOCAB-02, VOCAB-03, VOCAB-04, VOCAB-05, VOCAB-06, VOCAB-07
+**Source**: `.project/Milestone_13-Token-Economy/Epic_1/prd-vocabulary-and-docs-foundation.md` (D-1, D-2, D-3, D-8, D-9; F4 partial, F5 docs)
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. `PROJECT.md` and `docs/src/architecture/domain-model.md` state the vocabulary rule — units/measures (`TokenUsage`, `max_tokens`, `max_context_tokens`) and technical ports (`TokenCounterPort`, `LlmPort`, `EmbeddingPort`) keep plain names; domain roles, places and events get Medieval-Military names — and `Commissary` appears in both the ubiquitous-language list and the domain-model table as the input-side, per-call window-rationing officer (VOCAB-01)
+  2. A numbered ADR in `.planning/decisions/` records the `Commissary` design (`verify_fits` guard + `dispense` allocator, fail-loud / never-silent), the Quartermaster→Commissary rename rationale and the explicit rejected-name list, reconstructed from `origin/feature/quartermaster-prompt-budgeting`'s `0010-prompt-context-budgeting.md` and the port commit history — and an mdBook page under `docs/src/` (concept, the `Consignment`/`Stockpile`/`ShedItem` model, a usage sketch) is reachable from the architecture nav with the link-check green (VOCAB-02, VOCAB-03)
+  3. A one-page `Treasurer` reservation ADR exists: the role is reserved (0/0 in-tree, verified by grep), will own cross-run / per-tenant / per-API-key allowances, per-model currency pricing, `cost_estimate` production and rate pacing, *installs* a per-run `TokenBudget` rather than replacing it, is built in a later milestone (Milestone 14 in `.project/Milestone_14-Treasurer/`), and — the downstream guardrail — is a framework-only word that must never appear as an audit-target or fixture domain term (VOCAB-04)
+  4. `docs/src/getting-started/configuration.md` carries one table naming the four `max_tokens` meanings (Garrison store cap, RAG injection cap, per-request completion cap, run-level `token_budget` cap) and states that any future Treasurer-level cap uses a distinct key (`allowance`); the rustdoc on `ExecutionMetadata.cost_estimate` (`crates/paladin-core/src/platform/container/herald.rs`) says it is reserved for the Treasurer (Milestone 14 / FUT-08) with no in-tree producer, and the field is not removed (VOCAB-05)
+  5. `grep -rniE '\bQuartermaster\b' crates src` returns nothing — the `src/lib.rs` provenance comment is reworded without the retired term — and the `SirQuartermaster` example in `.project/project-management/paladin-project-plan-final.md` is annotated as historical; `.planning/` phase history is untouched (VOCAB-06)
+  6. A token-economy versioning ADR records that Phases 31-33 land as **clean breaks inside the untagged v0.10.0** — superseding, for these phases only, the v0.10.0 corpus rule X-03 ("deprecations allowed, removals are not, before v0.11.0") on the operator's 2026-09-14 decision (single coordinated downstream consumer, pre-1.0) — and that every break still gets a `MIGRATION.md` §9.2 row and a `cargo semver-checks` allowlist row as documentation for the downstream refactor, never as a compatibility shim; the supersession is also recorded in `PROJECT.md` Key Decisions (VOCAB-07)
+
+**Plans**: TBD (run `/gsd-plan-phase 30` to break down)
+
+Plans:
+
+- [ ] TBD
+
+### Phase 31: Lossless Token Accounting
+
+**Goal**: The provider's prompt/completion split survives from the LLM port to `RunFinished` and a herald — no carrier above the port collapses `TokenUsage` to a bare total any more, `TokenUsage` gains optional cache and reasoning fields, and streamed runs report the same usage as non-streamed ones — so that everything cost-shaped (currency pricing, the Treasurer) becomes buildable on the shipped shape. This is the keystone phase: Phase 32 depends on it and Milestone 14 will.
+**Depends on**: Phase 29 (keystone — independent of Phase 30; Phase 30's VOCAB-07 versioning ADR should land first so the clean break is a recorded decision)
+**Requirements**: ACCT-01, ACCT-02, ACCT-03, ACCT-04, ACCT-05
+**Source**: `.project/Milestone_13-Token-Economy/Epic_2/prd-lossless-token-accounting.md` (D-4; F1, F8)
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. `TokenUsage` (`crates/paladin-core/src/platform/container/token_usage.rs`, the single definition) carries `cache_read_tokens`, `cache_write_tokens` and `reasoning_tokens` as `#[serde(default)]` optionals; the rustdoc states whether `total_tokens` includes them; a legacy JSON document without the new fields deserializes via defaults and a new document round-trips (ACCT-01)
+  2. `PaladinResult`, `BattalionResult.per_paladin_tokens`, the Waypoint `NodeExecutionRecord`, `TraceEvent::NodeFinished` and `RunFinished` carry a full `TokenUsage` rather than a bare count; `TokenUsage::from_total` is gone from the battalion aggregation path (`formation_service.rs`, `phalanx_service.rs`), and a round-trip test proves a usage with non-zero prompt AND completion (plus cache/reasoning) reaches `RunFinished` intact — a clean break with no `#[deprecated]` bare-count accessor whose only purpose is downstream compatibility (ACCT-02)
+  3. Every LLM adapter's `execute_stream` path is audited: a per-adapter test asserts the accumulated `TokenUsage` on the streaming path equals the non-streaming path, or the adapter's inability to report streamed usage is documented as an explicit exception in the adapter's rustdoc and the mdBook provider page (ACCT-03)
+  4. The breakdown is observable end-to-end in at least one herald in both JSON and Markdown output (ACCT-04)
+  5. Every touched public type has a `MIGRATION.md` §9.2 row and a matching `cargo semver-checks` allowlist row (Phase 29 D-04 row-level CI gate green), the `CHANGELOG.md` `[0.10.0]` section records the carrier change, and `make clean-code` plus the 82 % coverage floor are green (ACCT-05)
+
+**Plans**: TBD (run `/gsd-plan-phase 31` to break down)
+
+Plans:
+
+- [ ] TBD
+
+### Phase 32: Unified Token Primitives
+
+**Goal**: Exactly one token-counting contract and exactly one context-window resolver exist — `TokenCounterPort` gains its exactness signal so `Commissary::new` stops asking the caller for it, the legacy fallible `garrison::TokenCounter`/`TokenCounterFactory` pair is retired, and `HistoryTrimmer` and `Commissary` resolve the window through a single shared function that preserves Commissary's strict "no invented window" refusal.
+**Depends on**: Phase 31 (the primitives layer settles together), Phase 30 (VOCAB-07 versioning ADR)
+**Requirements**: PRIM-01, PRIM-02, PRIM-03, PRIM-04, PRIM-05
+**Source**: `.project/Milestone_13-Token-Economy/Epic_3/prd-unify-token-primitives.md` (D-5, D-6; F2, F3)
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. `TokenCounterPort` (`crates/paladin-ports/src/output/token_counter_port.rs`) has `fn is_exact(&self) -> bool` defaulting to `false`; the tiktoken-backed counter returns `true` and the heuristic counter returns `false`, each proven by a test (PRIM-01)
+  2. `Commissary::new` no longer takes an `is_exact_counter: bool` argument and reads exactness from the port — a clean break with no forwarding constructor — and every in-tree call site compiles against the new signature (PRIM-02)
+  3. The legacy `garrison::TokenCounter` trait and `TokenCounterFactory` are removed together with their three re-exports (`paladin-memory` `garrison/mod.rs` and `prelude.rs`, and the facade's `src/infrastructure/adapters/garrison/mod.rs`), every former in-tree caller consuming `TokenCounterPort` instead; if one internal caller genuinely cannot migrate, it is marked `#[deprecated]` with the blocking reason recorded in the phase context and removal assigned to Phase 33 (PRIM-03)
+  4. A shared resolver in `paladin-llm` (e.g. `window::resolve_context_window`) owns the precedence config table → provider capabilities → default, with an explicit strict mode that errors rather than defaults when the window is unknown; both `HistoryTrimmer` (`src/application/services/paladin/middleware/history.rs`, today's `resolve_limit`) and `Commissary` consume it; precedence tests cover config-table hit, provider-capability hit, default fallback and strict refusal, and an equivalence snapshot proves `Commissary` resolves the same windows as before this phase and `HistoryTrimmer` produces the same trims (PRIM-04)
+  5. The `Commissary::new` signature change and the legacy-counter removal each have a `MIGRATION.md` §9.2 row and a semver-checks allowlist row (row-level gate green), the `CHANGELOG.md` `[0.10.0]` section records them, and `make clean-code` plus the coverage floor are green (PRIM-05)
+
+**Plans**: TBD (run `/gsd-plan-phase 32` to break down)
+
+Plans:
+
+- [ ] TBD
+
+### Phase 33: Commissary In-Tree Adoption
+
+**Goal**: `Commissary` has a real production caller and the last silent token-truncation path is gone — RAG retrieval rations its injection budget through `Commissary::dispense` with score-derived priorities, records every shed memory and marks truncated output — and, because Phases 31-33 changed public API after Phase 29 sealed the release gates, those gates are re-run green on the final commit so v0.10.0 is releasable again.
+**Depends on**: Phase 32 (shared resolver, settled counter contract), Phase 31, Phase 30
+**Requirements**: COMM-01, COMM-02, COMM-03, COMM-04
+**Source**: `.project/Milestone_13-Token-Economy/Epic_4/prd-commissary-in-tree-adoption.md` (D-7; F6, F4 completes)
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. `RagRetrievalService::truncate_to_token_budget`'s inline `content.len() / 4` + silent drop (`crates/paladin-memory/src/services/rag_retrieval_service.rs`) is replaced by a `Commissary::dispense` call over a `Consignment` built from the retrieved memories with priority derived from relevance score and budget `rag.max_tokens`; a property test proves the retained set's total is ≤ the budget and the highest-scoring memories are the ones retained (COMM-01)
+  2. The `ShedItem` list (which memories were dropped and why) is surfaced through the RAG result path, and a truncation marker is emitted when content was shed; tests assert both are present when the budget is exceeded and both absent when everything fits (COMM-02)
+  3. An integration test exercises `Commissary::dispense` through the real RAG path — the F4 production-caller evidence — and no silent token-based truncation remains in-tree (the Phase 26 D-13 deferral closes; grep-provable) (COMM-03)
+  4. The Phase 29 release gates are re-sealed on the final commit of this phase: `MIGRATION.md` has no "TBD" and its §9.2 register matches the semver-checks allowlist row-for-row, `v0_9_config_boot` and the OpenAPI golden diff pass, `cargo semver-checks` and the MSRV job are green, `cargo publish --dry-run` is green in dependency order, and the `CHANGELOG.md` `[0.10.0]` section carries the RAG truncation-marker behavioural note plus the Phase 31/32 API entries — with the evidence appended to the Phase 29 acceptance audit rather than a new audit (COMM-04)
+
+**Plans**: TBD (run `/gsd-plan-phase 33` to break down)
+
+Plans:
+
+- [ ] TBD
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -784,6 +875,10 @@ Plans:
 | 27. Platform API | v0.10.0 | 26/26 | Complete    | 2026-09-08 |
 | 28. Observability & Tooling | v0.10.0 | 17/17 | Complete    | 2026-09-09 |
 | 29. Program Gates & Release | v0.10.0 | 9/9 | Complete    | 2026-09-10 |
+| 30. Token-Economy Vocabulary & Commissary Anchoring | v0.10.0 | 0/0 | Not started | — |
+| 31. Lossless Token Accounting | v0.10.0 | 0/0 | Not started | — |
+| 32. Unified Token Primitives | v0.10.0 | 0/0 | Not started | — |
+| 33. Commissary In-Tree Adoption | v0.10.0 | 0/0 | Not started | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see
@@ -1087,3 +1182,28 @@ CF-03/Muster); 26 (RT) is mostly standalone, depending only on 22; 27 (PLAT) dep
 28 (OBS) depends on 22's trace seam and 27's WarGraphDoc; 29 (SHIP) is the program-gates/release
 phase, depending on all of 22-28. Phases 1-21 unchanged and unrenumbered; every `### Phase N:`
 header is verbatim.*
+
+*Extended: 2026-09-14 — **v0.10.0 extended with Phases 30-33 "Token Economy"** before the
+`0.10.0` tag is cut. Forward work sourced from the handoff planning corpus in
+`.project/Milestone_13-Token-Economy/` (overview + Epics 1-4), authored 2026-09-14 from the
+downstream Web3 Security Paladin repo's token-economy systems analysis (findings F1-F8, decisions
+D-1…D-9). Four new requirement ID prefixes — the twenty-seventh through thirtieth, recycling none
+of the twenty-six spent: `VOCAB-*` (7), `ACCT-*` (5), `PRIM-*` (5), `COMM-*` (4) — 21
+requirements. Phase order follows the overview's dependency graph (§2): 30 (docs) can land alone
+and first; 31 (accounting) is the keystone; 32 depends on 31; 33 depends on 32. **Three
+scope-time amendments to the source PRDs, recorded here rather than silently applied:** (a) the
+PRDs target `v0.11.0`; the operator's instruction is that this work is still part of the
+**v0.10.0** release, which is possible because Phase 29 bumped `0.10.0` on the feature branch
+without a tag (Phase 29 D-18/D-21) — so Phase 33 gains COMM-04, re-sealing the Phase 29 release
+gates; (b) the PRDs' clean-break policy (overview §5.1: drop `Commissary::new`'s
+`is_exact_counter`, remove the legacy `TokenCounter`/`TokenCounterFactory`, change the token
+carriers outright, no shims) **supersedes the v0.10.0 corpus rule X-03** ("deprecations allowed,
+removals are not, before v0.11.0") for Phases 31-33 only — Phase 30 gains VOCAB-07 to record that
+supersession as an ADR per protocol item 4; (c) Epic 2's goals bullet ("keep a `token_count`
+accessor for one release as a deprecation shim") contradicts its own R3 and §5.1 — R3 wins, no
+shim (ACCT-02) — and Epic 4 R3 (wire `HistoryTrimmer` to the shared resolver) duplicates Epic 3 R4,
+so it lives once, in Phase 32 (PRIM-04), with Phase 33 keeping only the regression check.
+**Treasurer (Milestone 14, `.project/Milestone_14-Treasurer/`) is reserved by Phase 30's ADR and
+not roadmapped** — operator-confirmed deferral; it depends on Phase 31 and is the natural first
+phase of the next milestone. Phases 1-29 unchanged and unrenumbered; every `### Phase N:` header
+is verbatim.*

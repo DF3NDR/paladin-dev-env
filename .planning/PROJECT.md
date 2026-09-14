@@ -322,6 +322,38 @@ facade features `llm-openai-compatible`/`llm-gemini`/`llm-ollama` live at `Cargo
 RT-06 scopes these as verify-against-the-PRD's-conformance-bar and close gaps (shared conformance
 suite, FT-FR-01 transience mapping, documented Ollama recipe), not as greenfield builds.
 
+**Extended 2026-09-14 — Token Economy (Phases 30-33), still v0.10.0.** Phases 22-29 closed
+2026-09-10 with `0.10.0` bumped on the feature branch and no tag cut (Phase 29 D-18/D-21). Before
+tagging, the milestone is extended with four phases sourced from the handoff corpus in
+`.project/Milestone_13-Token-Economy/` (overview + Epics 1-4; authored from the downstream Web3
+Security Paladin repo's token-economy systems analysis, findings F1-F8 / decisions D-1…D-9):
+
+- Phase 30 — vocabulary rule (units/ports plain, roles medieval), `Commissary` anchored (ADR +
+  mdBook), `Treasurer` reserved (ADR + downstream guardrail), `max_tokens` disambiguated,
+  `Quartermaster` orphans purged, and the clean-break versioning decision recorded as an ADR
+  (`VOCAB-01…07`, docs only)
+- Phase 31 — lossless token accounting: full `TokenUsage` (plus optional cache/reasoning fields)
+  carried from the LLM port to `RunFinished` and a herald; streaming parity (`ACCT-01…05`,
+  keystone, breaking)
+- Phase 32 — one counting contract (`TokenCounterPort::is_exact`, `Commissary::new` without
+  `is_exact_counter`, legacy `TokenCounter`/`TokenCounterFactory` retired) and one shared window
+  resolver with a strict mode (`PRIM-01…05`, breaking)
+- Phase 33 — RAG rations through `Commissary::dispense` with shed records and a truncation
+  marker; Phase 29's release gates re-sealed on the final commit (`COMM-01…04`)
+
+**Locked by the corpus overview §0 (operator-confirmed 2026-09-14):** the two-officer model —
+`Commissary` (input-side, per-call window rationing; keep, do not rename) and `Treasurer`
+(output-side, cross-run spend governance; reserve now, build in Milestone 14,
+`.project/Milestone_14-Treasurer/`, not this cycle). `TokenBudget`, `TokenCounterPort`,
+`TokenUsage`, `max_tokens` are not renamed; `Paymaster` rejected; `Quartermaster` stays retired.
+
+**X-03 supersession (recorded per Roadmap Extension Protocol item 4):** the corpus rule X-03
+("deprecations allowed, removals are not, before v0.11.0") is superseded for Phases 31-33 only by
+the overview's clean-break policy (§5.1) — pre-1.0, one coordinated downstream consumer that pins
+its submodule pointer and adopts the whole milestone at once. Every break still gets a
+`MIGRATION.md` §9.2 row and a semver-checks allowlist row as refactor documentation, never as a
+shim. Phase 30's VOCAB-07 turns this paragraph into an ADR and a Key Decisions row.
+
 Carried-in open items (unchanged from the v0.9.0 close; tracked, not this milestone's scope
 unless a phase adopts them):
 

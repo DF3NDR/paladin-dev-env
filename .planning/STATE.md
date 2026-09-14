@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 29
-status: completed
-stopped_at: Phase 29 context gathered
-last_updated: "2026-09-10T16:51:41.135Z"
-last_activity: 2026-09-10
-last_activity_desc: Phase 29 complete
+current_phase: 30
+status: ready_to_plan
+stopped_at: Phases 30-33 added to the roadmap; Phase 30 not yet planned
+last_updated: "2026-09-14T00:00:00.000Z"
+last_activity: 2026-09-14
+last_activity_desc: Phases 30-33 (Token Economy) added to v0.10.0 from .project/Milestone_13-Token-Economy
 progress:
-  total_phases: 9
+  total_phases: 13
   completed_phases: 9
   total_plans: 137
   completed_plans: 137
-current_phase_name: Program Gates & Release
+current_phase_name: Token-Economy Vocabulary & Commissary Anchoring
 ---
 
 # Project State
@@ -25,10 +25,12 @@ See: .planning/PROJECT.md (updated 2026-09-10 after Phase 29)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** v0.10.0 milestone complete (all 9 phases) — next: `/gsd-complete-milestone v0.10.0`
-`.planning/REQUIREMENTS.md` is removed and opened fresh there).
+**Current focus:** v0.10.0 extended 2026-09-14 with Phases 30-33 "Token Economy" before the
+`0.10.0` tag is cut (Phases 22-29 complete). Next: `/gsd-plan-phase 30` (docs-only vocabulary +
+Commissary anchoring). `/gsd-complete-milestone v0.10.0` moves to after Phase 33's release
+re-seal (COMM-04).
 
-**Progress:** [████████████████████] v0.10.0 — 9 of 9 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29); 137/137 plans (100%)
+**Progress:** [██████████████░░░░░░] v0.10.0 — 9 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29); Phases 30-33 added 2026-09-14, not yet planned; 137/137 plans of the original nine (100%)
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -51,10 +53,11 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 29
+Phase: 30
 Plan: Not started
-Status: All phases complete
-Last activity: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
+Status: Ready to plan — Phases 30-33 added to the roadmap 2026-09-14 (Token Economy, still v0.10.0)
+Last activity: 2026-09-14 — Merged `origin/feature/v0.10.0-Commisary-Treasurer-plan` (`.project/Milestone_13-Token-Economy/`, `.project/Milestone_14-Treasurer/`) and added Phases 30-33 with VOCAB/ACCT/PRIM/COMM requirements
+Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics
 
@@ -846,6 +849,10 @@ requirement.
 - Phase 21 added: Release Artifacts — Curated Release Notes and Attached Distributables (v0.9.0; ARTIFACT-01..06 minted, twenty-second prefix)
 - Phase 22.1 inserted after Phase 22: Engine readiness defect and MSRV follow-up (readiness defect from 22-16 audit; MSRV 1.85 vs rmcp-pinned process-wrap decision; green postgres-integration run confirmation) (URGENT)
 - Phase ? changed: Phase 22.1 scope grew on 2026-09-03: BUG-04 (resume rebuilds the Frontier from scratch, losing pre-crash edge resolutions) promoted from CONTEXT.md deferred ideas into the phase at the 22.1-05 checkpoint by developer decision; ENG-04 re-opened for the phase; CI evidence to be re-captured on the final head.
+- Phase 30 added: Token-Economy Vocabulary & Commissary Anchoring — vocabulary rule, Commissary ADR + mdBook page, Treasurer reservation ADR, `max_tokens` table, Quartermaster purge, clean-break versioning ADR (VOCAB-01..07 minted, twenty-seventh prefix; docs only; source `.project/Milestone_13-Token-Economy/Epic_1`)
+- Phase 31 added: Lossless Token Accounting — full `TokenUsage` carried port→`RunFinished`→herald, optional cache/reasoning fields, `from_total` removed from the battalion path, streaming parity (ACCT-01..05, twenty-eighth prefix; keystone; clean break under the X-03 supersession)
+- Phase 32 added: Unified Token Primitives — `TokenCounterPort::is_exact`, `Commissary::new` without `is_exact_counter`, legacy `TokenCounter`/`TokenCounterFactory` retired, one shared window resolver with strict mode (PRIM-01..05, twenty-ninth prefix; clean break)
+- Phase 33 added: Commissary In-Tree Adoption — RAG through `Commissary::dispense` with shed records + marker, integration-tested production caller, Phase 29 release gates re-sealed (COMM-01..04, thirtieth prefix). Milestone 14 Treasurer (`.project/Milestone_14-Treasurer/`) reserved, not roadmapped.
 
 ## Deferred Items
 

@@ -778,11 +778,13 @@ Plans:
   5. `grep -rniE '\bQuartermaster\b' crates src` returns nothing — the `src/lib.rs` provenance comment is reworded without the retired term — and the `SirQuartermaster` example in `.project/project-management/paladin-project-plan-final.md` is annotated as historical; `.planning/` phase history is untouched (VOCAB-06)
   6. A token-economy versioning ADR records that Phases 31-33 land as **clean breaks inside the untagged v0.10.0** — superseding, for these phases only, the v0.10.0 corpus rule X-03 ("deprecations allowed, removals are not, before v0.11.0") on the operator's 2026-09-14 decision (single coordinated downstream consumer, pre-1.0) — and that every break still gets a `MIGRATION.md` §9.2 row and a `cargo semver-checks` allowlist row as documentation for the downstream refactor, never as a compatibility shim; the supersession is also recorded in `PROJECT.md` Key Decisions (VOCAB-07)
 
-**Plans**: TBD (run `/gsd-plan-phase 30` to break down)
+**Plans**: 3 plans
 
 Plans:
 
-- [ ] TBD
+- [ ] 30-01-PLAN.md — Anchor `Commissary`: ADR-0049 (design, rename rationale, nine rejected names), the vocabulary rule in all three ubiquitous-language lists, and the new `docs/src/architecture/commissary.md` page linked from the architecture nav (VOCAB-01, VOCAB-02, VOCAB-03) — wave 1
+- [ ] 30-02-PLAN.md — ADR-0050 (`Treasurer` reservation + downstream guardrail) and ADR-0051 (clean breaks inside the untagged v0.10.0, superseding X-03 for Phases 31-33), plus the PROMOTION.md index and PROJECT.md Key Decisions bookkeeping (VOCAB-04, VOCAB-07) — wave 2
+- [ ] 30-03-PLAN.md — The four meanings of `max_tokens` as one table, the `cost_estimate` rustdoc reservation at five doc sites, and the last two `Quartermaster` prose references retired from `crates`/`src` (VOCAB-05, VOCAB-06) — wave 3
 
 ### Phase 31: Lossless Token Accounting
 

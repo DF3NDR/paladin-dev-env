@@ -947,13 +947,13 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 29 complete — v0.10.0 milestone 9/9 phases, 137/137 plans; ready for `/gsd-complete-milestone v0.10.0`
+**Stopped at:** Phase 30 complete — UAT 10/10 passed, verification `passed`, security `threats_open: 0`; ready to discuss/plan Phase 31 (Lossless Token Accounting)
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-10T16:53:47Z
+Last session: 2026-09-14T22:51:00Z
 Resume file: None
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
@@ -1015,6 +1015,8 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
+- Phase 30 closed 2026-09-14: UAT 10/10 passed (`30-UAT.md`, `19a28185` — nine coverage-mode automated passes + one human confirmation), `30-VERIFICATION.md` `passed` (scoped re-verification `bc275c1c` after a one-field SUMMARY metadata fix), `30-SECURITY.md` `verified` (`threats_open: 0`, 11/11). Three non-threat doc-precision observations (O-30-01..03: `configuration.md` Anthropic row says "required" but `ANTHROPIC_MAX_TOKENS` defaults to 4096; Garrison/RAG owner column says `src/config/` but the structs live in `crates/paladin-memory/src/config/`; `vision.*.max_tokens` is an unlisted fifth surface) recorded in `30-SECURITY.md` for a docs follow-up.
+- Next: `/gsd-discuss-phase 31` (no `31-CONTEXT.md` yet) then `/gsd-plan-phase 31` — Lossless Token Accounting (keystone; breaking under ADR-0051). `/gsd-complete-milestone v0.10.0` stays deferred to after Phase 33's release re-seal (COMM-04).
 - Phase 29 closed 2026-09-10: UAT 3/3 passed (`29-UAT.md`, `640570eb`), `29-VERIFICATION.md` `passed`, `29-SECURITY.md` `verified` (`threats_open: 0`, 37/37). **v0.10.0 milestone: all 9 phases complete.**
 - Next: `/gsd-complete-milestone v0.10.0` — archive the milestone; then `/gsd-ship 29` for the feature-branch PR (the `v0.10.0` tag is cut on the `main` merge commit by `release.yml`, never on this branch).
 - Housekeeping before the PR: tick the seven maintainer sign-off boxes in `.project/v0.10.0/09-program-acceptance-audit.md` if the file should carry them (accepted at UAT but still `- [ ]` on disk), and refresh `29-CI-EVIDENCE.md` with the post-push run identifiers.

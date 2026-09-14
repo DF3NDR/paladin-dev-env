@@ -37,7 +37,11 @@ tower_governor = { version = "0.8", features = ["axum"] }
 # OpenAPI spec + interactive docs (Epic 6): derive the spec from DTOs/handlers, serve Swagger UI.
 utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-axum = "0.2"
-utoipa-swagger-ui = { version = "9", features = ["axum"] }
+# `vendored` embeds the Swagger UI bundle via utoipa-swagger-ui-vendored instead of
+# having build.rs curl the zip from github.com at compile time. That download was a
+# recurring CI flake (truncated archive -> "Could not find EOCD" panic in build.rs),
+# and it made every cold `cargo build` depend on GitHub being reachable.
+utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 
 [dev-dependencies]
 mockito = "1.7.0"

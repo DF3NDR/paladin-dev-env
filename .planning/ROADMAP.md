@@ -783,7 +783,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 30-01-PLAN.md — Anchor `Commissary`: ADR-0049 (design, rename rationale, nine rejected names), the vocabulary rule in all three ubiquitous-language lists, and the new `docs/src/architecture/commissary.md` page linked from the architecture nav (VOCAB-01, VOCAB-02, VOCAB-03) — wave 1
+- [x] 30-01-PLAN.md — Anchor `Commissary`: ADR-0049 (design, rename rationale, nine rejected names), the vocabulary rule in all three ubiquitous-language lists, and the new `docs/src/architecture/commissary.md` page linked from the architecture nav (VOCAB-01, VOCAB-02, VOCAB-03) — wave 1
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

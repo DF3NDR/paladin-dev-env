@@ -787,7 +787,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 30-02-PLAN.md — ADR-0050 (`Treasurer` reservation + downstream guardrail) and ADR-0051 (clean breaks inside the untagged v0.10.0, superseding X-03 for Phases 31-33), plus the PROMOTION.md index and PROJECT.md Key Decisions bookkeeping (VOCAB-04, VOCAB-07) — wave 2
+- [x] 30-02-PLAN.md — ADR-0050 (`Treasurer` reservation + downstream guardrail) and ADR-0051 (clean breaks inside the untagged v0.10.0, superseding X-03 for Phases 31-33), plus the PROMOTION.md index and PROJECT.md Key Decisions bookkeeping (VOCAB-04, VOCAB-07) — wave 2
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

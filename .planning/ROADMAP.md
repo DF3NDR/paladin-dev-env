@@ -791,7 +791,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 30-03-PLAN.md — The four meanings of `max_tokens` as one table, the `cost_estimate` rustdoc reservation at five doc sites, and the last two `Quartermaster` prose references retired from `crates`/`src` (VOCAB-05, VOCAB-06) — wave 3
+- [x] 30-03-PLAN.md — The four meanings of `max_tokens` as one table, the `cost_estimate` rustdoc reservation at five doc sites, and the last two `Quartermaster` prose references retired from `crates`/`src` (VOCAB-05, VOCAB-06) — wave 3
 
 ### Phase 31: Lossless Token Accounting
 

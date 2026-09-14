@@ -714,21 +714,23 @@ pub async fn resume_thread(
         .ok_or_else(|| ApiError::not_implemented(PARLEY_PORT_HINT))?;
     let thread = parse_thread_id(&id)?;
 
-    let mut responses = Vec::with_capacity(body.responses.len());
-    for input in body.responses {
-        let parley_id = parse_parley_id(&input.parley_id)?;
-        responses.push(ParleyResponse {
-            parley_id,
-            // Placeholders: `WarEngine::resume_with` stamps both from the
-            // matching request regardless of what is supplied here (D-07).
-            kind: ParleyKind::FreeText,
-            prompt: String::new(),
-            value: input.value,
-            responded_by: input.responded_by,
-            responded_at: Utc::now(),
-            defaulted: false,
-        });
-    }
+    let responses = body
+        .responses
+        .into_iter()
+        .map(|input| {
+            Ok(ParleyResponse {
+                parley_id: parse_parley_id(&input.parley_id)?,
+                // Placeholders: `WarEngine::resume_with` stamps both from the
+                // matching request regardless of what is supplied here (D-07).
+                kind: ParleyKind::FreeText,
+                prompt: String::new(),
+                value: input.value,
+                responded_by: input.responded_by,
+                responded_at: Utc::now(),
+                defaulted: false,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
 
     let accepted = parley
         .resume_with(&thread, responses)

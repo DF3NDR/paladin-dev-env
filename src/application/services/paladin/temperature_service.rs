@@ -99,9 +99,10 @@ impl TemperatureService {
             ));
         }
 
+        // The description is caller-authored free text that feeds an LLM
+        // prompt; keep its body out of the info log and record only its shape.
         info!(
-            "Calculating optimal temperature: agent_description={}, has_task_context={}",
-            agent_description,
+            "Calculating optimal temperature: has_task_context={}",
             task_context.is_some()
         );
 

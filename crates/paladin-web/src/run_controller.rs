@@ -414,10 +414,11 @@ fn parse_event_kind(raw: &str) -> Result<RunEventKind, ApiError> {
 /// /threads/{id}/fork`'s own optional `webhook` field, rather than
 /// duplicating the event-kind parsing.
 pub(crate) fn to_run_webhook_spec(dto: RunWebhookRequestDto) -> Result<WebhookSpec, ApiError> {
-    let mut events = Vec::with_capacity(dto.events.len());
-    for raw in &dto.events {
-        events.push(parse_event_kind(raw)?);
-    }
+    let events = dto
+        .events
+        .iter()
+        .map(|raw| parse_event_kind(raw))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(WebhookSpec {
         url: dto.url,
         secret: dto.secret,

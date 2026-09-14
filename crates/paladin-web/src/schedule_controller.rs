@@ -305,10 +305,11 @@ fn to_thread_strategy(raw: Option<serde_json::Value>) -> Result<Option<ThreadStr
 }
 
 fn to_webhook_spec(dto: WebhookRequestDto) -> Result<WebhookSpec, ApiError> {
-    let mut events = Vec::with_capacity(dto.events.len());
-    for raw in &dto.events {
-        events.push(parse_event_kind(raw)?);
-    }
+    let events = dto
+        .events
+        .iter()
+        .map(|raw| parse_event_kind(raw))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(WebhookSpec {
         url: dto.url,
         secret: dto.secret,

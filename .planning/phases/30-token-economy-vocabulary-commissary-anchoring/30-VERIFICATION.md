@@ -1,6 +1,6 @@
 ---
 phase: 30-token-economy-vocabulary-commissary-anchoring
-verified: 2026-09-14T19:45:00Z
+verified: 2026-09-14T22:44:22Z
 status: passed
 score: 7/7 must-haves verified
 behavior_unverified: 0
@@ -18,7 +18,7 @@ rather than an assumption.
 
 **Verified:** 2026-09-14
 **Status:** passed
-**Re-verification:** No — initial verification
+**Re-verification:** Yes — scoped re-verification at 2026-09-14T22:44:22Z (see "Re-verification" section); initial verification 2026-09-14T19:45:00Z
 
 ## Goal Achievement
 
@@ -104,7 +104,32 @@ None. This is a documentation-only phase; every must-have is directly checkable 
 
 No gaps. All 6 ROADMAP success criteria and all 7 VOCAB-01..07 requirement IDs are verified against the actual tree (not SUMMARY claims), including re-running the phase's own key verification commands (mdbook build, doctest, the three purge/reservation greps, the phase-wide `.rs` scope guard). No `.rs` file outside the two rustdoc-only files changed; no `Cargo.toml`/`Cargo.lock`/`MIGRATION.md` touched (consistent with the phase's "no public API change" claim); `.planning/` phase history outside Phase 30's own directory is untouched.
 
+### Re-verification 2026-09-14T22:44:22Z (scoped)
+
+**Trigger:** `/gsd-verify-work 30` corrected one metadata field in `30-03-SUMMARY.md` — the
+`coverage:` entry D2 (VOCAB-05, `herald.rs` `cost_estimate` reservation) listed its first
+`verification` ref without a `status:` line, which made the UAT coverage classifier report
+`validation_failed`. `status: pass` was added (commit `19a28185`). No SUMMARY claim, file list,
+commit hash or deliverable text changed.
+
+**Scope of re-verification:** the D2 verification the added field asserts. Plan 30-03 Task 2's
+`<verify>` greps were re-run against the tree on 2026-09-14:
+
+| Check | Result |
+|-------|--------|
+| `grep -c 'Milestone 14 / FUT-08' herald.rs` | 5 (want 5) |
+| Occurrences on non-`///` lines | 0 |
+| `no in-tree producer` present / `Epic 5` absent | yes / yes |
+| Three signatures (`pub cost_estimate: Option<f64>`, `pub fn total_cost(&self) -> Option<f64>`, `pub fn cost_estimate(mut self, cost_estimate: f64) -> Self`) | unchanged |
+| Example line `///     .cost_estimate(0.045)` | intact |
+| `cargo fmt --check` | exit 0 |
+
+**Verdict:** the added `status: pass` is accurate; the 7/7 must-have score and `status: passed`
+stand. The UAT (`30-UAT.md`) subsequently recorded all nine coverage-mode deliverables as
+automated passes plus one human confirmation, 10/10 passed. No other section of this report is
+affected.
+
 ---
 
-_Verified: 2026-09-14T19:45:00Z_
+_Verified: 2026-09-14T19:45:00Z (initial); 2026-09-14T22:44:22Z (scoped re-verification)_
 _Verifier: Claude (gsd-verifier)_

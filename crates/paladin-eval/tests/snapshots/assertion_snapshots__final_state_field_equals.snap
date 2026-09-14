@@ -1,0 +1,7 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: final_state_field_equals { field: "status", value: "done" }
+  expected: "done"
+  observed: "in_progress"

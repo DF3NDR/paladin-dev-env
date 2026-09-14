@@ -7,9 +7,11 @@
 
 pub mod support;
 
+pub mod agent_runtime;
 pub mod bridge;
 pub mod content;
 pub mod deployment_topologies;
+pub mod fault_tolerance;
 pub mod http_service_host;
 pub mod orchestration;
 pub mod queue_worker;

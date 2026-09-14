@@ -32,4 +32,65 @@
 #   requirement_id  = "<owning requirement, e.g. FT-01>"
 #   justification   = "<one line: why this is deliberate-breaking, not a mitigation>"
 #
-# entries = []
+[[entry]]
+crate = "paladin-web"
+lint = "function_requires_different_generic_type_params"
+migration_row = "paladin-web | require_authentication (fn)"
+requirement_id = "HITL-FR-16"
+justification = "require_authentication gained a generic type parameter (S: HasAgentAuth) so ThreadApiState's routes (24-11) can reuse the SAME middleware AgentApiState's routes already layer, instead of a duplicated copy -- accepted as the minimal, intentional cost of that reuse."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_marked_non_exhaustive"
+migration_row = "paladin-ai-core | BattalionError"
+requirement_id = "FT-01"
+justification = "BattalionError gained the Node(NodeError) variant (FT-FR-02, D-06) and is marked #[non_exhaustive] so the superstep engine's structured node-execution errors can be extended later without a semver-major bump."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_marked_non_exhaustive"
+migration_row = "paladin-ai-core | PaladinError"
+requirement_id = "FT-01"
+justification = "PaladinError gained the structured LlmFailure variant and the transience() method (D-02); marked #[non_exhaustive] so a typed-classification error taxonomy can grow without a semver-major bump. LlmFailure's Display is byte-identical to the legacy LlmError(String) arm and is_retryable() answers true exactly as that legacy arm did, so circuit_breaker.rs is unaffected (X-03, X-06)."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "enum_marked_non_exhaustive"
+migration_row = "paladin-ports | LlmError"
+requirement_id = "FT-01, FT-05"
+justification = "LlmError gained ProviderError and AllProvidersFailed (status-carrying variants for the FT-05 fallback chain, D-03) and the transience() method; marked #[non_exhaustive] so the provider-error taxonomy can grow without a semver-major bump."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai-core | PaladinResult"
+requirement_id = "FT-FR-17"
+justification = "PaladinResult gained the additive served_by: Option<String> field (serving provider from the FT-05 fallback chain, D-26) with #[serde(default, skip_serializing_if)] so legacy JSON is byte-identical; the struct stays constructible and is deliberately NOT #[non_exhaustive] because cross-crate functional-update syntax is disallowed on non_exhaustive structs -- FT-FR-17's premise that Default still works under that marking does not hold -- so only full struct literals break, and every in-tree one was migrated in the same commit."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-ports | LlmRequest"
+requirement_id = "RT-05"
+justification = "LlmRequest has no Default, so no functional-update site exists to preserve; every downstream literal breaks under either X-10.3 option and only marking it #[non_exhaustive] (option a) makes the next field free."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_marked_non_exhaustive"
+migration_row = "paladin-ai-core | StopReason"
+requirement_id = "RT-02"
+justification = "StopReason gained CallLimit and TokenBudget (ModelCallLimit and TokenBudget middleware, D-08) and is marked #[non_exhaustive] so a future budget-triggered stop reason can be added without a semver-major bump. The X-10.2 exception overview section 3 names for this exact enum is deliberately declined: nothing in the tree or in examples/ relies on exhaustive matching over StopReason, and one mechanism across PaladinError/LlmError/BattalionError/StopReason beats a bespoke exception (D-07). Every in-tree exhaustive match gained a wildcard arm in the same commit."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-ai-core | GarrisonEntry"
+requirement_id = "RT-03"
+justification = "GarrisonEntry gained a persisted is_summary: bool field (RT-FR-12, D-17) marking a Garrison entry as a compressed stand-in for older history; #[serde(default)] keeps every pre-existing JSON/SQLite row reading is_summary == false, and #[non_exhaustive] plus the four constructors (new/with_metadata/with_token_count/summary) make the next field free without breaking downstream struct literals."
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | Settings"
+requirement_id = "RT-02"
+justification = "Settings gained the additive agent_runtime: AgentRuntimeConfig field (X-09, D-10) with #[serde(default)], so an absent agent_runtime: key resolves to a fully inert default and a v0.9 config boots with identical behavior. The struct stays constructible and is deliberately NOT #[non_exhaustive] for the same reason PaladinResult is not (D-26): Settings implements Default, and cross-crate functional-update syntax is disallowed on non_exhaustive structs, so marking it would break every ..Default::default() site downstream. Only full struct literals break, and every in-tree one was migrated with the field."

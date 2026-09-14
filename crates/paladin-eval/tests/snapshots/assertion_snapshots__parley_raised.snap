@@ -1,0 +1,7 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: parley_raised { kind: "choice", node: "worker" }
+  expected: a ParleyRaised record with kind="choice" node="worker"
+  observed: kind=approval node=worker

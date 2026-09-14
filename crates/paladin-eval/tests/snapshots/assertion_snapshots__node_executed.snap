@@ -1,0 +1,12 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: node_executed { node: "worker", times: Exact(5) }
+  expected: exactly 5
+  observed: 2 execution(s)
+  seq: 8..=10
+  detail:
+    visits (seq / superstep / attempt / outcome):
+      seq=8 superstep=2 attempt=1 outcome=Failed
+      seq=10 superstep=2 attempt=2 outcome=Succeeded

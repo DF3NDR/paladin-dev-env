@@ -65,8 +65,15 @@ the plans that follow in this same phase):
 | 0045 | `additional-llm-provider-selection` | The additional-LLM-provider selection study — Kimi, Qwen, Grok, Ollama and Gemini build; Meta/Llama dispositioned via Ollama; Groq/Together/Mistral/Fireworks/Bedrock rejected as already covered by the generic operator-configured provider, not deferred (Phase 17, plan 17-02) |
 | 0046 | `facade-llm-feature-flag-wiring` | The facade's `llm-*` provider flags wired for real, with the default build preserved (D-11 amended, option-b) — a `Fixed` CHANGELOG entry, not `BREAKING` (Phase 17, plan 17-06) |
 | 0047 | `architecture-appendix-disposition` | `docs/src/appendix/design-and-architecture.md` recorded historical, superseded by `docs/src/architecture/` plus `docs/src/appendix/sentinel.md`; FR-26.1's metric re-anchored to 18 of 19 → 19 of 19 against the live chapter, naming Sentinel; three of the four named Mermaid diagrams withdrawn as genuinely unanswered by the existing SVG inventory, the fourth mapped to existing artifacts (Phase 16, plan 16-06) |
+| 0048 | `paladin-eval-composition-crate` | `paladin-eval` classified a composition crate (not an extracted crate) under ADR-0031's own extracted-crate scope language, published with a `cli`-gated upward facade edge and a deliberate `semver` job exclusion (Phase 28, plan 28-17) |
 
-**Next free ADR number: 0048**
+**Next free ADR number: 0049**
+
+*Dated note, 2026-09-09 (plan 28-17):* the line advances by **one**, from 0048 to 0049, because
+Phase 28 plan 28-17 authored ADR-0048 (the `paladin-eval` composition-crate classification,
+D-27). `ls .planning/decisions/0048-*.md` (re-run before writing this note) confirms the file
+exists with the expected number, not skipped or reused, and no existing index row above was
+renumbered, reworded or reordered.
 
 *Dated note, 2026-08-24 (plan 16-06):* the line advances by **one**, from 0047 to 0048, because
 Phase 16 plan 16-06 authored ADR-0047 (the architecture-appendix disposition — archive, metric

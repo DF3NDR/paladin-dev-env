@@ -89,22 +89,13 @@ pub trait VisionCapableLlm: LlmPort + Send + Sync {
     /// # use paladin_ports::output::llm_port::{LlmRequest, LlmError};
     /// # use paladin_core::platform::container::vision::{VisionRequest, VisionContent, ImageDetail};
     /// # use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-    /// # use uuid::Uuid;
-    /// # use std::collections::HashMap;
     /// # async fn example(llm: &dyn VisionCapableLlm) -> Result<(), Box<dyn std::error::Error>> {
     /// let user_prompt = UserPrompt {
     ///     query: "What is in this image?".to_string(),
     ///     context: None,
     /// };
     ///
-    /// let mut request = LlmRequest {
-    ///     id: Uuid::new_v4(),
-    ///     model: "gpt-4o".to_string(),
-    ///     prompt: PromptItem::new(PromptType::User(user_prompt))?,
-    ///     attachments: vec![],
-    ///     stream: false,
-    ///     metadata: HashMap::new(),
-    /// };
+    /// let request = LlmRequest::new("gpt-4o", PromptItem::new(PromptType::User(user_prompt))?);
     ///
     /// let vision = VisionRequest::new(
     ///     "Describe the contents of this image in detail.".to_string(),

@@ -18,9 +18,25 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
     StreamingResponse, TokenUsage,
 };
+
+use crate::http_status::map_http_status;
+// WR-01 (`25-REVIEW.md`): this adapter previously carried its own
+// byte-for-byte copy of the crate's shared credential-redaction routine
+// (`RESPONSE_EXCERPT_CHAR_BUDGET`, `CREDENTIAL_PLACEHOLDER`,
+// `bounded_excerpt`, `redact_token_after`, `redact_credentials`) rather than
+// importing it, so a future fix to the shared module would silently not
+// apply here. Mirrors `compat/engine.rs` and `gemini/adapter.rs`, which
+// already import from `crate::redaction`.
+#[cfg(test)]
+use crate::redaction::CREDENTIAL_PLACEHOLDER;
+use crate::redaction::{RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, redact_credentials};
+
+/// The provider name this adapter reports through [`LlmPort::get_provider_name`]
+/// and stamps on every [`LlmError::ProviderError`] it emits.
+const DEEPSEEK_PROVIDER: &str = "deepseek";
 
 /// Configuration for DeepSeek LLM adapter.
 #[derive(Debug, Clone)]
@@ -116,6 +132,25 @@ struct DeepSeekRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     presence_penalty: Option<f32>,
     stream: bool,
+    /// `LlmRequest.response_format` on the wire (RT-FR-17, D-28). Omitted
+    /// entirely when the caller sets no hint, keeping the body byte
+    /// -identical to a pre-0.10 request (X-03).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<DeepSeekResponseFormat>,
+}
+
+/// The provider-agnostic `response_format` hint, compiled down to
+/// DeepSeek's own plain JSON-object wire shape (D-28).
+///
+/// DeepSeek's chat-completions API supports `{"type":"json_object"}`; it has
+/// no schema-carrying native mode, so a `ResponseFormat::JsonSchema` request
+/// degrades to this same shape rather than being omitted
+/// (EDGE(RT-05/wire shape)). Correctness never depends on it — the caller
+/// also appends the schema-conformance instruction block (D-27).
+#[derive(Debug, Serialize)]
+struct DeepSeekResponseFormat {
+    #[serde(rename = "type")]
+    kind: &'static str,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -247,16 +282,6 @@ fn annotate_with_usage(err: LlmError, usage: &DeepSeekUsage) -> LlmError {
     }
 }
 
-/// Character budget for a diagnostic excerpt of a response body.
-///
-/// Mirrors `anthropic::adapter::RESPONSE_EXCERPT_CHAR_BUDGET`, deliberately —
-/// the two adapters' diagnostics are meant to stay in lockstep for the same
-/// reason their retryable sets are (see [`DeepSeekAdapter::call_api_with_retry`]).
-const RESPONSE_EXCERPT_CHAR_BUDGET: usize = 512;
-
-/// What a redacted credential is replaced with in a diagnostic excerpt.
-const CREDENTIAL_PLACEHOLDER: &str = "[REDACTED]";
-
 /// Deserialize a possibly-`null` (or absent) string field as an empty string.
 ///
 /// DeepSeek's reasoning models split their `max_tokens` budget between hidden
@@ -277,82 +302,6 @@ where
     D: serde::Deserializer<'de>,
 {
     Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
-}
-
-/// Build a diagnostic excerpt of a response body, bounded by CHARACTER count
-/// rather than byte count.
-///
-/// Slicing a UTF-8 `&str` by byte offset panics when the offset lands
-/// mid-character, and panics are forbidden in this library — a captured
-/// production response body is full of multi-byte characters. When `body`
-/// exceeds `budget` characters, an ASCII elision marker reports the total byte
-/// length of the untruncated body so the reader knows how much was withheld.
-fn bounded_excerpt(body: &str, budget: usize) -> String {
-    if body.chars().count() <= budget {
-        return body.to_string();
-    }
-
-    let truncated: String = body.chars().take(budget).collect();
-    format!("{truncated}... [truncated, {} total bytes]", body.len())
-}
-
-/// Replace the token that follows every occurrence of `marker` with
-/// [`CREDENTIAL_PLACEHOLDER`].
-///
-/// The token is taken to run until the first whitespace or JSON delimiter.
-/// `marker` must be ASCII so the byte offsets returned by `find` are always
-/// character boundaries; every slice is nonetheless taken through the checked
-/// `get` API so this function has no panicking path.
-fn redact_token_after(body: &str, marker: &str) -> String {
-    let mut out = String::with_capacity(body.len());
-    let mut rest = body;
-
-    while let Some(idx) = rest.find(marker) {
-        let cut = idx + marker.len();
-        let (head, tail) = match (rest.get(..cut), rest.get(cut..)) {
-            (Some(head), Some(tail)) => (head, tail),
-            // Unreachable for an ASCII `marker` located by `find`, but this
-            // library must never panic: stop scanning and emit the remainder
-            // verbatim via the trailing `push_str` below.
-            _ => break,
-        };
-
-        out.push_str(head);
-
-        let end = tail
-            .find(|c: char| c.is_whitespace() || matches!(c, '"' | ',' | '}' | ']' | '\\'))
-            .unwrap_or(tail.len());
-
-        if end > 0 {
-            out.push_str(CREDENTIAL_PLACEHOLDER);
-        }
-
-        rest = tail.get(end..).unwrap_or("");
-    }
-
-    out.push_str(rest);
-    out
-}
-
-/// Strip anything credential-shaped out of text destined for a log line.
-///
-/// Three passes, in order of precision:
-/// 1. the adapter's OWN configured `api_key`, matched exactly — this cannot
-///    miss, and covers a gateway that echoes the request back verbatim;
-/// 2. `Bearer <token>` / `bearer <token>`, the header form;
-/// 3. any surviving `sk-`-prefixed token.
-///
-/// Redaction MUST run before truncation, otherwise a bounded excerpt could
-/// slice a secret in half and leak the surviving prefix.
-fn redact_credentials(body: &str, api_key: &str) -> String {
-    let exact = if api_key.is_empty() {
-        body.to_string()
-    } else {
-        body.replace(api_key, CREDENTIAL_PLACEHOLDER)
-    };
-
-    let no_bearer = redact_token_after(&redact_token_after(&exact, "Bearer "), "bearer ");
-    redact_token_after(&no_bearer, "sk-")
 }
 
 /// DeepSeek LLM Adapter implementing [`LlmPort`].
@@ -387,6 +336,15 @@ impl DeepSeekAdapter {
         let client = Client::builder()
             .timeout(timeout)
             .default_headers(headers)
+            // CR-02 (`25-REVIEW.md`): `DeepSeekConfig::base_url` is
+            // operator-configurable and every request carries the
+            // `Authorization: Bearer` default header set above. Refusing
+            // redirects means a `3xx` from whatever host it resolves to can
+            // never replay that header to a different, attacker-influenced
+            // host — matches every `CompatEngine`-based preset and the
+            // bespoke Gemini adapter (T-17-18/T-17-52). A refused redirect
+            // surfaces via [`Self::map_error`]'s `300..=399` arm.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
@@ -398,6 +356,16 @@ impl DeepSeekAdapter {
         let messages = self.convert_prompt_to_messages(&request.prompt)?;
         let params = &request.prompt.node.node.parameters;
 
+        // D-28: any `ResponseFormat` variant degrades to DeepSeek's plain
+        // JSON-object form — see `DeepSeekResponseFormat`'s rustdoc.
+        let response_format =
+            request
+                .response_format
+                .as_ref()
+                .map(|_: &ResponseFormat| DeepSeekResponseFormat {
+                    kind: "json_object",
+                });
+
         Ok(DeepSeekRequest {
             model: request.model.clone(),
             messages,
@@ -407,6 +375,7 @@ impl DeepSeekAdapter {
             frequency_penalty: params.frequency_penalty,
             presence_penalty: params.presence_penalty,
             stream: request.stream,
+            response_format,
         })
     }
 
@@ -497,28 +466,35 @@ impl DeepSeekAdapter {
         bounded_excerpt(&redacted, RESPONSE_EXCERPT_CHAR_BUDGET)
     }
 
-    /// Map DeepSeek API errors to LlmError.
-    fn map_error(&self, status: u16, message: &str) -> LlmError {
+    /// Map a non-2xx DeepSeek response to [`LlmError`].
+    ///
+    /// `300..=399` is named explicitly (CR-02, mirroring
+    /// `CompatEngine::map_error`/`GeminiAdapter::map_error`) because this
+    /// client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
+    /// response is never followed — it arrives here as an ordinary
+    /// non-success status instead. Everything else delegates wholesale to
+    /// the crate-wide [`map_http_status`] (Phase 25 D-03, FT-FR-01): `body`
+    /// is the RAW response text, redacted and bounded once inside the
+    /// helper — never pre-excerpted here, which would bound twice.
+    /// DeepSeek's documented insufficient-balance status is 402; the
+    /// helper's 402 arm carries `regain_hint: None` because DeepSeek's 402
+    /// body shape is not first-party-confirmed (Phase 41 RESEARCH
+    /// Assumption A1), so there is no prose to parse yet.
+    fn map_error(&self, status: u16, body: &str) -> LlmError {
         match status {
-            401 => LlmError::AuthenticationError(format!(
-                "Invalid API key for DeepSeek. Check DEEPSEEK_API_KEY. Error: {}",
-                message
-            )),
-            429 => LlmError::RateLimitExceeded,
-            // DeepSeek's documented insufficient-balance/quota-exhausted status
-            // is 402. `regain_hint` is `None` because DeepSeek's 402 body
-            // shape is not first-party-confirmed (RESEARCH Assumption A1 —
-            // corroborated by multiple third-party sources, not by
-            // DeepSeek's own API reference), so there is no prose to parse
-            // yet. This is D-05's "explicitly-empty, documented branch" —
-            // expressed as a real arm with a `None` hint, not as an absence.
-            402 => LlmError::UsageLimitExceeded {
-                provider: "deepseek".to_string(),
-                regain_hint: None,
+            300..=399 => LlmError::ProviderError {
+                provider: DEEPSEEK_PROVIDER.to_string(),
+                status,
+                message: format!(
+                    "the configured base URL responded with a redirect (HTTP {status}), which \
+                     this client refuses to follow because doing so would forward the \
+                     credential header to a different, potentially attacker-influenced host. \
+                     Correct the configured base-URL setting to point directly at the intended \
+                     endpoint. Response excerpt: {}",
+                    self.diagnostic_excerpt(body)
+                ),
             },
-            404 => LlmError::ModelNotAvailable(message.to_string()),
-            400 => LlmError::InvalidPrompt(message.to_string()),
-            _ => LlmError::ProcessingError(format!("DeepSeek API error ({}): {}", status, message)),
+            _ => map_http_status(DEEPSEEK_PROVIDER, status, body, &self.config.api_key),
         }
     }
 
@@ -626,7 +602,7 @@ impl LlmPort for DeepSeekAdapter {
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status.as_u16(), &self.diagnostic_excerpt(&error_text)));
+                return Err(self.map_error(status.as_u16(), &error_text));
             }
 
             // Read the body to text FIRST, then deserialize it separately.
@@ -798,7 +774,7 @@ impl LlmPort for DeepSeekAdapter {
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "deepseek"
+        DEEPSEEK_PROVIDER
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -1176,6 +1152,70 @@ mod tests {
     const LIVE_BODY_DECODE_ERROR: &str =
         "Failed to parse DeepSeek response: error decoding response body";
 
+    // ── Phase 25 (FT-FR-01, D-03): non-2xx routes through map_http_status ──
+
+    #[test]
+    fn deepseek_non_2xx_routes_through_the_shared_mapper() {
+        let adapter = test_adapter();
+        match adapter.map_error(503, r#"{"error":{"message":"overloaded"}}"#) {
+            LlmError::ProviderError {
+                provider, status, ..
+            } => {
+                assert_eq!(provider, "deepseek");
+                assert_eq!(status, 503);
+            }
+            other => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deepseek_dedicated_status_mappings_are_unchanged() {
+        let adapter = test_adapter();
+        assert!(matches!(
+            adapter.map_error(401, "bad key"),
+            LlmError::AuthenticationError(_)
+        ));
+        assert!(matches!(
+            adapter.map_error(429, "slow down"),
+            LlmError::RateLimitExceeded
+        ));
+        assert!(matches!(
+            adapter.map_error(404, "no model"),
+            LlmError::ModelNotAvailable(_)
+        ));
+        assert!(matches!(
+            adapter.map_error(400, "bad prompt"),
+            LlmError::InvalidPrompt(_)
+        ));
+    }
+
+    #[test]
+    fn map_error_maps_a_redirect_status_to_an_actionable_provider_error() {
+        // CR-02 (`25-REVIEW.md`): named explicitly because this client's
+        // redirect policy is `none` (see `DeepSeekAdapter::new`), so a
+        // `3xx` response is never followed by the underlying HTTP client —
+        // it arrives here as an ordinary non-success status instead.
+        let adapter = test_adapter();
+
+        for expected in [301u16, 302, 307] {
+            match adapter.map_error(expected, "moved") {
+                LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                } => {
+                    assert_eq!(provider, "deepseek");
+                    assert_eq!(status, expected, "typed status field must carry the code");
+                    assert!(
+                        message.contains("redirect"),
+                        "status {expected}: message must name the refused redirect, got: {message}"
+                    );
+                }
+                other => panic!("status {expected}: expected ProviderError, got {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn map_error_402_maps_to_usage_limit_exceeded_not_processing_error() {
         let adapter = test_adapter();
@@ -1363,6 +1403,73 @@ mod tests {
             calls.load(Ordering::SeqCst),
             4,
             "RateLimitExceeded retry behavior must not regress"
+        );
+    }
+
+    // ── Phase 26 (RT-05, D-28): response_format reaches the wire ──────────
+
+    fn build_response_format_request(response_format: Option<ResponseFormat>) -> LlmRequest {
+        use paladin_core::platform::container::prompt::UserPrompt;
+
+        let request = LlmRequest::new(
+            "deepseek-chat",
+            PromptItem::new(PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }))
+            .unwrap(),
+        );
+        match response_format {
+            Some(format) => request.with_response_format(format),
+            None => request,
+        }
+    }
+
+    #[test]
+    fn deepseek_request_carries_json_object_response_format() {
+        let adapter = test_adapter();
+        let request = build_response_format_request(Some(ResponseFormat::JsonObject));
+
+        let api_request = adapter.build_request(&request).unwrap();
+        let body = serde_json::to_value(&api_request).unwrap();
+
+        assert_eq!(
+            body.get("response_format"),
+            Some(&serde_json::json!({"type": "json_object"}))
+        );
+    }
+
+    #[test]
+    fn deepseek_json_schema_degrades_to_json_object_response_format() {
+        let adapter = test_adapter();
+        let request = build_response_format_request(Some(ResponseFormat::JsonSchema {
+            name: "answer".to_string(),
+            schema: serde_json::json!({"type": "object"}),
+            strict: true,
+        }));
+
+        let api_request = adapter.build_request(&request).unwrap();
+        let body = serde_json::to_value(&api_request).unwrap();
+
+        assert_eq!(
+            body.get("response_format"),
+            Some(&serde_json::json!({"type": "json_object"})),
+            "DeepSeek has no schema-carrying native mode -- every ResponseFormat \
+             variant degrades to the plain JSON-object form (D-28)"
+        );
+    }
+
+    #[test]
+    fn deepseek_request_without_response_format_is_unchanged() {
+        let adapter = test_adapter();
+        let request = build_response_format_request(None);
+
+        let api_request = adapter.build_request(&request).unwrap();
+        let body = serde_json::to_value(&api_request).unwrap();
+
+        assert!(
+            body.as_object().unwrap().get("response_format").is_none(),
+            "absent response_format must not appear on the wire, got: {body:?}"
         );
     }
 }

@@ -8,8 +8,6 @@ use paladin::core::platform::container::prompt::{
 };
 use paladin_llm::anthropic::{AnthropicAdapter, AnthropicConfig};
 use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
-use std::collections::HashMap;
-use uuid::Uuid;
 
 /// Helper to create a mock server and adapter configured to use it
 ///
@@ -40,14 +38,7 @@ fn create_test_request(content: &str) -> LlmRequest {
     }))
     .unwrap();
 
-    LlmRequest {
-        id: Uuid::new_v4(),
-        model: "claude-3-5-sonnet-20241022".to_string(),
-        prompt: system_prompt,
-        attachments: vec![],
-        stream: false,
-        metadata: HashMap::new(),
-    }
+    LlmRequest::new("claude-3-5-sonnet-20241022", system_prompt)
 }
 
 /// Helper to create a request with user prompt
@@ -58,14 +49,7 @@ fn create_user_request(content: &str) -> LlmRequest {
     }))
     .unwrap();
 
-    LlmRequest {
-        id: Uuid::new_v4(),
-        model: "claude-3-5-sonnet-20241022".to_string(),
-        prompt: user_prompt,
-        attachments: vec![],
-        stream: false,
-        metadata: HashMap::new(),
-    }
+    LlmRequest::new("claude-3-5-sonnet-20241022", user_prompt)
 }
 
 #[tokio::test]
@@ -325,11 +309,59 @@ async fn test_anthropic_server_error_500() {
     let response = adapter.generate(request).await;
 
     assert!(response.is_err());
-    let error = response.unwrap_err();
-    assert!(matches!(
-        error,
-        paladin_ports::output::llm_port::LlmError::ProcessingError(_)
-    ));
+    // Phase 25 (FT-FR-01, D-03): a 5xx is a typed `ProviderError` whose
+    // status is read from the field, never from rendered text.
+    match response.unwrap_err() {
+        paladin_ports::output::llm_port::LlmError::ProviderError {
+            provider, status, ..
+        } => {
+            assert_eq!(provider, "anthropic");
+            assert_eq!(status, 500);
+        }
+        other => panic!("expected ProviderError {{ status: 500 }}, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_anthropic_client_refuses_to_follow_a_redirect() {
+    // CR-02 (`25-REVIEW.md`): the adapter sends its credential as a
+    // custom `x-api-key` header, which reqwest's built-in cross-host
+    // redirect header-stripping does NOT cover. This must surface as a
+    // refused-redirect `ProviderError`, and the redirect target must never
+    // receive a request — proving the header was never replayed rather
+    // than merely asserting on the returned error shape.
+    let (mut server, adapter) = setup_mock_server().await;
+
+    let redirect_target = server
+        .mock("POST", "/redirected")
+        .expect(0)
+        .create_async()
+        .await;
+    let _mock = server
+        .mock("POST", "/messages")
+        .with_status(302)
+        .with_header("Location", "/redirected")
+        .with_body("moved")
+        .create_async()
+        .await;
+
+    let request = create_user_request("Hello");
+    let response = adapter.generate(request).await;
+
+    assert!(response.is_err());
+    match response.unwrap_err() {
+        paladin_ports::output::llm_port::LlmError::ProviderError {
+            provider,
+            status,
+            message,
+        } => {
+            assert_eq!(provider, "anthropic");
+            assert_eq!(status, 302);
+            assert!(message.contains("redirect"), "got: {message}");
+        }
+        other => panic!("expected ProviderError {{ status: 302 }}, got {other:?}"),
+    }
+    redirect_target.assert_async().await;
 }
 
 #[tokio::test]
@@ -355,4 +387,51 @@ async fn test_anthropic_malformed_response() {
         error,
         paladin_ports::output::llm_port::LlmError::ProcessingError(_)
     ));
+}
+
+#[tokio::test]
+async fn test_anthropic_malformed_response_excerpt_never_echoes_the_configured_api_key() {
+    // Follow-on to CR-01 (`25-REVIEW.md`): the deserialization-failure
+    // path embeds an excerpt of a 2xx body into `ProcessingError`. That
+    // body is third-party-influenceable (a gateway in front of `base_url`
+    // that echoes request headers back), so it must go through the crate's
+    // redact-then-bound helper like every other body-derived string in
+    // `paladin-llm` -- the configured `x-api-key` value must never survive
+    // into the operator-facing error.
+    let (mut server, adapter) = setup_mock_server().await;
+
+    // A 200 body that cannot deserialize as a Claude response AND echoes
+    // the configured credential plus a bearer-shaped token back verbatim.
+    let leaking_body = r#"{"echo":{"x-api-key":"test-api-key","authorization":"Bearer sk-leaked-token"},"missing":"content"}"#;
+
+    let _mock = server
+        .mock("POST", "/messages")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(leaking_body)
+        .create_async()
+        .await;
+
+    let request = create_user_request("Hello");
+    let error = adapter
+        .generate(request)
+        .await
+        .expect_err("a body that fails to deserialize must surface as an error");
+
+    let message = match error {
+        paladin_ports::output::llm_port::LlmError::ProcessingError(message) => message,
+        other => panic!("expected ProcessingError, got {other:?}"),
+    };
+    assert!(
+        message.contains("body excerpt"),
+        "diagnostic must still carry an excerpt: {message}"
+    );
+    assert!(
+        !message.contains("test-api-key"),
+        "configured API key leaked into the error: {message}"
+    );
+    assert!(
+        !message.contains("sk-leaked-token"),
+        "bearer token leaked into the error: {message}"
+    );
 }

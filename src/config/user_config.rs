@@ -279,6 +279,9 @@ mod tests {
             agents: Vec::new(),
             timeouts: None,
             http: None,
+            agent_runtime: crate::config::AgentRuntimeConfig::default(),
+            trace: crate::config::TraceConfig::default(),
+            web_server: crate::config::WebServerConfig::default(),
         }
     }
 

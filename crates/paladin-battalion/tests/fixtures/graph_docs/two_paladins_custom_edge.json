@@ -1,0 +1,94 @@
+{
+  "schema_version": "1",
+  "entry": [
+    "drafter"
+  ],
+  "nodes": [
+    {
+      "id": "drafter",
+      "kind": "paladin",
+      "paladin": {
+        "name": "Drafter",
+        "model": "gpt-4",
+        "system_prompt": "Draft an answer to {question}.",
+        "stop_words": [],
+        "input_template": "{question}",
+        "output_field": "draft"
+      },
+      "aegis": {
+        "retry": {
+          "max_attempts": 3,
+          "initial_interval_ms": 500,
+          "backoff_factor": 2.0,
+          "max_interval_ms": 60000,
+          "jitter": true,
+          "retry_on": {
+            "type": "custom",
+            "name": "retry_pred"
+          }
+        },
+        "on_error": {
+          "type": "custom",
+          "name": "on_error_handler"
+        }
+      },
+      "defer": false
+    },
+    {
+      "id": "finalizer",
+      "kind": "paladin",
+      "paladin": {
+        "name": "Finalizer",
+        "model": "gpt-4",
+        "system_prompt": "Return the final answer as JSON: {draft}.",
+        "stop_words": [],
+        "input_template": "{draft}",
+        "output_field": "answer",
+        "output_schema": {
+          "type": "registered",
+          "name": "answer"
+        }
+      },
+      "defer": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "drafter",
+      "to": "finalizer",
+      "condition": {
+        "type": "custom",
+        "name": "custom_edge"
+      }
+    }
+  ],
+  "schema": {
+    "fields": [
+      {
+        "name": "question",
+        "kind": "string",
+        "reducer": "last_write",
+        "default": "What is 2+2?",
+        "required": false
+      },
+      {
+        "name": "draft",
+        "kind": "string",
+        "reducer": "last_write",
+        "required": false
+      },
+      {
+        "name": "answer",
+        "kind": "object",
+        "reducer": "last_write",
+        "required": false
+      }
+    ]
+  },
+  "limits": {
+    "max_supersteps": 50,
+    "max_node_visits": 25,
+    "run_timeout_secs": null,
+    "max_muster_tasks": 100
+  }
+}

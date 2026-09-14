@@ -1,0 +1,1393 @@
+# 09 — Program Acceptance Audit
+
+**What this is:** The post-implementation audit doc-08 (`.project/v0.10.0/08-traceability-matrix.md`,
+"Verification protocol", lines 98-108) reserves as document 09. It runs doc-08's ten-step
+verification protocol against the shipped v0.10.0 program (docs 01-07, `00-program-overview.md`)
+and records what was found. Findings are recorded, not silently fixed — per D-12 (`29-CONTEXT.md`)
+and X-03, a production-code change to close a finding is out of scope for this document; a finding
+that would need one is stopped-and-flagged with a proposed disposition, never resolved unilaterally
+here.
+
+**Run at:** HEAD `4b845009fb67cc725e42a145346bff67660d4474`
+**Branch:** `worktree-agent-ac4fcdc6aee9097e1 (plan 29-04, wave 2 of phase 29-program-gates-release)`
+**Date:** 2026-09-10
+**Author:** Plan 29-04 (sections 1-5) — plan 29-07 completes sections 6-9, plan 29-09 completes
+section 10.
+
+Every claim below cites the exact command run and its observed output, or a `file#test_name`
+anchor and the `cargo test` result that exercised it — never a restatement of a prior phase's
+SUMMARY/VERIFICATION prose without independently re-running the check (T-29-04-01, this plan's own
+threat register). Each section's findings sub-list carries a single `- none` item when empty rather
+than omitting the heading, so "checked, nothing found" reads distinctly from "not checked" — every
+section that is filled carries that heading explicitly.
+
+---
+
+## 1. Per-row confirmation (doc-08 protocol step 1)
+
+**Protocol text:** "For each row, locate the implementing code + the tests named in the PRD's Test
+Plan; confirm the acceptance criteria of the owning PRD pass in CI."
+
+### Methodology
+
+Every FR in docs 01-07 (`.project/v0.10.0/0{1,2,3,4,5,6,7}-*.md`) was extracted by the fenced
+command below, then curated against `08-traceability-matrix.md`'s own Gap→FR coverage table (the
+G-01…G-29 / BUG-01…04 rows and their `Notes` column's `file#test_name` anchors), each phase's
+`2x-VERIFICATION.md`, and — for the eight FRs no gap row explicitly names — a direct grep for the
+FR's own implementing code and test names. Every row below carries at least one test anchor; none
+are empty.
+
+```bash
+grep -oE '\b(ENG|CF|HITL|FT|RT|PLAT|OBS)-FR-[0-9]+[a-z]?\b' \
+  .project/v0.10.0/0{1,2,3,4,5,6,7}-*.md | sort -u -V
+```
+
+**FR row count and the lettered-variant decision (RESEARCH.md assumption A2):** the corpus defines
+**138 globally-unique FR identifiers** across docs 01-07 (counted by the command above, deduplicated
+across all seven files). Lettered variants (`ENG-FR-02a`, `ENG-FR-06a`, `ENG-FR-12a`, `FT-FR-02a`)
+are **kept as their own rows**, not collapsed into their parent FR — each names a distinct,
+separately-tested requirement (BUG-02/03/04's fixes and the X-10 compatibility rule respectively),
+so collapsing them would hide a real testable claim behind its parent's row.
+
+**Finding — the plan's own row-count criterion cites a number this table cannot reach, and the
+document records why rather than padding to reach it.** `29-04-PLAN.md`'s acceptance criteria
+(and `29-RESEARCH.md`'s own stated "159 total") derive from **summing each corpus doc's own
+per-doc-unique FR count** (28+21+20+24+27+19+20 = 159) — but roughly twenty FRs are *cross-referenced*
+from a doc they are not defined in (e.g. `ENG-FR-12` is native to doc 01 but also cited in docs 02
+and 03; `CF-FR-01/02` are native to doc 02 but cited in doc 04). Summing per-doc counts counts each
+such FR two or three times; the corpus's true global-unique count, measured directly by the command
+above with `sort -u` over all seven files concatenated, is **138**, not 159 — and the plan's `-ge 150`
+acceptance threshold is unreachable by any table that lists each FR exactly once. This is the same
+class of defect `29-RESEARCH.md` itself already flagged twice in this exact phase (Pitfall 5: a
+`Y`-row-count vs distinct-pair-count mismatch in §9.2; Pitfall 6: a stated-28-vs-measured-26 row
+count in the same section) and that `29-03-SUMMARY.md` recorded rather than silently adjusted (the
+`--baseline-version 0.9.0` occurrence-count discrepancy). Padding the table with duplicate or
+per-doc-repeated rows to cross 150 would misrepresent the FR corpus and directly contradicts this
+audit's own T-29-04-01 mitigation ("every filled section records the exact command and its observed
+output" — not a number chosen to satisfy a threshold). **Recorded disposition:** the 138-row table
+below is the complete, accurate, deduplicated evidence base; the plan's `-ge 150` criterion is a
+planning-precision defect in `29-04-PLAN.md` itself, not a coverage gap — no FR is missing evidence,
+so no production-code or test-writing action follows from this finding.
+
+### Per-FR evidence table
+
+Columns: **FR | owning phase/plan | test anchor(s) | CI status**. Anchors prefixed `[G-NN]` or
+`[BUG-0N]` cite the corresponding doc-08 gap row's own `Notes` column verbatim (that row's tests
+already exercise every FR the gap covers); anchors with no bracket prefix were resolved by direct
+grep against the implementing crate for the eight FRs no gap row names. "CI status: green" means the
+anchor test(s) were independently re-run in this session (§3-§4 name the exact `cargo test`
+invocations for the E2E/BUG rows; the remainder were last measured green at their owning phase's
+close per that phase's `2x-CI-EVIDENCE.md` / `2x-SUMMARY.md`, cited by phase number in the second
+column — a full re-run of the entire historical test suite is `cargo test --workspace`, which
+`29-CI-EVIDENCE.md` (plan 29-09) records at the release commit).
+
+| FR | Owning phase/plan | Test anchor(s) | CI status |
+|---|---|---|---|
+| `ENG-FR-01` | Phase 22 | crates/paladin-battalion/src/engine/mod.rs#start_runs_one_node_and_persists_one_completed_waypoint (superstep loop core) | green |
+| `ENG-FR-02` | Phase 22 | [G-01] Bounded by max_supersteps / max_node_visits (Phase 22) | green |
+| `ENG-FR-02a` | Phase 22.1 | [BUG-02] crates/paladin-battalion/src/engine/graph.rs#validate_rejects_self_loop_only_stranded_node_naming_it; RED 31f1903e, GREEN b1ac8668 (Phase 22, plan 22-15) | green |
+| `ENG-FR-03` | Phase 22 | [G-01] Bounded by max_supersteps / max_node_visits (Phase 22) | green |
+| `ENG-FR-04` | Phase 22 | crates/paladin-battalion/src/engine/graph.rs#node_order (stable insertion order); crates/paladin-battalion/src/engine/mod.rs#resume_parameterized_at_every_superstep_index_matches_control_and_skips_completed_nodes (determinism) | green |
+| `ENG-FR-05` | Phase 22 | [G-02] Battlefield + DispatchRule (Phase 22) | green |
+| `ENG-FR-06` | Phase 22 | [DEFER-JOIN] Not-firing edges don't deadlock joins (Phase 23) | green |
+| `ENG-FR-06a` | Phase 22.1 | [BUG-03] starvation-release fallback pass in compute_next_vanguard, validate-time guard, run-end truthful-outcome check (Phase 22.1, plan 22.1-01) | green |
+| `ENG-FR-07` | Phase 22 | [G-02] Battlefield + DispatchRule (Phase 22) | green |
+| `ENG-FR-08` | Phase 22 | [G-02] Battlefield + DispatchRule (Phase 22) | green |
+| `ENG-FR-09` | Phase 22 | [G-02] Battlefield + DispatchRule (Phase 22) | green |
+| `ENG-FR-10` | Phase 22 | [G-02] Battlefield + DispatchRule (Phase 22) | green |
+| `ENG-FR-11` | Phase 22 | [G-03] Waypoint per superstep; resume; worker redelivery (Phase 22) / [DEFER-MIDMUSTER] Progress Waypoints inside a Muster superstep (Plan 23-06, D-14) | green |
+| `ENG-FR-12` | Phase 22 | [G-03] Waypoint per superstep; resume; worker redelivery (Phase 22) | green |
+| `ENG-FR-12a` | Phase 22.1 | [BUG-04] FrontierSnapshot persisted on Waypoint, shared contract-suite round-trip (Phase 22.1) | green |
+| `ENG-FR-13` | Phase 22 | [G-04] ThreadId + WaypointId + fingerprint (Phase 22) | green |
+| `ENG-FR-14` | Phase 22 | [G-04] ThreadId + WaypointId + fingerprint (Phase 22) | green |
+| `ENG-FR-15` | Phase 22 | [G-03] Waypoint per superstep; resume; worker redelivery (Phase 22) | green |
+| `ENG-FR-16` | Phase 22 | [G-03] Waypoint per superstep; resume; worker redelivery (Phase 22) | green |
+| `ENG-FR-17` | Phase 22 | [G-03] Waypoint per superstep; resume; worker redelivery (Phase 22) | green |
+| `ENG-FR-18` | Phase 22 | crates/paladin-storage/src/waypoint/retention.rs#max_waypoints_per_thread_leaves_the_newest_n_including_latest, #max_age_deletes_old_non_latest_waypoints, #keep_set_handed_to_the_port_always_contains_latest_and_awaiting_input | green |
+| `ENG-FR-19` | Phase 22 | crates/paladin-battalion/src/engine/bridges.rs#from_formation_chains_output_into_next_input, #from_formation_empty_list_validates_and_completes_immediately, #from_phalanx_all_write_history_in_vec_order, #from_phalanx_empty_list_validates_and_completes_immediately (golden equivalence) | green |
+| `ENG-FR-20` | Phase 22 | crates/paladin-battalion/src/formation_service.rs#test_sequential_execution_success (legacy FormationExecutionService unchanged) | green |
+| `ENG-FR-21` | Phase 22 | crates/paladin-battalion/src/engine/hooks.rs#full_queue_drops_the_oldest_event_not_the_newest (bounded channel + drop-oldest trace hook) | green |
+| `ENG-FR-22` | Phase 22 | [G-16] empty_chain_renders_byte_identical_prompt, recording_middleware_observes_before_model_then_after_model_per_iteration, around_tool_fires_for_both_arsenal_and_handoff_dispatch (Phase 26, plan 26-01); tests/integration/middleware_under_engine_test.rs | green |
+| `ENG-FR-23` | Phase 22 | [G-15] crates/paladin-battalion/src/engine/shutdown.rs#cancel_and_wait_returns_at_the_deadline_when_not_idle, crates/paladin-battalion/src/engine/superstep.rs#over_grace_node_is_aborted_and_recorded_skipped, src/bin/paladin-server.rs#resume_continues_a_halted_thread_after_process_shutdown (Phase 24, plans 24-08/24-09) | green |
+| `CF-FR-01` | Phase 23 | [BUG-01] Fail-closed at validation; RED b2d05045, GREEN 8d5ef333; grep-absence confirmed (Phase 23, plan 23-01) | green |
+| `CF-FR-02` | Phase 23 | [BUG-01] Fail-closed at validation; RED b2d05045, GREEN 8d5ef333; grep-absence confirmed (Phase 23, plan 23-01) | green |
+| `CF-FR-03` | Phase 23 | [BUG-01] Fail-closed at validation; RED b2d05045, GREEN 8d5ef333; grep-absence confirmed (Phase 23, plan 23-01) | green |
+| `CF-FR-04` | Phase 23 | [BUG-01] Fail-closed at validation; RED b2d05045, GREEN 8d5ef333; grep-absence confirmed (Phase 23, plan 23-01) | green |
+| `CF-FR-05` | Phase 23 | [G-07] Directive / NextStep::Goto/End (Phase 23) | green |
+| `CF-FR-06` | Phase 23 | [G-07] Directive / NextStep::Goto/End (Phase 23) | green |
+| `CF-FR-07` | Phase 23 | [G-01] Bounded by max_supersteps / max_node_visits (Phase 22) / [G-07] Directive / NextStep::Goto/End (Phase 23) | green |
+| `CF-FR-08` | Phase 23 | [G-07] Directive / NextStep::Goto/End (Phase 23) | green |
+| `CF-FR-09` | Phase 23 | [G-08] tests/integration/e2e_muster_defer_order_test.rs#one_worker_recovers_by_real_per_task_retry, tests/integration/e2e_muster_defer_order_test.rs#without_a_retry_policy_the_same_transient_failure_fails_the_run, tests/integration/aegis_retry_stress_test.rs#muster_with_per_task_retry_under_concurrency_has_exact_counts (Phase 23 base / Phase 25 plans 25-07/25-12) | green |
+| `CF-FR-10` | Phase 23 | [G-08] tests/integration/e2e_muster_defer_order_test.rs#one_worker_recovers_by_real_per_task_retry, tests/integration/e2e_muster_defer_order_test.rs#without_a_retry_policy_the_same_transient_failure_fails_the_run, tests/integration/aegis_retry_stress_test.rs#muster_with_per_task_retry_under_concurrency_has_exact_counts (Phase 23 base / Phase 25 plans 25-07/25-12) | green |
+| `CF-FR-11` | Phase 23 | [G-08] tests/integration/e2e_muster_defer_order_test.rs#one_worker_recovers_by_real_per_task_retry, tests/integration/e2e_muster_defer_order_test.rs#without_a_retry_policy_the_same_transient_failure_fails_the_run, tests/integration/aegis_retry_stress_test.rs#muster_with_per_task_retry_under_concurrency_has_exact_counts (Phase 23 base / Phase 25 plans 25-07/25-12) | green |
+| `CF-FR-12` | Phase 23 | [G-08] tests/integration/e2e_muster_defer_order_test.rs#one_worker_recovers_by_real_per_task_retry, tests/integration/e2e_muster_defer_order_test.rs#without_a_retry_policy_the_same_transient_failure_fails_the_run, tests/integration/aegis_retry_stress_test.rs#muster_with_per_task_retry_under_concurrency_has_exact_counts (Phase 23 base / Phase 25 plans 25-07/25-12) / [DEFER-JOIN] Not-firing edges don't deadlock joins (Phase 23) / [DEFER-MIDMUSTER] Progress Waypoints inside a Muster superstep (Plan 23-06, D-14) | green |
+| `CF-FR-13` | Phase 23 | [G-08] tests/integration/e2e_muster_defer_order_test.rs#one_worker_recovers_by_real_per_task_retry, tests/integration/e2e_muster_defer_order_test.rs#without_a_retry_policy_the_same_transient_failure_fails_the_run, tests/integration/aegis_retry_stress_test.rs#muster_with_per_task_retry_under_concurrency_has_exact_counts (Phase 23 base / Phase 25 plans 25-07/25-12) | green |
+| `CF-FR-14` | Phase 23 | [G-09] tests/integration/subgraph_formation_in_campaign_test.rs#fork_does_not_touch_mainline_child_waypoints, tests/integration/subgraph_formation_in_campaign_test.rs#latest_on_a_fork_child_thread_does_not_resolve_the_mainline_child (Phase 24, plan 24-07) | green |
+| `CF-FR-15` | Phase 23 | [G-09] tests/integration/subgraph_formation_in_campaign_test.rs#fork_does_not_touch_mainline_child_waypoints, tests/integration/subgraph_formation_in_campaign_test.rs#latest_on_a_fork_child_thread_does_not_resolve_the_mainline_child (Phase 24, plan 24-07) | green |
+| `CF-FR-16` | Phase 23 | [G-09] tests/integration/subgraph_formation_in_campaign_test.rs#fork_does_not_touch_mainline_child_waypoints, tests/integration/subgraph_formation_in_campaign_test.rs#latest_on_a_fork_child_thread_does_not_resolve_the_mainline_child (Phase 24, plan 24-07) | green |
+| `CF-FR-17` | Phase 23 | [G-09] tests/integration/subgraph_formation_in_campaign_test.rs#fork_does_not_touch_mainline_child_waypoints, tests/integration/subgraph_formation_in_campaign_test.rs#latest_on_a_fork_child_thread_does_not_resolve_the_mainline_child (Phase 24, plan 24-07) | green |
+| `CF-FR-18` | Phase 23 | [G-20] LlmDecision condition + Commander semantic mode (Phase 23) | green |
+| `CF-FR-19` | Phase 23 | [G-20] LlmDecision condition + Commander semantic mode (Phase 23) | green |
+| `HITL-FR-01` | Phase 24 | [G-05] crates/paladin-battalion/src/engine/superstep.rs#parley_suspends_run_and_persists_awaiting_input, crates/paladin-battalion/src/engine/mod.rs#parley_suspends_and_resumes_end_to_end, crates/paladin-battalion/src/engine/mod.rs#gate_raises_parley_on_first_visit, crates/paladin-battalion/src/engine/mod.rs#resume_with_rejects_wrong_shape_per_kind, tests/integration/e2e_approval_gate_test.rs#e2e2_approval_branch_survives_process_drop (Phase 24, plans 24-01/24-02/24-04/24-05) | green |
+| `HITL-FR-02` | Phase 24 | [G-05] crates/paladin-battalion/src/engine/superstep.rs#parley_suspends_run_and_persists_awaiting_input, crates/paladin-battalion/src/engine/mod.rs#parley_suspends_and_resumes_end_to_end, crates/paladin-battalion/src/engine/mod.rs#gate_raises_parley_on_first_visit, crates/paladin-battalion/src/engine/mod.rs#resume_with_rejects_wrong_shape_per_kind, tests/integration/e2e_approval_gate_test.rs#e2e2_approval_branch_survives_process_drop (Phase 24, plans 24-01/24-02/24-04/24-05) | green |
+| `HITL-FR-03` | Phase 24 | [G-05] crates/paladin-battalion/src/engine/superstep.rs#parley_suspends_run_and_persists_awaiting_input, crates/paladin-battalion/src/engine/mod.rs#parley_suspends_and_resumes_end_to_end, crates/paladin-battalion/src/engine/mod.rs#gate_raises_parley_on_first_visit, crates/paladin-battalion/src/engine/mod.rs#resume_with_rejects_wrong_shape_per_kind, tests/integration/e2e_approval_gate_test.rs#e2e2_approval_branch_survives_process_drop (Phase 24, plans 24-01/24-02/24-04/24-05) | green |
+| `HITL-FR-04` | Phase 24 | [G-05] crates/paladin-battalion/src/engine/superstep.rs#parley_suspends_run_and_persists_awaiting_input, crates/paladin-battalion/src/engine/mod.rs#parley_suspends_and_resumes_end_to_end, crates/paladin-battalion/src/engine/mod.rs#gate_raises_parley_on_first_visit, crates/paladin-battalion/src/engine/mod.rs#resume_with_rejects_wrong_shape_per_kind, tests/integration/e2e_approval_gate_test.rs#e2e2_approval_branch_survives_process_drop (Phase 24, plans 24-01/24-02/24-04/24-05) | green |
+| `HITL-FR-05` | Phase 24 | [G-05] crates/paladin-battalion/src/engine/superstep.rs#parley_suspends_run_and_persists_awaiting_input, crates/paladin-battalion/src/engine/mod.rs#parley_suspends_and_resumes_end_to_end, crates/paladin-battalion/src/engine/mod.rs#gate_raises_parley_on_first_visit, crates/paladin-battalion/src/engine/mod.rs#resume_with_rejects_wrong_shape_per_kind, tests/integration/e2e_approval_gate_test.rs#e2e2_approval_branch_survives_process_drop (Phase 24, plans 24-01/24-02/24-04/24-05) | green |
+| `HITL-FR-06` | Phase 24 | [G-05] crates/paladin-battalion/src/engine/superstep.rs#parley_suspends_run_and_persists_awaiting_input, crates/paladin-battalion/src/engine/mod.rs#parley_suspends_and_resumes_end_to_end, crates/paladin-battalion/src/engine/mod.rs#gate_raises_parley_on_first_visit, crates/paladin-battalion/src/engine/mod.rs#resume_with_rejects_wrong_shape_per_kind, tests/integration/e2e_approval_gate_test.rs#e2e2_approval_branch_survives_process_drop (Phase 24, plans 24-01/24-02/24-04/24-05) | green |
+| `HITL-FR-07` | Phase 24 | [G-06] crates/paladin-battalion/src/engine/mod.rs#replay_leaves_the_mainline_byte_identical, crates/paladin-battalion/src/engine/mod.rs#fork_with_edit_flips_a_conditional_edge, src/application/services/chronicle.rs#chronicle_history_returns_newest_first_summaries_with_lineage, crates/paladin-core/src/platform/container/waypoint.rs#child_on_branch_is_injective (Phase 24, plans 24-06/24-07) | green |
+| `HITL-FR-08` | Phase 24 | [G-06] crates/paladin-battalion/src/engine/mod.rs#replay_leaves_the_mainline_byte_identical, crates/paladin-battalion/src/engine/mod.rs#fork_with_edit_flips_a_conditional_edge, src/application/services/chronicle.rs#chronicle_history_returns_newest_first_summaries_with_lineage, crates/paladin-core/src/platform/container/waypoint.rs#child_on_branch_is_injective (Phase 24, plans 24-06/24-07) | green |
+| `HITL-FR-09` | Phase 24 | [G-06] crates/paladin-battalion/src/engine/mod.rs#replay_leaves_the_mainline_byte_identical, crates/paladin-battalion/src/engine/mod.rs#fork_with_edit_flips_a_conditional_edge, src/application/services/chronicle.rs#chronicle_history_returns_newest_first_summaries_with_lineage, crates/paladin-core/src/platform/container/waypoint.rs#child_on_branch_is_injective (Phase 24, plans 24-06/24-07) | green |
+| `HITL-FR-10` | Phase 24 | [G-06] crates/paladin-battalion/src/engine/mod.rs#replay_leaves_the_mainline_byte_identical, crates/paladin-battalion/src/engine/mod.rs#fork_with_edit_flips_a_conditional_edge, src/application/services/chronicle.rs#chronicle_history_returns_newest_first_summaries_with_lineage, crates/paladin-core/src/platform/container/waypoint.rs#child_on_branch_is_injective (Phase 24, plans 24-06/24-07) | green |
+| `HITL-FR-11` | Phase 24 | [G-06] crates/paladin-battalion/src/engine/mod.rs#replay_leaves_the_mainline_byte_identical, crates/paladin-battalion/src/engine/mod.rs#fork_with_edit_flips_a_conditional_edge, src/application/services/chronicle.rs#chronicle_history_returns_newest_first_summaries_with_lineage, crates/paladin-core/src/platform/container/waypoint.rs#child_on_branch_is_injective (Phase 24, plans 24-06/24-07) | green |
+| `HITL-FR-12` | Phase 24 | [G-06] crates/paladin-battalion/src/engine/mod.rs#replay_leaves_the_mainline_byte_identical, crates/paladin-battalion/src/engine/mod.rs#fork_with_edit_flips_a_conditional_edge, src/application/services/chronicle.rs#chronicle_history_returns_newest_first_summaries_with_lineage, crates/paladin-core/src/platform/container/waypoint.rs#child_on_branch_is_injective (Phase 24, plans 24-06/24-07) / [G-09] tests/integration/subgraph_formation_in_campaign_test.rs#fork_does_not_touch_mainline_child_waypoints, tests/integration/subgraph_formation_in_campaign_test.rs#latest_on_a_fork_child_thread_does_not_resolve_the_mainline_child (Phase 24, plan 24-07) | green |
+| `HITL-FR-13` | Phase 24 | [G-15] crates/paladin-battalion/src/engine/shutdown.rs#cancel_and_wait_returns_at_the_deadline_when_not_idle, crates/paladin-battalion/src/engine/superstep.rs#over_grace_node_is_aborted_and_recorded_skipped, src/bin/paladin-server.rs#resume_continues_a_halted_thread_after_process_shutdown (Phase 24, plans 24-08/24-09) | green |
+| `HITL-FR-14` | Phase 24 | [G-15] crates/paladin-battalion/src/engine/shutdown.rs#cancel_and_wait_returns_at_the_deadline_when_not_idle, crates/paladin-battalion/src/engine/superstep.rs#over_grace_node_is_aborted_and_recorded_skipped, src/bin/paladin-server.rs#resume_continues_a_halted_thread_after_process_shutdown (Phase 24, plans 24-08/24-09) | green |
+| `HITL-FR-15` | Phase 24 | [G-15] crates/paladin-battalion/src/engine/shutdown.rs#cancel_and_wait_returns_at_the_deadline_when_not_idle, crates/paladin-battalion/src/engine/superstep.rs#over_grace_node_is_aborted_and_recorded_skipped, src/bin/paladin-server.rs#resume_continues_a_halted_thread_after_process_shutdown (Phase 24, plans 24-08/24-09) | green |
+| `HITL-FR-16` | Phase 24 | [G-26] crates/paladin-web/src/thread_controller.rs#post_resume_returns_202_with_thread_and_state_url, #get_thread_history_paginates_with_limit_and_cursor, crates/paladin-web/src/openapi.rs#openapi_pre_existing_agent_paths_are_unchanged (Phase 24, plan 24-11) | green |
+| `FT-FR-01` | Phase 25 | [G-12] crates/paladin-core/src/platform/container/paladin_error.rs#paladin_error_transience_table; crates/paladin-battalion/src/engine/superstep.rs#route_writes_the_structured_error_and_places_the_target, #absorb_merges_its_delta_and_fires_static_edges; tests/integration/e2e_compensation_chain_test.rs#compensation_chain_routes_a_permanent_failure_to_a_recovery_node (Phase 25, plans 25-02/25-05/25-06/25-07/25-10/25-11) | green |
+| `FT-FR-02` | Phase 25 | [G-12] crates/paladin-core/src/platform/container/paladin_error.rs#paladin_error_transience_table; crates/paladin-battalion/src/engine/superstep.rs#route_writes_the_structured_error_and_places_the_target, #absorb_merges_its_delta_and_fires_static_edges; tests/integration/e2e_compensation_chain_test.rs#compensation_chain_routes_a_permanent_failure_to_a_recovery_node (Phase 25, plans 25-02/25-05/25-06/25-07/25-10/25-11) | green |
+| `FT-FR-02a` | Phase 25 | crates/paladin-core/src/platform/container/paladin_error.rs (#[non_exhaustive], line 22-24 doc comment citing MIGRATION.md §9.2); crates/paladin-core/src/platform/container/battalion/mod.rs:744-750 (same pattern for BattalionError) | green |
+| `FT-FR-03` | Phase 25 | [G-10] crates/paladin-battalion/src/engine/retry.rs#backoff_sequence_is_exact_with_jitter_off, #backoff_is_capped_at_max_interval, #backoff_with_jitter_stays_within_bounds; crates/paladin-battalion/src/engine/mod.rs#transient_function_node_failure_is_retried_and_run_completes (Phase 25, plans 25-01/25-03/25-07/25-12) | green |
+| `FT-FR-04` | Phase 25 | [G-10] crates/paladin-battalion/src/engine/retry.rs#backoff_sequence_is_exact_with_jitter_off, #backoff_is_capped_at_max_interval, #backoff_with_jitter_stays_within_bounds; crates/paladin-battalion/src/engine/mod.rs#transient_function_node_failure_is_retried_and_run_completes (Phase 25, plans 25-01/25-03/25-07/25-12) | green |
+| `FT-FR-05` | Phase 25 | [G-10] crates/paladin-battalion/src/engine/retry.rs#backoff_sequence_is_exact_with_jitter_off, #backoff_is_capped_at_max_interval, #backoff_with_jitter_stays_within_bounds; crates/paladin-battalion/src/engine/mod.rs#transient_function_node_failure_is_retried_and_run_completes (Phase 25, plans 25-01/25-03/25-07/25-12) | green |
+| `FT-FR-06` | Phase 25 | [G-08] tests/integration/e2e_muster_defer_order_test.rs#one_worker_recovers_by_real_per_task_retry, tests/integration/e2e_muster_defer_order_test.rs#without_a_retry_policy_the_same_transient_failure_fails_the_run, tests/integration/aegis_retry_stress_test.rs#muster_with_per_task_retry_under_concurrency_has_exact_counts (Phase 23 base / Phase 25 plans 25-07/25-12) / [G-10] crates/paladin-battalion/src/engine/retry.rs#backoff_sequence_is_exact_with_jitter_off, #backoff_is_capped_at_max_interval, #backoff_with_jitter_stays_within_bounds; crates/paladin-battalion/src/engine/mod.rs#transient_function_node_failure_is_retried_and_run_completes (Phase 25, plans 25-01/25-03/25-07/25-12) | green |
+| `FT-FR-07` | Phase 25 | [G-10] crates/paladin-battalion/src/engine/retry.rs#backoff_sequence_is_exact_with_jitter_off, #backoff_is_capped_at_max_interval, #backoff_with_jitter_stays_within_bounds; crates/paladin-battalion/src/engine/mod.rs#transient_function_node_failure_is_retried_and_run_completes (Phase 25, plans 25-01/25-03/25-07/25-12) | green |
+| `FT-FR-08` | Phase 25 | [G-11] crates/paladin-battalion/src/engine/superstep.rs#a_port_beating_every_100ms_survives_a_250ms_idle_timeout, #a_port_that_stalls_300ms_fails_with_timeout_idle, #a_slow_but_progressing_node_fails_on_run_timeout_not_idle (Phase 25, plans 25-09/25-12) | green |
+| `FT-FR-09` | Phase 25 | [G-11] crates/paladin-battalion/src/engine/superstep.rs#a_port_beating_every_100ms_survives_a_250ms_idle_timeout, #a_port_that_stalls_300ms_fails_with_timeout_idle, #a_slow_but_progressing_node_fails_on_run_timeout_not_idle (Phase 25, plans 25-09/25-12) | green |
+| `FT-FR-10` | Phase 25 | [G-11] crates/paladin-battalion/src/engine/superstep.rs#a_port_beating_every_100ms_survives_a_250ms_idle_timeout, #a_port_that_stalls_300ms_fails_with_timeout_idle, #a_slow_but_progressing_node_fails_on_run_timeout_not_idle (Phase 25, plans 25-09/25-12) | green |
+| `FT-FR-11` | Phase 25 | [G-12] crates/paladin-core/src/platform/container/paladin_error.rs#paladin_error_transience_table; crates/paladin-battalion/src/engine/superstep.rs#route_writes_the_structured_error_and_places_the_target, #absorb_merges_its_delta_and_fires_static_edges; tests/integration/e2e_compensation_chain_test.rs#compensation_chain_routes_a_permanent_failure_to_a_recovery_node (Phase 25, plans 25-02/25-05/25-06/25-07/25-10/25-11) | green |
+| `FT-FR-12` | Phase 25 | [G-12] crates/paladin-core/src/platform/container/paladin_error.rs#paladin_error_transience_table; crates/paladin-battalion/src/engine/superstep.rs#route_writes_the_structured_error_and_places_the_target, #absorb_merges_its_delta_and_fires_static_edges; tests/integration/e2e_compensation_chain_test.rs#compensation_chain_routes_a_permanent_failure_to_a_recovery_node (Phase 25, plans 25-02/25-05/25-06/25-07/25-10/25-11) | green |
+| `FT-FR-13` | Phase 25 | [G-12] crates/paladin-core/src/platform/container/paladin_error.rs#paladin_error_transience_table; crates/paladin-battalion/src/engine/superstep.rs#route_writes_the_structured_error_and_places_the_target, #absorb_merges_its_delta_and_fires_static_edges; tests/integration/e2e_compensation_chain_test.rs#compensation_chain_routes_a_permanent_failure_to_a_recovery_node (Phase 25, plans 25-02/25-05/25-06/25-07/25-10/25-11) | green |
+| `FT-FR-14` | Phase 25 | [G-12] crates/paladin-core/src/platform/container/paladin_error.rs#paladin_error_transience_table; crates/paladin-battalion/src/engine/superstep.rs#route_writes_the_structured_error_and_places_the_target, #absorb_merges_its_delta_and_fires_static_edges; tests/integration/e2e_compensation_chain_test.rs#compensation_chain_routes_a_permanent_failure_to_a_recovery_node (Phase 25, plans 25-02/25-05/25-06/25-07/25-10/25-11) | green |
+| `FT-FR-15` | Phase 25 | [G-12] crates/paladin-core/src/platform/container/paladin_error.rs#paladin_error_transience_table; crates/paladin-battalion/src/engine/superstep.rs#route_writes_the_structured_error_and_places_the_target, #absorb_merges_its_delta_and_fires_static_edges; tests/integration/e2e_compensation_chain_test.rs#compensation_chain_routes_a_permanent_failure_to_a_recovery_node (Phase 25, plans 25-02/25-05/25-06/25-07/25-10/25-11) | green |
+| `FT-FR-16` | Phase 25 | [G-13] crates/paladin-llm/src/fallback.rs#three_provider_chain_falls_through_two_transient_failures, #permanent_error_short_circuits_after_one_call (Phase 25, plan 25-08); RT-FR-09 crates/paladin-ai/src #model_call_port_is_resolved_at_exactly_one_point (Phase 26, plan 26-10) | green |
+| `FT-FR-17` | Phase 25 | [G-13] crates/paladin-llm/src/fallback.rs#three_provider_chain_falls_through_two_transient_failures, #permanent_error_short_circuits_after_one_call (Phase 25, plan 25-08); RT-FR-09 crates/paladin-ai/src #model_call_port_is_resolved_at_exactly_one_point (Phase 26, plan 26-10) | green |
+| `FT-FR-18` | Phase 25 | [G-14] crates/paladin-storage/src/node_cache/in_memory.rs#run_all_contract_functions_smoke_aggregate; crates/paladin-battalion/src/engine/cache_key.rs#key_includes_the_graph_fingerprint; crates/paladin-battalion/src/engine/superstep.rs#a_hit_merges_the_stored_delta_with_no_execution (Phase 25, plans 25-04/25-13) | green |
+| `FT-FR-19` | Phase 25 | [G-14] crates/paladin-storage/src/node_cache/in_memory.rs#run_all_contract_functions_smoke_aggregate; crates/paladin-battalion/src/engine/cache_key.rs#key_includes_the_graph_fingerprint; crates/paladin-battalion/src/engine/superstep.rs#a_hit_merges_the_stored_delta_with_no_execution (Phase 25, plans 25-04/25-13) | green |
+| `FT-FR-20` | Phase 25 | [G-14] crates/paladin-storage/src/node_cache/in_memory.rs#run_all_contract_functions_smoke_aggregate; crates/paladin-battalion/src/engine/cache_key.rs#key_includes_the_graph_fingerprint; crates/paladin-battalion/src/engine/superstep.rs#a_hit_merges_the_stored_delta_with_no_execution (Phase 25, plans 25-04/25-13) | green |
+| `RT-FR-01` | Phase 26 | [G-16] empty_chain_renders_byte_identical_prompt, recording_middleware_observes_before_model_then_after_model_per_iteration, around_tool_fires_for_both_arsenal_and_handoff_dispatch (Phase 26, plan 26-01); tests/integration/middleware_under_engine_test.rs | green |
+| `RT-FR-02` | Phase 26 | [G-16] empty_chain_renders_byte_identical_prompt, recording_middleware_observes_before_model_then_after_model_per_iteration, around_tool_fires_for_both_arsenal_and_handoff_dispatch (Phase 26, plan 26-01); tests/integration/middleware_under_engine_test.rs | green |
+| `RT-FR-03` | Phase 26 | [G-16] empty_chain_renders_byte_identical_prompt, recording_middleware_observes_before_model_then_after_model_per_iteration, around_tool_fires_for_both_arsenal_and_handoff_dispatch (Phase 26, plan 26-01); tests/integration/middleware_under_engine_test.rs | green |
+| `RT-FR-04` | Phase 26 | [G-16] empty_chain_renders_byte_identical_prompt, recording_middleware_observes_before_model_then_after_model_per_iteration, around_tool_fires_for_both_arsenal_and_handoff_dispatch (Phase 26, plan 26-01); tests/integration/middleware_under_engine_test.rs | green |
+| `RT-FR-05` | Phase 26 | [G-16] empty_chain_renders_byte_identical_prompt, recording_middleware_observes_before_model_then_after_model_per_iteration, around_tool_fires_for_both_arsenal_and_handoff_dispatch (Phase 26, plan 26-01); tests/integration/middleware_under_engine_test.rs | green |
+| `RT-FR-06` | Phase 26 | [G-16] empty_chain_renders_byte_identical_prompt, recording_middleware_observes_before_model_then_after_model_per_iteration, around_tool_fires_for_both_arsenal_and_handoff_dispatch (Phase 26, plan 26-01); tests/integration/middleware_under_engine_test.rs | green |
+| `RT-FR-07` | Phase 26 | [G-16] empty_chain_renders_byte_identical_prompt, recording_middleware_observes_before_model_then_after_model_per_iteration, around_tool_fires_for_both_arsenal_and_handoff_dispatch (Phase 26, plan 26-01); tests/integration/middleware_under_engine_test.rs | green |
+| `RT-FR-08` | Phase 26 | [G-16] empty_chain_renders_byte_identical_prompt, recording_middleware_observes_before_model_then_after_model_per_iteration, around_tool_fires_for_both_arsenal_and_handoff_dispatch (Phase 26, plan 26-01); tests/integration/middleware_under_engine_test.rs | green |
+| `RT-FR-09` | Phase 26 | [G-13] crates/paladin-llm/src/fallback.rs#three_provider_chain_falls_through_two_transient_failures, #permanent_error_short_circuits_after_one_call (Phase 25, plan 25-08); RT-FR-09 crates/paladin-ai/src #model_call_port_is_resolved_at_exactly_one_point (Phase 26, plan 26-10) / [G-16] empty_chain_renders_byte_identical_prompt, recording_middleware_observes_before_model_then_after_model_per_iteration, around_tool_fires_for_both_arsenal_and_handoff_dispatch (Phase 26, plan 26-01); tests/integration/middleware_under_engine_test.rs | green |
+| `RT-FR-10` | Phase 26 | [G-17] heuristic_counts_chars_not_bytes, heuristic_is_deterministic, tiktoken_counter_implements_the_port (plan 26-11); an_entry_is_kept_whole_or_dropped_whole, effective_history_is_the_newest_summary_plus_newer_raw (plans 26-11/26-07/26-15) | green |
+| `RT-FR-11` | Phase 26 | [G-17] heuristic_counts_chars_not_bytes, heuristic_is_deterministic, tiktoken_counter_implements_the_port (plan 26-11); an_entry_is_kept_whole_or_dropped_whole, effective_history_is_the_newest_summary_plus_newer_raw (plans 26-11/26-07/26-15) | green |
+| `RT-FR-12` | Phase 26 | [G-17] heuristic_counts_chars_not_bytes, heuristic_is_deterministic, tiktoken_counter_implements_the_port (plan 26-11); an_entry_is_kept_whole_or_dropped_whole, effective_history_is_the_newest_summary_plus_newer_raw (plans 26-11/26-07/26-15) | green |
+| `RT-FR-13` | Phase 26 | [G-18] namespace_rejects_every_invalid_shape, is_prefix_of_is_segment_wise_not_string_wise (plan 26-04); confined_vault_denies_a_sibling_namespace, confined_vault_denies_a_parent_namespace (plan 26-13); tests/integration/vault_confinement_test.rs#hostile_tool_call_to_a_sibling_namespace_is_denied (plan 26-16) | green |
+| `RT-FR-14` | Phase 26 | [G-18] namespace_rejects_every_invalid_shape, is_prefix_of_is_segment_wise_not_string_wise (plan 26-04); confined_vault_denies_a_sibling_namespace, confined_vault_denies_a_parent_namespace (plan 26-13); tests/integration/vault_confinement_test.rs#hostile_tool_call_to_a_sibling_namespace_is_denied (plan 26-16) | green |
+| `RT-FR-15` | Phase 26 | [G-18] namespace_rejects_every_invalid_shape, is_prefix_of_is_segment_wise_not_string_wise (plan 26-04); confined_vault_denies_a_sibling_namespace, confined_vault_denies_a_parent_namespace (plan 26-13); tests/integration/vault_confinement_test.rs#hostile_tool_call_to_a_sibling_namespace_is_denied (plan 26-16) | green |
+| `RT-FR-16` | Phase 26 | [G-18] namespace_rejects_every_invalid_shape, is_prefix_of_is_segment_wise_not_string_wise (plan 26-04); confined_vault_denies_a_sibling_namespace, confined_vault_denies_a_parent_namespace (plan 26-13); tests/integration/vault_confinement_test.rs#hostile_tool_call_to_a_sibling_namespace_is_denied (plan 26-16) | green |
+| `RT-FR-17` | Phase 26 | [G-19] extract_json_returns_none_for_non_json, shape_check_enforces_exactly_the_documented_subset (plan 26-12); structured_run_sets_response_format_on_every_model_call (plan 26-17); tests/integration/structured_engine_node_test.rs#structured_node_writes_a_parsed_object_to_output_field (plan 26-18) | green |
+| `RT-FR-18` | Phase 26 | [G-19] extract_json_returns_none_for_non_json, shape_check_enforces_exactly_the_documented_subset (plan 26-12); structured_run_sets_response_format_on_every_model_call (plan 26-17); tests/integration/structured_engine_node_test.rs#structured_node_writes_a_parsed_object_to_output_field (plan 26-18) | green |
+| `RT-FR-19` | Phase 26 | [G-19] extract_json_returns_none_for_non_json, shape_check_enforces_exactly_the_documented_subset (plan 26-12); structured_run_sets_response_format_on_every_model_call (plan 26-17); tests/integration/structured_engine_node_test.rs#structured_node_writes_a_parsed_object_to_output_field (plan 26-18) | green |
+| `RT-FR-20` | Phase 26 | [G-22] crates/paladin-llm/src/conformance.rs shared suite (24/24 pass, Phase 26 plan 26-14); tests/integration/ollama_docker_test.rs (CI ollama-integration job) | green |
+| `RT-FR-21` | Phase 26 | [G-22] crates/paladin-llm/src/conformance.rs shared suite (24/24 pass, Phase 26 plan 26-14); tests/integration/ollama_docker_test.rs (CI ollama-integration job) | green |
+| `RT-FR-22` | Phase 26 | [G-22] crates/paladin-llm/src/conformance.rs shared suite (24/24 pass, Phase 26 plan 26-14); tests/integration/ollama_docker_test.rs (CI ollama-integration job) | green |
+| `RT-FR-23` | Phase 26 | [G-21] feed_to_model_is_the_default_and_matches_v0_9, fail_run_produces_a_structured_error (plan 26-19); tests/integration/reasoning_agent_test.rs#reasoning_agent_runs_a_tool_and_answers (plan 26-20) | green |
+| `RT-FR-24` | Phase 26 | [G-21] feed_to_model_is_the_default_and_matches_v0_9, fail_run_produces_a_structured_error (plan 26-19); tests/integration/reasoning_agent_test.rs#reasoning_agent_runs_a_tool_and_answers (plan 26-20) | green |
+| `PLAT-FR-01` | Phase 27 | [G-23] Queue port, worker pool, streaming (Phase 27) | green |
+| `PLAT-FR-02` | Phase 27 | [G-23] Queue port, worker pool, streaming (Phase 27) | green |
+| `PLAT-FR-03` | Phase 27 | [G-03] Waypoint per superstep; resume; worker redelivery (Phase 22) / [G-23] Queue port, worker pool, streaming (Phase 27) | green |
+| `PLAT-FR-04` | Phase 27 | [G-15] crates/paladin-battalion/src/engine/shutdown.rs#cancel_and_wait_returns_at_the_deadline_when_not_idle, crates/paladin-battalion/src/engine/superstep.rs#over_grace_node_is_aborted_and_recorded_skipped, src/bin/paladin-server.rs#resume_continues_a_halted_thread_after_process_shutdown (Phase 24, plans 24-08/24-09) / [G-23] Queue port, worker pool, streaming (Phase 27) | green |
+| `PLAT-FR-05` | Phase 27 | [G-23] Queue port, worker pool, streaming (Phase 27) | green |
+| `PLAT-FR-06` | Phase 27 | [G-05] crates/paladin-battalion/src/engine/superstep.rs#parley_suspends_run_and_persists_awaiting_input, crates/paladin-battalion/src/engine/mod.rs#parley_suspends_and_resumes_end_to_end, crates/paladin-battalion/src/engine/mod.rs#gate_raises_parley_on_first_visit, crates/paladin-battalion/src/engine/mod.rs#resume_with_rejects_wrong_shape_per_kind, tests/integration/e2e_approval_gate_test.rs#e2e2_approval_branch_survives_process_drop (Phase 24, plans 24-01/24-02/24-04/24-05) / [G-23] Queue port, worker pool, streaming (Phase 27) | green |
+| `PLAT-FR-07` | Phase 27 | [G-23] Queue port, worker pool, streaming (Phase 27) | green |
+| `PLAT-FR-08` | Phase 27 | [G-25] Immutable versions, freeze-at-submit, WarGraphDoc (Phase 27) | green |
+| `PLAT-FR-09` | Phase 27 | [G-25] Immutable versions, freeze-at-submit, WarGraphDoc (Phase 27) | green |
+| `PLAT-FR-10` | Phase 27 | [G-25] Immutable versions, freeze-at-submit, WarGraphDoc (Phase 27) | green |
+| `PLAT-FR-11` | Phase 27 | [G-25] Immutable versions, freeze-at-submit, WarGraphDoc (Phase 27) | green |
+| `PLAT-FR-12` | Phase 27 | [G-25] Immutable versions, freeze-at-submit, WarGraphDoc (Phase 27) | green |
+| `PLAT-FR-13` | Phase 27 | [G-24] incl. SSRF guard, src/application/services/run/webhook/ssrf.rs (Phase 27) | green |
+| `PLAT-FR-14` | Phase 27 | [G-24] incl. SSRF guard, src/application/services/run/webhook/ssrf.rs (Phase 27) | green |
+| `PLAT-FR-15` | Phase 27 | [G-24] incl. SSRF guard, src/application/services/run/webhook/ssrf.rs (Phase 27) | green |
+| `PLAT-FR-16` | Phase 27 | crates/paladin-web/src/http_layers.rs#rate_limit_returns_429_when_exceeded, #rate_limit_disabled_is_passthrough | green |
+| `PLAT-FR-17` | Phase 27 | [G-29] Generated-client CI gate (sdk-clients job) (Phase 27) | green |
+| `OBS-FR-01` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+| `OBS-FR-02` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+| `OBS-FR-03` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+| `OBS-FR-04` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+| `OBS-FR-05` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+| `OBS-FR-06` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+| `OBS-FR-07` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+| `OBS-FR-08` | Phase 28 | [G-27] Mermaid/DOT export + execution overlay + inspector page (Phase 28) | green |
+| `OBS-FR-09` | Phase 28 | [G-27] Mermaid/DOT export + execution overlay + inspector page (Phase 28) | green |
+| `OBS-FR-10` | Phase 28 | [G-27] Mermaid/DOT export + execution overlay + inspector page (Phase 28) | green |
+| `OBS-FR-11` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+| `OBS-FR-12` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+| `OBS-FR-13` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+| `OBS-FR-14` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+| `OBS-FR-15` | Phase 28 | [G-28] trace/OTel + eval harness, tests/evals.rs registered scenarios (Phase 28) | green |
+
+**Section 1 verdict rationale:** every one of the 138 FRs carries a named test anchor and a
+"green" CI status; the plan's own row-count criterion is recorded as a planning-precision finding
+above (not a coverage gap). No FR is unevidenced.
+
+Verdict: PASS with findings
+
+**Findings:**
+- The plan's literal `-ge 150` per-FR-table-row acceptance criterion is unreachable by an accurate,
+  deduplicated table (138 globally-unique FRs exist in the corpus, not >=150) — a planning-precision
+  defect in `29-04-PLAN.md`'s own acceptance criteria, not a coverage gap. Disposition: recorded here;
+  no code or table change follows, since every FR already has evidence.
+
+---
+
+## 2. Cross-cutting X-rules audit (doc-08 protocol step 2)
+
+**Protocol text:** "Confirm cross-cutting X-01…X-09 per epic (spot-check dependency directions with
+`cargo tree` / import review; coverage report >= 82%; clippy clean)."
+
+### X-01 (Architecture) — dependency direction
+
+Spot-checked by reading each crate's own `[dependencies]` block (the hexagonal rule is declared,
+not merely conventional — a violation would be a `Cargo.toml` fact, not a runtime one):
+
+```bash
+grep -A5 '^\[dependencies\]' crates/paladin-core/Cargo.toml
+grep -A10 '^\[dependencies\]' crates/paladin-ports/Cargo.toml
+grep -E 'paladin' crates/paladin-web/Cargo.toml
+```
+
+- `paladin-core` (the `paladin-ai-core` package): five external deps (`serde`, `serde_json`, `uuid`,
+  `chrono`, `thiserror`) and **zero internal (`paladin-*`) dependencies** — confirms core depends on
+  nothing internal.
+- `paladin-ports`: depends on exactly one internal crate, `paladin_core` (path `../paladin-core`) —
+  confirms application/ports depends only on core.
+- `paladin-web` (an infrastructure adapter crate): depends on `paladin-ports` and `paladin-core`
+  only, no reverse edge — confirms infrastructure depends on core + ports, never the other way.
+
+**Verdict for X-01: no violation found** in this spot-check. A full `cargo tree -e no-dev
+--workspace` sweep across all twelve crates is owed to `29-CI-EVIDENCE.md` (plan 29-09) as the
+exhaustive form of this check; this section's spot-check covers the three-crate core→ports→web
+chain the hexagonal rule is named after.
+
+### X-02 (TDD) / coverage >= 82%
+
+Workspace line coverage was last measured canonically at Phase 28 close: **90.28%** on commit
+`ff78a6b5` (`.planning/STATE.md`, Phase 28 close entry), against the ADR-0006 82% floor — PASS by
+8.28 points. This audit does not re-run `cargo llvm-cov --fail-under-lines 82` locally (it is a
+multi-minute full-workspace instrumented build); the canonical release-commit figure is owed to
+`29-CI-EVIDENCE.md` (plan 29-09), which records the `coverage` CI job's run ID on the final release
+commit per D-21/D-23. Citing Phase 28's own measured figure here (rather than inventing a local
+number) follows this plan's `<action>` instruction: "Where a figure can only come from CI, name the
+workflow and job and mark it as owed to `29-CI-EVIDENCE.md`."
+
+### Clippy — scoped spot-check, full sweep owed to 29-CI-EVIDENCE.md
+
+```bash
+cargo clippy -p paladin-ai-core -p paladin-ports --all-targets -- -D warnings
+```
+
+Result: `Finished` with zero warnings — clean. This is a scoped check (the two crates X-01's
+dependency-direction spot-check names); a full `cargo clippy --workspace --all-targets
+--all-features -- -D warnings` sweep is a 10+ minute cold build in this devcontainer (per the
+`repo_operating_rules` this plan runs under) and is owed to `29-CI-EVIDENCE.md` (plan 29-09), which
+runs it at the release commit per D-23.
+
+Verdict: PASS with findings
+
+**Findings:**
+- Coverage (90.28%) and the full-workspace clippy sweep are cited from Phase 28's close / a scoped
+  spot-check respectively, not re-measured at this exact HEAD in this plan — both are explicitly
+  owed to `29-CI-EVIDENCE.md` (plan 29-09) per D-21/D-23, which is the plan that runs the full local
+  sweep at the release commit. This is a scope boundary, not a defect: re-running a multi-minute
+  full-workspace coverage/clippy sweep three times across plans 29-04/29-07/29-09 would be wasted
+  compute for the same answer; D-23 assigns the canonical, once-per-release-commit sweep to 29-09.
+
+---
+
+## 3. Program E2E scenarios (doc-08 protocol step 3)
+
+**Protocol text:** "Run the three program E2E scenarios (overview §6) and the eval-scenario
+dogfood copies (OBS-FR-15)."
+
+### E2E-1: Crash-resume
+
+**Overview §6 text:** a 6-node cyclic workflow (one loop with a max-iteration bound) runs against
+a mock LLM with a durable Waypoint backend; the engine is dropped after superstep 3, a fresh
+engine resumes from the same backend/`thread_id`, and the test asserts no re-execution, Battlefield
+equality with an uninterrupted control run, and exactly one Waypoint per completed superstep.
+
+**Command run and observed output:**
+
+```bash
+cargo test --test e2e_crash_resume --test e2e_approval_gate --test e2e_muster_defer_order
+```
+
+```
+     Running tests/integration/e2e_approval_gate_test.rs (target/debug/deps/e2e_approval_gate-96baa4e344f4d0a8)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s
+     Running tests/integration/e2e_crash_resume_test.rs (target/debug/deps/e2e_crash_resume-74256b30ff505f06)
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.98s
+     Running tests/integration/e2e_muster_defer_order_test.rs (target/debug/deps/e2e_muster_defer_order-2c15d6bc17af6ff7)
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.28s
+```
+
+Three `test result: ok` lines for the three targets named in the plan's own verify command — all
+green. E2E-1's own scenario assertion lives in
+`tests/integration/e2e_crash_resume_test.rs#e2e_1_crash_resume_matches_control_run_with_no_reexecution`,
+which passed as one of the 32.
+
+### E2E-2: Human approval gate
+
+**Overview §6 text:** a workflow reaches a Parley node requesting approval of a destructive
+action; the test asserts an `AwaitingInput` outcome (not an error), the process can be fully
+dropped and re-created, and `resume(thread_id, payload)` continues to the correct branch — "no"
+routes to a cancellation node, "yes" routes to the action node, both branches asserted.
+
+**Anchors (both branches, in the same `cargo test` run above):**
+- `tests/integration/e2e_approval_gate_test.rs#e2e2_approval_branch_survives_process_drop` — the
+  "yes" (approve) branch, action node reached.
+- `tests/integration/e2e_approval_gate_test.rs#e2e2_denial_branch_survives_process_drop` — the
+  "no" (deny) branch, cancellation node reached.
+- `tests/integration/e2e_approval_gate_test.rs#e2e2_suspended_thread_holds_no_engine_resources` —
+  the `AwaitingInput` / process-drop half of the claim.
+
+All three (and the remaining 32 tests in that binary, mostly shared `helpers::` module coverage)
+passed in the same run above (`35 passed`).
+
+### E2E-3: Dynamic map-reduce with per-node fault tolerance
+
+**Overview §6 text:** a planner node's Directive musters N=5 workers (mock-derived), one worker
+fails transiently twice before succeeding, its Aegis retry policy recovers it, a deferred
+aggregation node runs exactly once after all 5 complete, and the Battlefield's list-dispatch field
+contains exactly 5 results in deterministic order.
+
+**Anchors (same run above, `tests/integration/e2e_muster_defer_order_test.rs`, `37 passed`):**
+- `#planner_musters_five_workers_and_the_deferred_aggregator_runs_once` — N=5, deferred aggregator
+  runs once.
+- `#aggregated_results_are_exactly_five_in_task_key_order` — deterministic order, exactly 5.
+- `#one_worker_recovers_by_real_per_task_retry` — the transient-failure-then-recovery half (a real
+  per-task Aegis retry, not the Phase 23 mock seam Phase 25 plan 25-12 replaced — see doc-08's own
+  G-08 row).
+- `#without_a_retry_policy_the_same_transient_failure_fails_the_run` — negative control confirming
+  the retry policy is actually load-bearing.
+
+### OBS-FR-15 eval dogfood copies
+
+**Command run and observed output:**
+
+```bash
+cargo test --test evals
+```
+
+```
+running 4 tests
+test e2e-2-approval-gate.eval::approve                        ... ok
+test e2e-2-approval-gate.eval::deny                           ... ok
+test e2e-3-map-reduce-fault-tolerance.eval::recovering_worker ... ok
+test e2e-1-crash-resume.eval::crash_after_superstep_3         ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.83s
+```
+
+`test result: ok. 4 passed` — matches the count doc-08's own G-28 note and `28-CI-EVIDENCE.md`
+recorded at Phase 28 close. The four scenario names map 1:1 onto E2E-1/2 (both branches)/3 above,
+and — per D-13/29-CONTEXT.md — exercise the **same shared fixtures**
+(`tests/helpers/e2e_fixtures.rs`), not a parallel implementation: `tests/evals.rs` registers these
+as `paladin-eval` scenarios that call into the identical fixture-construction helpers the
+`tests/integration/e2e_*_test.rs` files use, so the eval harness is a dogfood copy of the same
+scenario, not an independently-authored duplicate that could silently drift from it.
+
+Verdict: PASS
+
+**Findings:**
+- none
+
+---
+
+## 4. BUG-01 / BUG-02 re-verification (doc-08 protocol step 4)
+
+**Protocol text:** "Confirm BUG-01's old code path is absent (grep for the warn-and-default-true
+branch) and the fix landed test-first. Confirm BUG-02's fix: `WarGraph::validate()` rejects a
+stranded self-loop-only node (run the regression test), the fix landed test-first, and no test
+fixture still works around strandedness by artificially wiring stranded nodes to entry."
+
+### BUG-01: custom edge condition silently true
+
+**RED-then-GREEN, cited by SHA (not re-tested — the commits are the test-first proof):**
+- RED `b2d05045` — `test(23-01): reproduce BUG-01 on both custom-edge-condition paths (red)`
+- GREEN `8d5ef333` — `fix(23-01): fail closed on unregistered custom edge conditions (green)`
+
+Both commits confirmed present in this worktree's history:
+
+```bash
+git log --oneline --all | grep -i "b2d05045\|8d5ef333"
+```
+```
+8d5ef333 fix(23-01): fail closed on unregistered custom edge conditions (green)
+b2d05045 test(23-01): reproduce BUG-01 on both custom-edge-condition paths (red)
+```
+
+RED precedes GREEN in the log (RED is the parent of GREEN).
+
+**Re-run grep for the old warn-and-default-true branch at this HEAD:**
+
+```bash
+grep -rn "defaulting to true" crates/ src/ 2>/dev/null | wc -l
+```
+```
+0
+```
+
+Zero matches — the old always-true-with-a-log-warning branch is absent at Phase 29 HEAD
+`4b845009fb67cc725e42a145346bff67660d4474`.
+
+**The four living tests, run individually by exact name in this session:**
+
+```bash
+cargo test -p paladin-battalion --lib unregistered_custom_condition_is_rejected_before_any_paladin_executes
+cargo test -p paladin-battalion --lib unregistered_custom_edge_condition_fails_graph_validation
+cargo test -p paladin-battalion --lib every_unregistered_custom_name_is_listed_sorted_and_deduped
+cargo test -p paladin-battalion --lib registered_engine_evaluator_true_and_false_route_correctly
+```
+
+| Test | File | Result |
+|---|---|---|
+| `unregistered_custom_condition_is_rejected_before_any_paladin_executes` | `crates/paladin-battalion/src/campaign_service.rs` (`campaign_service::tests::`) | `ok` |
+| `unregistered_custom_edge_condition_fails_graph_validation` | `crates/paladin-battalion/src/engine/graph.rs` (`engine::graph::tests::`) | `ok` |
+| `every_unregistered_custom_name_is_listed_sorted_and_deduped` | `crates/paladin-battalion/src/engine/graph.rs` (`engine::graph::tests::`) | `ok` |
+| `registered_engine_evaluator_true_and_false_route_correctly` | `crates/paladin-battalion/src/engine/mod.rs` (`engine::tests::`) | `ok` |
+
+All four ran `1 passed; 0 failed` individually.
+
+### BUG-02: silent stranded node
+
+**Regression test, run in this session:**
+
+```bash
+cargo test -p paladin-battalion --lib validate_rejects_self_loop_only_stranded_node_naming_it
+```
+```
+running 1 test
+test engine::graph::tests::validate_rejects_self_loop_only_stranded_node_naming_it ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 796 filtered out; finished in 0.00s
+```
+
+`WarGraph::validate()` rejects the self-loop-only stranded node and names it in the error, confirmed
+by this test.
+
+**Test-first order, cited by SHA:**
+
+```bash
+git log --all --oneline --grep="BUG-02" -i
+```
+```
+34630e86 fix(22-16): audit and classify strandedness-adjacent fixtures (ENG-FR-02a acceptance 2a)
+31f1903e test(22-15): add failing eligible-set reachability tests for BUG-02 (red)
+a171bbb4 docs(22-16): confirm BUG-02 pre-release classification from the repository
+9e9bdb59 test(22-16): record readiness defect with runnable ignored reproduction
+```
+
+RED `31f1903e` (`test(22-15): add failing eligible-set reachability tests for BUG-02 (red)`)
+precedes GREEN `b1ac8668` (`feat(22-15): implement eligible-set reachability validation
+(ENG-FR-02a)`) in plan 22-15's own history — test-first, matching the doc-08 mandate and
+`29-CONTEXT.md` D-15.
+
+**Does any test fixture still wire a stranded node to entry to work around strandedness, instead
+of the structural fix?** **Yes — two fixtures, both already recorded in `.planning/WINDOWS.md` as
+open `deviation` rows, cross-referenced here rather than left implied:**
+
+```bash
+grep -E '^\| 2[4-5] \|' .planning/WINDOWS.md
+```
+```
+| 24 | 22 | deviation | tests/integration/e2e_crash_resume_test.rs | 112 | loop_gate self-loop node made a graph entry to sidestep the Frontier::is_ready self-loop join-deadlock property, rather than fixed structurally; flagged for plan 22-16's fixture audit (acceptance 2a) | open |
+| 25 | 22 | deviation | crates/paladin-battalion/src/engine/superstep.rs | 1220 | self_loop_graph test helper makes its looping node a graph entry to sidestep the Frontier::is_ready self-loop join-deadlock property (same root cause as e2e_crash_resume_test.rs); flagged for plan 22-16's fixture audit (acceptance 2a) | open |
+```
+
+**WINDOWS.md row 24** (`loop_gate`, `tests/integration/e2e_crash_resume_test.rs:112`) and **row 25**
+(`self_loop_graph`, `crates/paladin-battalion/src/engine/superstep.rs:1220`) both record the same
+pattern: the test's own looping node is declared a graph **entry** node specifically to avoid
+`Frontier::is_ready`'s self-loop join-deadlock property, rather than relying on the ENG-FR-02a/BUG-02
+structural fix (`validate()`'s stranded-node rejection) to make the node reachable. This is a
+distinct concern from BUG-02 itself — BUG-02 is about *rejecting* a node no path can ever reach;
+these two fixtures are about *avoiding a different, adjacent* readiness property
+(`Frontier::is_ready`'s self-loop deadlock, which is BUG-03's territory, not BUG-02's) by declaring
+the node an entry rather than exercising the general non-entry-reachable-via-upstream-edge path.
+Both rows are `open` (not yet `waived`/`fixed`) as of this HEAD; `29-CONTEXT.md` D-24 assigns their
+triage to a dedicated later plan in this phase, not to this audit task.
+
+### Overview §7 classification (cited, not re-derived)
+
+Per `.project/v0.10.0/00-program-overview.md` §7: "Since `WarGraph` is new in v0.10, this is a
+pre-release engine fix, **not** a v0.9 behavioral change — no `MIGRATION.md` entry or X-10 register
+row is required." BUG-03 and BUG-04 carry the identical classification in their own §7 entries
+(both cite that the `engine`/`waypoint` modules are absent at the `v0.9.0` tag). This audit cites
+that classification rather than re-deriving it, per doc-08 step 7's own instruction.
+
+Verdict: PASS with findings
+
+**Findings:**
+- WINDOWS.md rows 24 and 25 record two test fixtures (`loop_gate`,
+  `tests/integration/e2e_crash_resume_test.rs:112`; `self_loop_graph`,
+  `crates/paladin-battalion/src/engine/superstep.rs:1220`) that sidestep a self-loop readiness
+  property by declaring their looping node a graph entry, rather than exercising the general
+  non-entry-reachable-via-upstream-edge path the ENG-FR-02a/BUG-02 fix targets. Both rows are
+  already `open` in `.planning/WINDOWS.md`, already scoped to a dedicated triage plan by D-24
+  (`29-CONTEXT.md`) — no new finding is created here; this section cross-references the existing
+  rows by number as the plan's `<action>` text requires, rather than leaving the answer implied.
+
+---
+
+## 5. Findings pass — orphan behavior and ubiquitous-language conformance (doc-08 protocol step 5)
+
+**Protocol text:** "File any FR without a passing test, any test without an FR ('orphan behavior'),
+and any deviation from the ubiquitous-language names in §4 of the overview as findings."
+
+**FR-coverage half:** already recorded under Section 1 above — every one of the 138 globally-unique
+FRs carries a named test anchor (no FR without a passing test was found); the plan's own row-count
+criterion is recorded there as a planning-precision finding, not a coverage gap. The two halves
+below complete this step.
+
+### Orphan-behavior scope (D-13)
+
+**Scope, per D-13/`29-CONTEXT.md`:** every `[[test]]` block present in HEAD's `Cargo.toml` or a
+crate `Cargo.toml` but absent at `v0.9.0`, every file added under `tests/integration/` and
+`crates/*/tests/` since the tag, and `tests/evals.rs`'s registered scenarios. Unit tests inside
+`#[cfg(test)] mod tests { ... }` blocks are explicitly **out of scope** — there are hundreds of
+them across the workspace, and doc-08 step 5's "orphan behavior" targets *behaviors*; integration
+and E2E tests are the witnesses for behaviors (a unit test proves an internal function's logic, not
+that a program-level capability is reachable and correct end-to-end), so excluding them is a
+recorded scope decision, not an oversight.
+
+**Measured (this session), files added under `tests/` and `crates/*/tests/` since `v0.9.0`:**
+
+```bash
+git diff --diff-filter=A --name-only v0.9.0 HEAD -- tests/ 'crates/*/tests/'
+```
+
+Returns **29 paths** total, of which **22 are `.rs` test files under root `tests/`** (excluding
+`tests/helpers/e2e_fixtures.rs`, a shared fixture module several of the 22 import, not an
+independent test target itself) plus **3 non-`.rs` files under `crates/paladin-web/tests/`**
+(`fixtures/README.md`, `fixtures/openapi-v0.9.0.json`) and **3 fixture files under
+`tests/fixtures/config/`** (this phase's own plan 29-01 artefacts) — the remainder are `.snap`
+snapshot files paired with the `tests/cli/*_test.rs` files, not separate targets.
+
+```bash
+git diff --diff-filter=A --name-only v0.9.0 HEAD -- crates/paladin-web/tests/
+```
+
+Returns **1 additional `.rs` test file**: `crates/paladin-web/tests/openapi_golden_v0_9.rs` (this
+phase's own plan 29-02, SHIP-02).
+
+**Measured, `.rs` test files added: 23** (22 under root `tests/` + 1 under
+`crates/paladin-web/tests/`) — against the planning-time figure of **22** in `29-RESEARCH.md`'s
+interfaces block. The one-file difference is exactly the `+1` `29-RESEARCH.md` itself predicted:
+"this plan's own dependencies 29-01 and 29-02 add two more: `v0_9_config_boot` and
+`crates/paladin-web/tests/openapi_golden_v0_9.rs`" — `v0_9_config_boot_test.rs` was already inside
+the root-`tests/` count measured above, and `openapi_golden_v0_9.rs` is the `+1` crate-level file,
+landing the total at 23. Recorded as a measured-vs-planning-time discrepancy, per the plan's own
+instruction, not silently reconciled.
+
+**Measured, added `[[test]]` target-name lines in the root `Cargo.toml`:**
+
+```bash
+git diff v0.9.0 HEAD -- Cargo.toml | grep '^+name = '
+```
+
+```
++name = "war_engine_tracer"
++name = "e2e_crash_resume"
++name = "waypoint_retention_fault_injection"
++name = "golden_bridge_equivalence"
++name = "subgraph_formation_in_campaign"
++name = "e2e_muster_defer_order"
++name = "e2e_approval_gate"
++name = "e2e_platform_api"
++name = "v0_9_config_boot"
++name = "multi_parley_suspension"
++name = "parley_resume_stress"
++name = "e2e_compensation_chain"
++name = "aegis_retry_stress"
++name = "evals"
++name = "engine_benchmarks"
+```
+
+**14 new `[[test]]` entries** (the fifteenth line, `engine_benchmarks`, is a **`[[bench]]`** block —
+confirmed by reading its preceding `harness = false` / `[[bench]]` header directly — and is
+correctly out of D-13's scope, which names `[[test]]` blocks only, not benchmarks). This is **14**,
+not the planning-time figure of "15 added target-name lines" in `29-RESEARCH.md`'s interfaces
+block — the difference is exactly this one `[[bench]]` line the planning-time grep did not
+distinguish from a `[[test]]` line. Recorded, not silently reconciled.
+
+**The remaining 5 `.rs` test files** (`tests/integration/middleware_under_engine_test.rs`,
+`otel_transport_test.rs`, `reasoning_agent_test.rs`, `structured_engine_node_test.rs`,
+`vault_confinement_test.rs`) and the **3 new `tests/cli/*_test.rs` files**
+(`eval_run_test.rs`, `graph_export_test.rs`, `run_export_test.rs`) need no new root `[[test]]`
+entry: they are compiled as `pub mod` submodules of the pre-existing `lib` and `cli` test binaries
+respectively (`tests/lib.rs` declares `pub mod integration;`, which is
+`tests/integration/mod.rs`'s own `pub mod middleware_under_engine_test;` etc.; `tests/cli/mod.rs`
+declares `mod eval_run_test;` etc.) — confirmed directly:
+
+```bash
+grep -n "pub mod middleware_under_engine_test\|pub mod otel_transport_test\|pub mod reasoning_agent_test\|pub mod structured_engine_node_test\|pub mod vault_confinement_test" tests/integration/mod.rs
+grep -n "mod eval_run_test\|mod graph_export_test\|mod run_export_test" tests/cli/mod.rs
+```
+
+Both confirmed present. `cargo test --test lib -- --list` was run in this session and confirmed
+`integration::middleware_under_engine_test::...` entries are listed under the `lib` binary, not a
+separately-named `integration` binary — a small correction to doc-08's own G-16 citation
+("`cargo test --test integration middleware_under_engine`"), recorded here rather than left to
+propagate: the binary is `lib`, `integration` is the module path prefix within it. This does not
+change any coverage claim — the tests run and pass either way, verified in Section 1's `RT-FR-01`
+through `RT-FR-08` row's own "green" CI status, last measured green at Phase 26 close.
+
+**Per-target owner mapping — every added test target/file traces to at least one FR, X-rule, or
+BUG-0x (no orphan found):**
+
+| Target / file | Owner |
+|---|---|
+| `war_engine_tracer` | `ENG-FR-21` (trace hook) |
+| `e2e_crash_resume` | E2E-1 program scenario; `ENG-FR-11/12/15-17` (G-03) |
+| `waypoint_retention_fault_injection` | `ENG-FR-18` (retention) |
+| `golden_bridge_equivalence` | `ENG-FR-19` (legacy-service golden equivalence) |
+| `subgraph_formation_in_campaign` | `CF-FR-14…17`, `HITL-FR-12` (G-09) |
+| `e2e_muster_defer_order` | E2E-3 program scenario; `CF-FR-09…13`, `FT-FR-06` (G-08) |
+| `e2e_approval_gate` | E2E-2 program scenario; `HITL-FR-01…06` (G-05) |
+| `e2e_platform_api` | `PLAT-FR-01…07` (G-23) |
+| `v0_9_config_boot` | SHIP-02 (this phase, plan 29-01) |
+| `multi_parley_suspension` | `HITL-FR-01…06` (concurrent-parley extension of G-05) |
+| `parley_resume_stress` | `HITL-FR-01…06` / X-05 concurrency stress |
+| `e2e_compensation_chain` | `FT-FR-11…15` (G-12) |
+| `aegis_retry_stress` | `FT-FR-03…07` (G-10) / X-05 concurrency stress |
+| `evals` | `OBS-FR-15` (eval dogfood harness) |
+| `middleware_under_engine_test` (submodule) | `RT-FR-01…09` (G-16) |
+| `otel_transport_test` (submodule) | `OBS-FR-01…07` (trace/OTel) |
+| `reasoning_agent_test` (submodule) | `RT-FR-23/24` (G-21) |
+| `structured_engine_node_test` (submodule) | `RT-FR-17…19` (G-19) |
+| `vault_confinement_test` (submodule) | `RT-FR-13…16` (G-18) |
+| `eval_run_test` (cli submodule) | `OBS-FR-15` / `paladin-cli eval run` |
+| `graph_export_test` (cli submodule) | `OBS-FR-08…10` (G-27) |
+| `run_export_test` (cli submodule) | `PLAT-FR-07` / `OBS-FR-08…10` (run/trace export) |
+| `crates/paladin-web/tests/openapi_golden_v0_9.rs` | SHIP-02 (this phase, plan 29-02) |
+
+All 23 measured `.rs` test files trace to a named owner. **`v0_9_config_boot` and
+`openapi_golden_v0_9.rs` — this phase's own two new targets — are inside the orphan-behavior scope
+measured above, not exempt from it**, per the plan's own instruction.
+
+### Ubiquitous-language conformance (D-14)
+
+**The twelve overview §4 terms, each mapped to the canonical Rust type/module that embodies it:**
+
+| Term | Canonical type / module |
+|---|---|
+| Battlefield | `Battlefield` — `crates/paladin-core/src/platform/container/battlefield.rs` |
+| Dispatch | `DispatchRule` — `crates/paladin-core/src/platform/container/battlefield.rs` |
+| Superstep | the superstep loop — `crates/paladin-battalion/src/engine/superstep.rs` / `crates/paladin-battalion/src/engine/mod.rs` |
+| Waypoint | `Waypoint` — `crates/paladin-core/src/platform/container/waypoint.rs` |
+| Thread | `ThreadId` — `crates/paladin-core/src/platform/container/waypoint.rs` |
+| Directive | `Directive` — `crates/paladin-core/src/platform/container/directive.rs` |
+| Muster | `MusterTask` — `crates/paladin-core/src/platform/container/directive.rs` |
+| Parley | `ParleyRequest` — `crates/paladin-core/src/platform/container/parley.rs` |
+| Vanguard | `compute_next_vanguard` (function) operating on the `Frontier` type — both in `crates/paladin-battalion/src/engine/superstep.rs` (see naming-split disposition below) |
+| Chronicle | `src/application/services/chronicle.rs` (`ChronicleService` / chronicle history functions) |
+| Aegis | `Aegis` (fault-tolerance policy bundle) — `crates/paladin-core/src/platform/container/aegis.rs` |
+| Vault | `VaultPort` — `crates/paladin-ports/src/output/vault_port.rs` |
+
+**Grep for competing synonyms over public rustdoc and `docs/src/`:**
+
+```bash
+grep -roi 'checkpoint' docs/src/ | wc -l        # 16
+grep -roi 'frontier' docs/src/ | wc -l          # 1
+grep -rn '^\s*///.*[Ff]rontier' crates/*/src | wc -l   # 71 (rustdoc comment hits)
+grep -roi 'reducer' docs/src/ | wc -l           # 3
+grep -rn 'compute_next_vanguard' crates/ | wc -l  # 18
+```
+
+**Classification:**
+- **`reducer`** (3 hits in `docs/src/`) — a **sanctioned alias** for Dispatch, per overview §4's
+  own wording: "Called a *dispatch rule* or *reducer* interchangeably." Not a deviation.
+- **`frontier`** (1 hit in `docs/src/`, 71 rustdoc-comment hits in `crates/*/src`) — overview §4
+  itself describes Vanguard as "the frontier" in prose, sanctioning the word as description; the
+  **type name** `Frontier` (not just the word) is the substantive naming split addressed below.
+- **`checkpoint`** (16 hits in `docs/src/`) — used descriptively alongside "Waypoint" in several
+  mdBook pages (e.g., explaining Waypoints to readers coming from other frameworks' "checkpoint"
+  vocabulary) rather than as a competing type name; no Rust type or public API is named
+  `Checkpoint`. Recorded as an acceptable descriptive gloss, not a naming deviation — no code
+  defines a competing `Checkpoint` type.
+
+**The `Frontier`/`Vanguard` naming split (known candidate, per `29-CONTEXT.md`):** the public type
+`Frontier` in `paladin-battalion::engine` (`crates/paladin-battalion/src/engine/superstep.rs`),
+alongside the free function `compute_next_vanguard` operating on it, is a genuine ubiquitous-language
+divergence — the overview's own term for this concept is Vanguard, and the shipped type is named
+`Frontier`. **Disposition: accepted alias, rename deferred.** A public-type rename
+(`Frontier` → `Vanguard`) is an X-10 minor-version-breaking change in a release-gate phase (renaming
+a public struct changes every call site and downstream reference); `29-CONTEXT.md`'s Deferred Ideas
+section already names this exact rename as future work, not this phase's. **No rename is made
+here** — the disposition is filed, matching D-14's explicit prohibition against renaming a public
+type to satisfy this table.
+
+**Method limitation, stated plainly:** the greps above compare byte-wise over ASCII Rust
+identifiers and literal ASCII words. A Unicode look-alike (e.g. a homoglyph substituted into a
+doc comment) or a case variant not covered by `-i` in a context the pattern doesn't anticipate
+would not be matched by this method — so the absence of a grep hit for a given synonym is evidence
+of "not found by this search," not proof that no competing synonym exists anywhere in the tree.
+This is the same class of limitation `29-04-PLAN.md`'s own must-haves name explicitly (the
+backstop-verified truth in the plan's frontmatter), and it is stated here rather than left implicit
+so the section's own claim is honest about its reach.
+
+Verdict: PASS with findings
+
+**Findings:**
+- Measured orphan-behavior counts (23 `.rs` test files, 14 new root `[[test]]` entries) differ
+  slightly from `29-RESEARCH.md`'s planning-time figures (22 files, 15 target-name lines) — both
+  differences are fully explained (the `+1` file is exactly the `openapi_golden_v0_9.rs` addition
+  RESEARCH itself predicted; the `-1` target-line difference is `engine_benchmarks` being a
+  `[[bench]]`, not a `[[test]]`, which the planning-time grep did not distinguish). Recorded, not
+  silently reconciled; no test target is missing an owner.
+- `Frontier` (type, `paladin-battalion::engine`) vs. Vanguard (overview §4 term) is a genuine
+  ubiquitous-language naming split. Disposition: **accepted alias, rename deferred** — filed per
+  D-14, not corrected in this release-gate phase (a rename is an X-10 break); already named as a
+  deferred idea in `29-CONTEXT.md`.
+- Doc-08's own G-16 row citation ("`cargo test --test integration middleware_under_engine`") names
+  the test binary as `integration`; the actual binary, confirmed by running
+  `cargo test --test lib -- --list` in this session, is `lib` (`integration` is the module path
+  prefix inside it, via `tests/lib.rs`'s `pub mod integration;`). A citation-precision note on
+  doc-08's own prose, not a test-coverage gap — the named tests run and pass under `cargo test
+  --test lib`, confirmed by Section 1's RT-FR rows.
+
+---
+
+## 6. Compatibility audit — X-03/X-10 (doc-08 protocol step 6)
+
+**Protocol text:** "diff the public API of every publishable crate against v0.9.0 (`cargo semver-checks`
+output plus a manual `cargo public-api`-style diff). Every enum-variant, struct-field, or
+trait-method change to a pre-existing type must have a matching row in `MIGRATION.md` §9.2 with a
+stated mitigation; every semver-checks allowlist entry must correspond to a
+'deliberate-breaking: Y' row; any unregistered change is a finding. Confirm no pre-existing public
+trait gained a required method."
+
+### Methodology and a stated limitation
+
+Two independent tools are used together, per D-05: `cargo semver-checks` (per-crate, type-level,
+authoritative for enum variants/struct fields/trait methods) and a manual diff of
+`.project/current-exports.txt` against `git show v0.9.0:.project/current-exports.txt` (the
+existing api-surface snapshot, no new tool adopted). **Stated limitation, checked directly rather
+than assumed:** `.project/current-exports.txt` is generated by `cargo-public-api` against the root
+**`paladin` facade crate only** (its own header: "tracks all publicly exported items from the
+paladin crate") and does not expand enum variants of a re-exported type at all — confirmed by
+grep: `StopReason` appears in the snapshot only as `pub use paladin::prelude::StopReason` in BOTH
+the v0.9.0 and HEAD versions, with none of its variants (old or new) listed. The manual diff is
+therefore evidence for "was this symbol name reachable through the facade at v0.9.0" (useful for
+the reverse-direction and deliberate-zero checks below), not evidence for enum-variant- or
+field-level changes to types defined in the eleven leaf crates — `cargo semver-checks`, which
+builds and diffs each crate's own rustdoc JSON, is the tool that actually catches those, and is
+why D-05 requires both together rather than the diff alone.
+
+### `cargo semver-checks` — per-crate results
+
+The eleven baseline crates (`.github/workflows/ci.yml`'s `semver` job, `paladin-eval` excluded):
+
+```bash
+cargo semver-checks check-release --package paladin-ai-core --default-features --baseline-version 0.9.0
+```
+```
+    Building paladin-ai-core v0.9.0 (current)
+       Built [  19.832s] (current)
+    Building paladin-ai-core v0.9.0 (baseline)
+       Built [  17.534s] (baseline)
+    Checking paladin-ai-core v0.9.0 -> v0.9.0 (no change; assume minor)
+     Checked [   0.144s] 193 checks: 193 pass, 61 skip
+     Summary no semver update required
+```
+
+Run live in this session (paladin-ai-core: 193 checks, 193 pass, 0 fail, `Summary no semver update
+required`). The remaining ten (`paladin-ai`, `paladin-ports`, `paladin-battalion`, `paladin-herald`,
+`paladin-llm`, `paladin-memory`, `paladin-storage`, `paladin-notifications`, `paladin-content`,
+`paladin-web`) are cited from `28-CI-EVIDENCE.md` row 11 — all eleven crates measured
+`Summary no semver update required` (193–196 checks each, 0 failures), `11/11 PASS` — rather than
+re-run cold here (a full eleven-crate sweep builds rustdoc for the whole dependency graph twice per
+crate; this devcontainer's `target/` is cold for this worktree, and the plan's own operating rules
+name this exact tradeoff). The citation is proven current, not stale, by direct measurement:
+
+```bash
+git diff --stat 25a0eaaf..HEAD -- '*.rs' ':!tests/**' ':!crates/*/tests/**'
+```
+Empty output — **zero non-test `.rs` files changed** between Phase 28's close commit (`25a0eaaf`,
+the commit `28-CI-EVIDENCE.md`'s 11/11 result was measured against) and this HEAD.
+
+```bash
+git diff --stat 25a0eaaf..HEAD -- Cargo.toml 'crates/*/Cargo.toml'
+```
+```
+ Cargo.toml | 5 +++++
+ 1 file changed, 5 insertions(+)
+```
+The five lines are a single new `[[test]] name = "v0_9_config_boot"` block (plan 29-01, SHIP-02) —
+no dependency, no version, no feature-flag change. Since neither the source nor the manifests of
+any of the eleven crates changed between `25a0eaaf` and this HEAD, the cited 11/11 result is proven
+current, not merely assumed. `paladin-eval` is excluded from this sweep and cited, not left
+unexplained: `.planning/decisions/0048-paladin-eval-composition-crate.md` (**ADR-0048**) records that it first
+shipped in this same v0.10.0 cycle with no published `0.9.0` baseline to diff against, and
+`cargo semver-checks --baseline-version 0.9.0` would error (not skip) against a nonexistent
+baseline — the exclusion is registered with an inline comment in `ci.yml`'s own package list
+rather than a silent omission.
+
+### The public-API diff
+
+```bash
+wc -l .project/current-exports.txt          # 7901 lines total; grep -c '^pub ' = 3936 items
+git show v0.9.0:.project/current-exports.txt | wc -l   # 3550 lines (v0.9.0 baseline)
+diff <(git show v0.9.0:.project/current-exports.txt) .project/current-exports.txt
+```
+4353 lines added, **2 lines removed — both the file's own header/count comment lines
+(`# Public API Surface - Generated ...`, `Total public items: 1971`), zero actual API-item lines
+removed.** No pre-existing symbol reachable through the facade at v0.9.0 disappeared at HEAD — every
+observed change in the facade-reachable surface is additive, consistent with every §9.2 row's own
+"new variant"/"new field"/"new method" framing (none of the 26 rows describes a removal).
+`.project/current-exports.txt` at this HEAD is byte-identical to the copy committed at Phase 28's
+close (`25a0eaaf`, blob `b3eb3166`) — confirmed by direct diff, `0` differences — so the snapshot is
+current, not stale, independent of the git-diff proof above.
+
+### Row-count facts, measured directly (not as CONTEXT.md stated them)
+
+```bash
+awk '/^## 9.2/,/^## 9.3/' MIGRATION.md | grep -c '^| `'
+```
+**26 data rows** (not the 28 `29-CONTEXT.md`'s own text states — 28 counts the header row and the
+`---` separator row as data). Of these 26, **10 rows are marked `Y`**
+(`paladin-ai-core`×`StopReason`, `BattalionError`, `PaladinError`; `paladin-ports`×`LlmError`,
+`LlmRequest`; `paladin-ai-core`×`GarrisonEntry`, `PaladinResult`; `paladin-ai`×`Settings`
+[marked `Y` on TWO separate rows — the `agent_runtime` field, Phase 26, and the `trace`/
+`web_server` fields, Phase 28, §9.2's own row-191 text stating the second occurrence needs no new
+allowlist entry]; `paladin-web`×`require_authentication`), which **dedupe to 9 distinct
+`crate | type` pairs.** `.cargo/semver-checks-allowlist.toml` holds exactly **9 `[[entry]]` blocks**,
+one per distinct pair, confirmed by direct read — a byte-for-byte match with the 9 deduplicated
+pairs above, in both directions (every entry's `migration_row` names one of the 9 pairs; every one
+of the 9 pairs has exactly one entry). This is the exact form Pitfall 5/`29-RESEARCH.md` warns a
+naive 10-vs-9 row-count comparison would falsely flag — the set comparison, not a row count, is
+what D-04's own CI step (and this audit) uses. Plan 29-03's row-level CI gate (`.github/workflows/
+ci.yml`'s `semver` job) makes this exact set-equality check durable on every future PR; this
+section verifies it once, by hand, as doc-08 step 6 asks.
+
+Per-crate `Cargo.toml` semver-checks lint suppressions, confirmed by direct read, reconcile exactly
+against the 9 pairs' lint categories: `crates/paladin-core/Cargo.toml:64-67`
+(`enum_marked_non_exhaustive`, `constructible_struct_adds_field`, `struct_marked_non_exhaustive` —
+covers `StopReason`/`BattalionError`/`PaladinError` [enum], `PaladinResult` [constructible struct],
+`GarrisonEntry` [non-exhaustive struct]); `crates/paladin-ports/Cargo.toml:45-47`
+(`enum_marked_non_exhaustive`, `struct_marked_non_exhaustive` — covers `LlmError` [enum],
+`LlmRequest` [non-exhaustive struct]); `crates/paladin-web/Cargo.toml:75-77`
+(`function_requires_different_generic_type_params`, `struct_marked_non_exhaustive` — covers
+`require_authentication` [fn]; the struct suppression also covers two N/A-marked new-in-0.10 types
+on the same crate, `ResumeAcceptedResponse`/`ThreadApiState`, which is a broader-than-required but
+not incorrect suppression scope); `Cargo.toml:96-97` (root facade, `constructible_struct_adds_field`
+— covers `Settings`). Every suppression traces to at least one of the 9 register rows; none is
+unexplained.
+
+### Part 1 — per-row pass (26 rows)
+
+Every row was read against `MIGRATION.md` §9.2 in full (lines 159-268). Sixteen rows describe a
+**new-in-0.10 type** (no pre-existing signature touched — `ExecutionMiddleware`, `TokenCounterPort`,
+`VaultPort`, `StructuredExecutorPort`, `Waypoint`, `ParleyPort`, `ResumeAccepted`,
+`ResumeAcceptedResponse`, `ThreadApiState`, `RunSubmissionPort`, and the `PaladinPort` two-method
+rows [`N`, default methods on a pre-existing trait, addressed under "trait-method conclusion"
+below], `EdgeCondition` [semantics-only, no signature change], `Commander`/`CampaignExecutionService`
+[additive builder methods, no public field added, verified by source read]) — each correctly marked
+`N/A` or `N` with no allowlist entry required, consistent with X-10 governing only a signature
+change to a type that shipped in a *published* release. Ten rows describe a **pre-existing type's
+signature change** (the 9 distinct pairs above); every one states a mitigation
+(`#[non_exhaustive]`, `#[serde(default)]`, a default trait method, or a documented no-mitigation
+case for `require_authentication`'s generic-arity change) and is marked `Y`, matching an allowlist
+entry one-to-one.
+
+### Part 2 — reverse direction: does every pre-existing signature change map to a row?
+
+The facade-only public-API diff (Part above) shows zero removed API lines and cannot itself expand
+enum variants of leaf-crate types (the stated limitation), so it cannot independently enumerate
+every pre-existing signature change end-to-end. The authoritative check for this direction is
+`cargo semver-checks` itself: the tool's own per-crate run classifies **every** signature change to
+a pre-existing item, and the nine per-crate lint suppressions are the *complete* set of
+`[package.metadata.cargo-semver-checks.lints]` entries in the eleven crates' manifests (confirmed by
+direct grep of each of the four manifests carrying a suppression — no fifth manifest carries one).
+Because `cargo semver-checks check-release` reports "no semver update required" for all eleven
+crates (this session's live run for `paladin-ai-core`, cited-and-proven-current for the other ten),
+and a genuinely *unregistered* breaking change to a pre-existing type would make that same command
+report a semver-major bump is required (a lint the corresponding crate's suppression table does not
+silence), the "no semver update required" verdict IS the reverse-direction proof: no pre-existing
+signature change exists in the tree that lacks either (a) a `#[non_exhaustive]`/`#[serde(default)]`/
+default-method mitigation the tool itself recognizes as non-breaking, or (b) one of the nine
+registered lint suppressions. **No unregistered change was found.**
+
+### Part 3 — the "deliberate zero" notes, confirmed by absence
+
+**Measured, not assumed:** `MIGRATION.md` §9.2 contains **6 "deliberate zero" note paragraphs**
+(one each for Plan 22-01, and Phases 23/D-27, 24/D-29, 25/D-30, 26/D-37, 28/D-39) — not the "eight"
+this plan's own `<read_first>` text names, per `grep -n '\*\*Note on' MIGRATION.md` scoped to §9.2.
+Recorded as a measured-vs-planning-time discrepancy, in the same house style `29-04-SUMMARY.md`
+already established for its own FR-count and orphan-behavior-count findings — no note is missing
+content; the plan's own prose cites a number six notes cannot reach without either double-counting
+or inventing a seventh/eighth. Every named type in all six notes was grep-checked against the
+v0.9.0 export and returns **zero** matches, confirming genuine absence at the baseline:
+
+```bash
+for t in StateNode NodeSpec EngineLimits EngineError WarGraph RunOutcome NodeContext \
+         NodeOutcomeKind WaypointSummary NodeExecutionRecord WaypointStatus FieldSpec TraceEvent; do
+  grep -c "$t" /tmp/v090-exports.txt   # every one: 0
+done
+```
+All twelve named types return `0` in the v0.9.0 snapshot. Combined with each note's own citation of
+"introduced by Plan 22-01" or "new-in-0.10, Phase NN" (traceable to a specific landing plan), this
+confirms every deliberate-zero note names a genuinely new-in-0.10 type, not an omitted register row.
+
+### Trait required-method conclusion (doc-08 step 6's own final clause)
+
+**No pre-existing public trait gained a required method in this program.** The only two
+trait-method additions recorded against a pre-existing trait are both on `PaladinPort`
+(`execute_observed`, Phase 25/FT-03; `execute_scoped`, Phase 26/RT-04) — §9.2 rows 21 and 22 both
+state "default method" as the mitigation, marked `N` (not deliberate-breaking), and every existing
+implementor compiles unchanged (`self.execute(...)`/`self.execute_observed(...)` default bodies).
+Checked directly against the mitigation cell of every row touching a pre-existing trait (`PaladinPort`
+is the only pre-existing trait touched); no row anywhere in §9.2 states a mitigation-less required
+method on a pre-existing trait.
+
+Verdict: PASS with findings
+
+**Findings:**
+- The plan's own `<read_first>` text states "eight deliberate-zero notes"; the measured count in
+  `MIGRATION.md` §9.2 is 6. Recorded per this plan's own instruction to measure rather than assume;
+  no note lacks content and no type lacks an absence-confirmation — this is a planning-precision
+  discrepancy in the plan text, the same class 29-04-SUMMARY.md already recorded twice for its own
+  FR/orphan-behavior counts, not a coverage gap in the register.
+- `.project/current-exports.txt`'s facade-only scope (see Methodology above) means the manual
+  public-API diff alone cannot independently verify the reverse direction (every pre-existing
+  signature change has a row) for enum variants and fields defined in the eleven leaf crates —
+  `cargo semver-checks`'s own per-crate suppression-completeness check is the tool that actually
+  closes that direction, and this section names the limitation explicitly rather than overstating
+  what the manual diff alone proves.
+
+---
+
+## 7. Behavioral-change audit — MIGRATION.md §9.1 (doc-08 protocol step 7)
+
+**Protocol text:** "confirm `MIGRATION.md` §9.1 contains M-B-01 (BUG-01), M-B-02 (shutdown grace),
+M-B-03 (tool-error default, with the chosen default stated) and nothing else — or that any
+additional entry was raised as a stop-and-flag item with a recorded decision."
+
+**Confirmed by direct read of §9.1's table (`MIGRATION.md` lines 163-167):** exactly four rows,
+`M-B-01` through `M-B-04`, and no fifth or unlettered entry:
+
+- **M-B-01** — BUG-01 fix: `EdgeCondition::Custom(name)` no longer defaults to `true` when
+  unregistered; validation now fails closed, naming each unregistered condition.
+- **M-B-02** — Graceful shutdown: SIGTERM/SIGINT now waits up to `shutdown_grace` (default 30s) for
+  in-flight runs to drain before exiting.
+- **M-B-03** — No behavioral change (named, not introduced): `tool_error_mode` documents the v0.9
+  loop's pre-existing feed-failure-back-to-model behavior as `FeedToModel` (the default, byte-for-byte
+  unchanged apart from a sanitization pass), and adds `FailRun` as a new opt-in.
+- **M-B-04** — Automatic per-superstep checkpointing: any graph executed through the new `WarEngine`
+  writes one `Waypoint` (a full `Battlefield` snapshot) after every superstep by default
+  (`WaypointDurability::Strict`); the legacy `Formation`/`Phalanx`/`Campaign`/`Commander` paths are
+  explicitly stated as unaffected (byte-for-byte unchanged, ENG-FR-20).
+
+`grep -c '^| M-B-0' MIGRATION.md` confirms exactly 4 matches. No fifth `M-B-0N` row exists anywhere
+in the file.
+
+**M-B-04's provenance (doc-08's own "or … a recorded decision" clause):** M-B-04 is the fourth entry
+protocol step 7's own wording anticipates might need justification beyond "M-B-01…03 and nothing
+else." It was added by **`ENG-08`, Phase 22** — `MIGRATION.md`'s own scope note (lines 1-9) states
+the file "was created in the first epic of the v0.10.0 program (Phase 22, `ENG-08`)", and M-B-04's
+own worked-example line states "no worked example owed — this phase (ENG-08) both introduces the
+behavior and documents it in full above," directly naming the requirement/phase that added it.
+Doc-08 step 7's clause is satisfied by this recorded decision — the countersignature this clause
+asks for ("or any additional entry was raised as a stop-and-flag item with a recorded decision") is
+placed in the maintainer sign-off section below (§7 of this document does not declare the clause
+closed on its own authority; D-17 reserves that closure for a human).
+
+**§9.1's own internal cross-reference, confirmed consistent:** the "Note on Phase 25… D-30" text
+immediately below the M-B rows explicitly states "no behavioral change; no row is added above" for
+every Aegis/fault-tolerance capability (opt-in per node, a v0.9 graph declares none) — this is
+itself evidence that the M-B-01…04 set is exhaustive by construction: every phase that touched
+runtime behavior either produced a numbered M-B row or explicitly recorded why it did not.
+
+Verdict: PASS
+
+**Findings:**
+- none
+
+---
+
+## 8. Toolchain audit — X-11 MSRV & dependency discipline (doc-08 protocol step 8)
+
+**Protocol text:** "MSRV job present and green on the MSRV toolchain with `--all-features`;
+`rust-version`, README badge and `MIGRATION.md` §9.3 agree; `cargo tree -e features` for default
+features shows no new heavyweight dependencies; `cargo deny`/`cargo audit` green."
+
+### MSRV: three-way agreement at 1.88, job re-run locally
+
+- `Cargo.toml:18` — `workspace.package.rust-version = "1.88"` (all ten crate manifests inherit via
+  `rust-version.workspace = true`).
+- `README.md:8` — MSRV badge reads `rust-1.88%2B`.
+- `MIGRATION.md` §9.3 (line 112) — "Final MSRV: 1.88 (Rust, edition 2024)".
+
+All three agree at **1.88**. `29-05-SUMMARY.md` already recorded this three-way re-verification
+(README badge, prerequisites line, §9.3) as part of closing MIGRATION.md's placeholders — cited here
+rather than re-derived, per this plan's own instruction.
+
+The `msrv` job's exact command was re-run locally in this session:
+
+```bash
+RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --all-features --all-targets --locked
+```
+```
+    Checking paladin-web v0.9.0 (...)
+    Checking paladin-storage v0.9.0 (...)
+    Checking paladin-eval v0.9.0 (...)
+    Checking paladin-ai v0.9.0 (...)
+    Checking paladin-doc-examples v0.9.0 (...)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 18s
+```
+Zero errors, zero warnings surfaced in the tail of the run — **PASS**, matching `28-CI-EVIDENCE.md`
+row 13's own form.
+
+### Default-feature dependency-set check (X-11.4)
+
+```bash
+cargo deny check                              # exit 0: "advisories ok, bans ok, licenses ok, sources ok"
+cargo tree -e no-dev,features -p paladin-ai   # 2763 lines, production/default view
+cargo tree -e no-dev,features -p paladin-ai | grep -ic "opentelemetry\|tonic\|grpc"   # 0
+```
+Zero `opentelemetry`/`tonic`/gRPC entries in the default production tree — the heaviest dependency
+class this program added (Phase 28's `otel` feature, `MIGRATION.md` §9.3's own "Default-build impact
+(X-11.4): `cargo tree … | grep -c opentelemetry` is `0`" line) stays opt-in, confirmed still true at
+this HEAD. No dependency was added by this phase's own three plans to date (29-01 through 29-06 —
+this audit's own scope, per the `<threat_model>`'s trust boundary, does not include a new
+dependency, and none was found in this check).
+
+### `cargo deny` / `cargo audit`
+
+```bash
+cargo deny check
+```
+```
+advisories ok, bans ok, licenses ok, sources ok
+```
+Exit 0 — **PASS**.
+
+```bash
+cargo audit
+```
+```
+warning: 10 allowed warnings found
+```
+Exit 0 — **PASS**. The ten warnings are the same pre-existing RustSec advisories
+`28-CI-EVIDENCE.md` row 14 already documented and `.github/instructions/security.instructions.md`
+carries (`smartstring`, `event-listener`, `scc`, `chacha20`, `spin` — unmaintained/unsound/yanked
+notices on transitive dependencies, none newly introduced), confirmed by direct re-run rather than
+cited from memory: `RUSTSEC-2026-0249` (smartstring), `RUSTSEC-2026-0221` (event-listener),
+`RUSTSEC-2026-0205` (scc), plus the `chacha20`/`spin` yanked-version warnings — the same four
+advisory IDs, unchanged.
+
+### The `cargo doc --workspace --no-deps` condition (carried, out-of-scope, per Open Question 2's resolution)
+
+Re-measured live, the exact command the `lint` job's "Check documentation" step runs
+(`.github/workflows/ci.yml:63`) with zero tolerance for any `warning:` line:
+
+```bash
+cargo doc --workspace --no-deps 2>&1 | tee /tmp/doc-output.txt
+grep -c "warning:" /tmp/doc-output.txt
+```
+```
+72
+```
+**72 `warning:` lines** — the `lint` job's "Check documentation" step is **red** at this HEAD,
+matching `29-RESEARCH.md` Pitfall 7's live-measured figure exactly (STATE.md's Phase 26 carried
+concern recorded roughly 60; the count has grown to 72). This is recorded here explicitly, not
+silently omitted: **the `lint` job is NOT fully green** because of this pre-existing, unowned
+condition. Per this plan's own instruction and `29-RESEARCH.md`'s Open Question 2 resolution,
+SHIP-04's requirement text asks only that this phase introduce no *new* broken intra-doc links and
+that the *semver and MSRV* jobs be green (both confirmed above) — it does not require the `lint`
+job's doc-warning count to reach zero, and D-25's bounded doc sweep does not list fixing these 72
+warnings. **Disposition:** carried as a named, tracked condition — a WINDOWS.md `deviation` row for
+this exact condition is proposed for plan 29-08's triage pass (this plan does not write to
+WINDOWS.md per its own isolation instruction); the condition is not fixed here, and this section
+does not present the `lint` job as green when it evidently is not.
+
+Verdict: PASS with findings
+
+**Findings:**
+- The `lint` job's "Check documentation" step (`cargo doc --workspace --no-deps`, zero-tolerance for
+  `warning:` lines) is red at this HEAD: 72 warnings measured live, up from ~60 at Phase 26. Not a
+  Phase 29 regression (confirmed pre-existing by `29-RESEARCH.md`'s live measurement during this
+  phase's own research) and not required to be zero by SHIP-04's text (which names only "no NEW
+  broken links" plus green semver/MSRV — both true). Proposed disposition: a new WINDOWS.md
+  `deviation` row, for plan 29-08 to actually write (this plan is isolated from WINDOWS.md).
+
+---
+
+## 9. Config-compat test existence — §9.5/§9.6 (doc-08 protocol step 9)
+
+**Protocol text:** "the integration test required by §9.5 (boot v0.10 with a v0.9 sample config →
+legacy behavior) exists and passes; §9.6's `openapi.json` golden diff for pre-existing paths is
+empty."
+
+### SHIP-02 proof 1 — `v0_9_config_boot` (§9.5)
+
+**Path:** `tests/integration/v0_9_config_boot_test.rs`, registered as `[[test]] name =
+"v0_9_config_boot"` in the root `Cargo.toml`, `required-features = ["web-server"]`.
+
+```bash
+cargo test --features web-server --test v0_9_config_boot
+```
+```
+test apply_env_overrides_is_a_no_op_with_no_app_vars ... ok
+test v0_10_settings_fields_resolve_to_default ... ok
+test v0_9_config_file_loads_at_v0_10 ... ok
+test v0_9_config_leaves_the_run_surface_unwired ... ok
+test dev_ui_route_is_unregistered_404 ... ok
+test v0_10_route_families_answer_501 ... ok
+test v0_9_routes_are_mounted ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+```
+**9 passed, 0 failed** — matches `29-01-SUMMARY.md`'s recorded count exactly, re-run and confirmed
+live in this session, not merely cited. `MIGRATION.md` §9.5 (closed by plan 29-05) cites this same
+target by name.
+
+**CI gate:** `.github/workflows/ci.yml`'s `e2e-platform-api` job carries two dedicated steps —
+`Run the v0_9_config_boot test binary (SHIP-02 backward-compat proof)` (line 1295, the exact
+command above) and `Fail if the v0_9_config_boot run selected fewer than the full test set` (line
+1301, a guard against a stale filter silently reporting green on fewer than 9 tests) — confirmed
+present by direct read, added by plan 29-05.
+
+### SHIP-02 proof 2 — `openapi_golden_v0_9` (§9.6)
+
+**Path:** `crates/paladin-web/tests/openapi_golden_v0_9.rs`.
+
+```bash
+cargo test -p paladin-web --test openapi_golden_v0_9
+```
+```
+running 6 tests
+test v0_9_path_restriction_is_non_empty ... ok
+test security_schemes_match_the_frozen_baseline ... ok
+test info_version_is_the_only_normalisation ... ok
+test ref_closure_schemas_match_the_frozen_baseline ... ok
+test ref_closure_is_non_empty_and_fully_resolved ... ok
+test openapi_v0_9_paths_match_the_frozen_baseline ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+```
+**6 passed, 0 failed** — re-run live in this session. `openapi_v0_9_paths_match_the_frozen_baseline`
+is the empty-diff assertion itself (protocol step 9's own text); the frozen baseline
+(`crates/paladin-web/tests/fixtures/openapi-v0.9.0.json`, D-08) is the committed
+`v0.9.0:crates/paladin-web/openapi.json` restricted to the six pre-existing paths with `$ref`
+closure and `info.version` as the sole sanctioned normalisation, confirmed present by `29-02`'s own
+plan scope (cited by `MIGRATION.md` §9.6, closed by plan 29-05).
+
+**CI gate:** the `crate-isolation (paladin-web)` matrix job (`.github/workflows/ci.yml:583-584`)
+runs `cargo test -p paladin-web` as an ordinary per-crate test invocation — `tests/` files under a
+crate are auto-discovered by cargo with no `[[test]]` registration needed (confirmed: the crate's
+own `Cargo.toml` carries no `[[test]]` blocks), so this new file gates on every PR through that
+existing matrix leg with no new CI job required, matching D-09's own "no new CI job" decision.
+
+Verdict: PASS
+
+**Findings:**
+- none
+
+---
+
+## Accepted deviation for v0.10.0 — Phase 28 tracing-overhead bar (PRD 07 acceptance 6)
+
+**The bar:** PRD 07 acceptance criterion 6 — superstep overhead with tracing enabled must be ≤3%
+versus an untraced run.
+
+**The measurement:** `.planning/phases/28-observability-tooling/28-BENCH-EVIDENCE.md` — `log_sink`
+**+22.18%**, `composite` (log + a no-op sink) **+18.46%**, both measured against a ~110µs untraced
+baseline. Both figures genuinely **fail** the ≤3% bar by a wide margin (6-7x over budget).
+
+**Disposition: ACCEPTED for v0.10.0 as a documented deviation**, with the bar re-scoped as a
+follow-up. Not re-measured or re-litigated here — `28-VERIFICATION.md`'s `human_verification` item 1
+offered a maintainer three options ((a) accept, (b) re-scope to an I/O-bound superstep, or (c)
+require optimization first); `29-CONTEXT.md` D-16 auto-selected (a) now + (b) as the recorded
+follow-up, flagged `⚠` for developer review at plan review (not overturned — no plan-review note in
+this phase's artifacts reverses it), and `.planning/STATE.md`'s Phase 28 close entry independently
+records: "D-37: the ≤3% tracing-overhead bar was measured and FAILED … non-CI-gating by decision,
+**accepted by maintainer sign-off at close-out UAT (2026-09-09)**." This audit does not re-ask a
+question already answered once — it cites both the recorded decision and the maintainer sign-off
+that closed it.
+
+**The reason the deviation is defensible, not merely accepted:**
+- Tracing sinks are **opt-in** — no sink configured means no overhead measured or paid.
+- `trace.state_values` defaults **off** (D-36), so the default configuration carries no per-field
+  state-serialization cost either.
+- The microbenchmark is **all-Function-node** (`28-BENCH-EVIDENCE.md`'s own methodology) — a
+  synthetic workload with no LLM call to amortise the tracing overhead against. A real workflow's
+  per-superstep LLM latency (hundreds of milliseconds to seconds) dwarfs the measured tracing
+  overhead (microseconds), which is exactly the re-scoped bar's premise (b) above.
+
+**Consequence:** no v0.9 workflow and no default v0.10 deployment pays this cost — the exposure is
+bounded to deployments that deliberately enable a trace sink, matching this audit's own threat
+register (T-29-07-05, disposition `accept`).
+
+**The follow-up:** the bar is re-scoped to an I/O-bound (LLM-call) superstep rather than the
+synthetic all-Function-node microbenchmark — named as a deferred idea in `29-CONTEXT.md`
+("`TraceDispatcher::emit`/`LogTraceSink` serialization optimisation — the D-16 follow-up if the
+re-scoped I/O-bound bar is also missed").
+
+**Where the same record is carried (a reader can cross-check consistency across all four):**
+1. This audit document (here).
+2. `docs/src/operations/observability.md`'s "Known limitations" bullet (extended by this plan, see
+   below — the published-docs record).
+3. The root `CHANGELOG.md` `[0.10.0]` section's "Known limitations" entry (plan 29-09's scope).
+4. A `.planning/WINDOWS.md` `deviation` row for Phase 28 (plan 29-08's scope to write; this plan is
+   isolated from WINDOWS.md per its own instructions).
+
+**Published-docs confirmation:** `docs/src/operations/observability.md` lines 184-190 already state
+the ≤3% bar, `log_sink +22.18%`, `composite +18.46%`, the ~110µs baseline, and "both genuinely fail
+the ≤3% bar" — confirmed present before this plan's edit. This plan's own edit (Task 2) adds the
+v0.10.0 disposition sentence to the same bullet, so a reader of the published docs learns both the
+number and that it is an accepted, tracked deviation — not merely the number in isolation.
+
+---
+
+## Maintainer sign-off (unticked — closed by a human, not this audit)
+
+The following items are judgment-tier: `28-VERIFICATION.md` marks each `verification: judgment`,
+meaning an agent's code-level inspection is recorded as supporting evidence but is explicitly
+**non-authoritative**. Per D-17, every box below is authored **unchecked** by this executor. The
+phase's UAT / `/gsd-verify-work` step is where a human ticks them — this audit does not, and must
+not, tick them itself.
+
+**The six judgment-tier safety/privacy prohibitions** (`28-VERIFICATION.md` frontmatter,
+`human_verification` item 2, labels quoted verbatim from that file; evidence per item as this
+verifier's own code-level inspection recorded there):
+
+- [ ] **28-01 state-values-never-default** — evidence: redact-before-truncate ordering
+  (`crates/paladin-battalion/src/engine/superstep.rs:3570-3574`).
+- [ ] **28-05 scenario-file-not-an-execution-vector** — evidence: no `serde` derive on
+  `CustomAssertion` (`assertion.rs:250-255`).
+- [ ] **28-06 observability-never-load-bearing** — evidence: `BlockingTraceSink`/
+  `PanickingTraceSink`/the 500ms-sink timing test (`hooks.rs`).
+- [ ] **28-09 OTel-header-redaction-and-no-redirect** — evidence: the OTel client's `Policy::none()`
+  plus a passing `otlp_client_does_not_follow_redirects` test and `OtelConfig`'s manual redacting
+  `Debug` impl.
+- [ ] **28-12 live-mode-never-in-default-CI** — evidence: the three-way `--live` AND
+  `PALADIN_EVAL_LIVE` AND provider-key gate with a passing test.
+- [ ] **28-15 dev-ui-auth-gate-and-no-values-shown** — evidence: `dev_ui_unauthenticated_request_is_rejected`
+  plus the `field_changes: Vec<FieldName>`-only (never values) `InspectorView` shape.
+
+**The M-B-04 countersignature** (§7 above): §9.1's fourth behavioral-change row was added by
+`ENG-08`, Phase 22 — recorded, not re-derived, in §7. Doc-08 step 7's "or any additional entry was
+raised as a stop-and-flag item with a recorded decision" clause is satisfied by that citation; this
+box is where a maintainer confirms the citation itself is accepted as sufficient:
+
+- [ ] **M-B-04 provenance countersignature** — evidence: `MIGRATION.md`'s own scope note (lines 1-9,
+  "created in the first epic of the v0.10.0 program (Phase 22, `ENG-08`)") and M-B-04's own row text
+  ("this phase (ENG-08) both introduces the behavior and documents it in full above"), cited in §7.
+
+**No box is added for anything with a mechanical check** — every truth in sections 1-9 above that a
+grep, a re-run test, or a diff can verify is verified there, with a `Verdict:` line, not repeated
+here. This section exists only for the seven items where an agent's own verdict is
+non-authoritative by design.
+
+---
+
+## 10. Release readiness (doc-08 protocol step 10)
+
+**Protocol text:** "all crates at `0.10.0`; changelogs updated; `cargo publish --dry-run` succeeds
+in dependency order; `MIGRATION.md` contains no 'TBD'."
+
+### All crates at 0.10.0
+
+`cargo release version 0.10.0 --execute --no-confirm --workspace` (Task 1, commit `83d219f1`)
+bumped `workspace.package.version` and every one of the twelve publishable crates' own `version`
+field (`paladin-ai`, `paladin-ai-core`, `paladin-ports`, `paladin-herald`, `paladin-battalion`,
+`paladin-llm`, `paladin-memory`, `paladin-storage`, `paladin-notifications`, `paladin-content`,
+`paladin-web`, `paladin-eval`) plus the non-publishable `paladin-doc-examples` workspace member, to
+`0.10.0`, along with `Cargo.lock`. Verified: `grep -q 'version = "0.10.0"' Cargo.toml` and, per
+crate, `grep -q '^version = "0.10.0"' crates/<name>/Cargo.toml` — all pass.
+
+Every intra-workspace path-dependency pin moved with it: `grep -rc '0\.9\.0' --include=Cargo.toml
+crates/` shows zero **pin** occurrences remaining (three residual `0.9.0` strings survive, all
+confirmed comments, not pins: root `Cargo.toml:150`'s `schemars` transitive-version note, plus two
+further comment-only references discovered during this plan's own reach-verification —
+`crates/paladin-battalion/Cargo.toml:44` (the same `schemars`-transitive-version note, mirrored in
+that crate) and `crates/paladin-web/Cargo.toml:70` (a `struct_marked_non_exhaustive` lint-suppression
+comment citing "the v0.9.0 baseline" historically). **Measured-vs-planning-time note:** the plan's
+own `<interfaces>` text names only the root-manifest schemars comment as the sanctioned exception;
+this audit records the additional two comment occurrences as a precision finding, not a defect —
+both were read in full context and confirmed non-pin before being left untouched.).
+
+`crates/paladin-web/openapi.json`'s `info.version` was regenerated via `UPDATE_OPENAPI=1 cargo test
+-p paladin-web openapi_matches_committed_baseline --quiet` to `0.10.0` — confirmed by
+`python3 -c "import json;print(json.load(open('crates/paladin-web/openapi.json'))['info']['version'])"`
+→ `0.10.0`, and the regeneration diff touched only that one field (`git diff HEAD~1 --
+crates/paladin-web/openapi.json` — 1 insertion, 1 deletion).
+
+The two occurrences that must NOT move are unchanged: `.github/workflows/ci.yml`'s
+`--baseline-version 0.9.0` literal — **measured 3 occurrences** at HEAD (lines 276, 334, 357), not
+the plan text's stated 5; the two additional line numbers it names (304, 339) carry `v0.9.0` in a
+job-name/comment string without the literal substring `baseline-version 0.9.0`, so this is another
+measured-vs-planning-time discrepancy, recorded rather than forced to match a stale count. All
+three actual occurrences are still present and unedited (`git diff --stat HEAD~2..HEAD --
+.github/workflows/ci.yml` is empty — this plan's commits never touch that file). Root
+`Cargo.toml`'s schemars comment (line 150) is unchanged.
+
+### Changelogs updated
+
+`make finalize-crate-changelogs VERSION=0.10.0` (Task 2, commit `3019ed8e`) stamped a dated
+`## [0.10.0] - 2026-09-10` section into all twelve publishable packages' changelogs (root +
+eleven crates), with `## [Unreleased]` preserved and empty in every file — confirmed:
+`for f in CHANGELOG.md crates/*/CHANGELOG.md; do grep -q '^## \[0.10.0\]' "$f" && grep -q '^##
+\[Unreleased\]' "$f"; done` exits 0 across all twelve files. The root `CHANGELOG.md`'s 270-line
+`[Unreleased]` body was curated: a new "Behavioral changes" sub-list leads the section (M-B-01
+through M-B-04, each linking `MIGRATION.md` §9.1), followed by the pre-existing grouped
+Changed/Added/Fixed sections (substance preserved, reorganised not rewritten), followed by a new
+"Known limitations" section carrying the D-16 tracing-overhead deviation (+22.18% log sink /
++18.46% composite) — completing artefact 3 of the 4-artefact cross-reference this audit's own
+"Accepted deviation" section above named as owed to plan 29-09. `crates/paladin-eval/CHANGELOG.md`'s
+"Initial release" content now sits under its own `[0.10.0]` section (its first published version,
+per ADR-0048).
+
+`./scripts/check-release-consistency.sh --tag v0.10.0` exits 0: `✅ OK: 12 publishable package(s)
+checked, all match tag version '0.10.0' with a changelog section for it.`
+
+### `cargo publish --dry-run` succeeds in dependency order
+
+`cargo publish --workspace --dry-run` (Task 3, `29-CI-EVIDENCE.md` Local sweep row 14) packaged and
+verified **twelve** crates, zero errors, each ending in `warning: aborting upload due to dry run` —
+a non-empty result, not a zero-crates-packaged false pass. Verified in dependency order:
+`paladin-ai-core` → `paladin-ports` → `paladin-llm` → `paladin-storage` → `paladin-battalion` →
+`paladin-content` → `paladin-eval` → `paladin-herald` → `paladin-memory` → `paladin-notifications`
+→ `paladin-web` → `paladin-ai`. `paladin-doc-examples` (`publish = false`) does not appear in the
+output at all — correctly skipped as unpublishable, confirmed absent rather than assumed absent.
+
+### `MIGRATION.md` contains no "TBD"
+
+`grep -c 'TBD' MIGRATION.md` → **0**. Closed by plan 29-05 (the D-01 CI gate) and re-confirmed live
+in this session, unaffected by this plan's own commits (`git diff --name-only HEAD~2..HEAD | grep
+-c MIGRATION.md` is 0 — this plan never touches the file).
+
+### Post-bump semver re-run (D-21's "record the post-bump run explicitly" instruction)
+
+`cargo semver-checks check-release --package <pkg> --default-features --baseline-version 0.9.0` was
+re-run for all eleven pre-existing publishable crates against the ACTUAL bumped `0.10.0` tree
+(`29-CI-EVIDENCE.md` Local sweep row 10) — every crate reports `Checking <pkg> v0.9.0 -> v0.10.0
+(major change)` / `Summary no semver update required`, confirming the per-crate suppressions still
+carry exactly the nine allowed changes and nothing else moved. 11/11 PASS, matching Phase 28's
+pre-bump 11/11 evidence and now additionally proving the SAME allowlist survives the version bump
+itself.
+
+Verdict: PASS
+
+**Findings:**
+- **[Precision, non-blocking]** Two additional comment-only `0.9.0` string occurrences exist beyond
+  the one the plan's `<interfaces>` text names (`crates/paladin-battalion/Cargo.toml:44`,
+  `crates/paladin-web/Cargo.toml:70`) — both confirmed non-pin, non-actionable, left untouched.
+- **[Precision, non-blocking]** `.github/workflows/ci.yml`'s literal `baseline-version 0.9.0`
+  substring count is 3 at HEAD, not the plan text's stated 5 — the two additional line numbers it
+  names carry `v0.9.0` in adjacent prose without the exact substring. All five referenced line
+  numbers (276, 304, 334, 339, 357) are present and unedited regardless of which literal count
+  applies; the file is untouched by this plan's commits either way.
+
+---
+
+*Corpus document: `.project/v0.10.0/09-program-acceptance-audit.md`*
+*Phase: 29-program-gates-release*
+*Sections 1-5 by plan 29-04; sections 6-9 by plan 29-07; section 10 by plan 29-09.*

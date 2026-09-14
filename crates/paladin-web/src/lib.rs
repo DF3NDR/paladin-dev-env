@@ -16,10 +16,18 @@ pub mod agent_controller;
 pub mod agent_registry;
 /// Application router composition for the user REST API.
 pub mod app;
+/// Assistant definitions -- `/v1/assistants*` routes on the shared `RunApiState`
+/// (PLAT-04, D-28..D-33, D-44, D-46).
+pub mod assistant_controller;
 /// Authentication and RBAC middleware for the user REST API.
 pub mod auth_middleware;
 /// Content-delivery controller handlers (axum).
 pub mod delivery_controller;
+/// Feature-gated (`dev-ui`, default off) admin developer tool: `GET
+/// /v1/dev-ui/threads/{id}` renders a [`paladin_ports::input::run_inspector_port::RunInspectorPort`]
+/// view as a single static HTML page (28-15, D-25/D-26).
+#[cfg(feature = "dev-ui")]
+pub mod dev_ui_controller;
 /// Unified API error model (structured JSON error envelope).
 pub mod error;
 /// Liveness and readiness endpoints.
@@ -30,8 +38,18 @@ pub mod http_layers;
 pub mod job_store;
 /// OpenAPI spec assembly and interactive (Swagger UI) docs serving.
 pub mod openapi;
+/// Shared pagination primitives applied by every `/v1` list endpoint
+/// (D-47): `PageQuery`, `resolve_limit`, `encode_cursor`/`decode_cursor`.
+pub mod pagination;
 /// Request-logging middleware with request-id correlation.
 pub mod request_log;
+/// Run submission/status HTTP controller (wire types, state, handlers, router; PLAT-01, D-44).
+pub mod run_controller;
+/// Run schedules -- `/v1/schedules*` routes on the shared `RunApiState`
+/// (PLAT-05, PLAT-06, D-42, D-44, D-46, D-47).
+pub mod schedule_controller;
+/// Thread inspection/resume/history HTTP controller (wire types, state, handlers, router).
+pub mod thread_controller;
 /// Execution timeout policy and resolution.
 pub mod timeout;
 /// User management controller handlers.
@@ -48,4 +66,6 @@ pub use agent_registry::{
 pub use error::ApiError;
 pub use http_layers::{HttpLayersConfig, RateLimitConfig, with_http_layers};
 pub use job_store::{JobRecord, JobStatus, JobStore};
+pub use run_controller::{RunApiState, run_router};
+pub use thread_controller::{ThreadApiState, thread_router};
 pub use timeout::TimeoutPolicy;

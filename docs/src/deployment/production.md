@@ -309,11 +309,20 @@ readinessProbe:
 
 ### Graceful Shutdown
 
+On SIGTERM/SIGINT, `paladin-server` cancels a `ShutdownCoordinator` shared with every
+in-flight superstep run and waits up to a configured grace window for those runs to finish
+before the process exits (HITL-04, D-21/D-22) — matching the live pattern at
+`src/bin/paladin-server.rs` (`shutdown_signal`/`drain_on_shutdown`; `axum::Server` was removed
+in Axum 0.7+, this workspace pins axum 0.8.4, and the current API binds a listener directly
+and passes it to `axum::serve`):
+
 ```rust,ignore
-// Implement graceful shutdown
+use paladin::config::engine::EngineConfig;
+use paladin_battalion::engine::shutdown::ShutdownCoordinator;
+use std::time::Duration;
 use tokio::signal;
 
-async fn shutdown_signal() {
+async fn wait_for_termination_signal() {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -336,19 +345,49 @@ async fn shutdown_signal() {
     tracing::info!("Shutdown signal received, starting graceful shutdown");
 }
 
-// In main — matches the live pattern at src/bin/paladin-server.rs:129-133. `axum::Server`
-// was removed in Axum 0.7+ (this workspace pins axum 0.8.4); the current API binds a
-// listener directly and passes it to axum::serve.
+// Cancels the coordinator's root token, then waits <= grace for every registered
+// in-flight run to drain -- or skips the wait entirely when APP_ENGINE_GRACEFUL_SHUTDOWN=false
+// (the M-B-02 disable switch for legacy-only deployments).
+async fn shutdown_signal(coordinator: ShutdownCoordinator, grace: Duration, graceful: bool) {
+    wait_for_termination_signal().await;
+    if graceful {
+        let outcome = coordinator.cancel_and_wait(grace).await;
+        tracing::info!("graceful shutdown drain complete: {outcome:?}");
+    } else {
+        coordinator.token().cancel();
+    }
+}
+
+// In main:
+let mut engine_config = EngineConfig::default();
+engine_config.apply_env_overrides();
+let coordinator = ShutdownCoordinator::new();
 let listener = tokio::net::TcpListener::bind(&addr).await?;
 axum::serve(listener, app.into_make_service())
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(shutdown_signal(
+        coordinator,
+        Duration::from_secs(engine_config.shutdown_grace_secs),
+        engine_config.graceful_shutdown,
+    ))
     .await?;
 ```
 
+**The rule: `terminationGracePeriodSeconds` must be at least twice the configured
+`APP_ENGINE_SHUTDOWN_GRACE_SECS`.** With the 30-second default grace, that is 60 seconds — the
+value both `k8s/server/deployment.yaml` and `k8s/deployment.yaml` ship — not the 30 seconds
+this page previously showed, which would let the kubelet's SIGKILL deadline land while the
+process is still mid-drain. If you raise `APP_ENGINE_SHUTDOWN_GRACE_SECS`, raise
+`terminationGracePeriodSeconds` to at least twice that new value too.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `APP_ENGINE_SHUTDOWN_GRACE_SECS` | `30` | Seconds the process waits, after SIGTERM/SIGINT, for in-flight superstep runs to finish before giving up on the stragglers. |
+| `APP_ENGINE_GRACEFUL_SHUTDOWN` | `true` | Set to `false` to restore the legacy no-wait behavior (the M-B-02 disable switch). |
+
 ```yaml
-# Kubernetes graceful termination
+# Kubernetes graceful termination — 60s = 2x the 30s default APP_ENGINE_SHUTDOWN_GRACE_SECS
 spec:
-  terminationGracePeriodSeconds: 30
+  terminationGracePeriodSeconds: 60
   containers:
   - lifecycle:
       preStop:

@@ -1,0 +1,757 @@
+<!doctype html>
+<!--
+  Paladin dev-ui run inspector page (28-15, D-25/D-26, 28-UI-SPEC.md).
+
+  A single static template `include_str!`-ed into `dev_ui_controller.rs` at compile time.
+  The server substitutes two markers before serving:
+    - `__INSPECTOR_DATA__` inside the `#inspector-data` <script type="application/json">
+      element -- the serialized `InspectorView` JSON, with `</` and `<!--` escaped so it
+      cannot break out of the surrounding <script> element or open an HTML comment
+      (T-28-15-02).
+    - `__MERMAID_URL__` inside the `#dev-ui-mermaid-config` <script type="application/json">
+      element -- the configured Mermaid ESM module URL
+      (`web_server.dev_ui.mermaid_url`), JSON-string-escaped by the handler.
+
+  This page makes no fetches (D-26): the only network request it issues at runtime is the
+  `import()` of the Mermaid module from the configured URL. Every other panel renders
+  synchronously from the embedded JSON, parsed once inside a single try/catch, immediately
+  after the #inspector-data script element in document order (28-UI-SPEC.md E2/E3/E4
+  "loading": no network-bound loading state exists for the three data panels).
+
+  Read-only by design (PRD 07 OBS-FR-10: "explicitly minimal: no editing, no live mode
+  required"). No values-shown mode exists at any configuration -- field CHANGES are
+  rendered by NAME only, never a Battlefield field value (T-28-14-01, T-28-15-03).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Paladin — Run Inspector</title>
+<style>
+  :root {
+    /* Color (28-UI-SPEC.md "Color") -- light scheme */
+    --color-bg: #ffffff;
+    --color-panel: #f4f5f7;
+    --color-accent: #2563eb;
+    --color-destructive: #b91c1c;
+    --color-text: #0b0d12;
+    --color-text-muted: #475569;
+    --color-border: #e2e8f0;
+
+    /* Outcome color set (28-UI-SPEC.md "Outcome color set") -- light scheme */
+    --outcome-success-fill: #dcfce7;   --outcome-success-stroke: #16a34a;   --outcome-success-text: #14532d;
+    --outcome-failed-fill: #fee2e2;    --outcome-failed-stroke: #dc2626;    --outcome-failed-text: #7f1d1d;
+    --outcome-parleyed-fill: #fef3c7;  --outcome-parleyed-stroke: #d97706;  --outcome-parleyed-text: #78350f;
+    --outcome-skipped-fill: #f1f5f9;   --outcome-skipped-stroke: #94a3b8;   --outcome-skipped-text: #475569;
+    --outcome-cache_hit-fill: #e0e7ff; --outcome-cache_hit-stroke: #4f46e5; --outcome-cache_hit-text: #312e81;
+
+    /* Spacing scale (28-UI-SPEC.md "Spacing Scale") */
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 16px;
+    --space-lg: 24px;
+    --space-xl: 32px;
+
+    /* Typography (28-UI-SPEC.md "Typography"): two weights (400/600), four sizes
+       (12/14/18/24). */
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --font-body-size: 14px;
+    --font-label-size: 12px;
+    --font-heading-size: 18px;
+    --font-display-size: 24px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --color-bg: #0b0d12;
+      --color-panel: #171a21;
+      --color-accent: #60a5fa;
+      --color-destructive: #f87171;
+      --color-text: #f4f5f7;
+      --color-text-muted: #cbd5e1;
+      --color-border: #2a2f3a;
+
+      --outcome-success-fill: #14532d;   --outcome-success-stroke: #4ade80;   --outcome-success-text: #dcfce7;
+      --outcome-failed-fill: #7f1d1d;    --outcome-failed-stroke: #f87171;    --outcome-failed-text: #fee2e2;
+      --outcome-parleyed-fill: #78350f;  --outcome-parleyed-stroke: #fbbf24;  --outcome-parleyed-text: #fef3c7;
+      --outcome-skipped-fill: #1e293b;   --outcome-skipped-stroke: #64748b;   --outcome-skipped-text: #cbd5e1;
+      --outcome-cache_hit-fill: #312e81; --outcome-cache_hit-stroke: #818cf8; --outcome-cache_hit-text: #e0e7ff;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: var(--font-body-size);
+    font-weight: 400;
+    line-height: 1.5;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: var(--space-lg);
+  }
+
+  h1.display {
+    font-size: var(--font-display-size);
+    font-weight: 600;
+    line-height: 1.2;
+    margin: 0 0 var(--space-xl) 0;
+  }
+
+  h2.heading {
+    font-size: var(--font-heading-size);
+    font-weight: 600;
+    line-height: 1.2;
+    margin: 0 0 var(--space-md) 0;
+    padding-left: var(--space-sm);
+    border-left: 3px solid var(--color-accent);
+  }
+
+  .label {
+    font-size: var(--font-label-size);
+    font-weight: 600;
+    line-height: 1.5;
+  }
+
+  .mono {
+    font-family: var(--font-mono);
+    overflow-wrap: anywhere;
+  }
+
+  .panel {
+    background: var(--color-panel);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: var(--space-md);
+    margin-bottom: var(--space-lg);
+  }
+
+  .panel-diagram {
+    margin-top: var(--space-xl);
+  }
+
+  .panels-secondary {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-lg);
+  }
+
+  @media (max-width: 900px) {
+    .panels-secondary {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* E1: bounded scroll on both axes, never clipped, never breaking page layout
+     (28-UI-SPEC.md E1 "overflow"). */
+  .diagram-container {
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: 70vh;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: var(--space-sm);
+  }
+
+  .panel-empty,
+  .panel-loading,
+  .panel-error {
+    color: var(--color-text-muted);
+    padding: var(--space-sm) 0;
+  }
+
+  .panel-error pre,
+  #parse-error-raw {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: var(--space-sm);
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+    font-size: var(--font-label-size);
+  }
+
+  /* E2: node-visits panel, bounded scroll past ~10 rows (28-UI-SPEC.md E2 "overflow"). */
+  #visits-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  #visits-list li {
+    padding: var(--space-sm) 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  #visits-list li:last-child {
+    border-bottom: none;
+  }
+
+  /* E3: fired-edge panel, bounded scroll past ~15 supersteps (28-UI-SPEC.md E3
+     "overflow"). */
+  #edges-list {
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .edge-group {
+    padding: var(--space-sm) 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .edge-group:last-child {
+    border-bottom: none;
+  }
+
+  .edge-arrow {
+    white-space: nowrap;
+  }
+
+  /* E4: superstep table, sticky header + bounded vertical scroll past ~30 rows, and its
+     own horizontal scroll (28-UI-SPEC.md E4 "overflow"); no pagination -- the page makes
+     no fetches (D-26) and the smoke test needs the full embedded payload in the DOM. */
+  .superstep-table-wrapper {
+    max-height: 600px;
+    overflow-y: auto;
+    overflow-x: auto;
+  }
+
+  #superstep-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-body-size);
+  }
+
+  #superstep-table th,
+  #superstep-table td {
+    text-align: left;
+    padding: var(--space-sm);
+    border-bottom: 1px solid var(--color-border);
+    vertical-align: top;
+  }
+
+  #superstep-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--color-panel);
+    font-size: var(--font-label-size);
+    font-weight: 600;
+  }
+
+  #superstep-table tr.latest-superstep {
+    border-left: 3px solid var(--color-accent);
+  }
+
+  /* Outcome badges (28-UI-SPEC.md "Outcome color set" -- five NodeOutcomeKind classes:
+     success / failed / parleyed / skipped / cache_hit). */
+  .outcome-badge {
+    display: inline-block;
+    padding: 0 var(--space-xs);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: var(--font-label-size);
+    border: 1px solid transparent;
+  }
+
+  .outcome-success {
+    background: var(--outcome-success-fill);
+    border-color: var(--outcome-success-stroke);
+    color: var(--outcome-success-text);
+  }
+
+  .outcome-failed {
+    background: var(--outcome-failed-fill);
+    border-color: var(--outcome-failed-stroke);
+    color: var(--outcome-failed-text);
+  }
+
+  .outcome-parleyed {
+    background: var(--outcome-parleyed-fill);
+    border-color: var(--outcome-parleyed-stroke);
+    color: var(--outcome-parleyed-text);
+  }
+
+  .outcome-skipped {
+    background: var(--outcome-skipped-fill);
+    border-color: var(--outcome-skipped-stroke);
+    color: var(--outcome-skipped-text);
+  }
+
+  .outcome-cache_hit {
+    background: var(--outcome-cache_hit-fill);
+    border-color: var(--outcome-cache_hit-stroke);
+    color: var(--outcome-cache_hit-text);
+  }
+
+  .error-banner h2 {
+    color: var(--color-destructive);
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1 class="display"><span id="page-title-thread" class="mono"></span> <span id="page-title-status"></span></h1>
+  </header>
+
+  <!-- Whole-page empty state (28-UI-SPEC.md Copywriting Contract "Empty state
+       heading/body"): replaces the diagram (E1 empty) and the superstep table (E4 empty)
+       when InspectorView.supersteps is empty. -->
+  <div id="empty-state" class="panel" hidden>
+    <h2 class="heading">No supersteps recorded yet</h2>
+    <p>This thread has not completed a superstep. Once execution starts, node visits, fired
+      edges, and the superstep table will appear here.</p>
+  </div>
+
+  <main id="panels">
+    <section id="diagram-panel" class="panel panel-diagram">
+      <h2 class="heading">Execution Diagram</h2>
+      <div id="diagram-loading" class="panel-loading">Rendering diagram…</div>
+      <div id="diagram-error" class="panel-error" hidden>
+        <p id="diagram-error-text"></p>
+        <pre id="diagram-source"></pre>
+      </div>
+      <div id="diagram-container" class="diagram-container mermaid" hidden></div>
+    </section>
+
+    <div class="panels-secondary">
+      <section id="visits-panel" class="panel">
+        <h2 class="heading">Node Visits</h2>
+        <div id="visits-empty" class="panel-empty" hidden>No nodes have executed yet.</div>
+        <ul id="visits-list"></ul>
+      </section>
+
+      <section id="edges-panel" class="panel">
+        <h2 class="heading">Fired Edges</h2>
+        <div id="edges-empty" class="panel-empty" hidden>No edges evaluated yet.</div>
+        <div id="edges-list"></div>
+      </section>
+    </div>
+
+    <section id="superstep-panel" class="panel panel-supersteps">
+      <h2 class="heading">Supersteps</h2>
+      <div class="superstep-table-wrapper">
+        <table id="superstep-table">
+          <thead>
+            <tr>
+              <th>Superstep</th>
+              <th>Vanguard</th>
+              <th>Completed</th>
+              <th>Field Changes</th>
+            </tr>
+          </thead>
+          <tbody id="superstep-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script id="inspector-data" type="application/json">__INSPECTOR_DATA__</script>
+  <script id="dev-ui-mermaid-config" type="application/json">{"url": __MERMAID_URL__}</script>
+  <script type="module">
+    // Copywriting Contract (28-UI-SPEC.md) -- verbatim, used by both this renderer and the
+    // Rust-side smoke test's grep-equivalent assertions.
+    const COPY = {
+      emptyHeading: "No supersteps recorded yet",
+      emptyBody:
+        "This thread has not completed a superstep. Once execution starts, node visits, " +
+        "fired edges, and the superstep table will appear here.",
+      visitsEmpty: "No nodes have executed yet.",
+      edgesEmpty: "No edges evaluated yet.",
+      parseFailedHeading: "Inspector data could not be parsed.",
+      parseFailedBody: "The embedded inspector payload is not valid JSON. Raw payload shown below.",
+      diagramLoading: "Rendering diagram…",
+      diagramRenderFailedPrefix: "Mermaid could not be loaded from",
+      diagramRenderFailedSuffix: "Showing the raw diagram source below.",
+      observedOnlySuffix: "(observed nodes only — no graph document available)",
+      evaluatedUnavailableSuffix:
+        "(evaluated-but-not-fired edges unavailable — no persisted trace for this run)",
+      noFieldChanges: "no field changes",
+      awaitingInput: "— (awaiting input)",
+    };
+
+    const OUTCOME_GLYPHS = {
+      success: "✓", // ✓
+      failed: "✗", // ✗
+      parleyed: "⏸", // ⏸
+      skipped: "⊘", // ⊘
+      cache_hit: "⚡", // ⚡
+    };
+
+    /// Maps a `CompletedRow` (raw `InspectorView` JSON shape) to one of the five outcome
+    /// classes (28-UI-SPEC.md "Outcome color set"): `cache_hit` wins regardless of the
+    /// underlying `NodeOutcomeKind`, mirroring D-19/D-21's Mermaid `classDef` convention.
+    function outcomeClass(row) {
+      if (row && row.cache_hit) return "cache_hit";
+      const o = row ? row.outcome : null;
+      if (typeof o === "string") {
+        if (o === "Succeeded" || o === "Ended") return "success";
+        if (o === "Failed") return "failed";
+        if (o === "Parleyed") return "parleyed";
+      } else if (o && typeof o === "object" && "Skipped" in o) {
+        return "skipped";
+      }
+      return "skipped";
+    }
+
+    function outcomeBadge(row) {
+      const cls = outcomeClass(row);
+      const glyph = OUTCOME_GLYPHS[cls] || "?";
+      const span = document.createElement("span");
+      span.className = "outcome-badge outcome-" + cls;
+      span.textContent = glyph + " " + cls;
+      return span;
+    }
+
+    function nodeSpan(id) {
+      const span = document.createElement("span");
+      span.className = "mono";
+      span.textContent = id;
+      return span;
+    }
+
+    function dash() {
+      const span = document.createElement("span");
+      span.textContent = "—"; // —
+      return span;
+    }
+
+    function pluralize(n, unit) {
+      return n === 1 ? "1 " + unit : n + " " + unit + "s";
+    }
+
+    // --- Payload-parse-failure banner (28-UI-SPEC.md E2/E3/E4 "error"): shared across
+    // all three data panels, never three silently empty panels. ---
+    function renderParseFailure(rawText) {
+      const targets = [
+        { empty: "visits-empty", list: "visits-list" },
+        { empty: "edges-empty", list: "edges-list" },
+        { empty: null, list: "superstep-tbody" },
+      ];
+      for (const t of targets) {
+        if (t.empty) document.getElementById(t.empty).hidden = true;
+        const container = document.getElementById(t.list);
+        container.innerHTML = "";
+        const heading = document.createElement("p");
+        heading.textContent = COPY.parseFailedHeading;
+        const body = document.createElement("p");
+        body.textContent = COPY.parseFailedBody;
+        const pre = document.createElement("pre");
+        pre.id = "parse-error-raw";
+        pre.textContent = rawText;
+        const wrap = document.createElement("li");
+        wrap.appendChild(heading);
+        wrap.appendChild(body);
+        wrap.appendChild(pre);
+        if (container.tagName === "TBODY") {
+          const row = document.createElement("tr");
+          const cell = document.createElement("td");
+          cell.colSpan = 4;
+          cell.appendChild(heading.cloneNode(true));
+          cell.appendChild(body.cloneNode(true));
+          cell.appendChild(pre.cloneNode(true));
+          row.appendChild(cell);
+          container.appendChild(row);
+        } else {
+          container.appendChild(wrap);
+        }
+      }
+      const diagramLoading = document.getElementById("diagram-loading");
+      diagramLoading.hidden = true;
+      const diagramError = document.getElementById("diagram-error");
+      diagramError.hidden = false;
+      document.getElementById("diagram-error-text").textContent = COPY.parseFailedHeading;
+      document.getElementById("diagram-source").textContent = rawText;
+    }
+
+    // --- E2: Node Visits panel ---
+    function renderVisits(view) {
+      const emptyEl = document.getElementById("visits-empty");
+      const listEl = document.getElementById("visits-list");
+      listEl.innerHTML = "";
+      if (!view.visits || view.visits.length === 0) {
+        emptyEl.hidden = false;
+        return;
+      }
+      emptyEl.hidden = true;
+      for (const visit of view.visits) {
+        const li = document.createElement("li");
+        const idSpan = nodeSpan(visit.node_id);
+        const countText = document.createTextNode(
+          " ran " + pluralize(visit.count, "time") + ": supersteps " +
+            (visit.supersteps || []).join(", ") + " "
+        );
+        li.appendChild(idSpan);
+        li.appendChild(countText);
+        listEl.appendChild(li);
+      }
+    }
+
+    // --- E3: Fired Edges panel ---
+    function renderEdges(view) {
+      const emptyEl = document.getElementById("edges-empty");
+      const listEl = document.getElementById("edges-list");
+      listEl.innerHTML = "";
+      const groups = (view.supersteps || []).filter(
+        (s) => (s.fired_edges && s.fired_edges.length) || (s.evaluated_edges && s.evaluated_edges.length)
+      );
+      if (groups.length === 0) {
+        emptyEl.hidden = false;
+        return;
+      }
+      emptyEl.hidden = true;
+      for (const s of groups) {
+        const group = document.createElement("div");
+        group.className = "edge-group";
+        const label = document.createElement("div");
+        label.className = "label";
+        label.textContent = "superstep " + s.superstep + ":";
+        group.appendChild(label);
+
+        const fired = s.fired_edges || [];
+        for (const [from, to] of fired) {
+          const row = document.createElement("div");
+          row.appendChild(nodeSpan(from));
+          const arrow = document.createElement("span");
+          arrow.className = "edge-arrow mono";
+          arrow.textContent = " → ";
+          row.appendChild(arrow);
+          row.appendChild(nodeSpan(to));
+          row.appendChild(document.createTextNode(" fired"));
+          group.appendChild(row);
+        }
+
+        const evaluated = s.evaluated_edges || [];
+        for (const [from, to] of evaluated) {
+          const row = document.createElement("div");
+          row.appendChild(nodeSpan(from));
+          const arrow = document.createElement("span");
+          arrow.className = "edge-arrow mono";
+          arrow.textContent = " → ";
+          row.appendChild(arrow);
+          row.appendChild(nodeSpan(to));
+          row.appendChild(document.createTextNode(" evaluated, not fired"));
+          group.appendChild(row);
+        }
+
+        if (view.source === "Waypoints" && evaluated.length === 0) {
+          const note = document.createElement("div");
+          note.className = "label";
+          note.textContent = COPY.evaluatedUnavailableSuffix;
+          group.appendChild(note);
+        }
+
+        listEl.appendChild(group);
+      }
+    }
+
+    // --- E4: Superstep table ---
+    function statusLabel(status) {
+      if (typeof status === "string") return status;
+      return "Unknown";
+    }
+
+    function renderSupersteps(view) {
+      const tbody = document.getElementById("superstep-tbody");
+      tbody.innerHTML = "";
+      const rows = view.supersteps || [];
+      const latestIndex = rows.length - 1;
+      rows.forEach((row, idx) => {
+        const tr = document.createElement("tr");
+        if (idx === latestIndex) tr.className = "latest-superstep";
+
+        const stepTd = document.createElement("td");
+        stepTd.textContent = String(row.superstep);
+        tr.appendChild(stepTd);
+
+        const vanguardTd = document.createElement("td");
+        vanguardTd.className = "mono";
+        vanguardTd.textContent = (row.vanguard || []).join(", ");
+        tr.appendChild(vanguardTd);
+
+        const completedTd = document.createElement("td");
+        if (!row.completed || row.completed.length === 0) {
+          if (row.status === "AwaitingInput") {
+            completedTd.textContent = COPY.awaitingInput;
+          } else {
+            completedTd.appendChild(dash());
+          }
+        } else {
+          for (const c of row.completed) {
+            const wrap = document.createElement("span");
+            wrap.style.marginRight = "6px";
+            wrap.appendChild(outcomeBadge(c));
+            wrap.appendChild(document.createTextNode(" "));
+            wrap.appendChild(nodeSpan(c.node_id));
+            completedTd.appendChild(wrap);
+          }
+        }
+        tr.appendChild(completedTd);
+
+        const fieldsTd = document.createElement("td");
+        fieldsTd.className = "mono";
+        if (!row.field_changes || row.field_changes.length === 0) {
+          fieldsTd.textContent = COPY.noFieldChanges;
+        } else {
+          fieldsTd.textContent = row.field_changes.join(", ");
+        }
+        tr.appendChild(fieldsTd);
+
+        tbody.appendChild(tr);
+      });
+      void statusLabel; // referenced for future status-column use; kept to document intent
+    }
+
+    // --- E1: Execution diagram ---
+    function diagramClassDefBlock(isDark) {
+      const set = isDark
+        ? {
+            success: ["#14532d", "#4ade80", "#dcfce7"],
+            failed: ["#7f1d1d", "#f87171", "#fee2e2"],
+            parleyed: ["#78350f", "#fbbf24", "#fef3c7"],
+            skipped: ["#1e293b", "#64748b", "#cbd5e1"],
+            cache_hit: ["#312e81", "#818cf8", "#e0e7ff"],
+          }
+        : {
+            success: ["#dcfce7", "#16a34a", "#14532d"],
+            failed: ["#fee2e2", "#dc2626", "#7f1d1d"],
+            parleyed: ["#fef3c7", "#d97706", "#78350f"],
+            skipped: ["#f1f5f9", "#94a3b8", "#475569"],
+            cache_hit: ["#e0e7ff", "#4f46e5", "#312e81"],
+          };
+      let block = "";
+      for (const [name, [fill, stroke, text]] of Object.entries(set)) {
+        block += "classDef " + name + " fill:" + fill + ",stroke:" + stroke + ",color:" + text + ";\n";
+      }
+      return block;
+    }
+
+    async function renderDiagram(view, mermaidUrl) {
+      const loadingEl = document.getElementById("diagram-loading");
+      const errorEl = document.getElementById("diagram-error");
+      const containerEl = document.getElementById("diagram-container");
+
+      if (!view.supersteps || view.supersteps.length === 0) {
+        // E1 empty: no blank canvas, no CDN request -- the global empty state already
+        // covers this panel.
+        loadingEl.hidden = true;
+        return;
+      }
+
+      const isDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      let source = view.mermaid || "graph TD";
+      if (view.observed_only) {
+        source = "%%{init: {}}%%\n" + source;
+      }
+      source += "\n" + diagramClassDefBlock(isDark);
+
+      let timedOut = false;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        loadingEl.hidden = true;
+        errorEl.hidden = false;
+        document.getElementById("diagram-error-text").textContent =
+          COPY.diagramRenderFailedPrefix + " `" + mermaidUrl + "`. " + COPY.diagramRenderFailedSuffix;
+        document.getElementById("diagram-source").textContent = source;
+      }, 5000);
+
+      try {
+        const mod = await import(/* @vite-ignore */ mermaidUrl);
+        const mermaid = mod.default || mod;
+        mermaid.initialize({ startOnLoad: false, theme: isDark ? "dark" : "default" });
+        clearTimeout(timeout);
+        if (timedOut) return;
+        containerEl.textContent = source;
+        const { svg } = await mermaid.render("dev-ui-diagram-svg", source);
+        containerEl.innerHTML = svg;
+        loadingEl.hidden = true;
+        containerEl.hidden = false;
+        if (view.observed_only) {
+          const title = document.createElement("p");
+          title.className = "label";
+          title.textContent = COPY.observedOnlySuffix;
+          containerEl.prepend(title);
+        }
+      } catch (err) {
+        clearTimeout(timeout);
+        loadingEl.hidden = true;
+        errorEl.hidden = false;
+        document.getElementById("diagram-error-text").textContent =
+          COPY.diagramRenderFailedPrefix + " `" + mermaidUrl + "`. " + COPY.diagramRenderFailedSuffix;
+        document.getElementById("diagram-source").textContent = source;
+      }
+    }
+
+    // --- Page title ---
+    function renderTitle(view) {
+      const threadEl = document.getElementById("page-title-thread");
+      const statusEl = document.getElementById("page-title-status");
+      if (threadEl) threadEl.textContent = view.thread_id || "";
+      if (statusEl) {
+        let text = view.status ? String(view.status) : "";
+        if (view.observed_only) {
+          text += " " + COPY.observedOnlySuffix;
+        }
+        statusEl.textContent = text;
+      }
+    }
+
+    // --- Whole-page empty state (E1 + E4 empty) ---
+    function renderEmptyOrPanels(view) {
+      const empty = !view.supersteps || view.supersteps.length === 0;
+      document.getElementById("empty-state").hidden = !empty;
+      document.getElementById("diagram-panel").hidden = empty;
+      document.getElementById("superstep-panel").hidden = empty;
+      return empty;
+    }
+
+    // --- Entry point ---
+    const dataEl = document.getElementById("inspector-data");
+    const rawText = dataEl ? dataEl.textContent : "";
+    let view = null;
+    try {
+      view = JSON.parse(rawText);
+    } catch (err) {
+      renderParseFailure(rawText);
+    }
+
+    if (view) {
+      renderTitle(view);
+      const isEmptyPage = renderEmptyOrPanels(view);
+      renderVisits(view);
+      renderEdges(view);
+      renderSupersteps(view);
+
+      if (!isEmptyPage) {
+        let mermaidUrl = "";
+        try {
+          const cfgEl = document.getElementById("dev-ui-mermaid-config");
+          const cfg = JSON.parse(cfgEl.textContent);
+          mermaidUrl = cfg.url || "";
+        } catch (err) {
+          mermaidUrl = "";
+        }
+        renderDiagram(view, mermaidUrl);
+      } else {
+        document.getElementById("diagram-loading").hidden = true;
+      }
+    }
+  </script>
+</div>
+</body>
+</html>

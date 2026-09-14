@@ -1,0 +1,8 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: total_tokens_max 10
+  expected: total_tokens <= 10
+  observed: total_tokens = 22
+  seq: 13..=13

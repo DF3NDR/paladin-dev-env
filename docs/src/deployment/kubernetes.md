@@ -13,6 +13,7 @@ Complete guide for deploying Paladin on Kubernetes with high availability, scala
 - [Helm Chart](#helm-chart)
 - [Resource Management](#resource-management)
 - [High Availability](#high-availability)
+- [Graceful Shutdown](#graceful-shutdown)
 - [Horizontal Scaling](#horizontal-scaling)
 - [Storage](#storage)
 - [Networking](#networking)
@@ -186,6 +187,10 @@ spec:
         # the shipped routes are /health and /ready (crates/paladin-web/src/health.rs).
     spec:
       serviceAccountName: paladin
+      # 2x the configured APP_ENGINE_SHUTDOWN_GRACE_SECS (default 30s) so the
+      # kubelet's SIGKILL deadline never lands mid-drain — see the Graceful
+      # Shutdown section below (HITL-04, D-23).
+      terminationGracePeriodSeconds: 60
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -305,6 +310,24 @@ spec:
                   - paladin
               topologyKey: kubernetes.io/hostname
 ```
+
+### Worker replicas (Platform API, v0.10)
+
+The Deployment above serves the `/v1` API surface. Since Phase 27's Platform API turns
+`paladin-server` into a durable run server (`POST /runs` enqueues, a worker pool executes off the
+request path — see [`docs/src/api-reference/platform-api.md`](../api-reference/platform-api.md)),
+horizontal scale-out for run *execution* is a second, separate Deployment consuming the same
+durable run store and queue, not a config flag on this one:
+
+[`k8s/server/worker-deployment.yaml`](https://github.com/DF3NDR/paladin-dev-env/blob/main/k8s/server/worker-deployment.yaml)
+is the worked example — same image, `APP_RUN_STORE_BACKEND=postgres`,
+`APP_RUN_QUEUE_BACKEND=redis`, `APP_RUN_WORKER_CONCURRENCY` set, no separate Service (worker pods
+only consume work, they never serve inbound traffic). See
+[Queue / Worker (Distributed)](../deployment-topologies/queue-worker.md#run-server-producer-api--worker-replicas)
+for the full producer/worker-replica writeup, including why scaling worker replicas does **not**
+change ADR-0041's single-replica scope for the in-process auth token store — that limitation
+attaches to how many API replicas serve `bearer_token`-authenticated routes, not to how many
+worker replicas exist.
 
 ### Service
 
@@ -682,6 +705,33 @@ affinity:
             - paladin
         topologyKey: topology.kubernetes.io/zone
 ```
+
+## Graceful Shutdown
+
+On SIGTERM/SIGINT, `paladin-server` and the `ServiceRunner`-based binaries cancel a
+`ShutdownCoordinator` shared with every in-flight superstep run and wait up to a configured
+grace window for those runs to finish before the process exits (HITL-04, D-21/D-22).
+
+**The rule: `terminationGracePeriodSeconds` must be at least twice the configured
+`APP_ENGINE_SHUTDOWN_GRACE_SECS`.** Both `k8s/server/deployment.yaml` and `k8s/deployment.yaml`
+set `terminationGracePeriodSeconds: 60` — 2x the 30-second default grace — so the kubelet's
+SIGKILL deadline never lands while the process is still mid-drain. If you raise
+`APP_ENGINE_SHUTDOWN_GRACE_SECS`, raise `terminationGracePeriodSeconds` to at least twice that
+new value too.
+
+Two env vars, both read by `EngineConfig` (`src/config/engine.rs`):
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `APP_ENGINE_SHUTDOWN_GRACE_SECS` | `30` | Seconds the process waits, after SIGTERM/SIGINT, for in-flight superstep runs to finish before giving up on the stragglers. `0` aborts immediately; values above 3600 are rejected as a misconfiguration. |
+| `APP_ENGINE_GRACEFUL_SHUTDOWN` | `true` | Set to `false` to restore the legacy no-wait behavior — the process exits immediately on SIGTERM/SIGINT without waiting for any in-flight run (the `MIGRATION.md` M-B-02 disable switch for legacy-only deployments). |
+
+What an operator observes on SIGTERM: a run still executing when the signal arrives either
+finishes inside the grace window and its Waypoint records completion normally, or it is still
+running at the deadline — in which case it is aborted, its node's execution record reads
+`Skipped { reason: "shutdown" }`, and the node's id is re-listed in the Halted Waypoint's
+vanguard so the next `resume` re-runs it exactly once. No in-flight work silently vanishes
+either way.
 
 ## Horizontal Scaling
 

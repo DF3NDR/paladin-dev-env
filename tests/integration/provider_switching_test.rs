@@ -23,9 +23,7 @@ use paladin_llm::deepseek::{DeepSeekAdapter, DeepSeekConfig};
 use paladin_llm::mock::MockLlmAdapter;
 use paladin_llm::provider_factory::{LlmProviderFactory, ProviderFactoryError};
 use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
-use std::collections::HashMap;
 use std::sync::Arc;
-use uuid::Uuid;
 
 /// Build a fresh request each call so the same logical request can be sent
 /// through more than one provider without fighting move semantics.
@@ -36,14 +34,7 @@ fn make_request(content: &str) -> LlmRequest {
     }))
     .expect("fixed, valid prompt construction cannot fail");
 
-    LlmRequest {
-        id: Uuid::new_v4(),
-        model: "test-model".to_string(),
-        prompt,
-        attachments: vec![],
-        stream: false,
-        metadata: HashMap::new(),
-    }
+    LlmRequest::new("test-model", prompt)
 }
 
 #[tokio::test]

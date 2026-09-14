@@ -363,6 +363,20 @@ impl ConclaveExecutionService {
             PaladinError::GarrisonError(_) => false,
             PaladinError::GarrisonRequired => false,
             PaladinError::ArsenalError(_) => false,
+            // FT-01 (25-02 Task 1 landed the variant; D-02): classify by the carried
+            // transience instead of message sniffing.
+            PaladinError::LlmFailure { .. } => matches!(
+                error.transience(),
+                paladin_core::platform::container::transience::Transience::Transient
+            ),
+            // X-10.2 (D-04): `PaladinError` is `#[non_exhaustive]`; a future
+            // variant is classified by its own `transience()` rather than a
+            // silently-wrong `true`/`false` guess, mirroring the `LlmFailure`
+            // arm immediately above.
+            _ => matches!(
+                error.transience(),
+                paladin_core::platform::container::transience::Transience::Transient
+            ),
         }
     }
 
@@ -730,6 +744,67 @@ mod tests {
         assert!(!ConclaveExecutionService::is_retryable_error(
             &PaladinError::StopWordDetected("STOP".to_string())
         ));
+    }
+
+    /// Plan 25-06 Test 3 (D-02): the Conclave retry predicate classifies a
+    /// structured `LlmFailure` -- produced by `llm_failure::to_paladin_error`
+    /// from a real `LlmError` -- by its carried transience, never by sniffing
+    /// the message, and the rendered text is the legacy `LLM error: {e}`.
+    #[test]
+    fn conclave_execution_service_surfaces_structured_llm_failure() {
+        use crate::llm_failure::to_paladin_error;
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_ports::output::llm_port::LlmError;
+
+        // Transient by typed status: retried.
+        let transient = to_paladin_error(&LlmError::ProviderError {
+            provider: "openai".to_string(),
+            status: 503,
+            message: "upstream unavailable".to_string(),
+        });
+        assert!(matches!(
+            transient,
+            PaladinError::LlmFailure {
+                transience: Transience::Transient,
+                status: Some(503),
+                ..
+            }
+        ));
+        assert!(ConclaveExecutionService::is_retryable_error(&transient));
+
+        // A 500 carries no substring the legacy sniff recognised; the typed
+        // status classifies it Transient by value (FT-FR-01).
+        let server_fault = to_paladin_error(&LlmError::ProviderError {
+            provider: "openai".to_string(),
+            status: 500,
+            message: "internal".to_string(),
+        });
+        assert!(ConclaveExecutionService::is_retryable_error(&server_fault));
+
+        // Permanent: not retried.
+        let permanent = to_paladin_error(&LlmError::AuthenticationError(
+            "invalid API key".to_string(),
+        ));
+        assert!(matches!(
+            permanent,
+            PaladinError::LlmFailure {
+                transience: Transience::Permanent,
+                status: None,
+                ..
+            }
+        ));
+        assert!(!ConclaveExecutionService::is_retryable_error(&permanent));
+
+        // Unknown: not retried by the Conclave predicate.
+        let unknown = to_paladin_error(&LlmError::ProcessingError("opaque".to_string()));
+        assert!(!ConclaveExecutionService::is_retryable_error(&unknown));
+
+        // Rendered text is byte-identical to the legacy erasure (X-03).
+        let fixed = LlmError::RateLimitExceeded;
+        assert_eq!(
+            to_paladin_error(&fixed).to_string(),
+            format!("LLM error: {fixed}")
+        );
     }
 
     #[test]

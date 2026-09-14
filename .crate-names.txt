@@ -21,3 +21,4 @@ paladin-storage
 paladin-notifications
 paladin-content
 paladin-web
+paladin-eval

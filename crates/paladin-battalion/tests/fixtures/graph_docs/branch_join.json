@@ -1,0 +1,127 @@
+{
+  "schema_version": "1",
+  "entry": [
+    "split"
+  ],
+  "nodes": [
+    {
+      "id": "split",
+      "kind": "paladin",
+      "paladin": {
+        "name": "Split",
+        "model": "gpt-4",
+        "system_prompt": "Route the request: {topic}.",
+        "stop_words": [],
+        "input_template": "{topic}",
+        "output_field": "route"
+      },
+      "defer": false
+    },
+    {
+      "id": "branch_a",
+      "kind": "paladin",
+      "paladin": {
+        "name": "BranchA",
+        "model": "gpt-4",
+        "system_prompt": "Handle branch A: {route}.",
+        "stop_words": [],
+        "input_template": "{route}",
+        "output_field": "result_a"
+      },
+      "defer": false
+    },
+    {
+      "id": "branch_b",
+      "kind": "paladin",
+      "paladin": {
+        "name": "BranchB",
+        "model": "gpt-4",
+        "system_prompt": "Handle branch B: {route}.",
+        "stop_words": [],
+        "input_template": "{route}",
+        "output_field": "result_b"
+      },
+      "defer": false
+    },
+    {
+      "id": "join",
+      "kind": "paladin",
+      "paladin": {
+        "name": "Join",
+        "model": "gpt-4",
+        "system_prompt": "Combine: {result_a} and {result_b}.",
+        "stop_words": [],
+        "input_template": "{result_a} {result_b}",
+        "output_field": "joined"
+      },
+      "defer": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "split",
+      "to": "branch_a",
+      "condition": {
+        "type": "contains",
+        "value": "a"
+      }
+    },
+    {
+      "from": "split",
+      "to": "branch_b",
+      "condition": {
+        "type": "contains",
+        "value": "b"
+      }
+    },
+    {
+      "from": "branch_a",
+      "to": "join"
+    },
+    {
+      "from": "branch_b",
+      "to": "join"
+    }
+  ],
+  "schema": {
+    "fields": [
+      {
+        "name": "topic",
+        "kind": "string",
+        "reducer": "last_write",
+        "default": "widgets",
+        "required": false
+      },
+      {
+        "name": "route",
+        "kind": "string",
+        "reducer": "last_write",
+        "required": false
+      },
+      {
+        "name": "result_a",
+        "kind": "string",
+        "reducer": "last_write",
+        "required": false
+      },
+      {
+        "name": "result_b",
+        "kind": "string",
+        "reducer": "last_write",
+        "required": false
+      },
+      {
+        "name": "joined",
+        "kind": "string",
+        "reducer": "last_write",
+        "required": false
+      }
+    ]
+  },
+  "limits": {
+    "max_supersteps": 50,
+    "max_node_visits": 25,
+    "run_timeout_secs": null,
+    "max_muster_tasks": 100
+  }
+}

@@ -1,6 +1,6 @@
 [package]
 name = "paladin-web"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -13,8 +13,8 @@ categories = ["development-tools", "asynchronous", "api-bindings"]
 documentation = "https://docs.rs/paladin-web"
 
 [dependencies]
-paladin-ports = { version = "0.9.0", path = "../paladin-ports" }
-paladin-core = { package = "paladin-ai-core", version = "0.9.0", path = "../paladin-core" }
+paladin-ports = { version = "0.10.0", path = "../paladin-ports" }
+paladin-core = { package = "paladin-ai-core", version = "0.10.0", path = "../paladin-core" }
 axum = { version = "0.8.4" }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -25,6 +25,8 @@ chrono = { workspace = true }
 reqwest = { workspace = true }
 log = { workspace = true }
 async-trait = { workspace = true }
+# Opaque, base64url (no padding) pagination cursors (D-47, `pagination.rs`).
+base64 = { workspace = true }
 # Streaming (SSE): build the axum SSE body from the agent PaladinStream with a deadline.
 futures = "0.3"
 async-stream = "0.3"
@@ -41,3 +43,35 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 mockito = "1.7.0"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+
+[features]
+# The crate's FIRST [features] section (28-RESEARCH.md Q15 / Pitfall 2) -- every other
+# capability in this crate compiles unconditionally today. `dev-ui` is created from
+# scratch, not extended from a prior default.
+default = []
+# Feature-gated (default off, absent from the root umbrella's `full` set -- X-11.4), admin-
+# only developer tool: `GET /v1/dev-ui/threads/{id}` renders a `RunInspectorPort` view as a
+# single static HTML page (28-15, D-25/D-26). No new dependency is required -- the port and
+# its `InspectorView` payload already live in `paladin-ports`, an unconditional dependency
+# of this crate.
+dev-ui = []
+
+# X-10.6 deliberate-breaking suppression (D-06, MIGRATION.md §9.2, HITL-05, Phase 24).
+# `require_authentication` (agent_auth.rs) gained a generic type parameter `S:
+# HasAgentAuth` so `ThreadApiState`'s routes (24-11) could reuse the SAME
+# middleware `AgentApiState`'s routes already layer, instead of a duplicated
+# copy. This is a real, intentional generic-arity break for any external
+# caller using turbofish syntax against the old zero-generic signature.
+# Register/remove this suppression only in the same commit as the matching
+# MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml` entry (kept
+# set-equal by CI's `semver` job).
+#
+# `struct_marked_non_exhaustive` (D-21, PLAT-03, Plan 27-08): `ResumeAcceptedResponse`
+# is new in 0.10 (Phase 24, absent at the v0.9.0 baseline) and gained
+# `#[non_exhaustive]` alongside its additive `run_id` field. Not a deliberate
+# X-10 break -- the type did not exist at the baseline -- but the crate-level
+# lint suppression covers the case regardless. No `.cargo/semver-checks-allowlist.toml`
+# entry is required (MIGRATION.md §9.2 marks this row N/A, not `Y`).
+[package.metadata.cargo-semver-checks.lints]
+function_requires_different_generic_type_params = "allow"
+struct_marked_non_exhaustive = "allow"

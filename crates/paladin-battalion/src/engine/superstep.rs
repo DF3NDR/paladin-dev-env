@@ -25,6 +25,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use log::warn;
 use regex::Regex;
 use tokio::sync::Semaphore;
@@ -32,35 +34,60 @@ use tokio_util::sync::CancellationToken;
 
 use uuid::Uuid;
 
+use paladin_core::platform::container::aegis::{Aegis, CachePolicy, ErrorHandlerSpec};
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
-    Battlefield, CustomDispatchResolver, FieldName, StateDelta,
+    BATTLEFIELD_SCHEMA_VERSION, Battlefield, BattlefieldSchema, CacheMarker,
+    CustomDispatchResolver, FieldName, StateDelta,
 };
 use paladin_core::platform::container::directive::{
     Directive, MusterContext, MusterTask, NextStep,
 };
-use paladin_core::platform::container::paladin::Paladin;
-use paladin_core::platform::container::waypoint::{
-    FrontierEdgeState, FrontierSnapshot, MusterProgress, NodeExecutionRecord, NodeId,
-    NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus, canonical_edge_condition,
+use paladin_core::platform::container::node_cache::{CachedDelta, NODE_CACHE_SCHEMA_VERSION};
+use paladin_core::platform::container::node_error::{
+    AttemptRecord, NodeError, NodeErrorSource, TimeoutKind,
 };
+use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::parley::{
+    ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
+};
+use paladin_core::platform::container::run_scope::RunScope;
+use paladin_core::platform::container::structured::SchemaRef;
+use paladin_core::platform::container::transience::Transience;
+use paladin_core::platform::container::waypoint::{
+    FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeExecutionRecord,
+    NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus,
+    canonical_edge_condition,
+};
+use paladin_ports::output::cancellation_probe::CancellationProbe;
+use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::PaladinPort;
-use paladin_ports::output::trace_sink_port::TraceEvent;
+use paladin_ports::output::structured_executor_port::{StructuredExecutorPort, StructuredOptions};
+use paladin_ports::output::trace_sink_port::{NodeProgressKind, TraceEvent};
+use paladin_ports::output::vault_confined::ConfinedVault;
 use paladin_ports::output::waypoint_port::WaypointPort;
 
 use crate::edge_evaluator::EdgeEvaluatorRegistry;
+use crate::engine::cache_key;
 use crate::engine::directive_parser::{DirectiveParseError, DirectiveParser};
-use crate::engine::graph::{EngineLimits, NodeSpec, StateMap, WarGraph};
+use crate::engine::graph::{EngineLimits, GateRequestTemplate, NodeSpec, StateMap, WarGraph};
+use crate::engine::heartbeat::HeartbeatHandle;
 use crate::engine::hooks::{InterceptDecision, NodeInterceptor, TraceDispatcher};
 use crate::engine::input_mapping::InputMapping;
-use crate::engine::node::NodeError;
+use crate::engine::node::{NodeContext, StateNode, StateNodeError};
+use crate::engine::registries::EngineRegistries;
+use crate::engine::retry;
 use crate::engine::{EngineError, RunOutcome, WaypointDurability};
+use crate::llm_failure;
 
 /// Every parent engine resource D-21 requires forwarding into a
 /// `NodeSpec::Battalion` node's child run (CF-FR-16): the `WaypointPort`,
 /// `WaypointDurability`, the parallelism setting, the dispatch resolver,
-/// the edge-evaluator registry, the trace sink, the interceptor chain and
-/// the shared `CancellationToken`. `PaladinPort` is forwarded separately
+/// the whole `EngineRegistries` bundle (edge evaluators, retry predicates
+/// and error handlers -- a child inherits the parent's registries
+/// wholesale, Phase 23 D-21 / Phase 25 D-13), the trace sink, the
+/// interceptor chain and the shared `CancellationToken`/`CancellationProbe`. `PaladinPort` is forwarded separately
 /// (already `Arc<dyn PaladinPort>` at every call site, no bundling
 /// needed). Gathered ONCE per [`run`] call -- never per-dispatch -- and
 /// `Arc`-wrapped so every per-superstep node's `tokio::spawn`'d task can
@@ -75,16 +102,458 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     durability: WaypointDurability,
     parallelism: Option<usize>,
     registry: CustomDispatchResolver,
-    evaluators: EdgeEvaluatorRegistry,
+    registries: EngineRegistries,
     trace: Arc<TraceDispatcher>,
     interceptors: Vec<Arc<dyn NodeInterceptor>>,
     cancellation: Option<CancellationToken>,
+    /// THIS run's own cancellation probe (D-14, PLAT-FR-04) -- inherited by
+    /// a nested `NodeSpec::Battalion` child run wholesale, like the token
+    /// above, so a cancelled parent thread's children observe it too.
+    cancellation_probe: Option<Arc<dyn CancellationProbe>>,
     /// THIS run's own `checkpoint_ns` (CF-FR-15, D-20) -- captured once
     /// here so a NESTED `NodeSpec::Battalion` dispatch (a grandchild, from
     /// this run's own perspective) can derive the next namespace segment
     /// as `"{this}{grandchild_node_id}/"` without threading an extra
     /// parameter through the whole dispatch/execute call chain.
     checkpoint_ns: Option<String>,
+    /// THIS run's own `fork_of` (HITL-03, D-14) -- captured once here so a
+    /// NESTED `NodeSpec::Battalion` dispatch propagates the SAME branch
+    /// root onto its child run's own Waypoints, verbatim (never
+    /// concatenated -- a branch root is a single value shared by the whole
+    /// run tree, unlike `checkpoint_ns`'s per-level namespace segments).
+    fork_of: Option<WaypointId>,
+    /// THIS run's own `shutdown_grace` (HITL-04, D-19, D-20) -- captured
+    /// once here so a nested `NodeSpec::Battalion` child run observes the
+    /// SAME grace window its parent does when racing its own in-flight
+    /// batch against a mid-superstep cancellation (a runtime setting shared
+    /// by the whole run tree, exactly like `fork_of` above).
+    shutdown_grace: std::time::Duration,
+    /// THIS run's node cache backend (FT-FR-18, D-29; plan 25-13) --
+    /// inherited by a nested `NodeSpec::Battalion` child run wholesale,
+    /// like every other engine resource, so a child graph's own
+    /// `CachePolicy` nodes are served by the same backend the parent's are.
+    node_cache: Option<Arc<dyn NodeCachePort>>,
+    /// THIS engine's confined Vault handle (RT-04, D-21; plan 26-13) --
+    /// inherited by a nested `NodeSpec::Battalion` child run wholesale,
+    /// like every other engine resource, so a child graph's own nodes
+    /// receive the SAME grant the parent's do.
+    vault: Option<ConfinedVault>,
+    /// THIS engine's structured-output executor (RT-05, RT-FR-19, D-29;
+    /// plan 26-18) -- inherited by a nested `NodeSpec::Battalion` child run
+    /// wholesale, like every other engine resource, so a child graph's own
+    /// `output_schema` nodes dispatch through the SAME executor the
+    /// parent's do.
+    structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
+}
+
+/// One dispatched node's resolved cache binding (Doc 04 FT-FR-18, D-29;
+/// plan 25-13): `Some` only when the node's resolved `Aegis` carries a
+/// `cache` policy AND this run has a backend -- `WarGraph::
+/// validate_node_cache_backend` already rejected the policy-without-backend
+/// case before any node ran, so a `None` here always means "no policy".
+#[derive(Clone)]
+struct NodeCacheBinding {
+    policy: CachePolicy,
+    cache: Arc<dyn NodeCachePort>,
+    graph_fingerprint: GraphFingerprint,
+}
+
+/// Compose this dispatch's cache key (D-28, `engine::cache_key`): a
+/// `NodeSpec::Paladin` node keys on the SAME rendered input string
+/// `execute_vanguard_node` will hand the port (rendered here a second time
+/// over the same immutable snapshot -- cheap, and it keeps the key
+/// composition a pure function of the dispatch rather than a side channel
+/// out of the attempt); a `Function` node keys on the snapshot. `None` when
+/// the input cannot be rendered (the attempt will then fail with the same
+/// `InputMapping` error, so there is nothing to look up) or for a dispatch
+/// kind that never carries a cache policy (`Battalion`, rejected at
+/// validation).
+fn compose_node_cache_key<W: WaypointPort + 'static>(
+    binding: &NodeCacheBinding,
+    dispatch: &NodeDispatch<W>,
+    snapshot: &Battlefield,
+    ctx: &NodeContext,
+) -> Option<NodeCacheKey> {
+    match dispatch {
+        NodeDispatch::Function(_) => Some(cache_key::compose(&cache_key::CacheKeyInputs {
+            graph_fingerprint: &binding.graph_fingerprint,
+            node_id: &ctx.node_id,
+            input: cache_key::InputComponent::Snapshot(snapshot),
+            snapshot,
+            key_spec: &binding.policy.key,
+            muster: ctx.muster.as_ref(),
+            paladin: None,
+        })),
+        NodeDispatch::Paladin {
+            paladin,
+            input_template,
+            ..
+        } => {
+            let rendered = input_template
+                .render(snapshot, ctx.muster.as_ref(), ctx.parley_response())
+                .ok()?;
+            Some(cache_key::compose(&cache_key::CacheKeyInputs {
+                graph_fingerprint: &binding.graph_fingerprint,
+                node_id: &ctx.node_id,
+                input: cache_key::InputComponent::Rendered(&rendered),
+                snapshot,
+                key_spec: &binding.policy.key,
+                muster: ctx.muster.as_ref(),
+                paladin: Some(paladin.as_ref()),
+            }))
+        }
+        NodeDispatch::Battalion { .. } => None,
+    }
+}
+
+/// The lookup BEFORE attempt 1 (FT-FR-18, D-29). `Some(cached)` only for a
+/// live hit: a backend `Err` is a MISS (logged, never a failure -- the
+/// cache is best-effort by construction), an entry at or past its
+/// `expires_at` is a miss even if the backend served it (the closed TTL
+/// boundary, re-checked here so the engine and every backend agree on what
+/// `expires_at` means), and an entry authored under a different
+/// `CachedDelta`/`StateDelta` schema version is a miss rather than a delta
+/// this build might mis-merge.
+async fn lookup_node_cache(
+    binding: &NodeCacheBinding,
+    key: &NodeCacheKey,
+    node_id: &NodeId,
+) -> Option<CachedDelta> {
+    match binding.cache.get(key).await {
+        Ok(Some(cached)) => {
+            if cached.is_expired_at(Utc::now()) {
+                log::debug!("node cache: entry for {node_id} is expired -- miss");
+                return None;
+            }
+            if cached.schema_version != NODE_CACHE_SCHEMA_VERSION
+                || cached.delta.schema_version != BATTLEFIELD_SCHEMA_VERSION
+            {
+                log::debug!(
+                    "node cache: entry for {node_id} carries schema versions {}/{} (this build: \
+                     {NODE_CACHE_SCHEMA_VERSION}/{BATTLEFIELD_SCHEMA_VERSION}) -- miss",
+                    cached.schema_version,
+                    cached.delta.schema_version
+                );
+                return None;
+            }
+            Some(cached)
+        }
+        Ok(None) => None,
+        Err(err) => {
+            warn!("node cache: get failed for {node_id}: {err} -- treated as a miss (D-29)");
+            None
+        }
+    }
+}
+
+/// The store AFTER a successful attempt (FT-FR-18, D-29): called only for a
+/// genuine `NodeRunOutcome::Succeeded` whose `Directive` routes via
+/// `NextStep::Edges` -- never for a failed attempt, a handler-compensated
+/// failure, or a `Goto`/`End`/`Parley`/`Muster` directive (a `CachedDelta`
+/// stores a delta alone, and replaying only the delta of a routing
+/// directive would silently drop its routing). A delta touching a field the
+/// schema marks other than `CacheMarker::Allow` is never stored (FT-FR-20:
+/// the `Function`-node half of the `Deny` guarantee, since a `StateNode`'s
+/// write set is only knowable here). A backend `Err` is logged and never
+/// fails the run.
+async fn store_node_cache(
+    binding: &NodeCacheBinding,
+    key: &NodeCacheKey,
+    delta: &StateDelta,
+    schema: &BattlefieldSchema,
+    node_id: &NodeId,
+) {
+    let denied: Vec<&str> = delta
+        .values
+        .keys()
+        .filter(|field| {
+            schema
+                .field_spec(field)
+                .is_some_and(|spec| !matches!(spec.cache, CacheMarker::Allow))
+        })
+        .map(FieldName::as_str)
+        .collect();
+    if !denied.is_empty() {
+        log::debug!(
+            "node cache: not storing {node_id}'s delta -- it writes cache: Deny field(s) {}",
+            denied.join(", ")
+        );
+        return;
+    }
+    if let Err(err) = binding.cache.put(key, delta, binding.policy.ttl).await {
+        warn!("node cache: put failed for {node_id}: {err} -- ignored, the run continues (D-29)");
+    }
+}
+
+/// Pairs a spawned node task's own dispatch-order position with its
+/// [`tokio::task::JoinHandle`], so a batch of handles can be raced through a
+/// [`FuturesUnordered`] (which does not preserve insertion order) while
+/// still recovering each result's ORIGINAL `dispatch_entries` index for the
+/// existing order-sensitive bookkeeping (`node_failure`'s first-wins guard,
+/// `goto_targets` push order, etc. -- D-19, RESEARCH.md Pitfall 1).
+/// [`IndexedHandle::abort`] delegates to the wrapped handle so the
+/// grace-deadline race can cancel a still-outstanding task without first
+/// removing it from the `FuturesUnordered` (`iter()` inspects without
+/// polling or removing).
+struct IndexedHandle<T> {
+    index: usize,
+    handle: tokio::task::JoinHandle<T>,
+}
+
+impl<T> IndexedHandle<T> {
+    /// Abort the wrapped task (`JoinHandle::abort`, cancel-safe to call
+    /// while the handle is also registered in a `FuturesUnordered`).
+    fn abort(&self) {
+        self.handle.abort();
+    }
+}
+
+impl<T> std::future::Future for IndexedHandle<T> {
+    type Output = (usize, Result<T, tokio::task::JoinError>);
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        // `tokio::task::JoinHandle<T>` is `Unpin` unconditionally, so
+        // `IndexedHandle<T>` (a `usize` plus a `JoinHandle<T>`, nothing
+        // self-referential) is auto-`Unpin` too -- no `unsafe` needed to
+        // reach `&mut self.handle` through the `Pin`.
+        let this = self.get_mut();
+        let index = this.index;
+        std::pin::Pin::new(&mut this.handle)
+            .poll(cx)
+            .map(|res| (index, res))
+    }
+}
+
+/// Resolves to the token's own cancellation the moment it fires, or never
+/// resolves at all when `token` is `None` -- lets the mid-superstep grace
+/// race (D-19) include "watch for cancellation" as an ordinary
+/// `tokio::select!` branch regardless of whether a `CancellationToken` is
+/// configured, with no `unwrap()`/`expect()` on the `Option` (house rule).
+async fn cancelled_or_pending(token: &Option<CancellationToken>) {
+    match token {
+        Some(t) => t.cancelled().await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// One attempt's resolved timeout bounds (Doc 04 FT-FR-08/09/10, D-20;
+/// plan 25-09): the tightest wall-clock deadline and which bound it belongs
+/// to, plus the idle window. Resolved fresh per attempt by
+/// [`AttemptBounds::resolve`] and raced against the attempt by
+/// [`race_attempt`].
+#[derive(Debug, Clone, Copy)]
+struct AttemptBounds {
+    /// The absolute wall-clock deadline for this attempt and the typed kind
+    /// naming which bound it is: `Run` when the node's own
+    /// `TimeoutPolicy::run_timeout` is the tightest, `EngineRun` when the
+    /// remaining `EngineLimits::run_timeout` budget is. `None` when neither
+    /// bound is declared.
+    deadline: Option<(tokio::time::Instant, TimeoutKind)>,
+    /// The node's `TimeoutPolicy::idle_timeout`, if declared: the attempt
+    /// fails `Timeout(Idle)` if no heartbeat arrives within this window.
+    idle: Option<std::time::Duration>,
+}
+
+impl AttemptBounds {
+    /// Resolve the bounds for an attempt starting NOW from the node's
+    /// resolved `TimeoutPolicy` (if any) and the run's absolute engine
+    /// deadline (if any). The per-attempt deadline is
+    /// `min(now + run_timeout, engine_deadline)`, named by whichever was
+    /// tightest; on an exact tie the node's own `Run` bound is named (the
+    /// policy the node author declared wins the label). Zero durations
+    /// never reach here: `WarGraph::validate` rejects them (plan 25-03).
+    fn resolve(
+        policy: Option<&paladin_core::platform::container::aegis::TimeoutPolicy>,
+        engine_deadline: Option<tokio::time::Instant>,
+    ) -> Self {
+        let now = tokio::time::Instant::now();
+        let run = policy
+            .and_then(|p| p.run_timeout)
+            .map(|d| (now + d, TimeoutKind::Run));
+        let engine = engine_deadline.map(|d| (d, TimeoutKind::EngineRun));
+        let deadline = match (run, engine) {
+            (Some(run), Some(engine)) if engine.0 < run.0 => Some(engine),
+            (Some(run), _) => Some(run),
+            (None, engine) => engine,
+        };
+        Self {
+            deadline,
+            idle: policy.and_then(|p| p.idle_timeout),
+        }
+    }
+}
+
+/// Resolves when `deadline` passes, or never when there is none -- an
+/// always-present `tokio::select!` branch with no `unwrap()` on the
+/// `Option` (house rule), mirroring [`cancelled_or_pending`].
+async fn deadline_or_pending(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// D-04, D-36: the default per-node `NodeProgress::Heartbeat` emission
+/// interval, used when no caller-configured value is threaded in --
+/// 28-06 passes `TraceConfig::heartbeat_interval_secs` through
+/// [`idle_or_pending`]/[`race_attempt`] in this constant's place. Not part
+/// of [`EngineLimits`] (23-CONTEXT D-18 keeps that struct out of the graph
+/// fingerprint, and this is a trace-rate knob, never a run limit).
+const DEFAULT_HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Resolves when no beat has been observed on `heartbeat` for `idle`, or
+/// never when there is no idle window (a node without an `idle_timeout`
+/// never subscribes -- D-18's "heartbeat is a no-op" truth). Each observed
+/// beat restarts the window: the timer AWAITS the handle's `changed()`
+/// rather than polling a timestamp, so under `tokio::time::pause` it is
+/// driven purely by the virtual clock (RESEARCH.md's `watch` recommendation).
+///
+/// D-04, T-28-03-02: every beat observed also feeds a per-node,
+/// per-`heartbeat_interval` rate limit -- `heartbeat_last_emitted` (keyed
+/// by `node_id`, shared across this whole run, never reset per superstep)
+/// gates a `TraceEvent::NodeProgress { node_id, progress:
+/// NodeProgressKind::Heartbeat }` emission through `trace`: emitted only
+/// when no prior emission is recorded for `node_id`, or the elapsed time
+/// since the last one is at least `heartbeat_interval` -- so a node
+/// beating continuously cannot flood the bounded trace queue (T-28-03-02).
+#[allow(clippy::too_many_arguments)]
+async fn idle_or_pending(
+    heartbeat: &HeartbeatHandle,
+    idle: Option<std::time::Duration>,
+    node_id: &NodeId,
+    trace: &Arc<TraceDispatcher>,
+    heartbeat_last_emitted: &Arc<std::sync::Mutex<HashMap<NodeId, tokio::time::Instant>>>,
+    heartbeat_interval: std::time::Duration,
+) {
+    let Some(idle) = idle else {
+        return std::future::pending::<()>().await;
+    };
+    let mut beats = heartbeat.subscribe();
+    loop {
+        match tokio::time::timeout(idle, beats.changed()).await {
+            // A beat arrived inside the window: progress -- restart it,
+            // and consider it for a rate-limited liveness record.
+            Ok(Ok(())) => {
+                let now = tokio::time::Instant::now();
+                let should_emit = {
+                    let mut last = heartbeat_last_emitted
+                        .lock()
+                        .expect("heartbeat rate-limit mutex poisoned");
+                    let emit = last
+                        .get(node_id)
+                        .is_none_or(|&at| now.duration_since(at) >= heartbeat_interval);
+                    if emit {
+                        last.insert(node_id.clone(), now);
+                    }
+                    emit
+                };
+                if should_emit {
+                    trace.emit(TraceEvent::NodeProgress {
+                        node_id: node_id.clone(),
+                        progress: NodeProgressKind::Heartbeat,
+                    });
+                }
+                continue;
+            }
+            // The handle was dropped: the attempt itself is gone (finished
+            // or cancelled), so there is nothing left to bound.
+            Ok(Err(_)) => return std::future::pending::<()>().await,
+            // No beat for a whole window: the node has stalled.
+            Err(_elapsed) => return,
+        }
+    }
+}
+
+/// Race one attempt's execution against its [`AttemptBounds`] (D-20).
+/// `biased` toward the attempt so a result landing on the same virtual
+/// tick as a deadline is still a result. On expiry the attempt future is
+/// dropped here -- its partial work is discarded exactly as any other
+/// failed attempt's is (FT-FR-03, T-25-41) -- and the failure names the
+/// bound that fired by typed `TimeoutKind`, never by message text (T-25-42).
+#[allow(clippy::too_many_arguments)]
+async fn race_attempt(
+    attempt: impl std::future::Future<Output = NodeDispatchResult>,
+    bounds: &AttemptBounds,
+    heartbeat: &HeartbeatHandle,
+    node_id: &NodeId,
+    trace: &Arc<TraceDispatcher>,
+    heartbeat_last_emitted: &Arc<std::sync::Mutex<HashMap<NodeId, tokio::time::Instant>>>,
+    heartbeat_interval: std::time::Duration,
+) -> NodeDispatchResult {
+    let (deadline, deadline_kind) = match bounds.deadline {
+        Some((at, kind)) => (Some(at), kind),
+        None => (None, TimeoutKind::Run),
+    };
+    tokio::select! {
+        biased;
+        result = attempt => result,
+        _ = deadline_or_pending(deadline) => {
+            (None, 0, Err(NodeFailure::Timeout(deadline_kind)))
+        }
+        _ = idle_or_pending(heartbeat, bounds.idle, node_id, trace, heartbeat_last_emitted, heartbeat_interval) => {
+            (None, 0, Err(NodeFailure::Timeout(TimeoutKind::Idle)))
+        }
+    }
+}
+
+/// The ONE path every engine-limit failure takes (ENG-FR-03, D-20):
+/// `RecursionLimitExceeded`, `NodeVisitLimitExceeded` and, from plan 25-09,
+/// `RunTimeoutExceeded` all persist a `WaypointStatus::Failed` Waypoint
+/// through here and return `RunOutcome::Failed` -- consistency is
+/// structural (one function), not three implementations kept in step by
+/// hand. `completed` is empty for a boundary-time limit (nothing ran this
+/// superstep) and carries the superstep's records for a mid-superstep cut;
+/// `node_error` is `None` for a boundary-time limit (exactly what the two
+/// pre-existing limits always wrote) and `Some` when the engine budget cut
+/// an in-flight attempt, so the typed `Timeout(EngineRun)` survives on the
+/// Waypoint.
+#[allow(clippy::too_many_arguments)]
+async fn persist_limit_failure<W: WaypointPort + 'static>(
+    waypoint_port: &W,
+    durability: WaypointDurability,
+    trace: &Arc<TraceDispatcher>,
+    thread: &ThreadId,
+    parent_waypoint_id: Option<WaypointId>,
+    superstep_number: u64,
+    graph: &WarGraph,
+    battlefield: &Battlefield,
+    vanguard: Vec<NodeId>,
+    completed: Vec<NodeExecutionRecord>,
+    error: EngineError,
+    failed_node: NodeId,
+    node_error: Option<NodeError>,
+    visit_counts: BTreeMap<NodeId, u32>,
+    frontier: FrontierSnapshot,
+    checkpoint_ns: Option<String>,
+    fork_of: Option<WaypointId>,
+) -> Result<RunOutcome, EngineError> {
+    let waypoint = build_waypoint(
+        thread,
+        parent_waypoint_id,
+        superstep_number,
+        graph,
+        battlefield,
+        vanguard,
+        completed,
+        WaypointStatus::Failed {
+            error: error.to_string(),
+            failed_node,
+            node_error,
+        },
+        visit_counts,
+        frontier,
+        None,
+        checkpoint_ns,
+        fork_of,
+    );
+    persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+    Ok(RunOutcome::Failed {
+        error,
+        waypoint: Some(waypoint.waypoint_id),
+    })
 }
 
 /// What one vanguard node resolves to for this superstep's execution: either
@@ -109,6 +578,15 @@ enum NodeDispatch<W: WaypointPort + 'static> {
         output_field: FieldName,
         /// How this node's raw output becomes a routing `Directive`.
         directive_parser: DirectiveParser,
+        /// This node's `output_schema`, ALREADY RESOLVED to its JSON Schema
+        /// value (RT-05, RT-FR-19, D-29, plan 26-18) -- `SchemaRef::Inline`
+        /// unwrapped, `SchemaRef::Registered(name)` looked up in
+        /// `registries.output_schemas` and rendered via
+        /// `StructuredSchema::to_json_schema` -- both resolved ONCE, before
+        /// this dispatch entry is spawned (never per-attempt), by the
+        /// dispatch-building loop below. `None` for an ordinary node,
+        /// unchanged from before this phase.
+        output_schema: Option<serde_json::Value>,
     },
     /// A `NodeSpec::Battalion` node's execution inputs (CF-FR-14, D-19).
     Battalion {
@@ -127,6 +605,44 @@ enum NodeDispatch<W: WaypointPort + 'static> {
     },
 }
 
+// Manual `Clone` (rather than `#[derive(Clone)]`) so this impl does NOT pick
+// up a spurious `W: Clone` bound -- every field that mentions `W` is already
+// behind an `Arc` (`ChildEngineResources<W>`), which is `Clone` regardless
+// of whether `W` itself is. D-14's retry loop needs to re-dispatch the SAME
+// `NodeDispatch` on every attempt, so this is now load-bearing rather than
+// merely convenient.
+impl<W: WaypointPort + 'static> Clone for NodeDispatch<W> {
+    fn clone(&self) -> Self {
+        match self {
+            NodeDispatch::Function(node) => NodeDispatch::Function(Arc::clone(node)),
+            NodeDispatch::Paladin {
+                paladin,
+                input_template,
+                output_field,
+                directive_parser,
+                output_schema,
+            } => NodeDispatch::Paladin {
+                paladin: paladin.clone(),
+                input_template: input_template.clone(),
+                output_field: output_field.clone(),
+                directive_parser: directive_parser.clone(),
+                output_schema: output_schema.clone(),
+            },
+            NodeDispatch::Battalion {
+                graph,
+                state_map,
+                resources,
+                restart_on_resume,
+            } => NodeDispatch::Battalion {
+                graph: Arc::clone(graph),
+                state_map: state_map.clone(),
+                resources: Arc::clone(resources),
+                restart_on_resume: *restart_on_resume,
+            },
+        }
+    }
+}
+
 /// A vanguard node's failure, distinguishing a `DirectiveParser` parse
 /// failure (CF-02, D-11) -- which the per-node accumulation loop below
 /// converts to the typed `EngineError::DirectiveParseFailed` naming this
@@ -137,9 +653,15 @@ enum NodeDispatch<W: WaypointPort + 'static> {
 enum NodeFailure {
     /// A `Function` node's own error, a `NodeSpec::Paladin` node's
     /// `InputMapping::render`/`PaladinPort::execute` failure, or an
-    /// internal engine error -- everything that was `NodeError` before this
+    /// internal engine error -- everything that was `StateNodeError` before this
     /// phase, unchanged.
-    Node(NodeError),
+    Node(StateNodeError),
+    /// A `NodeSpec::Paladin` node's `PaladinPort::execute` call failed
+    /// (Doc 04 D-07): the live `PaladinError` is kept until the engine
+    /// boundary converts it, so its typed `transience()`, `status` and
+    /// `provider` reach the structured `NodeError` instead of being erased
+    /// to a string one line early. Retry-eligible exactly like `Node`.
+    Paladin(PaladinError),
     /// A `NodeSpec::Paladin` node's `DirectiveParser::StructuredDirective`
     /// call under `OnParseError::FailRun` (CF-02, D-11).
     DirectiveParse(DirectiveParseError),
@@ -149,12 +671,307 @@ enum NodeFailure {
     /// interpolated string), built where the child's own thread id is in
     /// scope and passed through here unchanged.
     Battalion(EngineError),
+    /// The attempt was cut by a timeout (Doc 04 FT-FR-08/09/10, D-20; plan
+    /// 25-09): the per-attempt wall-clock `TimeoutPolicy::run_timeout`
+    /// (`Run`), the progress-aware `TimeoutPolicy::idle_timeout` (`Idle`),
+    /// or the run-level `EngineLimits::run_timeout` (`EngineRun`). The
+    /// attempt's future was DROPPED at expiry, so its partial work never
+    /// existed as a `Directive` to merge (T-25-41). Always `Transient`, so
+    /// `Run`/`Idle` feed the retry predicate like any other transient
+    /// failure; `EngineRun` is never retried (the budget is gone) and ends
+    /// the whole run with `EngineError::RunTimeoutExceeded`.
+    Timeout(TimeoutKind),
+    /// A `NodeSpec::Paladin` node's `output_schema` structured-output
+    /// repair loop exhausted (D-29, RT-FR-19, Phase 25 D-05): ALWAYS
+    /// classified `Transience::Unknown` in `node_error` below -- NEVER
+    /// delegated to `PaladinError::transience()`'s general `Permanent`
+    /// verdict for `PaladinError::StructuredOutputInvalid` (the verdict a
+    /// non-engine caller of `execute_structured` correctly gets, since it
+    /// has no different-graph/different-model retry available). The engine
+    /// repair loop already retried internally (`max_repair_attempts`)
+    /// before this failure surfaced, so it is not a transient network
+    /// condition -- but it is not provably permanent either, and a
+    /// `TransientAndUnknown` Aegis may legitimately retry the WHOLE node
+    /// with a different prompt/model. Deliberately a DISTINCT variant from
+    /// `Paladin(PaladinError)` above rather than a special case inside it,
+    /// so this divergence from the general classification is visible at
+    /// the type level, not buried inside a conditional.
+    StructuredOutputInvalid(PaladinError),
+}
+
+impl NodeFailure {
+    /// The structured [`NodeError`] this failure converts to at the engine
+    /// boundary (Doc 04 D-07), for `node_id`'s 1-indexed `attempt`:
+    ///
+    /// - `Node(StateNodeError)` -> `NodeErrorSource::Function { message }`
+    ///   classified `Transience::Unknown` -- a `StateNode` author returns
+    ///   only a message, so nothing typed exists to classify from (the
+    ///   retry predicate's `TransientAndUnknown` is how a Function node
+    ///   opts into retrying these; `TransientOnly`, the default, does not).
+    /// - `Paladin(PaladinError)` -> `NodeErrorSource::Paladin { kind, .. }`,
+    ///   or `NodeErrorSource::Llm { status, provider, .. }` for a
+    ///   `PaladinError::LlmFailure`, classified by the error's own typed
+    ///   `PaladinError::transience()` (D-05) -- via
+    ///   `llm_failure::to_node_error_source`, the one conversion beside
+    ///   `to_paladin_error` so both read the same typed fields.
+    /// - `Timeout(kind)` -> `NodeErrorSource::Timeout(kind)` classified
+    ///   `Transience::Transient` (D-20, FT-FR-08): the bound that fired is
+    ///   carried by the typed `TimeoutKind`, never inferred from a message.
+    /// - `DirectiveParse`/`Battalion` -> `None`: neither is a node-execution
+    ///   failure the Aegis governs (each has its own typed `EngineError`
+    ///   and is never retried, D-14).
+    fn node_error(&self, node_id: &NodeId, attempt: u32) -> Option<NodeError> {
+        let (transience, source) = match self {
+            NodeFailure::Node(err) => (Transience::Unknown, NodeErrorSource::from(err.clone())),
+            NodeFailure::Paladin(err) => (err.transience(), llm_failure::to_node_error_source(err)),
+            NodeFailure::Timeout(kind) => (Transience::Transient, NodeErrorSource::Timeout(*kind)),
+            // --- D-29, Phase 25 D-05: hardcoded `Unknown`, never
+            // `err.transience()` -- see this variant's own rustdoc.
+            NodeFailure::StructuredOutputInvalid(err) => {
+                (Transience::Unknown, llm_failure::to_node_error_source(err))
+            }
+            NodeFailure::DirectiveParse(_) | NodeFailure::Battalion(_) => return None,
+        };
+        Some(NodeError {
+            node_id: node_id.clone(),
+            attempt,
+            transience,
+            source,
+        })
+    }
+}
+
+/// Resolve a node's FINAL failure through its `Aegis.on_error` handler
+/// (Doc 04 FT-FR-11/12/13, D-21, D-13; plan 25-10), returning the
+/// compensating [`Directive`] the dispatch loop honours as if the node had
+/// returned it -- or the error the run fails with instead:
+///
+/// - `Route { to, error_field }`: the structured `NodeError` is serialized
+///   to a `serde_json::Value` and written into `error_field` as an ORDINARY
+///   delta write (so the schema's declared dispatch applies -- validation
+///   already guaranteed the field is declared and not `Sum`), routed via
+///   `NextStep::Goto([to])` so the existing Goto machinery places `to` in
+///   the next Vanguard and resolves the failed node's static successors
+///   `NotFiring` (the routed target REPLACES them, FT-FR-11).
+/// - `Absorb { fallback_delta }`: the fallback delta (possibly empty --
+///   merges nothing) routed via `NextStep::Edges`, so the node's static
+///   edges fire exactly as they would on success (FT-FR-12).
+/// - `Custom(name)`: the handler registered under `name` in
+///   `registries.error_handlers` (D-13, FT-FR-13) is `await`ed with
+///   `(err, state)` and its `Directive` returned verbatim -- `Edges`,
+///   `Goto`, `End`, `Parley` and `Muster` are all honoured by the caller
+///   exactly as a node's own `NextStep` is. In particular a handler may ask
+///   a human (D-23, plan 25-11): `Parley` takes the ONE existing HITL-01
+///   suspension path a node-raised parley takes -- one `AwaitingInput`
+///   Waypoint, `RunOutcome::AwaitingInput` -- and the post-resume re-run
+///   is a fresh attempt 1 with `ctx.parley_response()` set (Phase 24
+///   D-07/D-08), having spent no retry budget (a parley is not an attempt
+///   failure). Inside a Muster task only `Edges` is honoured (D-22): the
+///   caller rejects anything else as `MusterHandlerMustBeDeltaOnly`, so a
+///   handler-raised parley never suspends from inside a fan-out.
+///   `WarGraph::validate` already
+///   rejected an unregistered name before any node ran (plan 25-03), so a
+///   miss here is unreachable in practice; library code must still not
+///   panic on an invariant it cannot enforce, so it re-fails with the
+///   original error -- never a silent fallthrough to `Absorb`/`Edges`.
+///
+/// Every arm reads `state` as the same immutable pre-superstep snapshot
+/// the node's attempts read (T-25-50). `serde_json::to_value` on a
+/// `NodeError` cannot fail for a well-formed value (every field is a plain
+/// serde value, D-07); should it ever, the run fails with the ORIGINAL
+/// error rather than a fabricated one, so nothing is silently dropped.
+async fn dispatch_error_handler(
+    spec: &ErrorHandlerSpec,
+    err: &NodeError,
+    state: &Battlefield,
+    registries: &EngineRegistries,
+) -> Result<Directive, NodeError> {
+    match spec {
+        ErrorHandlerSpec::Route { to, error_field } => {
+            let serialized = serde_json::to_value(err).map_err(|_| err.clone())?;
+            let mut delta = StateDelta::new();
+            delta.set_raw(error_field.clone(), serialized);
+            Ok(Directive {
+                delta,
+                next: NextStep::Goto(vec![to.clone()]),
+            })
+        }
+        ErrorHandlerSpec::Absorb { fallback_delta } => Ok(Directive {
+            delta: fallback_delta.clone(),
+            next: NextStep::Edges,
+        }),
+        ErrorHandlerSpec::Custom(name) => match registries.error_handlers.get(name) {
+            Some(handler) => handler.handle(err, state).await,
+            None => Err(err.clone()),
+        },
+        // `ErrorHandlerSpec` is `#[non_exhaustive]`: a variant added later
+        // is deliberately a re-fail with the original error, never an
+        // `Absorb`-shaped fallthrough that would silently swallow it.
+        _ => Err(err.clone()),
+    }
+}
+
+/// The bare arm name of a [`NextStep`], for
+/// [`EngineError::MusterHandlerMustBeDeltaOnly`]'s `returned` field (D-22).
+fn next_step_arm_name(next: &NextStep) -> &'static str {
+    match next {
+        NextStep::Edges => "Edges",
+        NextStep::Goto(_) => "Goto",
+        NextStep::Muster(_) => "Muster",
+        NextStep::End => "End",
+        NextStep::Parley(_) => "Parley",
+    }
 }
 
 /// [`execute_vanguard_node`]'s per-node result: `paladin_id`/`token_count`
 /// (`None`/`0` for a `Function` or `Battalion` node) plus the resolved
 /// `Directive` or [`NodeFailure`].
 type NodeDispatchResult = (Option<Uuid>, u64, Result<Directive, NodeFailure>);
+
+/// Executes a [`NodeSpec::Gate`] node's no-`run`-body-of-its-own contract
+/// (HITL-01, D-05), dispatched exactly like a `Function` node
+/// ([`NodeDispatch::Function`]) so it reuses every existing
+/// dispatch/interceptor/trace code path with no changes to any of them.
+///
+/// On the node's first visit (`ctx.parley_response()` is `None`) renders
+/// `request.prompt_template`/`payload_template` from `state` and returns
+/// `NextStep::Parley`, entering the suspension path plan 24-01 landed. On
+/// the post-resume visit (`ctx.parley_response()` is `Some`) writes the
+/// normalised delivered value to `output_field` -- or, for
+/// `ParleyKind::StateEdit`, returns the response's `StateDelta` as this
+/// node's own delta -- and routes via `NextStep::Edges` like any other
+/// node (D-06).
+struct GateDispatchNode {
+    request: GateRequestTemplate,
+    output_field: Option<FieldName>,
+}
+
+#[async_trait::async_trait]
+impl StateNode for GateDispatchNode {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        match ctx.parley_response() {
+            // --- First visit: render and raise. Never merges anything
+            // beyond an empty delta -- a Gate's own contribution to the
+            // Battlefield happens only on the post-resume visit below.
+            None => {
+                // --- HITL-01, D-07: this is the RAISING visit -- no parley
+                // context is in scope yet (that only exists on the
+                // post-resume visit below), so both templates render with
+                // `parley: None`, exactly like every other first-visit
+                // render call site (Task 1's own call-site audit,
+                // 24-03-SUMMARY.md).
+                let prompt = self
+                    .request
+                    .prompt_template
+                    .render(state, ctx.muster.as_ref(), None)
+                    .map_err(|e| StateNodeError(format!("gate {}: {e}", ctx.node_id)))?;
+                let payload = match &self.request.payload_template {
+                    Some(template) => {
+                        let rendered = template
+                            .render(state, ctx.muster.as_ref(), None)
+                            .map_err(|e| StateNodeError(format!("gate {}: {e}", ctx.node_id)))?;
+                        // A payload template commonly renders a JSON shape
+                        // (e.g. `{"amount": {amount}}`) through ordinary
+                        // `InputMapping` field substitution -- parsed back
+                        // into structured JSON when it is valid JSON, and
+                        // carried as a plain JSON string otherwise (never
+                        // an error: a payload is author-supplied context,
+                        // not a validated contract, HITL-FR-03).
+                        serde_json::from_str(&rendered)
+                            .unwrap_or(serde_json::Value::String(rendered))
+                    }
+                    None => serde_json::json!({}),
+                };
+                let created_at = Utc::now();
+                let expires_at = self.request.expires_in.map(|d| {
+                    created_at
+                        + chrono::Duration::from_std(d).unwrap_or_else(|_| chrono::Duration::zero())
+                });
+                let request = ParleyRequest {
+                    parley_id: ParleyId::new(),
+                    // Stamped onto the request regardless -- the engine's
+                    // suspension arm (plan 24-01) re-stamps it from the
+                    // dispatching `node_id` anyway, but setting it
+                    // correctly here keeps this type's own invariant
+                    // honest independent of that belt-and-braces rewrite.
+                    node_id: ctx.node_id.clone(),
+                    kind: self.request.kind.clone(),
+                    prompt,
+                    payload,
+                    choices: self.request.choices.clone(),
+                    expires_at,
+                    created_at,
+                    on_expire: self.request.on_expire.clone(),
+                };
+                Ok(Directive {
+                    delta: StateDelta::new(),
+                    next: NextStep::Parley(request),
+                })
+            }
+            // --- Post-resume visit: deliver and route via static edges.
+            Some(response) => {
+                let mut delta = StateDelta::new();
+                match &self.request.kind {
+                    ParleyKind::StateEdit => {
+                        let state_delta: StateDelta =
+                            serde_json::from_value(response.value.clone()).map_err(|e| {
+                                StateNodeError(format!(
+                                    "gate {}: StateEdit response value is not a valid \
+                                     StateDelta: {e}",
+                                    ctx.node_id
+                                ))
+                            })?;
+                        return Ok(state_delta.into());
+                    }
+                    ParleyKind::Approval => {
+                        let approved =
+                            crate::engine::graph::normalize_approval_value(&response.value)
+                                .ok_or_else(|| {
+                                    StateNodeError(format!(
+                                        "gate {}: response value {} is not a valid Approval value",
+                                        ctx.node_id, response.value
+                                    ))
+                                })?;
+                        if let Some(field) = &self.output_field {
+                            // D-06: a Bool output_field receives the JSON
+                            // boolean; a String output_field receives the
+                            // strings "true"/"false" -- inferred from the
+                            // field's schema default, the same signal
+                            // `WarGraph::validate` used to accept this
+                            // wiring in the first place.
+                            let is_bool_field = state
+                                .schema()
+                                .field_spec(field)
+                                .and_then(|spec| spec.default.as_ref())
+                                .is_some_and(serde_json::Value::is_boolean);
+                            let value = if is_bool_field {
+                                serde_json::json!(approved)
+                            } else {
+                                serde_json::json!(if approved { "true" } else { "false" })
+                            };
+                            delta.set_raw(field.clone(), value);
+                        }
+                    }
+                    ParleyKind::Choice | ParleyKind::FreeText => {
+                        if let Some(field) = &self.output_field {
+                            delta.set_raw(field.clone(), response.value.clone());
+                        }
+                    }
+                    // `ParleyKind` is `#[non_exhaustive]`: a future kind
+                    // reaching here (never raised by this phase's own
+                    // `GateRequestTemplate`) writes no output field rather
+                    // than panicking.
+                    _ => {}
+                }
+                Ok(delta.into())
+            }
+        }
+    }
+}
 
 /// Execute one vanguard node's dispatch against `snapshot`.
 ///
@@ -163,7 +980,7 @@ type NodeDispatchResult = (Option<Uuid>, u64, Result<Directive, NodeFailure>);
 /// populated from the executed `Paladin` and its `PaladinResult` for a
 /// `NodeSpec::Paladin` node. An `InputMapping::render` failure (an
 /// undeclared field, or a declared field with no value and no default) and a
-/// `PaladinPort::execute` error both become a `NodeError` here, so a Paladin
+/// `PaladinPort::execute` error both become a `StateNodeError` here, so a Paladin
 /// node's failure reaches the exact same node-failure path (and the same
 /// `WaypointStatus::Failed { failed_node, .. }` reporting) a `Function`
 /// node's own error already does — no special-cased Paladin failure path.
@@ -181,6 +998,11 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
     snapshot: &'a Battlefield,
     ctx: &'a crate::engine::node::NodeContext,
     paladin_port: &'a Arc<dyn PaladinPort>,
+    // --- RT-05, RT-FR-19, D-29 (plan 26-18): this run's structured-output
+    // executor, if any -- consulted ONLY when this dispatch's
+    // `output_schema` is `Some` (an ordinary node ignores this entirely,
+    // exactly as before this phase).
+    structured_executor: &'a Option<Arc<dyn StructuredExecutorPort>>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = NodeDispatchResult> + Send + 'a>> {
     Box::pin(async move {
         match dispatch {
@@ -193,23 +1015,127 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                 input_template,
                 output_field,
                 directive_parser,
+                output_schema,
             } => {
                 let paladin_id = Some(paladin.uuid);
                 // --- CF-03, D-15: the executing task's Muster context (`Some`
                 // only for a worker-template dispatch), so `{muster.payload}`/
                 // `{muster.task_key}` resolve from it, never from the
-                // Battlefield.
-                let rendered = match input_template.render(snapshot, ctx.muster.as_ref()) {
+                // Battlefield. --- HITL-01, D-07: `ctx.parley_response()` is
+                // `Some` ONLY on the post-resume re-run of a parleying
+                // Paladin node, so `{parley.value}`/`{parley.prompt}`/
+                // `{parley.kind}`/`{parley.responded_by}` resolve from it on
+                // that re-run (Task 1's own call-site audit,
+                // 24-03-SUMMARY.md: this is the ONE call site that threads a
+                // real parley response, since it is the same dispatch path a
+                // Paladin node's first-raising visit AND its post-resume
+                // re-run both go through).
+                let rendered = match input_template.render(
+                    snapshot,
+                    ctx.muster.as_ref(),
+                    ctx.parley_response(),
+                ) {
                     Ok(rendered) => rendered,
                     Err(e) => {
                         return (
                             paladin_id,
                             0,
-                            Err(NodeFailure::Node(NodeError(e.to_string()))),
+                            Err(NodeFailure::Node(StateNodeError(e.to_string()))),
                         );
                     }
                 };
-                match paladin_port.execute(&paladin, &rendered).await {
+                // --- FT-FR-09, D-19: ALWAYS `execute_scoped`, never
+                // `execute`/`execute_observed` directly, passing this
+                // attempt's own handle -- a port that overrides the
+                // defaulted `execute_observed` beats it on every LLM
+                // completion / stream chunk / Armament call, and each beat
+                // resets this node's `idle_timeout` timer. The trait's
+                // default `execute_observed` delegates to `execute` and
+                // beats nothing, so a non-observing port's `idle_timeout`
+                // degrades to a per-attempt wall clock rather than to no
+                // bound at all.
+                //
+                // --- RT-05, RT-FR-19, D-29: when `output_schema` is `Some`,
+                // dispatch through the engine's structured executor instead
+                // of the plain `PaladinPort` path below -- the PARSED JSON
+                // value, never a string, is written to `output_field`.
+                // `WarGraph::validate` (`validate_output_schemas`,
+                // `directive_parser` must be `PlainOutput`) and
+                // `WarGraph::validate_structured_executor_backend` have
+                // already guaranteed, before any node ran, that
+                // `structured_executor` is `Some` whenever `output_schema`
+                // is `Some` -- this `let Some(..) else` unwraps that
+                // invariant defensively rather than by `.expect()` (library
+                // code must not panic on an invariant it cannot enforce),
+                // failing just this node closed should it somehow not hold.
+                if let Some(schema_json) = output_schema {
+                    let Some(executor) = structured_executor else {
+                        return (
+                            paladin_id,
+                            0,
+                            Err(NodeFailure::Node(StateNodeError(format!(
+                                "node has output_schema but no structured executor is wired -- \
+                                 WarGraph::validate_structured_executor_backend should have \
+                                 rejected this before any node ran (node output_field: {})",
+                                output_field.as_str()
+                            )))),
+                        );
+                    };
+                    return match executor
+                        .execute_json_schema_observed(
+                            &paladin,
+                            &rendered,
+                            &schema_json,
+                            &StructuredOptions::default(),
+                            &ctx.heartbeat,
+                        )
+                        .await
+                    {
+                        Ok(structured) => {
+                            let token_count = u64::from(structured.raw.token_count);
+                            let mut delta = StateDelta::new();
+                            delta.set_raw(output_field, structured.value);
+                            (paladin_id, token_count, Ok(delta.into()))
+                        }
+                        // --- D-29, Phase 25 D-05: exhaustion is ALWAYS
+                        // `Transience::Unknown` here -- never delegated to
+                        // `PaladinError::transience()`'s general `Permanent`
+                        // verdict for `StructuredOutputInvalid` (that
+                        // verdict is correct for a non-engine caller of
+                        // `execute_structured`, who has no different-graph
+                        // retry available) -- see `NodeFailure::
+                        // StructuredOutputInvalid`'s own rustdoc for why.
+                        Err(err @ PaladinError::StructuredOutputInvalid { .. }) => (
+                            paladin_id,
+                            0,
+                            Err(NodeFailure::StructuredOutputInvalid(err)),
+                        ),
+                        // Any OTHER underlying failure (e.g. an LLM call
+                        // failure inside the repair loop) keeps its own
+                        // natural classification via the ordinary
+                        // `NodeFailure::Paladin` path.
+                        Err(other) => (paladin_id, 0, Err(NodeFailure::Paladin(other))),
+                    };
+                }
+
+                // --- RT-04, D-21: the `RunScope` carries this run's own
+                // Vault grant (`ctx.vault`'s granted namespace, if any) so
+                // a port that overrides `execute_scoped` can act on it. The
+                // trait's default `execute_scoped` delegates to
+                // `execute_observed` and ignores the scope entirely, so a
+                // non-scoped port's behavior is completely unchanged by
+                // this call switching from `execute_observed`.
+                let scope = ctx
+                    .vault
+                    .as_ref()
+                    .map(|confined| {
+                        RunScope::default().with_vault_namespace(confined.granted().clone())
+                    })
+                    .unwrap_or_default();
+                match paladin_port
+                    .execute_scoped(&paladin, &rendered, &ctx.heartbeat, &scope)
+                    .await
+                {
                     Ok(result) => {
                         let token_count = u64::from(result.token_count);
                         // --- CF-02, D-11: the `DirectiveParser` call replacing
@@ -224,11 +1150,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             }
                         }
                     }
-                    Err(e) => (
-                        paladin_id,
-                        0,
-                        Err(NodeFailure::Node(NodeError(e.to_string()))),
-                    ),
+                    Err(e) => (paladin_id, 0, Err(NodeFailure::Paladin(e))),
                 }
             }
             NodeDispatch::Battalion {
@@ -252,21 +1174,41 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     }
                 }
 
-                // --- CF-FR-15, D-20: the child's thread id is a derived,
-                // PROVABLY INJECTIVE encoding of (this run's thread, this
-                // node's id) -- `ThreadId::child`, length-prefixed exactly
-                // like `graph.rs`'s `push_field` (22.1 CR-01's lesson: a
-                // bare delimiter join of `NodeId`s, which accept any
-                // non-empty string, is collidable by construction). Fails
-                // typed (never silently truncates) if the derived id would
-                // itself exceed `ThreadId`'s own limits.
-                let child_thread = match ThreadId::child(&ctx.thread_id, &ctx.node_id) {
+                // --- CF-FR-15, D-20, HITL-03, D-18: the child's thread id
+                // is a derived, PROVABLY INJECTIVE encoding of (this run's
+                // thread, this node's id) -- `ThreadId::child`,
+                // length-prefixed exactly like `graph.rs`'s `push_field`
+                // (22.1 CR-01's lesson: a bare delimiter join of `NodeId`s,
+                // which accept any non-empty string, is collidable by
+                // construction). When this run is itself executing on a
+                // branch (`resources.fork_of` is `Some(branch_root)`), the
+                // child instead derives under `ThreadId::child_on_branch`,
+                // extended with the SAME branch root -- so a fork's
+                // subgraph child can never resolve to the mainline child's
+                // thread, and `latest(child_thread)` on the branch never
+                // sees the mainline child's history (D-18, HITL-FR-12).
+                // Mainline runs (`resources.fork_of: None`) keep deriving
+                // via `ThreadId::child`, byte-for-byte as before this plan.
+                // A fork's subgraph child therefore always starts fresh
+                // (D-18's `restart_on_resume` resolution): the derived id
+                // has no prior history for `existing_latest` (below) to
+                // find, which follows by construction from this distinct
+                // id rather than a separate flag. Fails typed (never
+                // silently truncates) if the derived id would itself
+                // exceed `ThreadId`'s own limits.
+                let child_thread = match &resources.fork_of {
+                    Some(branch_root) => {
+                        ThreadId::child_on_branch(&ctx.thread_id, branch_root, &ctx.node_id)
+                    }
+                    None => ThreadId::child(&ctx.thread_id, &ctx.node_id),
+                };
+                let child_thread = match child_thread {
                     Ok(id) => id,
                     Err(e) => {
                         return (
                             None,
                             0,
-                            Err(NodeFailure::Node(NodeError(format!(
+                            Err(NodeFailure::Node(StateNodeError(format!(
                                 "battalion node {}: failed to derive child thread id: {e}",
                                 ctx.node_id
                             )))),
@@ -315,7 +1257,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             return (
                                 None,
                                 0,
-                                Err(NodeFailure::Node(NodeError(format!(
+                                Err(NodeFailure::Node(StateNodeError(format!(
                                     "battalion node {}: failed to read child thread history: {e}",
                                     ctx.node_id
                                 )))),
@@ -374,7 +1316,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                     return (
                                         None,
                                         0,
-                                        Err(NodeFailure::Node(NodeError(format!(
+                                        Err(NodeFailure::Node(StateNodeError(format!(
                                             "battalion node {}: failed to initialize child \
                                          battlefield: {e}",
                                             ctx.node_id
@@ -386,7 +1328,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             return (
                                 None,
                                 0,
-                                Err(NodeFailure::Node(NodeError(format!(
+                                Err(NodeFailure::Node(StateNodeError(format!(
                                     "battalion node {}: child battlefield missing required \
                                      field(s): {e}",
                                     ctx.node_id
@@ -429,7 +1371,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     resources.durability,
                     resources.parallelism,
                     &resources.registry,
-                    &resources.evaluators,
+                    &resources.registries,
                     child_graph.as_ref(),
                     child_thread.clone(),
                     child_battlefield,
@@ -443,8 +1385,41 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     &resources.trace,
                     &resources.interceptors,
                     &resources.cancellation,
+                    &resources.cancellation_probe,
                     Some(Arc::clone(&resources.waypoint_port)),
                     child_checkpoint_ns,
+                    // --- HITL-03, D-14: the child run inherits the SAME
+                    // branch root as the parent, verbatim -- a branch is a
+                    // property of the whole run tree, not re-derived or
+                    // concatenated per nesting level like `checkpoint_ns`.
+                    resources.fork_of,
+                    // --- D-04: a child run never inherits the parent's
+                    // resume-time parley responses -- those are keyed to
+                    // the PARENT thread's own vanguard, and a suspended
+                    // child is unsupported this phase (see the
+                    // `RunOutcome::AwaitingInput` arm below).
+                    None,
+                    // --- HITL-04, D-19, D-20: the child run races its OWN
+                    // mid-superstep batch against the SAME grace window the
+                    // parent was configured with (`ChildEngineResources`'s
+                    // own rustdoc) -- a runtime setting shared by the whole
+                    // run tree, exactly like `fork_of` above.
+                    resources.shutdown_grace,
+                    // --- FT-FR-09, D-19: a child Battalion beats the
+                    // PARENT node's own attempt handle once per child
+                    // superstep, so a parent `idle_timeout` over a
+                    // Battalion node measures child-superstep progress.
+                    Some(ctx.heartbeat.clone()),
+                    // --- FT-FR-18, D-29: the child run serves its own
+                    // `CachePolicy` nodes from the SAME backend.
+                    resources.node_cache.clone(),
+                    // --- RT-04, D-21: the child run's nodes receive the
+                    // SAME Vault grant the parent's do.
+                    resources.vault.clone(),
+                    // --- RT-05, RT-FR-19, D-29: the child run's own
+                    // `output_schema` nodes dispatch through the SAME
+                    // structured executor the parent's do.
+                    resources.structured_executor.clone(),
                 ));
                 let outcome = child_fut.await;
 
@@ -475,11 +1450,12 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     Ok(RunOutcome::AwaitingInput { .. }) => (
                         None,
                         0,
-                        Err(NodeFailure::Node(NodeError(format!(
-                            "battalion node {}: child run paused awaiting input, which this phase \
-                         does not support",
-                            ctx.node_id
-                        )))),
+                        Err(NodeFailure::Battalion(
+                            EngineError::ParleyInChildUnsupported {
+                                node: ctx.node_id.clone(),
+                                child_thread,
+                            },
+                        )),
                     ),
                     Ok(RunOutcome::Failed { error, .. }) => (
                         None,
@@ -508,7 +1484,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
 /// What one vanguard node's per-superstep processing (its `NodeInterceptor`
 /// `before` chain, its dispatch if `Proceed`d, and its `after` chain)
 /// resolved to (ENG-FR-22), replacing the plain `Result<StateDelta,
-/// NodeError>` `execute_vanguard_node` alone would produce: a `Skip`
+/// StateNodeError>` `execute_vanguard_node` alone would produce: a `Skip`
 /// decision is neither a success nor a failure, so it needs its own
 /// variant rather than being folded into one of the other two.
 enum NodeRunOutcome {
@@ -526,6 +1502,75 @@ enum NodeRunOutcome {
     /// `OnParseError::FailRun` (CF-02, D-11), or a `NodeInterceptor::before`
     /// returned `Fail(error)` before the node could run.
     Failed(NodeFailure),
+    /// The run was cancelled while this node was waiting out a retry
+    /// backoff (D-15, FT-FR-07): its last attempt failed, no further
+    /// attempt ran, and nothing of it merges. Recorded exactly like a
+    /// grace-deadline abort -- `Skipped { reason: "shutdown" }` on the
+    /// record AND re-listed on the Halted Waypoint's vanguard (or, for a
+    /// Muster task, left unfinished in the preserved `MusterProgress`) --
+    /// so `resume` re-executes the node from attempt 1 rather than
+    /// silently dropping it as an ordinary skip would.
+    Interrupted,
+}
+
+/// Map one attempt's [`NodeRunOutcome`] onto the [`NodeOutcomeKind`]
+/// vocabulary [`TraceEvent::NodeFinished`] reports (D-02) -- the SAME
+/// vocabulary the persisted `Waypoint`'s `NodeExecutionRecord` uses, so a
+/// trace and a Waypoint never disagree. A `Succeeded` attempt is further
+/// split into `Ended`/`Parleyed` by its `Directive.next`, mirroring
+/// `NodeOutcomeKind`'s own doc comment; `Interrupted` is reported
+/// `Skipped { reason: "shutdown" }`, exactly as it is recorded on the
+/// Halted Waypoint itself.
+fn node_outcome_kind(outcome: &NodeRunOutcome) -> NodeOutcomeKind {
+    match outcome {
+        NodeRunOutcome::Succeeded(directive) => match &directive.next {
+            NextStep::End => NodeOutcomeKind::Ended,
+            NextStep::Parley(_) => NodeOutcomeKind::Parleyed,
+            _ => NodeOutcomeKind::Succeeded,
+        },
+        NodeRunOutcome::Skipped(reason) => NodeOutcomeKind::Skipped {
+            reason: reason.clone(),
+        },
+        NodeRunOutcome::Failed(_) => NodeOutcomeKind::Failed,
+        NodeRunOutcome::Interrupted => NodeOutcomeKind::Skipped {
+            reason: "shutdown".to_string(),
+        },
+    }
+}
+
+/// What one spawned node-dispatch task (the `tokio::spawn`'d async block in
+/// the dispatch loop below) resolves to: the node's own `NodeId` (so the
+/// grace-race join phase, which re-indexes by `dispatch_entries` position
+/// rather than relying on completion order, can still cross-check it),
+/// when its FINAL (succeeding or exhausted) attempt started, how long that
+/// attempt ran, its Paladin identity if any, its token count, its
+/// [`NodeRunOutcome`], the 1-indexed attempt number that produced it
+/// (D-15: populates `NodeExecutionRecord.attempt`, `1` for a node with no
+/// `Aegis` retry policy, exactly as before this phase), and the history of
+/// every failed attempt before it (populates `NodeExecutionRecord.attempts`).
+struct NodeTaskOutput {
+    node_id: NodeId,
+    started_at: chrono::DateTime<chrono::Utc>,
+    duration_ms: u64,
+    paladin_id: Option<Uuid>,
+    token_count: u64,
+    outcome: NodeRunOutcome,
+    attempt: u32,
+    /// Every FAILED attempt before the final one, ascending by attempt
+    /// number (FT-FR-03, D-16) -- built in order by the retry loop, so it
+    /// is asserted (never sorted) at the record construction site.
+    failed_attempts: Vec<AttemptRecord>,
+    /// The structured error of the FINAL attempt when it failed and the
+    /// node has a resolved Aegis (D-08) -- what the exhausted-failure path
+    /// surfaces as `EngineError::NodeFailed` and records on the `Failed`
+    /// Waypoint. `None` for a success, a skip, a no-Aegis node's failure
+    /// (the byte-identical pre-Phase-25 path, D-09), and a
+    /// `DirectiveParse`/`Battalion` failure.
+    node_error: Option<NodeError>,
+    /// Whether `outcome` was served from the node cache (FT-FR-18, D-29)
+    /// rather than by executing the node -- `true` only for a
+    /// `Succeeded` outcome on `attempt: 1` with no `failed_attempts`.
+    cache_hit: bool,
 }
 
 /// The `tasks.len() > limits.max_muster_tasks` comparison (D-13's
@@ -650,7 +1695,7 @@ fn validate_muster_tasks(
 /// from every real `WarEngine::start`/`resume_with_options` call (which
 /// already hold `Arc<W>`), `None` from a test helper whose graph never
 /// embeds a Battalion node. A Battalion dispatch entry with no Arc
-/// available fails closed with a `NodeError` naming the node, rather than
+/// available fails closed with a `StateNodeError` naming the node, rather than
 /// silently skipping the child -- this seam existing at all is what lets
 /// [`ChildEngineResources`] be gathered exactly once per `run()` call and
 /// `Arc`-cloned into each dispatching node's `tokio::spawn`'d task, the
@@ -661,7 +1706,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     durability: WaypointDurability,
     parallelism: Option<usize>,
     registry: &CustomDispatchResolver,
-    evaluators: &EdgeEvaluatorRegistry,
+    registries: &EngineRegistries,
     graph: &WarGraph,
     thread: ThreadId,
     battlefield: Battlefield,
@@ -675,7 +1720,39 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     trace: &Arc<TraceDispatcher>,
     interceptors: &[Arc<dyn NodeInterceptor>],
     cancellation: &Option<CancellationToken>,
+    // --- D-14, PLAT-FR-04: the optional durable, possibly cross-instance
+    // cancellation probe, consulted at every superstep boundary BESIDE --
+    // never instead of -- `cancellation` above. `None` behaves identically
+    // to a probe that never reports cancellation.
+    probe: &Option<Arc<dyn CancellationProbe>>,
     waypoint_port_arc: Option<Arc<W>>,
+    // --- HITL-04, D-19, D-20: unlike `checkpoint_ns`/`fork_of`/
+    // `initial_parley_responses` below (each fixed to a top-level-only
+    // `None` and never a real value this wrapper's own callers supply),
+    // `shutdown_grace` IS a real, always-present value every top-level
+    // caller configures via `WarEngine::with_shutdown_grace` -- so, unlike
+    // those three, it is a genuine new parameter on this wrapper's own
+    // signature (forwarded verbatim to [`run_with_namespace`]), not one
+    // this plan can fix to a constant.
+    shutdown_grace: std::time::Duration,
+    // --- FT-FR-18, D-29 (plan 25-13): the engine's node cache backend,
+    // like `shutdown_grace` a real, always-present engine setting every
+    // top-level caller forwards (`None` when no backend is wired --
+    // `WarGraph::validate_node_cache_backend` has then already rejected
+    // any `CachePolicy` in the graph).
+    node_cache: Option<Arc<dyn NodeCachePort>>,
+    // --- RT-04, D-21 (plan 26-13): the engine's confined Vault handle, if
+    // any -- like `node_cache`, a real, always-present engine setting every
+    // top-level caller forwards (`None` when `WarEngine::with_vault` was
+    // never called).
+    vault: Option<ConfinedVault>,
+    // --- RT-05, RT-FR-19, D-29 (plan 26-18): the engine's structured-output
+    // executor, if any -- like `node_cache`/`vault`, a real, always-present
+    // engine setting every top-level caller forwards (`None` when
+    // `WarEngine::with_structured_executor` was never called --
+    // `WarGraph::validate_structured_executor_backend` has then already
+    // rejected any `output_schema` in the graph).
+    structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
 ) -> Result<RunOutcome, EngineError> {
     // --- CF-FR-15, D-20: a top-level call through this public entry point
     // (`WarEngine::start`/`resume_with_options`, and every existing test
@@ -693,7 +1770,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         durability,
         parallelism,
         registry,
-        evaluators,
+        registries,
         graph,
         thread,
         battlefield,
@@ -707,27 +1784,52 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         trace,
         interceptors,
         cancellation,
+        probe,
         waypoint_port_arc,
         None,
+        // --- HITL-03, D-14: a top-level `start`/`resume_with_options` call
+        // is never itself entered from a branch -- only a later plan's
+        // `WarEngine::fork` first produces a `Some` value, and it calls
+        // `run_with_namespace` directly (bypassing this wrapper), exactly
+        // like `checkpoint_ns` above.
+        None,
+        // --- HITL-01, D-08: a top-level `start`/`resume_with_options` call
+        // never carries a resume-superstep's parley responses -- only
+        // `WarEngine::resume_with` does, and it calls `run_with_namespace`
+        // directly (bypassing this wrapper) so this function's SIGNATURE
+        // stays unchanged by this plan, exactly like `checkpoint_ns` above.
+        None,
+        shutdown_grace,
+        // --- FT-FR-09, D-19: a top-level run has no parent node whose
+        // idle timer it could feed -- only a `NodeSpec::Battalion` child
+        // dispatch ever passes `Some` here.
+        None,
+        node_cache,
+        vault,
+        structured_executor,
     )
     .await
 }
 
 /// [`run`]'s real implementation (CF-FR-15, D-20): identical to [`run`] in
-/// every respect except the trailing `checkpoint_ns` parameter, which
-/// [`run`] always passes as `None` and [`execute_vanguard_node`]'s
-/// `NodeSpec::Battalion` dispatch arm passes as `Some(namespace)` when
-/// recursing into a child run. Kept as a SEPARATE function (rather than
-/// adding the parameter to [`run`] directly) so `run`'s own public
-/// signature -- called from `engine::mod` and from `engine::graph`'s own
-/// tests -- stays unchanged by this plan.
+/// every respect except the trailing `checkpoint_ns` and
+/// `initial_parley_responses` parameters, which [`run`] always passes as
+/// `None` and [`execute_vanguard_node`]'s `NodeSpec::Battalion` dispatch arm
+/// passes as `Some(namespace)`/`None` respectively when recursing into a
+/// child run. Kept as a SEPARATE function (rather than adding the
+/// parameters to [`run`] directly) so `run`'s own public signature --
+/// called from `engine::mod` and from `engine::graph`'s own tests -- stays
+/// unchanged by this plan. `pub(crate)` (rather than private) so
+/// `WarEngine::resume_with` (`engine::mod`, HITL-02) can call it directly --
+/// the ONE caller that ever has a real `Some` `initial_parley_responses` to
+/// pass.
 #[allow(clippy::too_many_arguments)]
-async fn run_with_namespace<W: WaypointPort + 'static>(
+pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     waypoint_port: &W,
     durability: WaypointDurability,
     parallelism: Option<usize>,
     registry: &CustomDispatchResolver,
-    evaluators: &EdgeEvaluatorRegistry,
+    registries: &EngineRegistries,
     graph: &WarGraph,
     thread: ThreadId,
     mut battlefield: Battlefield,
@@ -741,6 +1843,13 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
     trace: &Arc<TraceDispatcher>,
     interceptors: &[Arc<dyn NodeInterceptor>],
     cancellation: &Option<CancellationToken>,
+    // --- D-14, PLAT-FR-04: the optional durable, possibly cross-instance
+    // cancellation probe, consulted at every superstep boundary BESIDE --
+    // never instead of -- `cancellation` above. `None` behaves identically
+    // to a probe that never reports cancellation. Inherited wholesale by a
+    // nested `NodeSpec::Battalion` child run via
+    // `ChildEngineResources::cancellation_probe`.
+    probe: &Option<Arc<dyn CancellationProbe>>,
     waypoint_port_arc: Option<Arc<W>>,
     // --- CF-FR-15, D-20: the namespace path THIS run's own Waypoints are
     // stamped with (`Waypoint.checkpoint_ns`) -- `None` for a top-level
@@ -753,7 +1862,80 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
     // mutated mid-run); a nested Battalion dispatch below derives the NEXT
     // level's namespace from it via `ChildEngineResources::checkpoint_ns`.
     checkpoint_ns: Option<String>,
+    // --- HITL-03, D-14: the branch root THIS run's own Waypoints are
+    // stamped with (`Waypoint.fork_of`) -- `None` for every mainline run
+    // (`WarEngine::start`/`resume_with_options`/`resume_with`, until a
+    // later plan's `WarEngine::fork` first produces a `Some` value), and
+    // `Some(root)` for a run entered from a branch. Stamped, verbatim
+    // (never re-derived or concatenated), onto every Waypoint
+    // [`build_waypoint`] produces in this call; a nested `NodeSpec::Battalion`
+    // dispatch propagates the SAME value onto its child run via
+    // `ChildEngineResources::fork_of`.
+    fork_of: Option<WaypointId>,
+    // --- HITL-01, D-08: `Some(responses_by_node)` ONLY on a
+    // `WarEngine::resume_with` re-entry, keyed by the PARLEYING node's own
+    // `NodeId` (never a `parley_id`, since `NodeContext.parley_response`
+    // must be looked up by the executing node, not the request that raised
+    // it). Consumed EXACTLY ONCE -- on the very first iteration of the loop
+    // below, via `.take()` -- so a resumed run's second superstep (and
+    // every ordinary `start`/`resume_with_options` call, which always
+    // passes `None`) never re-delivers a stale response to a node that
+    // re-enters the vanguard later in the same run (e.g. a Goto/cycle
+    // revisit).
+    initial_parley_responses: Option<BTreeMap<NodeId, ParleyResponse>>,
+    // --- HITL-04, D-19, D-20: the grace window this run's OWN mid-superstep
+    // cancellation race (below) shares across the whole in-flight batch,
+    // computed once as `cancel_observed_at + shutdown_grace` -- never a
+    // per-handle timeout (RESEARCH.md Pitfall 1). A runtime setting, never
+    // hashed into the graph fingerprint and never part of `EngineLimits`
+    // (D-20); every real `WarEngine::start`/`resume`/`resume_with`/
+    // `replay`/`fork` call forwards its own configured
+    // `WarEngine::with_shutdown_grace` value here, and a nested
+    // `NodeSpec::Battalion` child run inherits the SAME value via
+    // `ChildEngineResources::shutdown_grace`.
+    shutdown_grace: std::time::Duration,
+    // --- FT-FR-09, D-19: `Some(handle)` ONLY when this call is a
+    // `NodeSpec::Battalion` child run -- the PARENT node's own attempt
+    // handle, beaten once at the top of every child superstep below so a
+    // parent `idle_timeout` over a Battalion node observes child progress.
+    // `None` for every top-level `start`/`resume`/`fork` call.
+    parent_heartbeat: Option<HeartbeatHandle>,
+    // --- FT-FR-18, D-29 (plan 25-13): this run's node cache backend, if
+    // any; a nested `NodeSpec::Battalion` child run inherits the SAME
+    // backend via `ChildEngineResources::node_cache`.
+    node_cache: Option<Arc<dyn NodeCachePort>>,
+    // --- RT-04, D-21 (plan 26-13): this engine's confined Vault handle, if
+    // any -- granted to every `NodeContext` this run builds, and inherited
+    // wholesale by a nested `NodeSpec::Battalion` child run via
+    // `ChildEngineResources::vault`, like every other engine resource.
+    vault: Option<ConfinedVault>,
+    // --- RT-05, RT-FR-19, D-29 (plan 26-18): this engine's structured-output
+    // executor, if any -- consulted by a `NodeSpec::Paladin` node whose
+    // `output_schema` is `Some`, and inherited wholesale by a nested
+    // `NodeSpec::Battalion` child run via
+    // `ChildEngineResources::structured_executor`, like every other engine
+    // resource.
+    structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
 ) -> Result<RunOutcome, EngineError> {
+    // --- FT-FR-20, D-28: the graph fingerprint every cache key composed in
+    // this run starts with -- computed ONCE per run (never per dispatch),
+    // and only when a backend is wired at all.
+    let cache_graph_fingerprint: Option<GraphFingerprint> =
+        node_cache.as_ref().map(|_| graph.fingerprint());
+    // --- FT-FR-10, D-20, ENG-FR-03: the run-level budget. Measured from
+    // the moment THIS call starts (a resumed run's budget restarts with the
+    // resume; a Battalion child run measures its OWN budget against its
+    // OWN `EngineLimits`, per `child_uses_its_own_engine_limits`). The
+    // absolute deadline is threaded into every attempt so the per-attempt
+    // bound can be `min(attempt run_timeout, remaining budget)` and the
+    // top-of-loop check below can end a run whose budget is already gone.
+    // `tokio::time::Instant` (not `std`), so the paused clock drives it.
+    let run_started_at = tokio::time::Instant::now();
+    let engine_deadline: Option<tokio::time::Instant> = graph
+        .limits()
+        .run_timeout
+        .map(|limit| run_started_at + limit);
+
     // --- CF-FR-16, D-21: gathered ONCE per `run()` call, never per
     // dispatch -- see `ChildEngineResources`'s own rustdoc for why a
     // single construction site matters. `None` when this call has no
@@ -768,11 +1950,17 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 durability,
                 parallelism,
                 registry: registry.clone(),
-                evaluators: evaluators.clone(),
+                registries: registries.clone(),
                 trace: Arc::clone(trace),
                 interceptors: interceptors.to_vec(),
                 cancellation: cancellation.clone(),
+                cancellation_probe: probe.clone(),
                 checkpoint_ns: checkpoint_ns.clone(),
+                fork_of,
+                shutdown_grace,
+                node_cache: node_cache.clone(),
+                vault: vault.clone(),
+                structured_executor: structured_executor.clone(),
             })
         });
 
@@ -787,6 +1975,11 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
         .map(|progress| (progress.node.clone(), progress.tasks.clone()));
     let mut muster_carryover: Option<BTreeMap<String, StateDelta>> =
         initial_muster_progress.map(|progress| progress.completed);
+
+    // --- HITL-01, D-08: `Some` ONLY on a `WarEngine::resume_with`
+    // re-entry's very first iteration below (`.take()`n there so it can
+    // never re-apply to a later superstep of the same run).
+    let mut initial_parley_responses = initial_parley_responses;
 
     // The entry-vanguard-empty case: nothing to run, ever. Persist exactly
     // one Waypoint and return immediately (ENG-FR-01 step 7's "Vanguard
@@ -832,11 +2025,13 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Failed {
                     error: error.to_string(),
                     failed_node: starved[0].clone(),
+                    node_error: None,
                 },
                 visit_counts,
                 entry_frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -858,6 +2053,7 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
             entry_frontier.snapshot(graph),
             None,
             checkpoint_ns.clone(),
+            fork_of,
         );
         persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
         return Ok(RunOutcome::Completed {
@@ -867,6 +2063,17 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
     }
 
     let mut frontier = Frontier::for_run(graph, &frontier_snapshot);
+
+    // --- D-04, T-28-03-02: this run's own per-node heartbeat rate-limiter
+    // state, constructed ONCE per `run_with_namespace` call (never per
+    // superstep, so the limit holds across a re-entering node's later
+    // supersteps too) and cloned into every dispatched node's spawned task
+    // alongside `node_trace`, below. `DEFAULT_HEARTBEAT_INTERVAL` is this
+    // plan's own hardcoded default (no caller-facing knob exists yet); 28-06
+    // threads `TraceConfig::heartbeat_interval_secs` through in its place.
+    let heartbeat_last_emitted: Arc<std::sync::Mutex<HashMap<NodeId, tokio::time::Instant>>> =
+        Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let heartbeat_interval = DEFAULT_HEARTBEAT_INTERVAL;
 
     // --- CF-03 / CF-FR-12: a validated `NextStep::Muster(tasks)` accepted
     // in superstep N is carried in `pending_muster` (declared above, before
@@ -882,6 +2089,13 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
     // is never mistakenly reapplied to a later, unrelated Muster).
 
     loop {
+        // --- FT-FR-09, D-19: a child Battalion run reports progress to its
+        // parent node once per child superstep -- here, at the boundary,
+        // before any of this superstep's work begins.
+        if let Some(handle) = &parent_heartbeat {
+            handle.beat();
+        }
+
         // --- ENG-FR-23: cancellation is observed only at a superstep
         // BOUNDARY -- here, at the top of the loop -- never mid-superstep.
         // `vanguard` at this point is exactly the set of nodes that would
@@ -890,10 +2104,23 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
         // otherwise), so persisting it verbatim on a `Halted` Waypoint is
         // what makes `resume` able to continue from exactly where this run
         // was asked to stop.
-        if cancellation
+        //
+        // --- D-14, PLAT-FR-04: `probe`, if attached, is consulted here
+        // BESIDE -- never instead of -- `cancellation` above, exactly once
+        // per boundary (including the very first iteration). Either
+        // signal answering "cancelled" takes the SAME `Halted` path below;
+        // the probe is infallible by construction (it returns a plain
+        // `bool`, never a `Result`), so there is nothing here to handle on
+        // failure -- an adapter that cannot determine the answer has
+        // already decided internally to answer `false`.
+        let token_cancelled = cancellation
             .as_ref()
-            .is_some_and(CancellationToken::is_cancelled)
-        {
+            .is_some_and(CancellationToken::is_cancelled);
+        let probe_cancelled = match probe {
+            Some(p) => p.is_cancelled(&thread).await,
+            None => false,
+        };
+        if token_cancelled || probe_cancelled {
             let waypoint = build_waypoint(
                 &thread,
                 parent_waypoint_id,
@@ -907,6 +2134,7 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Halted {
@@ -916,12 +2144,39 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
 
         // --- ENG-FR-03: bounded iteration, checked at the top of the loop
         // so a run stops at exactly `max_supersteps` rather than one over.
+        // --- CR-01 (23-REVIEW.md): `vanguard` alone may be empty on a
+        // muster-only round -- this phase's Muster feature can re-enter
+        // this loop with `vanguard` empty and `pending_muster` carrying the
+        // next dispatch (`has_pending_muster` a few hundred lines below
+        // stands in for "there is more work" in exactly this situation).
+        // Mirrors the `Battlefield::merge` failure fallback's
+        // `dispatch_entries.first()` pattern a few hundred lines below,
+        // using `pending_muster` instead since `dispatch_entries` is not
+        // built yet at this point in the loop. The loop's own
+        // Completed-return checks guarantee at least one of `vanguard`/
+        // `pending_muster` is non-empty whenever a boundary-time limit
+        // fires, so the final placeholder is unreachable by construction --
+        // but must not panic if that invariant is ever violated (mirrors
+        // `MusterProgress::default`'s own placeholder
+        // `NodeId::new(String::new())`). Shared by every boundary-time
+        // limit below (recursion, run timeout).
+        let boundary_failed_node = || {
+            vanguard
+                .first()
+                .cloned()
+                .or_else(|| pending_muster.as_ref().map(|(node, _)| node.clone()))
+                .unwrap_or_else(|| NodeId::new(String::new()))
+        };
         if superstep_number >= graph.limits().max_supersteps {
             let error = EngineError::RecursionLimitExceeded {
                 limit: graph.limits().max_supersteps,
                 thread_id: thread.clone(),
             };
-            let waypoint = build_waypoint(
+            let failed_node = boundary_failed_node();
+            return persist_limit_failure(
+                waypoint_port,
+                durability,
+                trace,
                 &thread,
                 parent_waypoint_id,
                 superstep_number,
@@ -929,41 +2184,50 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 &battlefield,
                 vanguard.clone(),
                 Vec::new(),
-                WaypointStatus::Failed {
-                    error: error.to_string(),
-                    // --- CR-01 (23-REVIEW.md): `vanguard` alone may be
-                    // empty on a muster-only round -- this phase's Muster
-                    // feature can re-enter this loop with `vanguard` empty
-                    // and `pending_muster` carrying the next dispatch
-                    // (`has_pending_muster` a few hundred lines below
-                    // stands in for "there is more work" in exactly this
-                    // situation). Mirrors the `Battlefield::merge` failure
-                    // fallback's `dispatch_entries.first()` pattern a few
-                    // hundred lines below, using `pending_muster` instead
-                    // since `dispatch_entries` is not built yet at this
-                    // point in the loop. The loop's own Completed-return
-                    // checks guarantee at least one of `vanguard`/
-                    // `pending_muster` is non-empty whenever this branch is
-                    // reached, so the final placeholder is unreachable by
-                    // construction -- but must not panic if that invariant
-                    // is ever violated (mirrors `MusterProgress::default`'s
-                    // own placeholder `NodeId::new(String::new())`).
-                    failed_node: vanguard
-                        .first()
-                        .cloned()
-                        .or_else(|| pending_muster.as_ref().map(|(node, _)| node.clone()))
-                        .unwrap_or_else(|| NodeId::new(String::new())),
-                },
+                error,
+                failed_node,
+                None,
                 visit_counts,
                 frontier.snapshot(graph),
-                None,
                 checkpoint_ns.clone(),
-            );
-            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
-            return Ok(RunOutcome::Failed {
-                error,
-                waypoint: Some(waypoint.waypoint_id),
-            });
+                fork_of,
+            )
+            .await;
+        }
+
+        // --- FT-FR-10, D-20, ENG-FR-03: the run-level wall-clock budget,
+        // checked at the SAME boundary as the recursion limit so a run
+        // whose budget expired during (or exactly at the end of) the
+        // previous superstep stops here rather than starting another one.
+        // A budget that expires MID-superstep is caught by the per-attempt
+        // race instead (`AttemptBounds::resolve` names it `EngineRun`) and
+        // surfaced through the same helper after the bookkeeping loop.
+        if let Some(limit) = graph.limits().run_timeout {
+            let elapsed = run_started_at.elapsed();
+            if elapsed >= limit {
+                let error = EngineError::RunTimeoutExceeded { elapsed, limit };
+                let failed_node = boundary_failed_node();
+                return persist_limit_failure(
+                    waypoint_port,
+                    durability,
+                    trace,
+                    &thread,
+                    parent_waypoint_id,
+                    superstep_number,
+                    graph,
+                    &battlefield,
+                    vanguard.clone(),
+                    Vec::new(),
+                    error,
+                    failed_node,
+                    None,
+                    visit_counts,
+                    frontier.snapshot(graph),
+                    checkpoint_ns.clone(),
+                    fork_of,
+                )
+                .await;
+            }
         }
 
         // --- ENG-FR-03: per-node visit bound, checked before a node is
@@ -983,7 +2247,10 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 node: node.clone(),
                 limit: graph.limits().max_node_visits,
             };
-            let waypoint = build_waypoint(
+            return persist_limit_failure(
+                waypoint_port,
+                durability,
+                trace,
                 &thread,
                 parent_waypoint_id,
                 superstep_number,
@@ -991,26 +2258,21 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 &battlefield,
                 vanguard.clone(),
                 Vec::new(),
-                WaypointStatus::Failed {
-                    error: error.to_string(),
-                    failed_node: node,
-                },
+                error,
+                node,
+                None,
                 visit_counts,
                 frontier.snapshot(graph),
-                None,
                 checkpoint_ns.clone(),
-            );
-            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
-            return Ok(RunOutcome::Failed {
-                error,
-                waypoint: Some(waypoint.waypoint_id),
-            });
+                fork_of,
+            )
+            .await;
         }
         visit_counts = candidate_counts;
 
         trace.emit(TraceEvent::SuperstepStarted {
-            thread_id: thread.clone(),
             superstep: superstep_number,
+            vanguard: vanguard.clone(),
         });
 
         // --- CF-03 / CF-FR-12: this superstep's dispatch entries = every
@@ -1043,6 +2305,12 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
             };
         let muster_carryover_this_round: BTreeMap<String, StateDelta> =
             muster_carryover.take().unwrap_or_default();
+        // --- HITL-01, D-08: taken exactly once, on the round that
+        // dispatches a `WarEngine::resume_with` re-entry's forced vanguard
+        // (every ordinary superstep, and every later round of the SAME
+        // resumed run, sees `None` here).
+        let parley_responses_this_round: BTreeMap<NodeId, ParleyResponse> =
+            initial_parley_responses.take().unwrap_or_default();
         // --- WR-02 (23-REVIEW.md): reuses `MusterProgress::unfinished_tasks`
         // -- the method the module's own rustdoc says resume relies on --
         // instead of hand-rolling an equivalent `task_key` filter a second
@@ -1092,9 +2360,9 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
         let semaphore = Arc::new(Semaphore::new(limit));
 
         let mut handles = Vec::with_capacity(dispatch_entries.len());
-        for (node_id, muster_ctx) in &dispatch_entries {
+        for (dispatch_index, (node_id, muster_ctx)) in dispatch_entries.iter().enumerate() {
             let spec = graph.node(node_id).ok_or_else(|| {
-                EngineError::Node(NodeError(format!(
+                EngineError::Node(StateNodeError(format!(
                     "vanguard node {node_id} not found in graph"
                 )))
             })?;
@@ -1105,12 +2373,54 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                     input_template,
                     output_field,
                     directive_parser,
-                } => NodeDispatch::Paladin {
-                    paladin: paladin.clone(),
-                    input_template: input_template.clone(),
-                    output_field: output_field.clone(),
-                    directive_parser: directive_parser.clone(),
-                },
+                    output_schema,
+                } => {
+                    // --- RT-05, RT-FR-19, D-29: resolve `output_schema`
+                    // ONCE here, before this dispatch entry is spawned --
+                    // `SchemaRef::Inline` unwraps directly; `SchemaRef::
+                    // Registered(name)` looks the name up in
+                    // `registries.output_schemas`, already proven present
+                    // by `WarGraph::validate` (`validate_output_schemas`)
+                    // before any node ran, so this lookup is infallible in
+                    // practice -- but library code must not `.expect()` an
+                    // invariant it cannot enforce (mirroring the Battalion
+                    // arm's own `resources` lookup below), so a defensive
+                    // miss still fails the run with a typed error rather
+                    // than panicking.
+                    let resolved_schema = match output_schema {
+                        None => None,
+                        Some(SchemaRef::Inline(value)) => Some(value.clone()),
+                        Some(SchemaRef::Registered(name)) => {
+                            let schema = registries.output_schemas.get(name).ok_or_else(|| {
+                                EngineError::Node(StateNodeError(format!(
+                                    "node {node_id}: output_schema registered name \
+                                         '{name}' not found in registries at dispatch time -- \
+                                         WarGraph::validate should have rejected this before \
+                                         any node ran"
+                                )))
+                            })?;
+                            Some(schema.to_json_schema())
+                        }
+                        // `SchemaRef` is `#[non_exhaustive]` from this
+                        // crate's point of view -- a future variant fails
+                        // closed here (a typed error naming the node)
+                        // rather than silently falling through to "no
+                        // schema".
+                        Some(_) => {
+                            return Err(EngineError::Node(StateNodeError(format!(
+                                "node {node_id}: output_schema uses a SchemaRef variant this \
+                                 engine does not yet resolve"
+                            ))));
+                        }
+                    };
+                    NodeDispatch::Paladin {
+                        paladin: paladin.clone(),
+                        input_template: input_template.clone(),
+                        output_field: output_field.clone(),
+                        directive_parser: directive_parser.clone(),
+                        output_schema: resolved_schema,
+                    }
+                }
                 NodeSpec::Battalion {
                     graph: child_graph,
                     state_map,
@@ -1121,7 +2431,7 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                     // call has no `Arc<W>` available -- see `run`'s own
                     // rustdoc note on `waypoint_port_arc`.
                     let resources = child_resources.clone().ok_or_else(|| {
-                        EngineError::Node(NodeError(format!(
+                        EngineError::Node(StateNodeError(format!(
                             "battalion node {node_id}: no child-engine resources available for \
                              this run"
                         )))
@@ -1133,107 +2443,407 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                         restart_on_resume: *restart_on_resume,
                     }
                 }
+                // --- HITL-01, D-05: a Gate has no `run` body of its own --
+                // dispatched as an ordinary `Function` node wrapping a
+                // fresh `GateDispatchNode`, reusing every existing
+                // dispatch/interceptor/trace/NextStep::Parley-suspension
+                // code path below with no changes to any of it.
+                NodeSpec::Gate {
+                    request,
+                    output_field,
+                } => NodeDispatch::Function(Arc::new(GateDispatchNode {
+                    request: request.clone(),
+                    output_field: output_field.clone(),
+                })),
             };
             let snap = Arc::clone(&snapshot);
             let sem = Arc::clone(&semaphore);
             let port = Arc::clone(paladin_port);
+            // --- RT-05, RT-FR-19, D-29: this run's structured-output
+            // executor, cloned out of the outer scope so the spawned task
+            // owns everything it touches, mirroring `port` immediately
+            // above.
+            let node_structured_executor = structured_executor.clone();
             let node_trace = Arc::clone(trace);
+            // --- D-04, T-28-03-02: this run's shared heartbeat rate-limiter
+            // state, cloned into the spawned task alongside `node_trace`
+            // above; `heartbeat_interval` is `Copy` (a plain `Duration`), so
+            // it is captured by value with no clone needed.
+            let node_heartbeat_last_emitted = Arc::clone(&heartbeat_last_emitted);
             let node_interceptors = interceptors.to_vec();
-            let ctx = crate::engine::node::NodeContext {
+            // --- D-18: the attempt-INVARIANT part of this dispatch's
+            // context. `attempt` and `heartbeat` are per attempt (the retry
+            // loop below rebuilds `ctx` from this base on every iteration
+            // with the current attempt number and a FRESH handle), so the
+            // values placed here are placeholders overwritten before any
+            // node, interceptor or trace ever sees the context.
+            let base_ctx = crate::engine::node::NodeContext {
                 node_id: node_id.clone(),
                 thread_id: thread.clone(),
                 superstep: superstep_number,
                 muster: muster_ctx.clone(),
+                parley_response: parley_responses_this_round.get(node_id).cloned(),
+                attempt: 0,
+                heartbeat: HeartbeatHandle::new(),
+                // --- RT-04, D-21: the SAME grant for every node of this
+                // run -- `None` when the engine has no Vault store wired.
+                vault: vault.clone(),
             };
             let nid = node_id.clone();
-            handles.push(tokio::spawn(async move {
-                node_trace.emit(TraceEvent::NodeStarted {
-                    thread_id: ctx.thread_id.clone(),
-                    superstep: ctx.superstep,
-                    node_id: nid.clone(),
-                });
-                let started_at = Utc::now();
+            // --- D-09, D-10, D-14: this node's resolved Aegis (its own
+            // `set_aegis` entry, else the graph's `default_aegis`, else
+            // `None`), and this run's cancellation token, both cloned out
+            // of the graph/outer scope so the spawned task owns everything
+            // it touches, mirroring every other per-dispatch clone above.
+            let node_aegis: Option<Aegis> = graph.aegis_for(node_id).cloned();
+            let node_cancellation = cancellation.clone();
+            // --- FT-FR-18, D-29: this node's cache binding -- `Some` only
+            // with BOTH a resolved `cache` policy and a wired backend.
+            let node_cache_binding: Option<NodeCacheBinding> = match (
+                node_aegis.as_ref().and_then(|a| a.cache.as_ref()),
+                node_cache.as_ref(),
+                cache_graph_fingerprint.as_ref(),
+            ) {
+                (Some(policy), Some(cache), Some(fingerprint)) => Some(NodeCacheBinding {
+                    policy: policy.clone(),
+                    cache: Arc::clone(cache),
+                    graph_fingerprint: fingerprint.clone(),
+                }),
+                _ => None,
+            };
+            handles.push(IndexedHandle {
+                index: dispatch_index,
+                handle: tokio::spawn(async move {
+                    // --- FT-FR-18, D-29, D-14: the cache lookup happens
+                    // BEFORE attempt 1 and OUTSIDE the interceptor chain
+                    // (the cache is part of the Aegis, which wraps the whole
+                    // per-attempt sequence, so a hit runs no `before`/
+                    // `after` interceptor -- nothing executes). A hit merges
+                    // the stored delta as a `Succeeded` outcome on attempt 1
+                    // with `cache_hit: true`, emits exactly one
+                    // `NodeStarted`/`NodeFinished { cache_hit: true }` pair,
+                    // consumes no retry budget and calls no port. A `get`
+                    // error is a miss (`lookup_node_cache`), never a failure.
+                    let cache_key: Option<NodeCacheKey> =
+                        node_cache_binding.as_ref().and_then(|binding| {
+                            compose_node_cache_key(binding, &dispatch, &snap, &base_ctx)
+                        });
+                    if let (Some(binding), Some(key)) = (&node_cache_binding, &cache_key)
+                        && let Some(cached) = lookup_node_cache(binding, key, &nid).await
+                    {
+                        let started_at = Utc::now();
+                        node_trace.emit(TraceEvent::NodeStarted {
+                            superstep: base_ctx.superstep,
+                            node_id: nid.clone(),
+                            attempt: 1,
+                            muster_task_key: base_ctx.muster.as_ref().map(|m| m.task_key.clone()),
+                        });
+                        let paladin_id = match &dispatch {
+                            NodeDispatch::Paladin { paladin, .. } => Some(paladin.uuid),
+                            _ => None,
+                        };
+                        let duration_ms =
+                            (Utc::now() - started_at).num_milliseconds().max(0) as u64;
+                        node_trace.emit(TraceEvent::NodeFinished {
+                            superstep: base_ctx.superstep,
+                            node_id: nid.clone(),
+                            attempt: 1,
+                            // A cache hit always merges as `Edges`-routed
+                            // (FT-FR-18, D-29) -- never `Ended`/`Parleyed`.
+                            outcome: NodeOutcomeKind::Succeeded,
+                            duration_ms,
+                            token_count: 0,
+                            cache_hit: true,
+                        });
+                        return NodeTaskOutput {
+                            node_id: nid,
+                            started_at,
+                            duration_ms,
+                            paladin_id,
+                            token_count: 0,
+                            outcome: NodeRunOutcome::Succeeded(Directive {
+                                delta: cached.delta,
+                                next: NextStep::Edges,
+                            }),
+                            attempt: 1,
+                            failed_attempts: Vec::new(),
+                            node_error: None,
+                            cache_hit: true,
+                        };
+                    }
+                    // --- D-14: the retry loop wraps the ENTIRE per-attempt
+                    // sequence below -- the `NodeStarted` emit, the whole
+                    // `before` interceptor chain, `execute_vanguard_node`,
+                    // the whole `after` interceptor chain, and the
+                    // `NodeFinished` emit -- so every attempt runs through
+                    // interceptors afresh (`hooks.rs`'s own contract), never
+                    // just the dispatch call in isolation. A node with no
+                    // resolved Aegis (or no `retry` policy on it) runs
+                    // exactly once, byte-identical to pre-Phase-25 behavior
+                    // (D-09's "no policy, no change" truth).
+                    let mut attempt: u32 = 0;
+                    // --- FT-FR-03, D-16: one `AttemptRecord` per FAILED
+                    // attempt, pushed in attempt order as each retry is
+                    // decided, so the vector is ascending by construction.
+                    let mut failed_attempts: Vec<AttemptRecord> = Vec::new();
+                    loop {
+                        attempt += 1;
+                        // --- D-18: rebuilt per attempt with the CURRENT
+                        // attempt number and a FRESH `HeartbeatHandle`, so a
+                        // straggling task from a cancelled (timed-out)
+                        // previous attempt can never reset THIS attempt's
+                        // idle timer, and a `StateNode` never observes a
+                        // stale `ctx.attempt`.
+                        let ctx = crate::engine::node::NodeContext {
+                            attempt,
+                            heartbeat: HeartbeatHandle::new(),
+                            ..base_ctx.clone()
+                        };
+                        // --- FT-FR-08/09/10, D-20: THIS attempt's bounds,
+                        // armed fresh per attempt from the node's resolved
+                        // `TimeoutPolicy` and the remaining engine budget.
+                        // A policy with both fields `None` (or no policy at
+                        // all) and no engine bound arms nothing, so the
+                        // attempt runs exactly as before this plan.
+                        let attempt_bounds = AttemptBounds::resolve(
+                            node_aegis.as_ref().and_then(|a| a.timeout.as_ref()),
+                            engine_deadline,
+                        );
+                        node_trace.emit(TraceEvent::NodeStarted {
+                            superstep: ctx.superstep,
+                            node_id: nid.clone(),
+                            attempt,
+                            muster_task_key: ctx.muster.as_ref().map(|m| m.task_key.clone()),
+                        });
+                        let started_at = Utc::now();
 
-                // --- ENG-FR-22: run every `before` in order, short-
-                // circuiting on the first non-`Proceed` decision.
-                let mut decision = InterceptDecision::Proceed;
-                for interceptor in &node_interceptors {
-                    decision = interceptor.before(&ctx, &snap).await;
-                    if !matches!(decision, InterceptDecision::Proceed) {
-                        break;
-                    }
-                }
-
-                let (paladin_id, token_count, outcome) = match decision {
-                    InterceptDecision::Skip(reason) => {
-                        (None, 0u64, NodeRunOutcome::Skipped(reason))
-                    }
-                    InterceptDecision::Fail(err) => {
-                        (None, 0u64, NodeRunOutcome::Failed(NodeFailure::Node(err)))
-                    }
-                    InterceptDecision::Proceed => match sem.acquire_owned().await {
-                        Ok(_permit) => {
-                            let (paladin_id, token_count, result) =
-                                execute_vanguard_node(dispatch, &snap, &ctx, &port).await;
-                            match result {
-                                Ok(mut directive) => {
-                                    // --- ENG-FR-22: run every `after` in
-                                    // order, each observing the previous
-                                    // one's mutation. `after` still takes
-                                    // `&mut StateDelta` only -- the ENG-07
-                                    // hook signature is unchanged by CF-02;
-                                    // `directive.next` is not visible to any
-                                    // interceptor this phase.
-                                    for interceptor in &node_interceptors {
-                                        interceptor.after(&ctx, &mut directive.delta).await;
-                                    }
-                                    (
-                                        paladin_id,
-                                        token_count,
-                                        NodeRunOutcome::Succeeded(directive),
-                                    )
-                                }
-                                Err(e) => (paladin_id, token_count, NodeRunOutcome::Failed(e)),
+                        // --- ENG-FR-22: run every `before` in order, short-
+                        // circuiting on the first non-`Proceed` decision.
+                        let mut decision = InterceptDecision::Proceed;
+                        for interceptor in &node_interceptors {
+                            decision = interceptor.before(&ctx, &snap).await;
+                            if !matches!(decision, InterceptDecision::Proceed) {
+                                break;
                             }
                         }
-                        // Semaphore is never `.close()`d anywhere in this
-                        // engine today, so this arm is unreachable in
-                        // practice -- but library code must not `.expect()`
-                        // an invariant it cannot enforce (WR-01, Phase
-                        // 22.1). Report it the same way a node's own
-                        // execution error is reported, through the existing
-                        // NodeRunOutcome/NodeError plumbing, rather than
-                        // panicking inside a detached `tokio::spawn`ed task.
-                        Err(_) => (
-                            None,
-                            0u64,
-                            NodeRunOutcome::Failed(NodeFailure::Node(NodeError(
-                                "internal error: superstep semaphore closed unexpectedly"
-                                    .to_string(),
-                            ))),
-                        ),
-                    },
-                };
-                let duration_ms = (Utc::now() - started_at).num_milliseconds().max(0) as u64;
-                node_trace.emit(TraceEvent::NodeFinished {
-                    thread_id: ctx.thread_id.clone(),
-                    superstep: ctx.superstep,
-                    node_id: nid.clone(),
-                });
-                (
-                    nid,
-                    started_at,
-                    duration_ms,
-                    paladin_id,
-                    token_count,
-                    outcome,
-                )
-            }));
+
+                        let (paladin_id, token_count, outcome) = match decision {
+                            InterceptDecision::Skip(reason) => {
+                                (None, 0u64, NodeRunOutcome::Skipped(reason))
+                            }
+                            InterceptDecision::Fail(err) => {
+                                (None, 0u64, NodeRunOutcome::Failed(NodeFailure::Node(err)))
+                            }
+                            InterceptDecision::Proceed => match Arc::clone(&sem)
+                                .acquire_owned()
+                                .await
+                            {
+                                Ok(_permit) => {
+                                    // --- FT-FR-08/09/10, D-20: race the
+                                    // attempt against its resolved bounds.
+                                    // On expiry the attempt future is
+                                    // DROPPED (its partial work never becomes
+                                    // a Directive, T-25-41) and the failure
+                                    // names the bound by typed `TimeoutKind`.
+                                    let (paladin_id, token_count, result) = race_attempt(
+                                        execute_vanguard_node(
+                                            dispatch.clone(),
+                                            &snap,
+                                            &ctx,
+                                            &port,
+                                            &node_structured_executor,
+                                        ),
+                                        &attempt_bounds,
+                                        &ctx.heartbeat,
+                                        &nid,
+                                        &node_trace,
+                                        &node_heartbeat_last_emitted,
+                                        heartbeat_interval,
+                                    )
+                                    .await;
+                                    match result {
+                                        Ok(mut directive) => {
+                                            // --- ENG-FR-22: run every `after` in
+                                            // order, each observing the previous
+                                            // one's mutation. `after` still takes
+                                            // `&mut StateDelta` only -- the ENG-07
+                                            // hook signature is unchanged by CF-02;
+                                            // `directive.next` is not visible to any
+                                            // interceptor this phase.
+                                            for interceptor in &node_interceptors {
+                                                interceptor.after(&ctx, &mut directive.delta).await;
+                                            }
+                                            // --- FT-FR-18, D-29: `put` ONLY here --
+                                            // after a SUCCESSFUL attempt, once the
+                                            // `after` chain has produced the delta
+                                            // that will actually merge, and only
+                                            // for an `Edges`-routed directive
+                                            // (`store_node_cache`'s own contract).
+                                            // No failed attempt, handler outcome or
+                                            // error ever reaches this call.
+                                            if let (Some(binding), Some(key)) =
+                                                (&node_cache_binding, &cache_key)
+                                                && matches!(directive.next, NextStep::Edges)
+                                            {
+                                                store_node_cache(
+                                                    binding,
+                                                    key,
+                                                    &directive.delta,
+                                                    snap.schema(),
+                                                    &nid,
+                                                )
+                                                .await;
+                                            }
+                                            (
+                                                paladin_id,
+                                                token_count,
+                                                NodeRunOutcome::Succeeded(directive),
+                                            )
+                                        }
+                                        Err(e) => {
+                                            (paladin_id, token_count, NodeRunOutcome::Failed(e))
+                                        }
+                                    }
+                                }
+                                // Semaphore is never `.close()`d anywhere in this
+                                // engine today, so this arm is unreachable in
+                                // practice -- but library code must not `.expect()`
+                                // an invariant it cannot enforce (WR-01, Phase
+                                // 22.1). Report it the same way a node's own
+                                // execution error is reported, through the existing
+                                // NodeRunOutcome/StateNodeError plumbing, rather than
+                                // panicking inside a detached `tokio::spawn`ed task.
+                                Err(_) => (
+                                    None,
+                                    0u64,
+                                    NodeRunOutcome::Failed(NodeFailure::Node(StateNodeError(
+                                        "internal error: superstep semaphore closed unexpectedly"
+                                            .to_string(),
+                                    ))),
+                                ),
+                            },
+                        };
+                        let duration_ms =
+                            (Utc::now() - started_at).num_milliseconds().max(0) as u64;
+                        node_trace.emit(TraceEvent::NodeFinished {
+                            superstep: ctx.superstep,
+                            node_id: nid.clone(),
+                            attempt,
+                            outcome: node_outcome_kind(&outcome),
+                            duration_ms,
+                            token_count,
+                            // Plan 25-13 is the only plan that sets this
+                            // `true` (a served-from-cache outcome).
+                            cache_hit: false,
+                        });
+
+                        // --- D-14, D-15, D-07: only a `NodeFailure::Node`
+                        // (a `Function` node's own error, an `InputMapping`
+                        // failure, or an `InterceptDecision::Fail` decision
+                        // -- everything carrying a `StateNodeError`) or a
+                        // `NodeFailure::Paladin` (a `PaladinPort::execute`
+                        // error, classified by its own typed transience) is
+                        // retry-eligible -- exactly the failures
+                        // `NodeFailure::node_error` converts. A
+                        // `DirectiveParse`/`Battalion` failure, a `Skipped`
+                        // outcome, a `Succeeded` outcome (including a
+                        // `NextStep::Parley` Directive, which is a success
+                        // that leaves this loop at once and consumes no
+                        // retry budget, D-17) never enters this block.
+                        //
+                        // FT-FR-07: NO Waypoint is written anywhere inside
+                        // this loop -- a retry is never a durable checkpoint
+                        // boundary, so a run interrupted between attempts
+                        // resumes by re-executing this node from attempt 1.
+                        //
+                        // D-20: an attempt cut by the ENGINE's run budget
+                        // (`Timeout(EngineRun)`) is never retried -- the
+                        // budget is exhausted, so a fresh attempt would be
+                        // cut at once; the run ends `RunTimeoutExceeded`
+                        // instead (bookkeeping loop below). `Run`/`Idle`
+                        // cuts ARE retried like any other transient failure.
+                        if let NodeRunOutcome::Failed(ref failure) = outcome
+                            && !matches!(failure, NodeFailure::Timeout(TimeoutKind::EngineRun))
+                            && let Some(retry_policy) =
+                                node_aegis.as_ref().and_then(|a| a.retry.as_ref())
+                            && attempt < retry_policy.max_attempts
+                            && let Some(node_error) = failure.node_error(&nid, attempt)
+                            && retry::should_retry(retry_policy, &node_error, attempt)
+                        {
+                            failed_attempts.push(AttemptRecord {
+                                attempt,
+                                started_at,
+                                duration_ms,
+                                error: node_error,
+                            });
+                            let delay = retry::backoff_delay(retry_policy, attempt + 1);
+                            if retry::wait_backoff(delay, &node_cancellation).await {
+                                continue;
+                            }
+                            // --- D-15, RESEARCH.md Pitfall 7: the run is
+                            // shutting down mid-backoff -- stop retrying and
+                            // report this dispatch entry `Interrupted`, which
+                            // the bookkeeping loop records `Skipped { reason:
+                            // "shutdown" }` and re-lists for resume, exactly
+                            // like the grace-race abort path below (FT-FR-07:
+                            // a resume re-executes it from attempt 1).
+                            break NodeTaskOutput {
+                                node_id: nid,
+                                started_at,
+                                duration_ms,
+                                paladin_id,
+                                token_count,
+                                outcome: NodeRunOutcome::Interrupted,
+                                attempt,
+                                failed_attempts,
+                                node_error: None,
+                                cache_hit: false,
+                            };
+                        }
+                        // --- D-08: the structured error travels with a
+                        // FINAL failed attempt only when this node has a
+                        // resolved Aegis; a no-Aegis node's failure stays on
+                        // the byte-identical pre-Phase-25 path (D-09).
+                        // --- D-20: a timeout is the one exception -- it is
+                        // always structured, whether or not the node has an
+                        // Aegis, because the ENGINE's own run budget
+                        // (`Timeout(EngineRun)`) can cut a node that declared
+                        // no policy at all, and the bound that fired must
+                        // still be a typed `TimeoutKind` on the record.
+                        let node_error = match (&outcome, node_aegis.as_ref()) {
+                            (NodeRunOutcome::Failed(failure), Some(_)) => {
+                                failure.node_error(&nid, attempt)
+                            }
+                            (NodeRunOutcome::Failed(failure @ NodeFailure::Timeout(_)), None) => {
+                                failure.node_error(&nid, attempt)
+                            }
+                            _ => None,
+                        };
+                        break NodeTaskOutput {
+                            node_id: nid,
+                            started_at,
+                            duration_ms,
+                            paladin_id,
+                            token_count,
+                            outcome,
+                            attempt,
+                            failed_attempts,
+                            node_error,
+                            cache_hit: false,
+                        };
+                    }
+                }),
+            });
         }
 
         let mut deltas = Vec::with_capacity(handles.len());
         let mut completed_records = Vec::with_capacity(handles.len());
-        let mut node_failure: Option<(NodeId, NodeFailure)> = None;
+        let mut node_failure: Option<(NodeId, NodeFailure, Option<NodeError>)> = None;
+        // --- FT-FR-10, D-20: the first (dispatch-order) attempt this
+        // superstep that the ENGINE budget cut. Checked ahead of
+        // `node_failure` below: when the budget is what expired, the run
+        // ends `RunTimeoutExceeded` rather than merely failing that node.
+        let mut engine_budget_cut: Option<(NodeId, NodeError)> = None;
         // --- CF-02: per-superstep runtime values derived from this
         // superstep's `Directive`s, NOT `Frontier` state (RESEARCH.md
         // Pattern 3) -- rebuilt fresh every superstep, never persisted.
@@ -1246,24 +2856,259 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
         // this superstep to return `NextStep::End` (D-09); `mustered` is a
         // validated `NextStep::Muster` task list (CF-03, D-13), threaded
         // into `pending_muster` for the NEXT superstep's dispatch below. A
-        // Goto target validation failure, an invalid Muster, or a returned
-        // Parley all fail the run before any of this bookkeeping is acted
-        // on further (checked together with `node_failure`, before the
-        // merge).
+        // Goto target validation failure or an invalid Muster fails the
+        // run before any of this bookkeeping is acted on further (checked
+        // together with `node_failure`, before the merge). `parley_requests`
+        // (HITL-01, D-02, D-03) is NOT a failure path: every `ParleyRequest`
+        // raised anywhere this superstep is collected here and, after the
+        // merge below, suspends the whole run (checked ahead of
+        // `end_requested`).
         let mut goto_targets: Vec<NodeId> = Vec::new();
         let mut notfiring_nodes: HashSet<NodeId> = HashSet::new();
         let mut end_requested: Option<NodeId> = None;
         let mut routing_failure: Option<(NodeId, EngineError)> = None;
         let mut mustered: Option<(NodeId, Vec<MusterTask>)> = None;
-        for (entry, handle) in dispatch_entries.iter().zip(handles) {
-            let (_entry_node_id, entry_muster_ctx) = entry;
+        let mut parley_requests: Vec<ParleyRequest> = Vec::new();
+
+        // --- HITL-04, D-19, RESEARCH.md Pitfall 1: race the WHOLE batch of
+        // spawned node tasks against ONE shared grace deadline, never a
+        // per-handle timeout. `results` is indexed by `dispatch_entries`
+        // position (`FuturesUnordered` does not preserve insertion order),
+        // so the bookkeeping loop just below still runs in dispatch order,
+        // exactly as it did when this was a plain sequential `for` loop.
+        // `cancel_observed_at` starts `Some` the instant the token is ALREADY
+        // cancelled (e.g. observed at the top-of-loop boundary check just
+        // barely before dispatch), and otherwise flips to `Some` the first
+        // time the watch branch below fires -- either way, the deadline is
+        // computed exactly once, from that one moment.
+        let handle_count = dispatch_entries.len();
+        let mut results: Vec<Option<NodeTaskOutput>> = (0..handle_count).map(|_| None).collect();
+        let mut aborted_node_ids: Vec<NodeId> = Vec::new();
+        // --- CR-02 (24-REVIEW.md): a Muster worker task aborted at the
+        // grace deadline must NOT re-enter as an ordinary vanguard node on
+        // resume (it would lose its `task_key`/`payload` `MusterContext`,
+        // per `node.rs`'s worker-template contract). Tracked separately
+        // from `aborted_node_ids` -- which stays exactly "ordinary vanguard
+        // nodes aborted this superstep" -- so the Halted-branch below can
+        // preserve the round's `MusterProgress` instead of folding a
+        // worker's `NodeId` into `halted_vanguard`.
+        let mut muster_task_aborted = false;
+        let mut remaining: FuturesUnordered<IndexedHandle<NodeTaskOutput>> =
+            handles.into_iter().collect();
+        let mut cancel_observed_at: Option<tokio::time::Instant> = cancellation
+            .as_ref()
+            .filter(|token| token.is_cancelled())
+            .map(|_| tokio::time::Instant::now());
+
+        while !remaining.is_empty() {
+            match cancel_observed_at {
+                None => {
+                    tokio::select! {
+                        biased;
+                        Some((idx, res)) = remaining.next() => {
+                            match res {
+                                Ok(output) => results[idx] = Some(output),
+                                Err(e) => {
+                                    return Err(EngineError::Node(StateNodeError(format!(
+                                        "task join error: {e}"
+                                    ))));
+                                }
+                            }
+                        }
+                        _ = cancelled_or_pending(cancellation) => {
+                            cancel_observed_at = Some(tokio::time::Instant::now());
+                        }
+                    }
+                }
+                Some(observed_at) => {
+                    let deadline = observed_at + shutdown_grace;
+                    tokio::select! {
+                        biased;
+                        Some((idx, res)) = remaining.next() => {
+                            match res {
+                                Ok(output) => results[idx] = Some(output),
+                                Err(e) => {
+                                    return Err(EngineError::Node(StateNodeError(format!(
+                                        "task join error: {e}"
+                                    ))));
+                                }
+                            }
+                        }
+                        _ = tokio::time::sleep_until(deadline) => {
+                            // --- D-19: every handle still outstanding at the
+                            // deadline is aborted; its delta is discarded
+                            // (never awaited, never merged) and its own
+                            // dispatch-order id is recorded so the
+                            // bookkeeping loop below can produce a
+                            // `Skipped { reason: "shutdown" }` record for it
+                            // without needing the (never-arriving) real
+                            // outcome. `iter()` inspects without polling or
+                            // removing -- `abort()` is safe to call on a
+                            // handle still registered in `remaining`.
+                            for handle in remaining.iter() {
+                                handle.abort();
+                                let (aborted_node_id, aborted_muster_ctx) =
+                                    &dispatch_entries[handle.index];
+                                if aborted_muster_ctx.is_some() {
+                                    // A Muster worker's own dispatch-order id
+                                    // is recovered on resume via
+                                    // `MusterProgress::unfinished_tasks`, not
+                                    // by re-adding it to the plain vanguard.
+                                    muster_task_aborted = true;
+                                } else {
+                                    aborted_node_ids.push(aborted_node_id.clone());
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        for (dispatch_index, entry) in dispatch_entries.iter().enumerate() {
+            let (entry_node_id, entry_muster_ctx) = entry;
             let is_muster_task = entry_muster_ctx.is_some();
-            let (node_id, started_at, duration_ms, paladin_id, token_count, outcome) = handle
-                .await
-                .map_err(|e| EngineError::Node(NodeError(format!("task join error: {e}"))))?;
+            let Some(NodeTaskOutput {
+                node_id,
+                started_at,
+                duration_ms,
+                paladin_id,
+                token_count,
+                outcome,
+                attempt,
+                failed_attempts,
+                node_error,
+                cache_hit,
+            }) = results[dispatch_index].take()
+            else {
+                // --- D-19: aborted past the shared grace deadline. Recorded
+                // `Skipped { reason: "shutdown" }`, exactly like an
+                // interceptor `Skip` decision above -- never pushed to
+                // `deltas`/`ran`, so `frontier.record_execution` is never
+                // called for it and its outgoing edges stay `Pending`
+                // (acceptance 5), and never both merged and skipped.
+                completed_records.push(NodeExecutionRecord {
+                    node_id: entry_node_id.clone(),
+                    paladin_id: None,
+                    started_at: Utc::now(),
+                    duration_ms: 0,
+                    token_count: 0,
+                    outcome: NodeOutcomeKind::Skipped {
+                        reason: "shutdown".to_string(),
+                    },
+                    attempt: 1,
+                    attempts: Vec::new(),
+                    cache_hit: false,
+                });
+                continue;
+            };
+            // --- FT-FR-03, D-16: built in attempt order by the retry loop
+            // (asserted, never sorted, so a regression there is loud).
+            debug_assert!(
+                failed_attempts
+                    .windows(2)
+                    .all(|w| w[0].attempt < w[1].attempt),
+                "attempt history must ascend by attempt number"
+            );
+            // --- Plan 25-10, D-21, FT-FR-11/12/13: a FINAL failure --
+            // retries exhausted, or the predicate refused a non-retryable
+            // error; the retry loop above never yields `Failed` while
+            // attempts remain (FT-FR-05, T-25-48) -- with a resolved
+            // `on_error` handler is handed to that handler HERE, in dispatch
+            // order, over the SAME pre-superstep `battlefield` every attempt
+            // read (T-25-50: the merge below has not happened yet, so a
+            // handler never observes partially merged state). The handler's
+            // `Directive` is then honoured through the `Succeeded` arm below
+            // exactly as a node's own would be -- `Edges` merges the delta
+            // and fires static edges, `Goto` places its target through the
+            // existing Goto machinery (`goto_targets` -> `next_vanguard`, so
+            // a routed visit is counted by the SAME `visit_counts` bound as
+            // any other, T-25-47), `End` completes, `Parley` suspends,
+            // `Muster` fans out -- with ONE difference: the record still
+            // reads `NodeOutcomeKind::Failed`, because the node DID fail;
+            // the handler compensated. A handler returning `Err` fails the
+            // run carrying the HANDLER's error (D-13). An attempt cut by
+            // the ENGINE budget (`Timeout(EngineRun)`) is never handed to a
+            // handler: the budget is gone, and the run ends
+            // `RunTimeoutExceeded` below (D-20). A failure with no
+            // structured error (a `DirectiveParse`/`Battalion` failure, or a
+            // no-Aegis node) has no handler by construction (D-09, D-14).
+            let mut node_error = node_error;
+            let mut handled_failure = false;
+            let outcome = match outcome {
+                NodeRunOutcome::Failed(failure)
+                    if !matches!(failure, NodeFailure::Timeout(TimeoutKind::EngineRun)) =>
+                {
+                    let handler = graph.aegis_for(&node_id).and_then(|a| a.on_error.as_ref());
+                    match (handler, node_error.as_ref()) {
+                        (Some(spec), Some(err)) => {
+                            match dispatch_error_handler(spec, err, &battlefield, registries).await
+                            {
+                                Ok(directive) => {
+                                    handled_failure = true;
+                                    NodeRunOutcome::Succeeded(directive)
+                                }
+                                Err(handler_error) => {
+                                    node_error = Some(handler_error);
+                                    NodeRunOutcome::Failed(failure)
+                                }
+                            }
+                        }
+                        _ => NodeRunOutcome::Failed(failure),
+                    }
+                }
+                other => other,
+            };
             match outcome {
                 NodeRunOutcome::Succeeded(directive) => {
                     let Directive { delta, next } = directive;
+                    // --- Plan 25-11, D-22: a handler inside a Muster is
+                    // delta-only. A mustered task's result is exactly ONE
+                    // contribution to its Muster's aggregation; `Goto`,
+                    // `End`, `Parley` and `Muster` each change control flow
+                    // for the WHOLE run from inside one of many concurrent
+                    // tasks, and the aggregation's semantics for that are
+                    // undefined -- so the case is rejected with a typed
+                    // error naming the template AND the task key, BEFORE
+                    // any routing side effect (`notfiring_nodes`,
+                    // `goto_targets`, `parley_requests`, `mustered`) is
+                    // touched, through the same `routing_failure` path an
+                    // unknown `Goto` target takes. `Route` on a template is
+                    // already a validation error, so its `Goto` never
+                    // reaches here in practice; the guard still covers it.
+                    // A permitted `Edges` delta falls through to the
+                    // `is_muster_task` branch below and lands in
+                    // `muster_completed_so_far` exactly like a successful
+                    // sibling's -- the aggregation sees a full task count.
+                    if is_muster_task && handled_failure && !matches!(next, NextStep::Edges) {
+                        completed_records.push(NodeExecutionRecord {
+                            node_id: node_id.clone(),
+                            paladin_id,
+                            started_at,
+                            duration_ms,
+                            token_count,
+                            outcome: NodeOutcomeKind::Failed,
+                            attempt,
+                            attempts: failed_attempts,
+                            cache_hit: false,
+                        });
+                        if routing_failure.is_none() {
+                            let task_key = entry_muster_ctx
+                                .as_ref()
+                                .map(|ctx| ctx.task_key.clone())
+                                .unwrap_or_default();
+                            routing_failure = Some((
+                                node_id.clone(),
+                                EngineError::MusterHandlerMustBeDeltaOnly {
+                                    node: node_id,
+                                    task_key,
+                                    returned: next_step_arm_name(&next).to_string(),
+                                },
+                            ));
+                        }
+                        continue;
+                    }
                     let outcome_kind = match &next {
                         NextStep::Edges => NodeOutcomeKind::Succeeded,
                         NextStep::Goto(targets) => {
@@ -1318,21 +3163,24 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                             }
                             NodeOutcomeKind::Ended
                         }
-                        NextStep::Parley(_) => {
-                            // D-10: never coerced to `Edges`; still marked
-                            // NotFiring per D-08c even though the run is
-                            // about to fail, for the same "no NextStep
-                            // variant leaves an edge Pending" uniformity.
+                        NextStep::Parley(request) => {
+                            // HITL-01, D-02, D-03: never coerced to `Edges`
+                            // -- this node's static outgoing edges resolve
+                            // NotFiring for this superstep, exactly like
+                            // Goto/Muster/End (D-08c uniformity: no
+                            // `NextStep` variant ever leaves an edge
+                            // Pending). Its own `StateDelta` still merges
+                            // normally below (`deltas.push` a few lines
+                            // down, unconditional on `next`) -- it already
+                            // emitted it. `node_id` is stamped onto the
+                            // request regardless of what the raising code
+                            // supplied, so the persisted `parleys` list is
+                            // always accurate.
                             notfiring_nodes.insert(node_id.clone());
-                            if routing_failure.is_none() {
-                                routing_failure = Some((
-                                    node_id.clone(),
-                                    EngineError::ParleyNotSupported {
-                                        node: node_id.clone(),
-                                    },
-                                ));
-                            }
-                            NodeOutcomeKind::Succeeded
+                            let mut request = request.clone();
+                            request.node_id = node_id.clone();
+                            parley_requests.push(request);
+                            NodeOutcomeKind::Parleyed
                         }
                     };
                     completed_records.push(NodeExecutionRecord {
@@ -1341,8 +3189,18 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                         started_at,
                         duration_ms,
                         token_count,
-                        outcome: outcome_kind,
-                        attempt: 1,
+                        // Plan 25-10: a handler-compensated failure is
+                        // still recorded as the failure it was (D-21).
+                        outcome: if handled_failure {
+                            NodeOutcomeKind::Failed
+                        } else {
+                            outcome_kind
+                        },
+                        attempt,
+                        attempts: failed_attempts,
+                        // Plan 25-13: `true` only for a served-from-cache
+                        // outcome (`attempt: 1`, no failed attempts).
+                        cache_hit,
                     });
 
                     if is_muster_task {
@@ -1385,6 +3243,7 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                                 frontier.snapshot(graph),
                                 Some(progress),
                                 checkpoint_ns.clone(),
+                                fork_of,
                             );
                             persist_waypoint(waypoint_port, durability, &progress_waypoint, trace)
                                 .await?;
@@ -1402,8 +3261,37 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                         duration_ms,
                         token_count,
                         outcome: NodeOutcomeKind::Skipped { reason },
-                        attempt: 1,
+                        attempt,
+                        attempts: failed_attempts,
+                        cache_hit: false,
                     });
+                }
+                NodeRunOutcome::Interrupted => {
+                    // --- D-15, FT-FR-07: cancelled mid-backoff. Recorded
+                    // like a grace-deadline abort (`Skipped { reason:
+                    // "shutdown" }`, never merged, edges left `Pending`) and
+                    // re-listed the same way, so the Halted Waypoint's
+                    // vanguard (or its preserved `MusterProgress`) brings
+                    // the node back at attempt 1 on resume instead of
+                    // dropping it as an ordinary skip would.
+                    completed_records.push(NodeExecutionRecord {
+                        node_id: node_id.clone(),
+                        paladin_id,
+                        started_at,
+                        duration_ms,
+                        token_count,
+                        outcome: NodeOutcomeKind::Skipped {
+                            reason: "shutdown".to_string(),
+                        },
+                        attempt,
+                        attempts: failed_attempts,
+                        cache_hit: false,
+                    });
+                    if is_muster_task {
+                        muster_task_aborted = true;
+                    } else {
+                        aborted_node_ids.push(node_id);
+                    }
                 }
                 NodeRunOutcome::Failed(e) => {
                     completed_records.push(NodeExecutionRecord {
@@ -1413,24 +3301,100 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                         duration_ms,
                         token_count,
                         outcome: NodeOutcomeKind::Failed,
-                        attempt: 1,
+                        attempt,
+                        attempts: failed_attempts,
+                        cache_hit: false,
                     });
+                    if matches!(e, NodeFailure::Timeout(TimeoutKind::EngineRun))
+                        && engine_budget_cut.is_none()
+                        && let Some(cut) = node_error.clone()
+                    {
+                        engine_budget_cut = Some((node_id.clone(), cut));
+                    }
                     if node_failure.is_none() {
-                        node_failure = Some((node_id, e));
+                        node_failure = Some((node_id, e, node_error));
                     }
                 }
             }
         }
         completed_records.sort_by(|a, b| a.node_id.cmp(&b.node_id));
 
-        if let Some((node_id, err)) = node_failure {
+        // --- FT-FR-10, D-20, ENG-FR-03: the engine budget expired
+        // MID-superstep and cut an in-flight attempt. The run ends with the
+        // typed `RunTimeoutExceeded` through the SAME limit-failure helper
+        // the boundary-time limits use, carrying this superstep's records
+        // and the cut attempt's `Timeout(EngineRun)` NodeError on the
+        // Waypoint. Checked ahead of `node_failure` so the budget, not an
+        // incidental sibling failure, names the outcome.
+        if let Some((failed_node, cut)) = engine_budget_cut
+            && let Some(limit) = graph.limits().run_timeout
+        {
+            let error = EngineError::RunTimeoutExceeded {
+                elapsed: run_started_at.elapsed(),
+                limit,
+            };
+            return persist_limit_failure(
+                waypoint_port,
+                durability,
+                trace,
+                &thread,
+                parent_waypoint_id,
+                superstep_number,
+                graph,
+                &battlefield,
+                vanguard.clone(),
+                completed_records,
+                error,
+                failed_node,
+                Some(cut),
+                visit_counts,
+                frontier.snapshot(graph),
+                checkpoint_ns.clone(),
+                fork_of,
+            )
+            .await;
+        }
+
+        if let Some((node_id, err, node_error)) = node_failure {
+            // --- D-08, X-06: an Aegis-governed node's exhausted (or
+            // non-retryable) failure surfaces as the structured
+            // `EngineError::NodeFailed`, rendering the SAME display line
+            // the generic `EngineError::Node` rendered for it before -- so
+            // `WaypointStatus::Failed.error` is unchanged while
+            // `node_error` beside it carries the structure. A no-Aegis
+            // node's failure keeps the generic path byte-identically
+            // (D-09); a `PaladinError` on that path is erased to the exact
+            // `StateNodeError(e.to_string())` it always was.
             // --- CF-02, D-11: a `DirectiveParser` parse failure gets its
             // own typed `EngineError` naming the node (X-06), rather than
             // routing through the generic `EngineError::Node` every other
             // node-execution failure uses.
-            let error = match err {
-                NodeFailure::Node(e) => EngineError::Node(e),
-                NodeFailure::DirectiveParse(e) => EngineError::DirectiveParseFailed {
+            let error = match (err, node_error) {
+                (
+                    NodeFailure::Node(_)
+                    | NodeFailure::Paladin(_)
+                    | NodeFailure::StructuredOutputInvalid(_)
+                    | NodeFailure::Timeout(_),
+                    Some(node_error),
+                ) => EngineError::NodeFailed(node_error),
+                (NodeFailure::Node(e), None) => EngineError::Node(e),
+                (NodeFailure::Paladin(e), None) => EngineError::Node(StateNodeError(e.to_string())),
+                // --- D-29: mirrors the `Paladin(e), None` fallback
+                // immediately above -- unreachable in practice (this
+                // variant's own `node_error` always returns `Some`), but
+                // library code must not `unreachable!()` an invariant it
+                // cannot enforce.
+                (NodeFailure::StructuredOutputInvalid(e), None) => {
+                    EngineError::Node(StateNodeError(e.to_string()))
+                }
+                // --- D-20: unreachable in practice -- a timeout's
+                // `node_error` is always `Some` (see the retry loop) -- but
+                // library code must not `unreachable!()` an invariant it
+                // cannot enforce; render through the generic path instead.
+                (NodeFailure::Timeout(kind), None) => {
+                    EngineError::Node(StateNodeError(format!("{kind} timeout")))
+                }
+                (NodeFailure::DirectiveParse(e), _) => EngineError::DirectiveParseFailed {
                     node: node_id.clone(),
                     reason: e.reason,
                 },
@@ -1438,8 +3402,9 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 // `EngineError::BattalionChildFailed` built in
                 // `execute_vanguard_node`, where the child thread id was
                 // in scope -- passed through unchanged.
-                NodeFailure::Battalion(e) => e,
+                (NodeFailure::Battalion(e), _) => e,
             };
+            let node_error = error.node_error().cloned();
             let waypoint = build_waypoint(
                 &thread,
                 parent_waypoint_id,
@@ -1451,11 +3416,13 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Failed {
                     error: error.to_string(),
                     failed_node: node_id,
+                    node_error,
                 },
                 visit_counts,
                 frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -1482,11 +3449,13 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 WaypointStatus::Failed {
                     error: error.to_string(),
                     failed_node,
+                    node_error: None,
                 },
                 visit_counts,
                 frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Failed {
@@ -1510,9 +3479,25 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
         // `muster_tasks` is non-empty only when `muster_node` is `Some`
         // (they are always constructed together above); iterating it
         // unconditionally is a no-op when no Muster was in play this round.
-        for task in &muster_tasks {
-            if let Some(delta) = muster_completed_so_far.get(&task.task_key) {
-                deltas.push((task.worker.clone(), delta.clone()));
+        //
+        // --- CR-02 (24-REVIEW.md): SKIPPED entirely when a sibling task was
+        // aborted this round (`muster_task_aborted`). Folding-and-merging
+        // the tasks that DID complete here, then ALSO persisting them
+        // unmerged inside the Halted Waypoint's own `MusterProgress.completed`
+        // (below) so a resumed run can re-fold them, would double-merge:
+        // the resumed round re-runs this exact fold once it (genuinely)
+        // finishes the whole cohort, over a battlefield that must still be
+        // the pre-this-round snapshot for that fold to be correct -- exactly
+        // how a mid-muster crash/resume already works (the per-task progress
+        // Waypoint the loop above persists is deliberately never merged,
+        // for the same reason). Ordinary (non-muster) peers that completed
+        // this same aborted round are unaffected: their deltas were pushed
+        // to `deltas` directly, above, and merge normally regardless.
+        if !muster_task_aborted {
+            for task in &muster_tasks {
+                if let Some(delta) = muster_completed_so_far.get(&task.task_key) {
+                    deltas.push((task.worker.clone(), delta.clone()));
+                }
             }
         }
 
@@ -1545,11 +3530,13 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                             .first()
                             .cloned()
                             .unwrap_or_else(|| dispatch_entries[0].0.clone()),
+                        node_error: None,
                     },
                     visit_counts,
                     frontier.snapshot(graph),
                     None,
                     checkpoint_ns.clone(),
+                    fork_of,
                 );
                 persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
                 return Ok(RunOutcome::Failed {
@@ -1559,9 +3546,41 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
             }
         };
         trace.emit(TraceEvent::DeltaMerged {
-            thread_id: thread.clone(),
             superstep: superstep_number,
-            field_changes: merge_report.changed_fields,
+            // `MergeReport` today carries only the changed field NAMES
+            // (`changed_fields`); the dispatch-rule name and writer list
+            // D-05's `FieldChange` shape also carries are not yet threaded
+            // through `Battlefield::merge` -- left as placeholder defaults
+            // here (28-01's own documented scope boundary), until a later
+            // plan enriches `MergeReport` itself. `value_bytes` and the
+            // opt-in, redacted-then-truncated `value` (D-05, T-28-03-01)
+            // ARE real as of this plan: read from the POST-merge
+            // `battlefield` (mutated in place by `Battlefield::merge`,
+            // above), never the other way round.
+            field_changes: merge_report
+                .changed_fields
+                .into_iter()
+                .map(|field| {
+                    let raw = battlefield
+                        .get_raw(&field)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    let serialized = serde_json::to_string(&raw).unwrap_or_default();
+                    let value_bytes = serialized.len() as u64;
+                    // D-05, T-28-03-01: redact BEFORE truncating -- the
+                    // security-instructions ordering rule. Truncating
+                    // first can slice a secret across the cap boundary and
+                    // leak the surviving fragment.
+                    let value = trace.redacted_value(&serialized);
+                    paladin_core::platform::container::trace::FieldChange {
+                        field,
+                        dispatch: String::new(),
+                        writers: Vec::new(),
+                        value_bytes,
+                        value,
+                    }
+                })
+                .collect(),
         });
 
         for node_id in &ran {
@@ -1571,9 +3590,10 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                     node_id,
                     superstep_number,
                     &battlefield,
-                    evaluators,
+                    &registries.edge_evaluators,
                     &thread,
                     notfiring_nodes.contains(node_id),
+                    trace,
                 )
                 .await?;
         }
@@ -1597,6 +3617,123 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                     next_vanguard.push(target);
                 }
             }
+        }
+
+        // --- HITL-04, D-19: one or more nodes were aborted past the shared
+        // grace deadline this superstep. Every peer that finished in time
+        // already merged normally above and its edges already resolved
+        // (the loop just above only ever calls `frontier.record_execution`
+        // for `ran`, which never includes an aborted node); this Halted
+        // Waypoint's own vanguard re-lists each aborted node's id
+        // ALONGSIDE the normally computed `next_vanguard` (D-19 acceptance
+        // 5), so `resume` re-runs exactly those nodes exactly once, same as
+        // the boundary cancellation check's own Halted Waypoint. Checked
+        // BEFORE the Parley/End/starvation logic below: the run is going
+        // away, so none of those normal-completion paths apply once a node
+        // has actually been aborted (a mere `cancel_observed_at: Some` with
+        // NO aborted node -- Test 1's case -- changes nothing here; the
+        // very next loop iteration's existing top-of-loop boundary check
+        // Halts before the next superstep ever dispatches).
+        if !aborted_node_ids.is_empty() || muster_task_aborted {
+            let mut halted_vanguard = next_vanguard.clone();
+            let mut seen: HashSet<NodeId> = halted_vanguard.iter().cloned().collect();
+            for node in aborted_node_ids {
+                if seen.insert(node.clone()) {
+                    halted_vanguard.push(node);
+                }
+            }
+            // --- CR-02 (24-REVIEW.md): preserve this round's in-flight
+            // `MusterProgress` instead of hard-coding `None` -- otherwise
+            // resume forgets every sibling task `muster_completed_so_far`
+            // already recorded, and re-dispatches the aborted worker as an
+            // ordinary node with `NodeContext.muster == None`. Built ONLY
+            // when a Muster task was actually aborted (`muster_node` may be
+            // `Some` from an EARLIER superstep's now-fully-drained round
+            // that produced no new tasks this superstep).
+            let aborted_muster_progress = if muster_task_aborted {
+                muster_node.as_ref().map(|node| MusterProgress {
+                    node: node.clone(),
+                    tasks: muster_tasks.clone(),
+                    completed: muster_completed_so_far.clone(),
+                })
+            } else {
+                None
+            };
+            let waypoint = build_waypoint(
+                &thread,
+                parent_waypoint_id,
+                superstep_number,
+                graph,
+                &battlefield,
+                halted_vanguard,
+                completed_records,
+                WaypointStatus::Halted,
+                visit_counts,
+                frontier.snapshot(graph),
+                aborted_muster_progress,
+                checkpoint_ns.clone(),
+                fork_of,
+            );
+            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+            return Ok(RunOutcome::Halted {
+                waypoint: waypoint.waypoint_id,
+            });
+        }
+
+        // --- HITL-01, D-02, D-03, D-08: a `NextStep::Parley` raised
+        // anywhere this superstep suspends the WHOLE run -- checked before
+        // `end_requested` (a human's answer takes precedence over any
+        // conflicting same-superstep `End`). Every peer already merged
+        // normally above; the persisted `Waypoint`'s `vanguard` is
+        // deliberately overridden to be EXACTLY the parleying nodes
+        // (D-02), discarding whatever `compute_next_vanguard`/the `Goto`
+        // union just produced -- `resume_with` alone re-seeds from this
+        // exact list (D-08), so a downstream node made ready by a peer's
+        // delta this superstep is picked up on the FIRST post-resume
+        // superstep's own `compute_next_vanguard` call instead, once the
+        // parleying node(s) have re-run. This bypasses
+        // `StarvedNodeAtCompletion` entirely, mirroring `End`'s own
+        // rationale just below: a pending Parley is deliberate, observable
+        // suspension (recorded via `NodeOutcomeKind::Parleyed` above),
+        // never a scheduler silently walking away from ready work.
+        if !parley_requests.is_empty() {
+            parley_requests.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+            let parleying_nodes: Vec<NodeId> =
+                parley_requests.iter().map(|r| r.node_id.clone()).collect();
+            // --- D-04, T-28-03-03: one `ParleyRaised` per raised request,
+            // the moment this `AwaitingInput` outcome is built -- carrying
+            // `parley_id`/`node_id`/`kind` only, never `prompt` (no
+            // author-supplied context on the trace).
+            for request in &parley_requests {
+                trace.emit(TraceEvent::ParleyRaised {
+                    parley_id: request.parley_id,
+                    node_id: request.node_id.clone(),
+                    parley_kind: request.kind.clone(),
+                });
+            }
+            let waypoint = build_waypoint(
+                &thread,
+                parent_waypoint_id,
+                superstep_number,
+                graph,
+                &battlefield,
+                parleying_nodes,
+                completed_records,
+                WaypointStatus::AwaitingInput {
+                    parleys: parley_requests.clone(),
+                    responses: Vec::new(),
+                },
+                visit_counts.clone(),
+                frontier.snapshot(graph),
+                None,
+                checkpoint_ns.clone(),
+                fork_of,
+            );
+            persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+            return Ok(RunOutcome::AwaitingInput {
+                parleys: parley_requests,
+                waypoint: waypoint.waypoint_id,
+            });
         }
 
         // --- CF-03, D-13: a validated Muster accepted this superstep
@@ -1638,6 +3775,7 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                 frontier.snapshot(graph),
                 None,
                 checkpoint_ns.clone(),
+                fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Completed {
@@ -1686,11 +3824,13 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
                     WaypointStatus::Failed {
                         error: error.to_string(),
                         failed_node: starved[0].clone(),
+                        node_error: None,
                     },
                     visit_counts.clone(),
                     frontier.snapshot(graph),
                     None,
                     checkpoint_ns.clone(),
+                    fork_of,
                 );
                 persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
                 return Ok(RunOutcome::Failed {
@@ -1719,6 +3859,7 @@ async fn run_with_namespace<W: WaypointPort + 'static>(
             frontier.snapshot(graph),
             None,
             checkpoint_ns.clone(),
+            fork_of,
         );
         persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
 
@@ -1898,6 +4039,16 @@ impl Frontier {
     /// leave one `Pending` and strand a downstream join. Re-running a node
     /// (a cycle or self-loop) overwrites its edges' previous state with the
     /// fresh evaluation either way.
+    ///
+    /// D-04: every edge actually evaluated here (the `force_notfiring ==
+    /// false` branch, `None` "always" edges included) emits exactly one
+    /// `TraceEvent::EdgeEvaluated { from, to, condition_kind, fired }`
+    /// through `trace` -- whether or not it fired -- AFTER the evaluation
+    /// result is known and BEFORE `self.edge_state` is written, so the
+    /// record order is `NodeFinished` -> `EdgeEvaluated`* ->
+    /// `SuperstepStarted`(next). A `force_notfiring` edge is never
+    /// evaluated at all (this function's own doc comment above), so it
+    /// never emits one either.
     #[allow(clippy::too_many_arguments)]
     async fn record_execution(
         &mut self,
@@ -1908,6 +4059,7 @@ impl Frontier {
         evaluators: &EdgeEvaluatorRegistry,
         thread: &ThreadId,
         force_notfiring: bool,
+        trace: &Arc<TraceDispatcher>,
     ) -> Result<(), EngineError> {
         self.last_executed.insert(node.clone(), superstep);
         for (idx, edge) in graph.edges().iter().enumerate() {
@@ -1918,9 +4070,17 @@ impl Frontier {
                 false
             } else {
                 match &edge.condition {
-                    None => true,
+                    None => {
+                        trace.emit(TraceEvent::EdgeEvaluated {
+                            from: edge.from.clone(),
+                            to: edge.to.clone(),
+                            condition_kind: "always".to_string(),
+                            fired: true,
+                        });
+                        true
+                    }
                     Some(condition) => {
-                        evaluate_edge_condition(
+                        let fired = evaluate_edge_condition(
                             condition,
                             battlefield,
                             graph,
@@ -1930,7 +4090,14 @@ impl Frontier {
                             thread,
                             superstep,
                         )
-                        .await?
+                        .await?;
+                        trace.emit(TraceEvent::EdgeEvaluated {
+                            from: edge.from.clone(),
+                            to: edge.to.clone(),
+                            condition_kind: edge_condition_kind(condition).to_string(),
+                            fired,
+                        });
+                        fired
                     }
                 }
             };
@@ -2274,6 +4441,19 @@ fn starved_at_completion(graph: &WarGraph, frontier: &Frontier) -> Vec<NodeId> {
     starved
 }
 
+/// The `EdgeCondition` discriminant name D-04's `TraceEvent::EdgeEvaluated
+/// .condition_kind` reports. A `match` with no wildcard arm -- a future
+/// `EdgeCondition` variant is a compile error here, never a silently
+/// mislabeled `"custom"`.
+fn edge_condition_kind(condition: &EdgeCondition) -> &'static str {
+    match condition {
+        EdgeCondition::Always => "always",
+        EdgeCondition::Contains(_) => "contains",
+        EdgeCondition::Regex(_) => "regex",
+        EdgeCondition::Custom(_) => "custom",
+    }
+}
+
 /// Evaluate an [`EdgeCondition`] for the edge `source -> target`, whose
 /// source node completed at `superstep` on `thread` (BUG-01, CF-01).
 ///
@@ -2321,12 +4501,24 @@ async fn evaluate_edge_condition(
         }
         EdgeCondition::Custom(name) => {
             let evaluator = evaluators.get(name).cloned().ok_or_else(|| {
-                EngineError::Node(NodeError(format!(
+                EngineError::Node(StateNodeError(format!(
                     "internal error: edge evaluator '{name}' missing after graph validation"
                 )))
             })?;
             let output = match graph.node(source) {
-                Some(NodeSpec::Paladin { output_field, .. }) => battlefield
+                // D-06: a Gate source's `Custom`-evaluator output is its
+                // `output_field` value, exactly like a Paladin node's --
+                // a single added pattern on this arm, never a separate
+                // match arm (`Contains`/`Regex` above need no Gate-specific
+                // code at all: they already read the whole rendered
+                // Battlefield JSON, and a Gate's `output_field` is an
+                // ordinary schema field merged into it on the post-resume
+                // superstep).
+                Some(NodeSpec::Paladin { output_field, .. })
+                | Some(NodeSpec::Gate {
+                    output_field: Some(output_field),
+                    ..
+                }) => battlefield
                     .get::<String>(output_field)
                     .ok()
                     .flatten()
@@ -2353,7 +4545,7 @@ async fn evaluate_edge_condition(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_waypoint(
+pub(crate) fn build_waypoint(
     thread: &ThreadId,
     parent_waypoint_id: Option<WaypointId>,
     superstep: u64,
@@ -2373,6 +4565,12 @@ fn build_waypoint(
     // entirely from `thread` already being the child's own derived
     // `ThreadId` by the time this function is called.
     checkpoint_ns: Option<String>,
+    // --- HITL-03, D-14: the branch root this `run()` call's OWN Waypoints
+    // are stamped with -- `None` for every mainline run, `Some(root)` for a
+    // run entered from a branch. Propagated verbatim (never re-derived) --
+    // every Waypoint a single `run_with_namespace` call produces carries the
+    // SAME value.
+    fork_of: Option<WaypointId>,
 ) -> Waypoint {
     Waypoint {
         thread_id: thread.clone(),
@@ -2390,6 +4588,7 @@ fn build_waypoint(
         frontier,
         muster_progress,
         checkpoint_ns,
+        fork_of,
     }
 }
 
@@ -2399,7 +4598,7 @@ fn build_waypoint(
 /// warning and the caller proceeds as if the save had succeeded. Emits
 /// `TraceEvent::WaypointSaved` (ENG-FR-21) exactly when the save actually
 /// succeeded -- a `BestEffort`-swallowed failure is not reported as saved.
-async fn persist_waypoint<W: WaypointPort>(
+pub(crate) async fn persist_waypoint<W: WaypointPort>(
     waypoint_port: &W,
     durability: WaypointDurability,
     waypoint: &Waypoint,
@@ -2408,8 +4607,9 @@ async fn persist_waypoint<W: WaypointPort>(
     match waypoint_port.save(waypoint).await {
         Ok(()) => {
             trace.emit(TraceEvent::WaypointSaved {
-                thread_id: waypoint.thread_id.clone(),
                 waypoint_id: waypoint.waypoint_id,
+                superstep: waypoint.superstep,
+                status: format!("{:?}", waypoint.status),
             });
         }
         Err(source) => match durability {
@@ -2433,7 +4633,8 @@ mod tests {
     };
     use paladin_core::platform::container::battlefield_error::BattlefieldError;
     use paladin_core::platform::container::paladin::Paladin;
-    use paladin_core::platform::container::waypoint::{ParleyRequest, ThreadId};
+    use paladin_core::platform::container::parley::{OnExpire, ParleyId, ParleyKind};
+    use paladin_core::platform::container::waypoint::ThreadId;
     use std::sync::Mutex;
 
     use crate::engine::directive_parser::{DirectiveParser, OnParseError};
@@ -2441,7 +4642,7 @@ mod tests {
     use crate::engine::node::StateNode;
     use crate::engine::test_support::{
         ConcurrencyTrackingNode, CountingFunctionNode, FailingFunctionNode, RecordingPaladinPort,
-        RecordingWaypointStore, YieldingNode, shuffle_seeded,
+        RecordingWaypointStore, SlowFunctionNode, YieldingNode, shuffle_seeded,
     };
 
     fn field(name: &str) -> FieldName {
@@ -2465,11 +4666,24 @@ mod tests {
     }
 
     fn no_trace() -> Arc<TraceDispatcher> {
-        Arc::new(TraceDispatcher::new(None))
+        Arc::new(TraceDispatcher::new(
+            ThreadId::new("t").unwrap(),
+            None,
+            None,
+        ))
     }
 
     fn no_interceptors() -> Vec<Arc<dyn NodeInterceptor>> {
         Vec::new()
+    }
+
+    /// A grace window generous enough that no pre-existing (non-shutdown)
+    /// test in this module ever observes an abort -- every helper below
+    /// that does not itself test HITL-04's grace race passes this fixed
+    /// value, mirroring `no_trace()`/`no_interceptors()`'s "harmless
+    /// default" convention.
+    fn default_shutdown_grace() -> std::time::Duration {
+        std::time::Duration::from_secs(30)
     }
 
     async fn run_default(
@@ -2482,7 +4696,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             graph,
             thread,
             Battlefield::initialize(
@@ -2500,6 +4714,11 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
             None,
         )
         .await
@@ -2520,7 +4739,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             graph,
             thread,
             Battlefield::initialize(
@@ -2538,6 +4757,11 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
             None,
         )
         .await
@@ -2568,7 +4792,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             graph,
             thread,
             battlefield,
@@ -2582,6 +4806,11 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
             None,
         )
         .await
@@ -2679,6 +4908,61 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    /// Test 7 (plan 26-18, D-29, RT-FR-19): a plain `NodeSpec::Paladin`
+    /// node (no `output_schema`) behaves EXACTLY as before -- same
+    /// dispatch (`PaladinPort::execute_scoped`, never the structured
+    /// executor), same raw string written to `output_field`. Run with NO
+    /// structured executor wired at all (`run()`'s own `structured_executor`
+    /// argument is `None`), proving the ordinary path needs none.
+    #[tokio::test]
+    async fn a_node_without_output_schema_is_unchanged() {
+        let raw_field = field("weather");
+        let s = schema(vec![FieldSpec::new(
+            raw_field.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("worker");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin("worker"),
+                InputMapping::new("what is the weather"),
+                raw_field.clone(),
+            ),
+        );
+        graph.add_entry(node_id);
+
+        let recording = Arc::new(RecordingPaladinPort::new());
+        recording.set_output("worker", "just a plain string, not JSON");
+        let port: Arc<dyn PaladinPort> = recording.clone();
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("no-output-schema-unchanged-lib").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&raw_field),
+                    Some(&serde_json::Value::String(
+                        "just a plain string, not JSON".to_string()
+                    )),
+                    "a node with no output_schema must write the raw string verbatim"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            recording.call_count(),
+            1,
+            "dispatched through the ordinary PaladinPort path exactly once, never through a \
+             structured executor (none is even wired)"
+        );
     }
 
     #[tokio::test]
@@ -3019,19 +5303,13 @@ mod tests {
         graph.add_entry(a.clone());
 
         let err = graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .expect_err("c is reachable only via Goto and not marked dynamic_target");
         assert!(matches!(err, EngineError::UnreachableNode { .. }));
 
         graph.mark_dynamic_target(c.clone());
         graph
-            .validate(
-                &CustomDispatchResolver::new(),
-                &EdgeEvaluatorRegistry::new(),
-            )
+            .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
             .expect("c is now a declared dynamic target");
 
         let store = RecordingWaypointStore::new();
@@ -3310,7 +5588,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread,
             Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap(),
@@ -3324,6 +5602,11 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
             None,
         )
         .await
@@ -3370,46 +5653,383 @@ mod tests {
         assert_eq!(record.outcome, NodeOutcomeKind::Ended);
     }
 
+    // --- HITL-01, D-01/D-02/D-03: Parley suspension (Phase 24 Plan 01) ---
+
+    /// Test 1: a `StateNode` returning `NextStep::Parley` suspends the run
+    /// instead of failing it -- exactly one `AwaitingInput` Waypoint is
+    /// persisted, `parleys.len() == 1`, `responses.is_empty()`, and the
+    /// run returns `RunOutcome::AwaitingInput` (not `Failed`).
     #[tokio::test]
-    async fn parley_returned_this_phase_fails_the_run() {
+    async fn parley_suspends_run_and_persists_awaiting_input() {
         let s = schema(vec![]);
         let mut graph = WarGraph::new(s, EngineLimits::default());
         let asker = NodeId::new("asker");
         let asker_node = CountingFunctionNode::with_directive(|_run, _state| Directive {
             delta: StateDelta::new(),
             next: NextStep::Parley(ParleyRequest {
+                parley_id: ParleyId::new(),
+                node_id: NodeId::new("wrong-on-purpose"),
+                kind: ParleyKind::Approval,
                 prompt: "need input".to_string(),
+                payload: serde_json::json!({}),
+                choices: None,
+                expires_at: None,
+                created_at: Utc::now(),
+                on_expire: OnExpire::FailRun,
             }),
         });
         graph.add_node(asker.clone(), NodeSpec::Function(asker_node));
         graph.add_entry(asker.clone());
 
         let store = RecordingWaypointStore::new();
-        let thread = ThreadId::new("parley-unsupported").unwrap();
+        let thread = ThreadId::new("parley-suspends").unwrap();
         let outcome = run_default(&graph, thread.clone(), &store).await;
-        match outcome {
-            RunOutcome::Failed {
-                error: EngineError::ParleyNotSupported { node },
-                ..
-            } => {
-                assert_eq!(node, asker);
+
+        match &outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                // The engine stamps the real raising node's id, overriding
+                // whatever the node itself supplied.
+                assert_eq!(parleys[0].node_id, asker);
             }
-            other => panic!("expected Failed(ParleyNotSupported), got {other:?}"),
+            other => panic!("expected AwaitingInput, got {other:?}"),
         }
 
         let saved = store.saved_waypoints(&thread).await;
-        assert!(
-            saved
-                .iter()
-                .all(|w| !matches!(w.status, WaypointStatus::AwaitingInput { .. })),
-            "no AwaitingInput waypoint may be written for an unsupported Parley"
+        let awaiting: Vec<&Waypoint> = saved
+            .iter()
+            .filter(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. }))
+            .collect();
+        assert_eq!(
+            awaiting.len(),
+            1,
+            "exactly one AwaitingInput waypoint must be persisted"
         );
+        match &awaiting[0].status {
+            WaypointStatus::AwaitingInput { parleys, responses } => {
+                assert_eq!(parleys.len(), 1);
+                assert!(responses.is_empty());
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
         assert!(
             !saved
                 .iter()
                 .any(|w| matches!(w.status, WaypointStatus::Completed)),
             "the run must not report Completed"
         );
+        assert!(
+            !saved
+                .iter()
+                .any(|w| matches!(w.status, WaypointStatus::Failed { .. })),
+            "the run must not fail"
+        );
+    }
+
+    /// Test 2: a superstep with one parleying node and one ordinary peer
+    /// node records `NodeOutcomeKind::Parleyed` for the parleying node,
+    /// `Succeeded` for the peer, and the merged Battlefield carries both
+    /// nodes' deltas.
+    #[tokio::test]
+    async fn parley_waypoint_records_parleyed_outcome_and_merges_peer_deltas() {
+        let s = schema(vec![
+            FieldSpec::new(
+                FieldName::new("asker_field").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+            FieldSpec::new(
+                FieldName::new("peer_field").unwrap(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            ),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let asker = NodeId::new("asker");
+        let peer = NodeId::new("peer");
+        let asker_field = FieldName::new("asker_field").unwrap();
+        let peer_field = FieldName::new("peer_field").unwrap();
+        let asker_node = {
+            let asker_field = asker_field.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(asker_field.clone(), serde_json::json!("asked"));
+                Directive {
+                    delta,
+                    next: NextStep::Parley(ParleyRequest {
+                        parley_id: ParleyId::new(),
+                        node_id: NodeId::new(""),
+                        kind: ParleyKind::Approval,
+                        prompt: "need input".to_string(),
+                        payload: serde_json::json!({}),
+                        choices: None,
+                        expires_at: None,
+                        created_at: Utc::now(),
+                        on_expire: OnExpire::FailRun,
+                    }),
+                }
+            })
+        };
+        let peer_node = CountingFunctionNode::fixed(peer_field.clone(), serde_json::json!("ran"));
+        graph.add_node(asker.clone(), NodeSpec::Function(asker_node));
+        graph.add_node(peer.clone(), NodeSpec::Function(peer_node));
+        graph.add_entry(asker.clone());
+        graph.add_entry(peer.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("parley-peer-merge").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(matches!(outcome, RunOutcome::AwaitingInput { .. }));
+
+        let saved = store.saved_waypoints(&thread).await;
+        let awaiting = saved
+            .iter()
+            .find(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. }))
+            .expect("an AwaitingInput waypoint must exist");
+
+        let asker_record = awaiting
+            .completed
+            .iter()
+            .find(|r| r.node_id == asker)
+            .expect("asker's execution record");
+        assert_eq!(asker_record.outcome, NodeOutcomeKind::Parleyed);
+        let peer_record = awaiting
+            .completed
+            .iter()
+            .find(|r| r.node_id == peer)
+            .expect("peer's execution record");
+        assert_eq!(peer_record.outcome, NodeOutcomeKind::Succeeded);
+
+        assert_eq!(
+            awaiting.battlefield.get::<String>(&asker_field).unwrap(),
+            Some("asked".to_string()),
+            "the parleying node's own delta merges at raise time (D-03)"
+        );
+        assert_eq!(
+            awaiting.battlefield.get::<String>(&peer_field).unwrap(),
+            Some("ran".to_string()),
+            "the peer's delta merges normally"
+        );
+    }
+
+    /// Test 3: the persisted Waypoint's `vanguard` equals the set of
+    /// parleying node ids -- with two parleys raised by different nodes in
+    /// the same superstep, the persisted list carries both, in `node_id`
+    /// order (D-02).
+    #[tokio::test]
+    async fn awaiting_input_vanguard_is_exactly_the_parleying_nodes() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let asker_b = NodeId::new("b-asker");
+        let asker_a = NodeId::new("a-asker");
+        let node_b = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(ParleyRequest {
+                parley_id: ParleyId::new(),
+                node_id: NodeId::new(""),
+                kind: ParleyKind::Approval,
+                prompt: "b?".to_string(),
+                payload: serde_json::json!({}),
+                choices: None,
+                expires_at: None,
+                created_at: Utc::now(),
+                on_expire: OnExpire::FailRun,
+            }),
+        });
+        let node_a = CountingFunctionNode::with_directive(|_run, _state| Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Parley(ParleyRequest {
+                parley_id: ParleyId::new(),
+                node_id: NodeId::new(""),
+                kind: ParleyKind::Approval,
+                prompt: "a?".to_string(),
+                payload: serde_json::json!({}),
+                choices: None,
+                expires_at: None,
+                created_at: Utc::now(),
+                on_expire: OnExpire::FailRun,
+            }),
+        });
+        graph.add_node(asker_b.clone(), NodeSpec::Function(node_b));
+        graph.add_node(asker_a.clone(), NodeSpec::Function(node_a));
+        graph.add_entry(asker_b.clone());
+        graph.add_entry(asker_a.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("parley-two-nodes").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        match outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 2);
+                let ids: Vec<NodeId> = parleys.iter().map(|p| p.node_id.clone()).collect();
+                assert_eq!(
+                    ids,
+                    vec![asker_a.clone(), asker_b.clone()],
+                    "parleys must be ordered by node_id"
+                );
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+
+        let saved = store.saved_waypoints(&thread).await;
+        let awaiting = saved
+            .iter()
+            .find(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. }))
+            .expect("an AwaitingInput waypoint must exist");
+        assert_eq!(awaiting.vanguard, vec![asker_a, asker_b]);
+    }
+
+    // --- HITL-03 / D-14: fork_of propagation (Phase 24 Plan 06) --------
+
+    /// Test 3: an ordinary mainline run's Waypoints all carry
+    /// `fork_of: None` -- no fork/replay entry point produces a `Some`
+    /// value yet (a later plan's `WarEngine::fork` is the first producer),
+    /// so every Waypoint the top-level `run()`/`run_default` path writes
+    /// must still show `None`.
+    #[tokio::test]
+    async fn mainline_waypoints_carry_no_fork_of() {
+        let s = schema(vec![FieldSpec::new(
+            field("result"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_a = NodeId::new("a");
+        let node_b = NodeId::new("b");
+        let result_field = field("result");
+        let a_node = CountingFunctionNode::new(move |_run, _state| {
+            let mut delta = StateDelta::new();
+            delta.set_raw(result_field.clone(), serde_json::json!("a"));
+            delta
+        });
+        let b_node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        graph.add_node(node_a.clone(), NodeSpec::Function(a_node));
+        graph.add_node(node_b.clone(), NodeSpec::Function(b_node));
+        graph.add_edge(EdgeSpec {
+            from: node_a.clone(),
+            to: node_b.clone(),
+            condition: Some(EdgeCondition::Always),
+        });
+        graph.add_entry(node_a.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("mainline-no-fork-of").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let saved = store.saved_waypoints(&thread).await;
+        assert!(
+            !saved.is_empty(),
+            "the run must have persisted at least one waypoint"
+        );
+        assert!(
+            saved.iter().all(|w| w.fork_of.is_none()),
+            "every mainline waypoint must carry fork_of: None"
+        );
+    }
+
+    /// Test 4: given a Waypoint whose `fork_of` is `Some(root)`, the next
+    /// Waypoint `build_waypoint` constructs for that same run also carries
+    /// `Some(root)` -- the branch root propagates verbatim onto every
+    /// Waypoint of the run, never re-derived per call.
+    #[test]
+    fn branch_waypoints_inherit_fork_of_from_the_branch_root() {
+        let s = schema(vec![]);
+        let graph = WarGraph::new(s.clone(), EngineLimits::default());
+        let thread = ThreadId::new("branch-inherits-fork-of").unwrap();
+        let battlefield = Battlefield::new(s);
+        let root = WaypointId::new();
+
+        let first = build_waypoint(
+            &thread,
+            None,
+            1,
+            &graph,
+            &battlefield,
+            vec![],
+            vec![],
+            WaypointStatus::Running,
+            BTreeMap::new(),
+            FrontierSnapshot::default(),
+            None,
+            None,
+            Some(root),
+        );
+        assert_eq!(first.fork_of, Some(root));
+
+        // The next Waypoint of the SAME (branch) run propagates the SAME
+        // root verbatim, exactly as `resume_with` forwards `latest.fork_of`.
+        let second = build_waypoint(
+            &thread,
+            Some(first.waypoint_id),
+            2,
+            &graph,
+            &battlefield,
+            vec![],
+            vec![],
+            WaypointStatus::Completed,
+            BTreeMap::new(),
+            FrontierSnapshot::default(),
+            None,
+            None,
+            first.fork_of,
+        );
+        assert_eq!(second.fork_of, Some(root));
+    }
+
+    /// Test 5: forking again from a Waypoint whose own `fork_of` is already
+    /// `Some(a)` yields Waypoints carrying `Some(b)` where `b` is the NEWER
+    /// branch point, not `Some(a)`.
+    #[test]
+    fn fork_of_a_fork_carries_the_newer_root() {
+        let s = schema(vec![]);
+        let graph = WarGraph::new(s.clone(), EngineLimits::default());
+        let thread = ThreadId::new("fork-of-a-fork").unwrap();
+        let battlefield = Battlefield::new(s);
+        let root_a = WaypointId::new();
+        let root_b = WaypointId::new();
+
+        // A Waypoint already on branch `a`.
+        let on_branch_a = build_waypoint(
+            &thread,
+            None,
+            1,
+            &graph,
+            &battlefield,
+            vec![],
+            vec![],
+            WaypointStatus::Running,
+            BTreeMap::new(),
+            FrontierSnapshot::default(),
+            None,
+            None,
+            Some(root_a),
+        );
+        assert_eq!(on_branch_a.fork_of, Some(root_a));
+
+        // Forking AGAIN from it carries the NEWER root, `root_b`, never the
+        // older `root_a` it was itself forked from.
+        let on_branch_b = build_waypoint(
+            &thread,
+            Some(on_branch_a.waypoint_id),
+            2,
+            &graph,
+            &battlefield,
+            vec![],
+            vec![],
+            WaypointStatus::Running,
+            BTreeMap::new(),
+            FrontierSnapshot::default(),
+            None,
+            None,
+            Some(root_b),
+        );
+        assert_eq!(on_branch_b.fork_of, Some(root_b));
+        assert_ne!(on_branch_b.fork_of, on_branch_a.fork_of);
     }
 
     // --- CF-03: Muster dynamic fan-out (Plan 23-05).
@@ -3495,7 +6115,7 @@ mod tests {
                 &self,
                 _state: &Battlefield,
                 ctx: &crate::engine::node::NodeContext,
-            ) -> Result<Directive, NodeError> {
+            ) -> Result<Directive, StateNodeError> {
                 let key = ctx.task_key().unwrap_or_default().to_string();
                 let delay_ms = match key.as_str() {
                     "a" => 30,
@@ -3926,7 +6546,7 @@ mod tests {
                 &self,
                 _state: &Battlefield,
                 ctx: &crate::engine::node::NodeContext,
-            ) -> Result<Directive, NodeError> {
+            ) -> Result<Directive, StateNodeError> {
                 let key = ctx.task_key().unwrap_or_default().to_string();
                 self.executed_keys.lock().unwrap().push(key.clone());
                 let mut delta = StateDelta::new();
@@ -4214,6 +6834,201 @@ mod tests {
         );
     }
 
+    /// A five-task Muster worker where one designated `task_key` cancels the
+    /// shared shutdown token the instant it starts (before its own `.await`
+    /// point, mirroring `SlowFunctionNode::cancelling`'s determinism), then
+    /// sleeps well past the test's grace window; every other task_key
+    /// completes immediately. Used to deterministically abort exactly one
+    /// Muster task mid-round (CR-02, 24-REVIEW.md).
+    fn five_task_muster_graph_with_one_slow_task(
+        results_field: &FieldName,
+        executed_keys: Arc<Mutex<Vec<String>>>,
+        slow_key: &'static str,
+        slow_hold: std::time::Duration,
+        token: CancellationToken,
+    ) -> (WarGraph, NodeId) {
+        struct SlowKeyRecordingWorkerNode {
+            field: FieldName,
+            executed_keys: Arc<Mutex<Vec<String>>>,
+            slow_key: &'static str,
+            slow_hold: std::time::Duration,
+            token: CancellationToken,
+        }
+        #[async_trait::async_trait]
+        impl StateNode for SlowKeyRecordingWorkerNode {
+            async fn run(
+                &self,
+                _state: &Battlefield,
+                ctx: &crate::engine::node::NodeContext,
+            ) -> Result<Directive, StateNodeError> {
+                let key = ctx.task_key().unwrap_or_default().to_string();
+                if key == self.slow_key {
+                    self.token.cancel();
+                    tokio::time::sleep(self.slow_hold).await;
+                }
+                self.executed_keys.lock().unwrap().push(key.clone());
+                let mut delta = StateDelta::new();
+                delta.set_raw(self.field.clone(), serde_json::json!(key));
+                Ok(delta.into())
+            }
+        }
+
+        let s = schema(vec![FieldSpec::new(
+            results_field.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(
+                    ["a", "b", "c", "d", "e"]
+                        .iter()
+                        .map(|k| muster_task(&worker, serde_json::json!(*k), k))
+                        .collect(),
+                ),
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(
+            worker.clone(),
+            NodeSpec::Function(std::sync::Arc::new(SlowKeyRecordingWorkerNode {
+                field: results_field.clone(),
+                executed_keys,
+                slow_key,
+                slow_hold,
+                token,
+            })),
+        );
+        graph.add_entry(planner);
+        (graph, worker)
+    }
+
+    /// CR-02 (24-REVIEW.md) regression: a shutdown-grace abort landing
+    /// mid-Muster must preserve the round's `MusterProgress` on the Halted
+    /// Waypoint (not `None`), must NOT re-list the aborted worker's
+    /// `NodeId` in the plain `vanguard`, and resume must re-dispatch
+    /// exactly the unfinished task(s) -- with a populated `MusterContext`,
+    /// not as an ordinary vanguard node.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shutdown_grace_abort_mid_muster_preserves_progress_for_resume() {
+        let results_field = field("results");
+        let token = CancellationToken::new();
+        let executed_keys = Arc::new(Mutex::new(Vec::new()));
+        let (graph, worker) = five_task_muster_graph_with_one_slow_task(
+            &results_field,
+            executed_keys.clone(),
+            "c",
+            std::time::Duration::from_secs(2),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-abort-mid-muster").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+        assert!(
+            matches!(outcome, RunOutcome::Halted { .. }),
+            "aborting one Muster task past the grace deadline must Halt the run, got {outcome:?}"
+        );
+
+        // Exactly the four fast siblings ran before the abort; "c" never
+        // reached its own push (aborted mid-sleep).
+        let mut completed_before_abort = executed_keys.lock().unwrap().clone();
+        completed_before_abort.sort();
+        assert_eq!(completed_before_abort, vec!["a", "b", "d", "e"]);
+
+        let saved = store.saved_waypoints(&thread).await;
+        let halted = saved.first().expect("a Halted waypoint was saved");
+        assert_eq!(halted.status, WaypointStatus::Halted);
+        assert!(
+            !halted.vanguard.contains(&worker),
+            "the aborted Muster worker's NodeId must NOT be re-listed in the plain \
+             vanguard -- it is recovered via MusterProgress::unfinished_tasks() instead, \
+             got vanguard {:?}",
+            halted.vanguard
+        );
+
+        let progress = halted
+            .muster_progress
+            .clone()
+            .expect("the Halted waypoint must preserve the in-flight MusterProgress");
+        assert_eq!(progress.node, NodeId::new("planner"));
+        assert_eq!(progress.tasks.len(), 5, "the full task list is preserved");
+        let mut completed_keys: Vec<&String> = progress.completed.keys().collect();
+        completed_keys.sort();
+        assert_eq!(
+            completed_keys,
+            vec!["a", "b", "d", "e"],
+            "every sibling task completed before the abort must be recorded"
+        );
+        let unfinished = progress.unfinished_tasks();
+        assert_eq!(
+            unfinished.len(),
+            1,
+            "exactly the one aborted task must be unfinished"
+        );
+        assert_eq!(unfinished[0].task_key, "c");
+        assert_eq!(unfinished[0].worker, worker);
+
+        // Resume: mirrors `WarEngine::resume_with_options`'s own mid-muster
+        // re-entry (SAME superstep, never `+ 1`), dispatching only
+        // `progress.unfinished_tasks()` with its `MusterContext` populated.
+        let resumed_keys = Arc::new(Mutex::new(Vec::new()));
+        let (resume_graph, _worker) = five_task_muster_graph(&results_field, resumed_keys.clone());
+        let resume_store = RecordingWaypointStore::new();
+        let resumed_outcome = run_resumed_mid_muster(
+            &resume_graph,
+            thread.clone(),
+            &resume_store,
+            halted.battlefield.clone(),
+            halted.vanguard.clone(),
+            halted.visit_counts.clone(),
+            halted.frontier.clone(),
+            progress,
+            halted.superstep,
+        )
+        .await;
+        assert!(
+            matches!(resumed_outcome, RunOutcome::Completed { .. }),
+            "resume must complete the interrupted round, got {resumed_outcome:?}"
+        );
+        assert_eq!(
+            resumed_keys.lock().unwrap().clone(),
+            vec!["c".to_string()],
+            "resume must re-dispatch EXACTLY the one unfinished task, with its \
+             MusterContext populated (a bare, muster_ctx-less re-entry would either \
+             fail to render {{muster.task_key}} or run every task again)"
+        );
+
+        let final_state = match resumed_outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected Completed, got {other:?}"),
+        };
+        let mut merged = final_state
+            .get::<Vec<String>>(&results_field)
+            .unwrap()
+            .unwrap();
+        merged.sort();
+        assert_eq!(
+            merged,
+            vec!["a", "b", "c", "d", "e"],
+            "the resumed run's final Battlefield must reflect all five tasks, the four \
+             restored via MusterProgress.completed plus the one re-run"
+        );
+    }
+
     #[tokio::test]
     async fn strict_durability_failure_on_a_progress_write_fails_the_run() {
         let results_field = field("results");
@@ -4233,7 +7048,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread.clone(),
             Battlefield::initialize(
@@ -4251,6 +7066,11 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
             None,
         )
         .await;
@@ -4283,7 +7103,7 @@ mod tests {
             WaypointDurability::BestEffort,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread.clone(),
             Battlefield::initialize(
@@ -4301,6 +7121,11 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
             None,
         )
         .await
@@ -4576,7 +7401,7 @@ mod tests {
             // wraps a DIFFERENT, unrelated call path); the message names
             // the unresolved placeholder.
             RunOutcome::Failed {
-                error: EngineError::Node(NodeError(message)),
+                error: EngineError::Node(StateNodeError(message)),
                 ..
             } => {
                 assert!(
@@ -4610,7 +7435,7 @@ mod tests {
                 &self,
                 _state: &Battlefield,
                 ctx: &crate::engine::node::NodeContext,
-            ) -> Result<Directive, NodeError> {
+            ) -> Result<Directive, StateNodeError> {
                 let key = ctx.task_key().unwrap_or_default().to_string();
                 let delay_ms = self.delays_by_key.get(&key).copied().unwrap_or(0);
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
@@ -4868,7 +7693,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -4882,6 +7707,11 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
             None,
         )
         .await;
@@ -4901,7 +7731,7 @@ mod tests {
             WaypointDurability::BestEffort,
             None,
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -4915,6 +7745,11 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
             None,
         )
         .await
@@ -4960,7 +7795,7 @@ mod tests {
             WaypointDurability::Strict,
             Some(2),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &graph,
             thread,
             Battlefield::new(graph.schema().clone()),
@@ -4974,6 +7809,11 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
             None,
         )
         .await
@@ -5186,10 +8026,7 @@ mod tests {
         // accepts this graph. This is NOT a reachability problem.
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok(),
             "b is reachable from entry over a static edge, so validate() must accept this \
              graph -- the defect this test reproduces is a runtime readiness problem, not a \
@@ -5283,10 +8120,7 @@ mod tests {
         // already proves the two-node-cycle topology validates on its own).
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok(),
             "a is reachable from entry over a static edge, so validate() must accept this \
              graph -- the defect this test reproduces is a runtime readiness problem, not a \
@@ -5442,10 +8276,7 @@ mod tests {
 
         assert!(
             graph
-                .validate(
-                    &CustomDispatchResolver::new(),
-                    &EdgeEvaluatorRegistry::new()
-                )
+                .validate(&CustomDispatchResolver::new(), &EngineRegistries::default())
                 .is_ok(),
             "agg is reachable from entry over a static edge, so validate() must accept this \
              graph"
@@ -6461,7 +9292,7 @@ mod tests {
         store: &Arc<RecordingWaypointStore>,
         port: &Arc<dyn PaladinPort>,
         registry: &CustomDispatchResolver,
-        evaluators: &EdgeEvaluatorRegistry,
+        registries: &EngineRegistries,
         cancellation: &Option<CancellationToken>,
     ) -> Result<RunOutcome, EngineError> {
         run(
@@ -6469,7 +9300,7 @@ mod tests {
             WaypointDurability::Strict,
             None,
             registry,
-            evaluators,
+            registries,
             graph,
             thread,
             Battlefield::initialize(graph.schema().clone(), &initial).unwrap(),
@@ -6483,7 +9314,12 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             cancellation,
+            &None,
             Some(Arc::clone(store)),
+            default_shutdown_grace(),
+            None,
+            None,
+            None,
         )
         .await
     }
@@ -6558,7 +9394,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -6630,7 +9466,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -6694,7 +9530,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -6762,7 +9598,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -6856,7 +9692,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -6944,7 +9780,7 @@ mod tests {
             &store,
             &port_dyn,
             &registry,
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -7022,7 +9858,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -7072,7 +9908,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -7156,7 +9992,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &Some(token),
         )
         .await
@@ -7263,7 +10099,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -7367,7 +10203,7 @@ mod tests {
             &resumed_store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -7464,7 +10300,7 @@ mod tests {
             &resumed_store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -7553,7 +10389,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -7619,7 +10455,7 @@ mod tests {
             &store,
             &no_paladin_port(),
             &CustomDispatchResolver::new(),
-            &EdgeEvaluatorRegistry::new(),
+            &EngineRegistries::default(),
             &None,
         )
         .await
@@ -7843,5 +10679,4103 @@ mod tests {
                  here"
             );
         }
+    }
+
+    // --- Phase 24 Plan 08: mid-superstep shutdown-grace race (HITL-04, D-19,
+    // RESEARCH.md Pitfall 1) ------------------------------------------------
+
+    /// Race `graph`'s dispatch through the real join loop under `cancellation`
+    /// and `shutdown_grace`, exposing both directly (unlike every helper
+    /// above, which always passes `&None`/`default_shutdown_grace()`).
+    async fn run_with_shutdown_grace(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        cancellation: &Option<CancellationToken>,
+        shutdown_grace: std::time::Duration,
+    ) -> RunOutcome {
+        run(
+            store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::default(),
+            graph,
+            thread,
+            Battlefield::initialize(
+                graph.schema().clone(),
+                &paladin_core::platform::container::battlefield::StateDelta::new(),
+            )
+            .unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            1,
+            &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            cancellation,
+            &None,
+            None,
+            shutdown_grace,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Resume `thread` from its latest (`Halted`) Waypoint through the SAME
+    /// low-level `run()` entry point, restoring vanguard/battlefield/
+    /// visit_counts/frontier exactly as `WarEngine::resume` would (D-19
+    /// acceptance 5).
+    async fn resume_after_halt(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        shutdown_grace: std::time::Duration,
+    ) -> RunOutcome {
+        let latest = store
+            .saved_waypoints(&thread)
+            .await
+            .last()
+            .cloned()
+            .expect("at least one Waypoint must already be saved for this thread");
+        run(
+            store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::default(),
+            graph,
+            thread,
+            latest.battlefield,
+            latest.vanguard,
+            latest.visit_counts,
+            Some(latest.frontier),
+            None,
+            Some(latest.waypoint_id),
+            latest.superstep + 1,
+            &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            &None,
+            &None,
+            None,
+            shutdown_grace,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// A graph with exactly one entry node -- a [`SlowFunctionNode`] that
+    /// cancels `token` the instant it starts, then sleeps `hold` -- so
+    /// cancellation is always observed mid-flight, deterministically,
+    /// without racing a background poller against real time.
+    fn single_slow_entry_graph(
+        hold: std::time::Duration,
+        run_count: Arc<std::sync::atomic::AtomicUsize>,
+        token: CancellationToken,
+    ) -> (WarGraph, NodeId, FieldName) {
+        let f = field("x");
+        let s = schema(vec![FieldSpec::new(
+            f.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let id = NodeId::new("slow");
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(SlowFunctionNode::cancelling(
+                f.clone(),
+                serde_json::json!("done"),
+                hold,
+                run_count,
+                token,
+            )),
+        );
+        graph.add_entry(id.clone());
+        (graph, id, f)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn in_flight_nodes_finishing_inside_grace_merge_normally() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, _id, f) = single_slow_entry_graph(
+            std::time::Duration::from_millis(30),
+            run_count.clone(),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-merge-in-time").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "a node finishing inside the grace window must merge normally and complete the run, \
+             got {outcome:?}"
+        );
+        assert_eq!(run_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert_eq!(
+            first.battlefield.get_raw(&f),
+            Some(&serde_json::json!("done"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn over_grace_node_is_aborted_and_recorded_skipped() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, id, f) = single_slow_entry_graph(
+            std::time::Duration::from_secs(2),
+            run_count.clone(),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-over-abort").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+
+        assert!(
+            matches!(outcome, RunOutcome::Halted { .. }),
+            "an over-grace node must Halt the run, got {outcome:?}"
+        );
+        assert_eq!(
+            run_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the node must have started exactly once before being aborted"
+        );
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert_eq!(
+            first.battlefield.get_raw(&f),
+            None,
+            "an aborted node's delta must never reach the Battlefield"
+        );
+        let record = first
+            .completed
+            .iter()
+            .find(|r| r.node_id == id)
+            .expect("the aborted node must still have a completed record");
+        assert_eq!(
+            record.outcome,
+            NodeOutcomeKind::Skipped {
+                reason: "shutdown".to_string()
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn over_grace_node_is_relisted_in_the_halted_vanguard() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, id, _f) = single_slow_entry_graph(
+            std::time::Duration::from_secs(2),
+            run_count.clone(),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-relisted").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+        assert!(matches!(outcome, RunOutcome::Halted { .. }));
+
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert!(
+            first.vanguard.contains(&id),
+            "the aborted node's id must be re-listed in the Halted Waypoint's vanguard, got {:?}",
+            first.vanguard
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resume_reruns_the_skipped_node_exactly_once() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, _id, f) = single_slow_entry_graph(
+            std::time::Duration::from_millis(150),
+            run_count.clone(),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-resume-exactly-once").unwrap();
+        let halted = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(20),
+        )
+        .await;
+        assert!(matches!(halted, RunOutcome::Halted { .. }));
+        assert_eq!(run_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let resumed = resume_after_halt(
+            &graph,
+            thread.clone(),
+            &store,
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(
+            matches!(resumed, RunOutcome::Completed { .. }),
+            "resuming a Halted run must re-run the skipped node and complete, got {resumed:?}"
+        );
+        assert_eq!(
+            run_count.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "exactly one aborted attempt plus one completed attempt across the whole scenario"
+        );
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert_eq!(
+            first.battlefield.get_raw(&f),
+            Some(&serde_json::json!("done"))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_slow_nodes_share_one_deadline() {
+        let field_m = field("m");
+        let s = schema(vec![FieldSpec::new(
+            field_m.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let token = CancellationToken::new();
+        let run_count_a = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let run_count_b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let id_a = NodeId::new("a_finishes_in_time");
+        let id_b = NodeId::new("b_over_grace");
+        graph.add_node(
+            id_a.clone(),
+            NodeSpec::Function(SlowFunctionNode::cancelling(
+                field_m.clone(),
+                serde_json::json!("a-done"),
+                std::time::Duration::from_millis(30),
+                run_count_a.clone(),
+                token.clone(),
+            )),
+        );
+        graph.add_node(
+            id_b.clone(),
+            NodeSpec::Function(SlowFunctionNode::new(
+                field_m.clone(),
+                serde_json::json!("b-done"),
+                std::time::Duration::from_millis(400),
+                run_count_b.clone(),
+            )),
+        );
+        graph.add_entry(id_a.clone());
+        graph.add_entry(id_b.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-shared-deadline").unwrap();
+        let started = std::time::Instant::now();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(100),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert!(matches!(outcome, RunOutcome::Halted { .. }));
+        assert_eq!(run_count_a.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(run_count_b.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert_eq!(
+            first.battlefield.get_raw(&field_m),
+            Some(&serde_json::json!("a-done")),
+            "the node finishing inside the shared grace window must merge normally"
+        );
+        assert!(
+            first.vanguard.contains(&id_b) && !first.vanguard.contains(&id_a),
+            "only the node still running past the shared deadline is re-listed for resume, got \
+             {:?}",
+            first.vanguard
+        );
+        // The deadline is shared, computed once -- not a fresh per-handle
+        // budget. A per-handle-timeout bug would need roughly a's own
+        // window PLUS b's own freshly-started window once the loop reaches
+        // it; the correct, shared-deadline behavior finishes close to the
+        // single 100ms window regardless of a's own completion time.
+        assert!(
+            elapsed < std::time::Duration::from_millis(250),
+            "the shared deadline must not be penalised by node a's own completion time \
+             (elapsed: {elapsed:?}) -- this is the regression signature of a per-handle timeout"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn zero_grace_aborts_immediately() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, id, _f) = single_slow_entry_graph(
+            std::time::Duration::from_secs(2),
+            run_count.clone(),
+            token.clone(),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-zero").unwrap();
+        let started = std::time::Instant::now();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::ZERO,
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert!(matches!(outcome, RunOutcome::Halted { .. }));
+        assert_eq!(run_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "Duration::ZERO must abort in-flight nodes immediately, not wait for their own \
+             completion (elapsed: {elapsed:?})"
+        );
+        let saved = store.saved_waypoints(&thread).await;
+        assert!(saved.first().unwrap().vanguard.contains(&id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn completed_records_stay_sorted_by_node_id_after_the_race() {
+        let field_m = field("m");
+        let s = schema(vec![FieldSpec::new(
+            field_m.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let token = CancellationToken::new();
+        let run_count_fast = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let run_count_slow = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // Deliberately dispatched/declared out of NodeId order: "z_fast"
+        // completes quickly (inside grace), "a_slow" is aborted -- the
+        // post-race sort must still land them in NodeId order regardless.
+        let id_fast = NodeId::new("z_fast");
+        let id_slow = NodeId::new("a_slow");
+        graph.add_node(
+            id_fast.clone(),
+            NodeSpec::Function(SlowFunctionNode::cancelling(
+                field_m.clone(),
+                serde_json::json!("fast-done"),
+                std::time::Duration::from_millis(10),
+                run_count_fast.clone(),
+                token.clone(),
+            )),
+        );
+        graph.add_node(
+            id_slow.clone(),
+            NodeSpec::Function(SlowFunctionNode::new(
+                field_m.clone(),
+                serde_json::json!("never"),
+                std::time::Duration::from_millis(500),
+                run_count_slow.clone(),
+            )),
+        );
+        graph.add_entry(id_fast.clone());
+        graph.add_entry(id_slow.clone());
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("shutdown-grace-sorted-records").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_millis(60),
+        )
+        .await;
+        assert!(matches!(outcome, RunOutcome::Halted { .. }));
+
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        let ids: Vec<&NodeId> = first.completed.iter().map(|r| &r.node_id).collect();
+        let mut sorted_ids = ids.clone();
+        sorted_ids.sort();
+        assert_eq!(
+            ids, sorted_ids,
+            "completed records must stay sorted by node_id regardless of completion/abort order"
+        );
+    }
+
+    /// A [`StateNode`] test double that sleeps for `delay` before failing
+    /// with a fixed message -- lets a test control REAL completion order
+    /// independently of dispatch order (Test 8, D-19's re-indexing
+    /// requirement).
+    struct DelayedFailingNode {
+        message: String,
+        delay: std::time::Duration,
+    }
+
+    #[async_trait::async_trait]
+    impl StateNode for DelayedFailingNode {
+        async fn run(
+            &self,
+            _state: &Battlefield,
+            _ctx: &NodeContext,
+        ) -> Result<Directive, StateNodeError> {
+            tokio::time::sleep(self.delay).await;
+            Err(StateNodeError(self.message.clone()))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn first_failure_wins_is_dispatch_order_not_completion_order() {
+        let s = schema(vec![]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        // Dispatch position 0 ("first") completes LATER than dispatch
+        // position 1 ("second") in wall-clock time -- proving the reported
+        // failure is picked by re-indexed DISPATCH order, not by whichever
+        // FuturesUnordered handle happens to resolve first.
+        let first = NodeId::new("first_dispatched_slow_to_fail");
+        let second = NodeId::new("second_dispatched_fast_to_fail");
+        graph.add_node(
+            first.clone(),
+            NodeSpec::Function(Arc::new(DelayedFailingNode {
+                message: "first".to_string(),
+                delay: std::time::Duration::from_millis(100),
+            })),
+        );
+        graph.add_node(
+            second.clone(),
+            NodeSpec::Function(Arc::new(DelayedFailingNode {
+                message: "second".to_string(),
+                delay: std::time::Duration::ZERO,
+            })),
+        );
+        graph.add_entry(first);
+        graph.add_entry(second);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("dispatch-order-first-wins").unwrap();
+        let outcome =
+            run_with_shutdown_grace(&graph, thread, &store, &None, default_shutdown_grace()).await;
+
+        match outcome {
+            RunOutcome::Failed {
+                error: EngineError::Node(StateNodeError(msg)),
+                ..
+            } => {
+                assert_eq!(
+                    msg, "first",
+                    "the reported failure must be the earlier-DISPATCHED node's error, even \
+                     though it completed later in wall-clock time"
+                );
+            }
+            other => panic!("expected Failed(Node(\"first\")), got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn boundary_cancellation_behaviour_is_unchanged() {
+        // A regression guard on the EXISTING, untouched superstep-boundary
+        // cancellation check (top of the loop): node1 cancels the token as
+        // part of its own execution; superstep 1 (node1 alone) still
+        // finishes and merges normally, and the boundary check for
+        // superstep 2 -- not the new mid-superstep grace race -- is what
+        // Halts the run before node2 is ever dispatched.
+        let schema_field = field("trace");
+        let closure_field = schema_field.clone();
+        let s = schema(vec![FieldSpec::new(
+            schema_field,
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let token = CancellationToken::new();
+        let node1 = NodeId::new("node1");
+        let node2 = NodeId::new("node2");
+        let node2_runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let node2_runs_clone = node2_runs.clone();
+        let token_clone = token.clone();
+        graph.add_node(
+            node1.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                token_clone.cancel();
+                let mut d = StateDelta::new();
+                d.set_raw(closure_field.clone(), serde_json::json!("node1"));
+                d
+            })),
+        );
+        graph.add_node(
+            node2.clone(),
+            NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                node2_runs_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                StateDelta::new()
+            })),
+        );
+        graph.add_edge(EdgeSpec {
+            from: node1.clone(),
+            to: node2.clone(),
+            condition: None,
+        });
+        graph.add_entry(node1);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("boundary-cancellation-unchanged").unwrap();
+        let outcome = run_with_shutdown_grace(
+            &graph,
+            thread.clone(),
+            &store,
+            &Some(token),
+            std::time::Duration::from_secs(2),
+        )
+        .await;
+
+        assert!(matches!(outcome, RunOutcome::Halted { .. }));
+        assert_eq!(
+            node2_runs.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "node2 must never be dispatched -- the boundary check halts before superstep 2 starts"
+        );
+        let saved = store.saved_waypoints(&thread).await;
+        let first = saved.first().unwrap();
+        assert!(
+            first.vanguard.contains(&node2),
+            "the Halted Waypoint's vanguard must be exactly the nodes that would have run next"
+        );
+    }
+
+    // --- Plan 25-09 Task 1: HeartbeatHandle, NodeContext.attempt/heartbeat(),
+    // and the defaulted PaladinPort::execute_observed (D-18, D-19) ----------
+
+    use crate::engine::test_support::{HeartbeatingNode, ObservedCallRecordingPort};
+
+    /// A retry policy that retries `Unknown`-classified `StateNodeError`s
+    /// (the default `TransientOnly` never would) with a 1 ms, jitter-free
+    /// backoff -- `engine::mod`'s `retrying_aegis` shape, restated here for
+    /// this module's own retry-aware tests.
+    fn retrying_aegis(max_attempts: u32) -> Aegis {
+        Aegis {
+            retry: Some(paladin_core::platform::container::aegis::RetryPolicy {
+                max_attempts,
+                retry_on:
+                    paladin_core::platform::container::aegis::RetryPredicate::TransientAndUnknown,
+                jitter: false,
+                initial_interval: std::time::Duration::from_millis(1),
+                ..paladin_core::platform::container::aegis::RetryPolicy::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// D-18: `ctx.heartbeat()` on a node with NO `idle_timeout` (no Aegis at
+    /// all here) neither panics nor changes the run -- the handle exists
+    /// but nothing is watching it, and the run completes normally.
+    #[tokio::test]
+    async fn heartbeat_is_a_no_op_without_an_idle_timeout() {
+        let out = field("out");
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("beater");
+        let node = HeartbeatingNode::new(1, 50, out.clone());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("heartbeat-no-op").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(final_state.get_raw(&out), Some(&serde_json::json!("done")));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(node.observed_attempts(), vec![1]);
+    }
+
+    /// D-18: on a node's second attempt, `ctx.attempt` is `2` -- the
+    /// context is rebuilt per attempt with the retry loop's own counter.
+    #[tokio::test]
+    async fn node_context_exposes_the_current_attempt() {
+        let out = field("out");
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("second-try");
+        let node = HeartbeatingNode::new(2, 0, out.clone());
+        graph.add_node(node_id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(3));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("ctx-attempt").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "expected Completed, got {outcome:?}"
+        );
+        assert_eq!(
+            node.observed_attempts(),
+            vec![1, 2],
+            "attempt 1 fails, attempt 2 sees ctx.attempt == 2 and succeeds"
+        );
+    }
+
+    /// D-19, D-21 (plan 26-13): the engine dispatches EVERY `NodeSpec::Paladin`
+    /// node through `PaladinPort::execute_scoped`, never `execute` directly.
+    /// `ObservedCallRecordingPort` overrides `execute_observed`, not
+    /// `execute_scoped`, so this still proves the chain: `execute_scoped`'s
+    /// default body delegates to `execute_observed`, which the port
+    /// overrides and records -- exactly one observed call and zero direct
+    /// calls.
+    #[tokio::test]
+    async fn the_engine_always_calls_execute_observed() {
+        let out = field("out");
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("scribe");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin("scribe"),
+                InputMapping::new("scribe"),
+                out.clone(),
+            ),
+        );
+        graph.add_entry(node_id);
+
+        let recording = ObservedCallRecordingPort::new();
+        let port: Arc<dyn PaladinPort> = recording.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("always-observed").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("observed")),
+                    "the output written is the one execute_observed produced"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(recording.observed_calls(), 1);
+        assert_eq!(
+            recording.direct_calls(),
+            0,
+            "the engine must never call execute() directly for a Paladin node"
+        );
+    }
+
+    // --- Plan 25-09 Task 2: per-attempt run_timeout / idle_timeout, named
+    // by the typed TimeoutKind (FT-FR-08, FT-FR-09, D-20). Every test here
+    // uses the paused-clock idiom `engine/retry.rs` established
+    // (`#[tokio::test(start_paused = true)]`): no wall-clock sleeps. ------
+
+    use crate::engine::test_support::{BeatingPaladinPort, TimedFunctionNode};
+    use paladin_core::platform::container::aegis::TimeoutPolicy;
+    use paladin_core::platform::container::node_error::TimeoutKind;
+    use std::time::Duration;
+
+    fn ms(millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
+
+    fn timeout_aegis(run: Option<Duration>, idle: Option<Duration>) -> Aegis {
+        Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: run,
+                idle_timeout: idle,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A single-`Paladin`-node graph whose node writes to `out`.
+    fn one_paladin_graph(out: &FieldName) -> (WarGraph, NodeId) {
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let node_id = NodeId::new("scout");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(make_paladin("scout"), InputMapping::new("go"), out.clone()),
+        );
+        graph.add_entry(node_id.clone());
+        (graph, node_id)
+    }
+
+    /// A single-`Function`-node graph over `node`, writing to `out`, under
+    /// the default `EngineLimits`.
+    fn one_function_graph(out: &FieldName, node: Arc<dyn StateNode>) -> (WarGraph, NodeId) {
+        one_function_graph_with_limits(out, node, EngineLimits::default())
+    }
+
+    /// As [`one_function_graph`], under caller-supplied `limits`.
+    fn one_function_graph_with_limits(
+        out: &FieldName,
+        node: Arc<dyn StateNode>,
+        limits: EngineLimits,
+    ) -> (WarGraph, NodeId) {
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, limits);
+        let node_id = NodeId::new("worker");
+        graph.add_node(node_id.clone(), NodeSpec::Function(node));
+        graph.add_entry(node_id.clone());
+        (graph, node_id)
+    }
+
+    /// FT-FR-09: a stream emitting a chunk every 100 ms is HEALTHY -- under
+    /// `idle_timeout: 250 ms` and `run_timeout: 10 s`, a port that beats
+    /// every 100 ms for 2 s completes, and neither bound fires.
+    #[tokio::test(start_paused = true)]
+    async fn a_port_beating_every_100ms_survives_a_250ms_idle_timeout() {
+        let out = field("out");
+        let (mut graph, node_id) = one_paladin_graph(&out);
+        graph.set_aegis(node_id, timeout_aegis(Some(ms(10_000)), Some(ms(250))));
+
+        let port_impl = BeatingPaladinPort::new(ms(100), 20, ms(0), "scouted");
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("idle-survives").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("scouted"))
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            port_impl.call_count(),
+            1,
+            "exactly one attempt, no timeout fired"
+        );
+    }
+
+    /// FT-FR-09: the SAME policy, but a port that beats then goes silent
+    /// for 300 ms, fails with `Timeout(Idle)` classified `Transient`.
+    #[tokio::test(start_paused = true)]
+    async fn a_port_that_stalls_300ms_fails_with_timeout_idle() {
+        let out = field("out");
+        let (mut graph, node_id) = one_paladin_graph(&out);
+        graph.set_aegis(
+            node_id.clone(),
+            timeout_aegis(Some(ms(10_000)), Some(ms(250))),
+        );
+
+        let port_impl = BeatingPaladinPort::new(ms(100), 2, ms(300), "never");
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("idle-fires").unwrap();
+        let outcome = run_with_port(&graph, thread, &store, &port).await;
+
+        let node_error = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        assert_eq!(node_error.node_id, node_id);
+        assert_eq!(node_error.attempt, 1);
+        assert_eq!(node_error.transience, Transience::Transient);
+        assert_eq!(
+            node_error.source,
+            NodeErrorSource::Timeout(TimeoutKind::Idle),
+            "the idle bound fired, named by its typed kind"
+        );
+        assert_eq!(port_impl.call_count(), 1, "no retry policy: one attempt");
+    }
+
+    /// FT-FR-08: a node that keeps beating is still cut by the wall-clock
+    /// `run_timeout`, and the failure names `Run` (not `Idle`) -- progress
+    /// cannot extend the hard cap (T-25-39).
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_but_progressing_node_fails_on_run_timeout_not_idle() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("too late"))],
+            Some(ms(100)),
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(node_id.clone(), timeout_aegis(Some(ms(500)), Some(ms(250))));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("run-beats-idle").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        let node_error = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        assert_eq!(node_error.node_id, node_id);
+        assert_eq!(node_error.transience, Transience::Transient);
+        assert_eq!(
+            node_error.source,
+            NodeErrorSource::Timeout(TimeoutKind::Run),
+            "the wall-clock bound fired even though the node kept beating"
+        );
+        assert_eq!(node.observed_attempts(), vec![1]);
+    }
+
+    /// FT-FR-08, D-20: a `Timeout(Run)` is `Transient`, so under the
+    /// default `TransientOnly` retry predicate the attempt is retried and a
+    /// faster later attempt completes the run; the attempt history records
+    /// the timed-out attempt with its typed kind.
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_attempt_is_retried_as_transient() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![
+                (ms(1_000), serde_json::json!("partial")),
+                (ms(10), serde_json::json!("final")),
+            ],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(
+            node_id.clone(),
+            Aegis {
+                retry: Some(paladin_core::platform::container::aegis::RetryPolicy {
+                    max_attempts: 3,
+                    jitter: false,
+                    initial_interval: ms(1),
+                    ..paladin_core::platform::container::aegis::RetryPolicy::default()
+                }),
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(ms(200)),
+                    idle_timeout: None,
+                }),
+                ..Default::default()
+            },
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("timeout-retried").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        assert!(
+            matches!(outcome, RunOutcome::Completed { .. }),
+            "expected Completed, got {outcome:?}"
+        );
+        assert_eq!(node.observed_attempts(), vec![1, 2]);
+        let waypoints = store.saved_waypoints(&thread).await;
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.node_id, node_id);
+        assert_eq!(record.attempt, 2, "the succeeding attempt is attempt 2");
+        assert_eq!(record.attempts.len(), 1);
+        assert_eq!(record.attempts[0].attempt, 1);
+        assert_eq!(
+            record.attempts[0].error.source,
+            NodeErrorSource::Timeout(TimeoutKind::Run)
+        );
+        assert_eq!(record.attempts[0].error.transience, Transience::Transient);
+    }
+
+    /// FT-FR-03/FT-FR-08 (T-25-41): a timed-out attempt's partial delta is
+    /// discarded exactly like any other failed attempt's -- only the
+    /// succeeding attempt's value reaches the merged Battlefield.
+    #[tokio::test(start_paused = true)]
+    async fn a_timed_out_attempts_partial_work_is_discarded() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![
+                (ms(1_000), serde_json::json!("partial")),
+                (ms(10), serde_json::json!("final")),
+            ],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(
+            node_id,
+            Aegis {
+                retry: Some(paladin_core::platform::container::aegis::RetryPolicy {
+                    max_attempts: 2,
+                    jitter: false,
+                    initial_interval: ms(1),
+                    ..paladin_core::platform::container::aegis::RetryPolicy::default()
+                }),
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(ms(200)),
+                    idle_timeout: None,
+                }),
+                ..Default::default()
+            },
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("partial-discarded").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("final")),
+                    "only the succeeding attempt's delta merges"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(
+            waypoints.len(),
+            1,
+            "no Waypoint is written between attempts"
+        );
+        assert_ne!(
+            waypoints[0].battlefield.get_raw(&out),
+            Some(&serde_json::json!("partial"))
+        );
+    }
+
+    /// `TimeoutPolicy { run_timeout: None, idle_timeout: None }` arms
+    /// nothing: a node under it behaves exactly as one with no policy --
+    /// a 5 s hold completes with one attempt and no timer ever fires.
+    #[tokio::test(start_paused = true)]
+    async fn timeout_policy_with_both_fields_none_is_a_no_op() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(5_000), serde_json::json!("eventually"))],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node.clone());
+        graph.set_aegis(node_id.clone(), timeout_aegis(None, None));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("no-op-policy").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("eventually"))
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        let waypoints = store.saved_waypoints(&thread).await;
+        let record = &waypoints[0].completed[0];
+        assert_eq!(record.node_id, node_id);
+        assert_eq!(record.attempt, 1);
+        assert!(record.attempts.is_empty());
+    }
+
+    /// T-25-42: which bound fired is read from the typed `TimeoutKind`
+    /// field by value -- this test never renders the error to a string and
+    /// never inspects a message.
+    #[tokio::test(start_paused = true)]
+    async fn the_fired_bound_is_read_from_the_typed_kind() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("silent"))],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node);
+        graph.set_aegis(node_id, timeout_aegis(Some(ms(10_000)), Some(ms(250))));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("typed-kind").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+
+        let node_error = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        // Typed, by value: a `match` on the variant, not a substring search.
+        let fired: TimeoutKind = match node_error.source {
+            NodeErrorSource::Timeout(kind) => kind,
+            other => panic!("expected a Timeout source, got {other:?}"),
+        };
+        assert_eq!(fired, TimeoutKind::Idle);
+        assert_ne!(fired, TimeoutKind::Run);
+    }
+
+    // --- Plan 25-09 Task 3: the run-level bound -- EngineLimits.run_timeout
+    // enforced, nested with the per-attempt bound, and named (D-20,
+    // FT-FR-10, ENG-FR-03). ------------------------------------------------
+
+    /// A three-node chain `a -> b -> c` of `TimedFunctionNode`s each holding
+    /// `hold` and writing `out`, under `limits`.
+    fn three_step_chain(out: &FieldName, hold: Duration, limits: EngineLimits) -> WarGraph {
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, limits);
+        let ids: Vec<NodeId> = ["a", "b", "c"].into_iter().map(NodeId::new).collect();
+        for id in &ids {
+            let node = TimedFunctionNode::new(
+                out.clone(),
+                vec![(hold, serde_json::json!(id.as_str()))],
+                None,
+            );
+            graph.add_node(id.clone(), NodeSpec::Function(node));
+        }
+        for pair in ids.windows(2) {
+            graph.add_edge(EdgeSpec {
+                from: pair[0].clone(),
+                to: pair[1].clone(),
+                condition: None,
+            });
+        }
+        graph.add_entry(ids[0].clone());
+        graph
+    }
+
+    /// ENG-FR-03, D-20: a run whose total wall clock exhausts
+    /// `EngineLimits.run_timeout` at a superstep BOUNDARY ends with the
+    /// typed `EngineError::RunTimeoutExceeded`, and writes the SAME kind of
+    /// `Failed` Waypoint `NodeVisitLimitExceeded`/`RecursionLimitExceeded`
+    /// write today: `node_error: None`, `failed_node` = the first node that
+    /// would have run next, the pending vanguard recorded verbatim.
+    ///
+    /// Shape: two 100 ms supersteps under a 200 ms budget -- superstep 2's
+    /// node completes on the SAME virtual tick the budget expires (the race
+    /// is biased toward the result, so it merges), and the top-of-loop
+    /// check then ends the run before superstep 3 starts.
+    #[tokio::test(start_paused = true)]
+    async fn engine_run_timeout_ends_the_run_with_a_typed_error() {
+        let out = field("out");
+        let graph = three_step_chain(
+            &out,
+            ms(100),
+            EngineLimits {
+                run_timeout: Some(ms(200)),
+                ..EngineLimits::default()
+            },
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("engine-run-timeout-boundary").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        let waypoint_id = match outcome {
+            RunOutcome::Failed {
+                error: EngineError::RunTimeoutExceeded { elapsed, limit },
+                waypoint: Some(waypoint_id),
+            } => {
+                assert_eq!(limit, ms(200));
+                assert!(elapsed >= limit, "elapsed {elapsed:?} >= limit {limit:?}");
+                waypoint_id
+            }
+            other => panic!("expected Failed(RunTimeoutExceeded), got {other:?}"),
+        };
+
+        let saved = store.saved_waypoints(&thread).await;
+        let failed = saved
+            .iter()
+            .find(|w| w.waypoint_id == waypoint_id)
+            .expect("the failure Waypoint was persisted");
+        match &failed.status {
+            WaypointStatus::Failed {
+                failed_node,
+                node_error,
+                ..
+            } => {
+                assert_eq!(
+                    failed_node,
+                    &NodeId::new("c"),
+                    "the first node that would run next"
+                );
+                assert!(
+                    node_error.is_none(),
+                    "a limit failure carries no NodeError, like NodeVisitLimitExceeded"
+                );
+            }
+            other => panic!("expected a Failed Waypoint, got {other:?}"),
+        }
+        assert_eq!(failed.vanguard, vec![NodeId::new("c")]);
+        assert_eq!(
+            failed.battlefield.get_raw(&out),
+            Some(&serde_json::json!("b")),
+            "superstep 2 merged before the boundary check ended the run"
+        );
+    }
+
+    /// FT-FR-10, D-20: an attempt cut MID-SUPERSTEP by the engine budget
+    /// records `Timeout(EngineRun)` -- not `Run`, not `Idle` -- on the
+    /// failure Waypoint, and the run ends `RunTimeoutExceeded` rather than
+    /// merely failing that node.
+    #[tokio::test(start_paused = true)]
+    async fn an_attempt_cut_by_the_engine_bound_records_timeout_enginerun() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("never"))],
+            None,
+        );
+        let (graph, node_id) = one_function_graph_with_limits(
+            &out,
+            node.clone(),
+            EngineLimits {
+                run_timeout: Some(ms(150)),
+                ..EngineLimits::default()
+            },
+        );
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("engine-run-cuts-attempt").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+
+        let waypoint_id = match outcome {
+            RunOutcome::Failed {
+                error: EngineError::RunTimeoutExceeded { limit, .. },
+                waypoint: Some(waypoint_id),
+            } => {
+                assert_eq!(limit, ms(150));
+                waypoint_id
+            }
+            other => panic!("expected Failed(RunTimeoutExceeded), got {other:?}"),
+        };
+
+        let saved = store.saved_waypoints(&thread).await;
+        let failed = saved
+            .iter()
+            .find(|w| w.waypoint_id == waypoint_id)
+            .expect("the failure Waypoint was persisted");
+        match &failed.status {
+            WaypointStatus::Failed {
+                failed_node,
+                node_error: Some(node_error),
+                ..
+            } => {
+                assert_eq!(failed_node, &node_id);
+                assert_eq!(node_error.node_id, node_id);
+                assert_eq!(node_error.attempt, 1);
+                assert_eq!(node_error.transience, Transience::Transient);
+                assert_eq!(
+                    node_error.source,
+                    NodeErrorSource::Timeout(TimeoutKind::EngineRun)
+                );
+            }
+            other => panic!("expected Failed with a NodeError, got {other:?}"),
+        }
+        let record = failed
+            .completed
+            .iter()
+            .find(|r| r.node_id == node_id)
+            .expect("the cut node's record is on the Waypoint");
+        assert_eq!(record.attempt, 1, "never retried: the budget is gone");
+        assert!(matches!(record.outcome, NodeOutcomeKind::Failed));
+        assert_eq!(node.observed_attempts(), vec![1]);
+    }
+
+    /// D-20: the per-attempt deadline is `min(attempt run_timeout,
+    /// remaining engine budget)` and the fired kind names whichever was
+    /// tightest -- both directions, by typed kind.
+    #[tokio::test(start_paused = true)]
+    async fn the_tightest_bound_fires() {
+        // --- (a) attempt bound 10 s, engine budget 200 ms -> EngineRun.
+        let out = field("out");
+        let slow = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("never"))],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph_with_limits(
+            &out,
+            slow,
+            EngineLimits {
+                run_timeout: Some(ms(200)),
+                ..EngineLimits::default()
+            },
+        );
+        graph.set_aegis(node_id.clone(), timeout_aegis(Some(ms(10_000)), None));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("tightest-engine").unwrap();
+        let outcome = run_default(&graph, thread.clone(), &store).await;
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Failed {
+                    error: EngineError::RunTimeoutExceeded { .. },
+                    ..
+                }
+            ),
+            "expected RunTimeoutExceeded, got {outcome:?}"
+        );
+        let saved = store.saved_waypoints(&thread).await;
+        let engine_kind = match &saved[0].status {
+            WaypointStatus::Failed {
+                node_error: Some(node_error),
+                ..
+            } => match node_error.source {
+                NodeErrorSource::Timeout(kind) => kind,
+                ref other => panic!("expected Timeout, got {other:?}"),
+            },
+            other => panic!("expected Failed with a NodeError, got {other:?}"),
+        };
+        assert_eq!(engine_kind, TimeoutKind::EngineRun);
+
+        // --- (b) attempt bound 200 ms, engine budget 10 s -> Run.
+        let slow = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(1_000), serde_json::json!("never"))],
+            None,
+        );
+        let (mut graph, node_id) = one_function_graph_with_limits(
+            &out,
+            slow,
+            EngineLimits {
+                run_timeout: Some(ms(10_000)),
+                ..EngineLimits::default()
+            },
+        );
+        graph.set_aegis(node_id, timeout_aegis(Some(ms(200)), None));
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("tightest-attempt").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        let node_error = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        let attempt_kind = match node_error.source {
+            NodeErrorSource::Timeout(kind) => kind,
+            other => panic!("expected Timeout, got {other:?}"),
+        };
+        assert_eq!(attempt_kind, TimeoutKind::Run);
+    }
+
+    /// `EngineLimits { run_timeout: None, .. }` (the default) arms no
+    /// run-level bound: a 5 s node under the default limits completes.
+    #[tokio::test(start_paused = true)]
+    async fn no_engine_run_timeout_means_no_run_level_bound() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(ms(5_000), serde_json::json!("eventually"))],
+            None,
+        );
+        let (graph, _) = one_function_graph(&out, node);
+        assert_eq!(graph.limits().run_timeout, None);
+
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("no-engine-bound").unwrap();
+        let outcome = run_default(&graph, thread, &store).await;
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                assert_eq!(
+                    final_state.get_raw(&out),
+                    Some(&serde_json::json!("eventually"))
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Phase 23 D-18 regression guard: `EngineLimits.run_timeout` stays
+    /// EXCLUDED from `WarGraph::fingerprint()` like every other limit, so
+    /// loosening or tightening the run budget never looks like a graph
+    /// change to `resume`'s `GraphMismatch` check.
+    #[test]
+    fn run_timeout_is_not_hashed_into_the_fingerprint() {
+        let out = field("out");
+        let s = schema(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let a = WarGraph::new(
+            s.clone(),
+            EngineLimits {
+                run_timeout: None,
+                ..EngineLimits::default()
+            },
+        );
+        let b = WarGraph::new(
+            s,
+            EngineLimits {
+                run_timeout: Some(Duration::from_secs(90)),
+                ..EngineLimits::default()
+            },
+        );
+        assert_eq!(a.fingerprint(), b.fingerprint());
+    }
+
+    /// D-20, X-03: the legacy-bridge `WarGraph`s carry NO legacy Battalion
+    /// timeout into `EngineLimits` -- `run_timeout` comes from `EngineConfig`
+    /// only -- so PRD 04 FT-FR-10's "any legacy Battalion timeout" clause is
+    /// satisfied vacuously. Asserted both behaviourally (every bridge yields
+    /// `run_timeout: None`) and as a source tripwire on `bridges.rs`.
+    #[test]
+    fn bridges_carry_no_legacy_battalion_timeout() {
+        assert_eq!(
+            WarGraph::from_formation(Vec::new()).limits().run_timeout,
+            None
+        );
+        assert_eq!(
+            WarGraph::from_phalanx(Vec::new()).limits().run_timeout,
+            None
+        );
+        let bridges_source = include_str!("bridges.rs");
+        assert!(
+            !bridges_source.contains("run_timeout"),
+            "bridges.rs must never set EngineLimits.run_timeout from a legacy Battalion timeout"
+        );
+        assert!(
+            bridges_source.contains("EngineLimits::default()"),
+            "every bridge builds its EngineLimits from the default (run_timeout: None)"
+        );
+    }
+
+    // --- Plan 25-10 Task 2: Route / Absorb / no-handler dispatch after
+    // retries exhaust (D-21, D-08, FT-FR-05, FT-FR-11, FT-FR-12, FT-FR-14) --
+
+    use crate::engine::test_support::{FailingPaladinPort, PermanentlyFailingNode, RecoveryNode};
+    use paladin_core::platform::container::aegis::{ErrorHandlerSpec, RetryPolicy};
+    use paladin_core::platform::container::node_error::NodeErrorSource;
+    use paladin_core::platform::container::transience::Transience;
+
+    /// `result` (the ordinary output field), `booking_error` (a Route's
+    /// `error_field`) and `recovered` (what a recovery node or an Absorb
+    /// fallback writes) -- all `LastWrite`.
+    fn handler_schema() -> BattlefieldSchema {
+        schema(
+            ["result", "booking_error", "recovered"]
+                .into_iter()
+                .map(|name| FieldSpec::new(field(name), DispatchRule::LastWrite, None, false))
+                .collect(),
+        )
+    }
+
+    fn route_aegis(to: &NodeId, error_field: &FieldName) -> Aegis {
+        Aegis {
+            on_error: Some(ErrorHandlerSpec::Route {
+                to: to.clone(),
+                error_field: error_field.clone(),
+            }),
+            ..Aegis::default()
+        }
+    }
+
+    fn absorb_aegis(fallback_delta: StateDelta) -> Aegis {
+        Aegis {
+            on_error: Some(ErrorHandlerSpec::Absorb { fallback_delta }),
+            ..Aegis::default()
+        }
+    }
+
+    /// `TransientOnly` (the default predicate), jitter-free, 1 ms initial
+    /// interval -- so a Permanent failure gets exactly one attempt and a
+    /// Transient one retries up to `max_attempts` under the paused clock.
+    fn transient_only_retry(max_attempts: u32) -> RetryPolicy {
+        RetryPolicy {
+            max_attempts,
+            jitter: false,
+            initial_interval: Duration::from_millis(1),
+            ..RetryPolicy::default()
+        }
+    }
+
+    /// A port whose every call fails `Permanent` (a `ConfigurationError`
+    /// classifies Permanent by `PaladinError::transience`, D-05).
+    fn permanent_port() -> Arc<FailingPaladinPort> {
+        FailingPaladinPort::new(|| PaladinError::ConfigurationError("card declined".to_string()))
+    }
+
+    /// A port whose every call fails with a 503-classified `Transient`
+    /// `LlmFailure`.
+    fn transient_port() -> Arc<FailingPaladinPort> {
+        FailingPaladinPort::new(|| PaladinError::LlmFailure {
+            transience: Transience::Transient,
+            status: Some(503),
+            provider: Some("mock".to_string()),
+            message: "service unavailable".to_string(),
+        })
+    }
+
+    fn paladin_node(name: &str, out: &FieldName) -> NodeSpec {
+        NodeSpec::paladin(make_paladin(name), InputMapping::new("go"), out.clone())
+    }
+
+    /// Run `graph` from its entry through the real superstep loop over
+    /// `port`, with `registries` (so a `Custom` handler resolves).
+    async fn run_handled(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        port: &Arc<dyn PaladinPort>,
+        registries: &EngineRegistries,
+    ) -> RunOutcome {
+        run(
+            store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            registries,
+            graph,
+            thread,
+            Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            1,
+            port,
+            &no_trace(),
+            &no_interceptors(),
+            &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// The `NodeExecutionRecord` for `node` across every saved Waypoint of
+    /// `thread` (oldest superstep first).
+    async fn records_for(
+        store: &RecordingWaypointStore,
+        thread: &ThreadId,
+        node: &NodeId,
+    ) -> Vec<NodeExecutionRecord> {
+        let mut waypoints = store.saved_waypoints(thread).await;
+        waypoints.reverse();
+        waypoints
+            .iter()
+            .flat_map(|wp| wp.completed.iter().filter(|r| &r.node_id == node).cloned())
+            .collect()
+    }
+
+    fn completed_state(outcome: RunOutcome) -> Battlefield {
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => final_state,
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// `book` (a Paladin node under `aegis`) with `cancel` (a
+    /// [`RecoveryNode`] writing `recovered = "cancelled"`) declared but NOT
+    /// statically wired -- reachable only by routing.
+    fn book_cancel_graph(aegis: Aegis) -> (WarGraph, NodeId, NodeId, Arc<RecoveryNode>) {
+        let mut graph = WarGraph::new(handler_schema(), EngineLimits::default());
+        let book = NodeId::new("book");
+        let cancel = NodeId::new("cancel");
+        let recovery = RecoveryNode::new(field("recovered"), serde_json::json!("cancelled"));
+        graph.add_node(book.clone(), paladin_node("book", &field("result")));
+        graph.add_node(cancel.clone(), NodeSpec::Function(recovery.clone()));
+        graph.add_entry(book.clone());
+        graph.set_aegis(book.clone(), aegis);
+        (graph, book, cancel, recovery)
+    }
+
+    /// FT-FR-11, D-21: the compensation-chain shape from CONTEXT.md --
+    /// `book` fails permanently, routes to `cancel`, the run Completes,
+    /// `booking_error` holds the NodeError JSON, `book`'s record reads
+    /// `outcome: Failed`. Compared as PARSED JSON fields, never bytes.
+    #[tokio::test]
+    async fn route_writes_the_structured_error_and_places_the_target() {
+        let error_field = field("booking_error");
+        let (graph, book, cancel, recovery) =
+            book_cancel_graph(route_aegis(&NodeId::new("cancel"), &error_field));
+        let port_impl = permanent_port();
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("route-structured").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        let written = final_state
+            .get_raw(&error_field)
+            .expect("booking_error holds the routed NodeError");
+        assert_eq!(written["node_id"], serde_json::json!("book"));
+        assert_eq!(written["attempt"], serde_json::json!(1));
+        assert_eq!(written["transience"], serde_json::json!("Permanent"));
+        let message = written["source"]["Paladin"]["message"]
+            .as_str()
+            .expect("source.Paladin.message is a string");
+        assert!(
+            message.contains("card declined"),
+            "the source message matches the failure: {message}"
+        );
+        // And it round-trips into the typed value.
+        let parsed: NodeError =
+            serde_json::from_value(written.clone()).expect("error_field parses as a NodeError");
+        assert_eq!(parsed.node_id, book);
+        assert_eq!(parsed.transience, Transience::Permanent);
+        assert!(matches!(parsed.source, NodeErrorSource::Paladin { .. }));
+
+        assert_eq!(port_impl.call_count(), 1, "no retry policy: one attempt");
+        assert!(recovery.ran(), "the Route target ran");
+        assert_eq!(
+            final_state.get_raw(&field("recovered")),
+            Some(&serde_json::json!("cancelled"))
+        );
+        let book_records = records_for(&store, &thread, &book).await;
+        assert_eq!(book_records.len(), 1);
+        assert_eq!(book_records[0].outcome, NodeOutcomeKind::Failed);
+        assert_eq!(book_records[0].attempt, 1);
+        let cancel_records = records_for(&store, &thread, &cancel).await;
+        assert_eq!(cancel_records.len(), 1);
+        assert_eq!(cancel_records[0].outcome, NodeOutcomeKind::Succeeded);
+    }
+
+    /// D-21: the routed target REPLACES the failed node's static
+    /// successors -- `confirm` (book's ordinary successor) never runs.
+    #[tokio::test]
+    async fn route_replaces_the_failed_nodes_static_successors() {
+        let error_field = field("booking_error");
+        let (mut graph, book, _cancel, recovery) =
+            book_cancel_graph(route_aegis(&NodeId::new("cancel"), &error_field));
+        let confirm = NodeId::new("confirm");
+        let confirm_node = RecoveryNode::new(field("result"), serde_json::json!("confirmed"));
+        graph.add_node(confirm.clone(), NodeSpec::Function(confirm_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: book.clone(),
+            to: confirm.clone(),
+            condition: None,
+        });
+        let port: Arc<dyn PaladinPort> = permanent_port();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("route-replaces").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert!(recovery.ran(), "only the routed target ran");
+        assert!(
+            !confirm_node.ran(),
+            "the failed node's static successor must NOT run"
+        );
+        assert!(final_state.get_raw(&field("result")).is_none());
+        assert!(records_for(&store, &thread, &confirm).await.is_empty());
+    }
+
+    /// D-21: routing to a terminal recovery node (no outgoing edges) ends
+    /// the run `Completed` -- the final Waypoint's status says so, and no
+    /// starvation failure is raised for the unrun static successors.
+    #[tokio::test]
+    async fn a_route_target_with_no_outgoing_edges_completes_the_run_normally() {
+        let error_field = field("booking_error");
+        let (graph, _book, cancel, recovery) =
+            book_cancel_graph(route_aegis(&NodeId::new("cancel"), &error_field));
+        let port: Arc<dyn PaladinPort> = permanent_port();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("route-terminal").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert!(recovery.ran());
+        assert_eq!(
+            final_state.get_raw(&field("recovered")),
+            Some(&serde_json::json!("cancelled"))
+        );
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(waypoints.len(), 2, "one superstep for book, one for cancel");
+        assert_eq!(waypoints[0].status, WaypointStatus::Completed);
+        assert!(waypoints[0].vanguard.is_empty());
+        // The first Waypoint's vanguard placed exactly the Route target.
+        assert_eq!(waypoints[1].vanguard, vec![cancel]);
+        assert_eq!(waypoints[1].status, WaypointStatus::Running);
+    }
+
+    /// FT-FR-12, D-21: under `Absorb`, the record reads `Failed`, the
+    /// fallback delta merges, and the node's static edges fire as on
+    /// success.
+    #[tokio::test]
+    async fn absorb_merges_its_delta_and_fires_static_edges() {
+        let mut graph = WarGraph::new(handler_schema(), EngineLimits::default());
+        let book = NodeId::new("book");
+        let confirm = NodeId::new("confirm");
+        let failing = PermanentlyFailingNode::new("booking service down");
+        let confirm_node = RecoveryNode::new(field("result"), serde_json::json!("confirmed"));
+        graph.add_node(book.clone(), NodeSpec::Function(failing.clone()));
+        graph.add_node(confirm.clone(), NodeSpec::Function(confirm_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: book.clone(),
+            to: confirm.clone(),
+            condition: None,
+        });
+        graph.add_entry(book.clone());
+        let mut fallback = StateDelta::new();
+        fallback.set_raw(field("recovered"), serde_json::json!("fallback"));
+        graph.set_aegis(book.clone(), absorb_aegis(fallback));
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("absorb-merges").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(failing.run_count(), 1);
+        assert_eq!(
+            final_state.get_raw(&field("recovered")),
+            Some(&serde_json::json!("fallback")),
+            "the fallback delta merged"
+        );
+        assert!(confirm_node.ran(), "the static edge fired as on success");
+        assert_eq!(
+            final_state.get_raw(&field("result")),
+            Some(&serde_json::json!("confirmed"))
+        );
+        let book_records = records_for(&store, &thread, &book).await;
+        assert_eq!(book_records.len(), 1);
+        assert_eq!(book_records[0].outcome, NodeOutcomeKind::Failed);
+        // The absorbed node's own delta never existed; only the fallback
+        // and confirm's write are in the final state.
+        assert!(final_state.get_raw(&field("booking_error")).is_none());
+    }
+
+    /// FT-FR-12: an EMPTY fallback delta merges nothing -- the Battlefield
+    /// is unchanged by the absorbed node -- yet its static edges still
+    /// fire and the record still reads `Failed`.
+    #[tokio::test]
+    async fn absorb_with_an_empty_fallback_delta_merges_nothing_and_continues() {
+        let mut graph = WarGraph::new(handler_schema(), EngineLimits::default());
+        let book = NodeId::new("book");
+        let confirm = NodeId::new("confirm");
+        let failing = PermanentlyFailingNode::new("booking service down");
+        let confirm_node = RecoveryNode::new(field("result"), serde_json::json!("confirmed"));
+        graph.add_node(book.clone(), NodeSpec::Function(failing.clone()));
+        graph.add_node(confirm.clone(), NodeSpec::Function(confirm_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: book.clone(),
+            to: confirm.clone(),
+            condition: None,
+        });
+        graph.add_entry(book.clone());
+        graph.set_aegis(book.clone(), absorb_aegis(StateDelta::new()));
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("absorb-empty").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        // The Battlefield `confirm` observed (the post-absorb merge) is
+        // byte-identical to the initial state: nothing merged for `book`.
+        let observed = confirm_node.observed();
+        assert_eq!(observed.len(), 1);
+        let initial = Battlefield::initialize(graph.schema().clone(), &StateDelta::new()).unwrap();
+        assert_eq!(observed[0], initial, "the absorbed node merged nothing");
+        assert!(confirm_node.ran(), "static edges still fire");
+        assert_eq!(
+            final_state.get_raw(&field("result")),
+            Some(&serde_json::json!("confirmed"))
+        );
+        let book_records = records_for(&store, &thread, &book).await;
+        assert_eq!(book_records.len(), 1);
+        assert_eq!(book_records[0].outcome, NodeOutcomeKind::Failed);
+    }
+
+    /// FT-FR-14, D-08: with no `on_error`, an exhausted failure writes a
+    /// `Failed` Waypoint whose `node_error` is `Some(..)` and returns
+    /// `RunOutcome::Failed` carrying the same value -- never a bare string.
+    #[tokio::test]
+    async fn no_handler_fails_the_run_with_the_structured_error() {
+        let (graph, book, _cancel, recovery) = book_cancel_graph(Aegis {
+            retry: Some(transient_only_retry(3)),
+            ..Aegis::default()
+        });
+        // `cancel` is declared but, with no Route, never reached -- it is
+        // the control proving nothing was routed.
+        let port_impl = permanent_port();
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("no-handler").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+
+        let exposed = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        assert_eq!(exposed.node_id, book);
+        assert_eq!(
+            exposed.attempt, 1,
+            "Permanent under TransientOnly: one attempt"
+        );
+        assert_eq!(exposed.transience, Transience::Permanent);
+        assert!(matches!(
+            &outcome,
+            RunOutcome::Failed {
+                error: EngineError::NodeFailed(_),
+                ..
+            }
+        ));
+        assert!(!recovery.ran(), "no handler: nothing routed");
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(waypoints.len(), 1);
+        match &waypoints[0].status {
+            WaypointStatus::Failed {
+                failed_node,
+                node_error,
+                ..
+            } => {
+                assert_eq!(failed_node, &book);
+                assert_eq!(node_error.as_ref(), Some(&exposed));
+            }
+            other => panic!("expected a Failed Waypoint, got {other:?}"),
+        }
+    }
+
+    /// FT-FR-05, T-25-48: a Transient failure under `max_attempts: 3`
+    /// reaches the handler only after the THIRD attempt fails -- the
+    /// recovery node runs exactly once, after three port calls, and the
+    /// routed error records `attempt: 3`.
+    #[tokio::test(start_paused = true)]
+    async fn a_handler_does_not_run_while_retries_remain() {
+        let error_field = field("booking_error");
+        let (graph, _book, _cancel, recovery) = book_cancel_graph(Aegis {
+            retry: Some(transient_only_retry(3)),
+            on_error: Some(ErrorHandlerSpec::Route {
+                to: NodeId::new("cancel"),
+                error_field: error_field.clone(),
+            }),
+            ..Aegis::default()
+        });
+        let port_impl = transient_port();
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("handler-after-retries").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(port_impl.call_count(), 3, "every attempt ran first");
+        assert_eq!(
+            recovery.run_count(),
+            1,
+            "exactly one handler invocation, after exhaustion"
+        );
+        let written = final_state.get_raw(&error_field).expect("routed error");
+        assert_eq!(written["attempt"], serde_json::json!(3));
+        assert_eq!(written["transience"], serde_json::json!("Transient"));
+        assert_eq!(written["source"]["Llm"]["status"], serde_json::json!(503));
+        let book_records = records_for(&store, &thread, &NodeId::new("book")).await;
+        assert_eq!(
+            book_records.len(),
+            1,
+            "one record, no Waypoint between attempts"
+        );
+        assert_eq!(book_records[0].attempt, 3);
+        assert_eq!(
+            book_records[0].attempts.len(),
+            2,
+            "two failed attempts before the final"
+        );
+    }
+
+    /// FT-FR-05: a Permanent failure under `TransientOnly` invokes the
+    /// handler after exactly one attempt -- the retry predicate refused it,
+    /// and the handler is entered at once.
+    #[tokio::test]
+    async fn a_non_retryable_error_reaches_the_handler_immediately() {
+        let error_field = field("booking_error");
+        let (graph, _book, _cancel, recovery) = book_cancel_graph(Aegis {
+            retry: Some(transient_only_retry(3)),
+            on_error: Some(ErrorHandlerSpec::Route {
+                to: NodeId::new("cancel"),
+                error_field: error_field.clone(),
+            }),
+            ..Aegis::default()
+        });
+        let port_impl = permanent_port();
+        let port: Arc<dyn PaladinPort> = port_impl.clone();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("handler-immediate").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(port_impl.call_count(), 1, "exactly one attempt");
+        assert_eq!(recovery.run_count(), 1);
+        let written = final_state.get_raw(&error_field).expect("routed error");
+        assert_eq!(written["attempt"], serde_json::json!(1));
+        assert_eq!(written["transience"], serde_json::json!("Permanent"));
+        let book_records = records_for(&store, &thread, &NodeId::new("book")).await;
+        assert_eq!(book_records[0].attempt, 1);
+        assert!(book_records[0].attempts.is_empty());
+    }
+
+    // --- Plan 25-10 Task 3: Custom handler dispatch and the
+    // max_node_visits loop bound (D-13, D-21, FT-FR-13, FT-FR-15) ----------
+
+    use crate::engine::test_support::RecordingErrorHandler;
+
+    fn custom_aegis(name: &str) -> Aegis {
+        Aegis {
+            on_error: Some(ErrorHandlerSpec::Custom(name.to_string())),
+            ..Aegis::default()
+        }
+    }
+
+    fn registries_with(name: &str, handler: Arc<RecordingErrorHandler>) -> EngineRegistries {
+        let mut registries = EngineRegistries::default();
+        registries.error_handlers.register(name, handler);
+        registries
+    }
+
+    fn delta_with(name: &str, value: serde_json::Value) -> StateDelta {
+        let mut delta = StateDelta::new();
+        delta.set_raw(field(name), value);
+        delta
+    }
+
+    /// `prep` (writes `result = "pre"`) -> `book` (Paladin, fails Permanent,
+    /// `Custom("compensate")`) -> `confirm` (a [`RecoveryNode`] writing
+    /// `result = "confirmed"`), plus an unwired `cancel` recovery node.
+    #[allow(clippy::type_complexity)]
+    fn compensation_graph() -> (WarGraph, NodeId, Arc<RecoveryNode>, Arc<RecoveryNode>) {
+        let mut graph = WarGraph::new(handler_schema(), EngineLimits::default());
+        let prep = NodeId::new("prep");
+        let book = NodeId::new("book");
+        let confirm = NodeId::new("confirm");
+        let cancel = NodeId::new("cancel");
+        let confirm_node = RecoveryNode::new(field("result"), serde_json::json!("confirmed"));
+        let cancel_node = RecoveryNode::new(field("recovered"), serde_json::json!("cancelled"));
+        graph.add_node(
+            prep.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("result"),
+                serde_json::json!("pre"),
+            )),
+        );
+        graph.add_node(book.clone(), paladin_node("book", &field("result")));
+        graph.add_node(confirm.clone(), NodeSpec::Function(confirm_node.clone()));
+        graph.add_node(cancel.clone(), NodeSpec::Function(cancel_node.clone()));
+        graph.add_edge(EdgeSpec {
+            from: prep,
+            to: book.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: book.clone(),
+            to: confirm,
+            condition: None,
+        });
+        graph.add_entry(NodeId::new("prep"));
+        graph.set_aegis(book.clone(), custom_aegis("compensate"));
+        (graph, book, confirm_node, cancel_node)
+    }
+
+    /// D-13, T-25-50: a registered handler observes the structured
+    /// `NodeError` (node_id / attempt / transience of the failure) and the
+    /// pre-failure Battlefield -- the state `book` itself saw, holding
+    /// `prep`'s merged write.
+    #[tokio::test]
+    async fn a_custom_handler_receives_the_structured_error_and_the_battlefield() {
+        let (graph, book, _confirm, _cancel) = compensation_graph();
+        let handler = RecordingErrorHandler::replying(StateDelta::new().into());
+        let registries = registries_with("compensate", handler.clone());
+        let port: Arc<dyn PaladinPort> = permanent_port();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("custom-receives").unwrap();
+
+        let outcome = run_handled(&graph, thread, &store, &port, &registries).await;
+        completed_state(outcome);
+
+        assert_eq!(handler.invocation_count(), 1);
+        let seen = handler.seen();
+        let (err, state) = &seen[0];
+        assert_eq!(err.node_id, book);
+        assert_eq!(err.attempt, 1);
+        assert_eq!(err.transience, Transience::Permanent);
+        assert!(
+            matches!(&err.source, NodeErrorSource::Paladin { message, .. } if message.contains("card declined"))
+        );
+        assert_eq!(
+            state.get_raw(&field("result")),
+            Some(&serde_json::json!("pre")),
+            "the handler sees the pre-failure snapshot, prep's write included"
+        );
+        assert!(
+            state.get_raw(&field("recovered")).is_none(),
+            "and nothing from this superstep's merge"
+        );
+    }
+
+    /// FT-FR-13: `NextStep::Edges` from a handler merges its delta and
+    /// continues on the failed node's static edges.
+    #[tokio::test]
+    async fn a_custom_handler_returning_edges_contributes_its_delta() {
+        let (graph, book, confirm, cancel) = compensation_graph();
+        let handler = RecordingErrorHandler::replying(
+            delta_with("recovered", serde_json::json!("compensated")).into(),
+        );
+        let registries = registries_with("compensate", handler.clone());
+        let port: Arc<dyn PaladinPort> = permanent_port();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("custom-edges").unwrap();
+
+        let outcome = run_handled(&graph, thread.clone(), &store, &port, &registries).await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(
+            final_state.get_raw(&field("recovered")),
+            Some(&serde_json::json!("compensated"))
+        );
+        assert!(confirm.ran(), "static edges fired");
+        assert!(!cancel.ran());
+        let book_records = records_for(&store, &thread, &book).await;
+        assert_eq!(book_records[0].outcome, NodeOutcomeKind::Failed);
+    }
+
+    /// FT-FR-13: `NextStep::Goto(target)` from a handler places `target` in
+    /// the next Vanguard, replacing the failed node's static successors.
+    #[tokio::test]
+    async fn a_custom_handler_returning_goto_places_its_target() {
+        let (graph, book, confirm, cancel) = compensation_graph();
+        let handler = RecordingErrorHandler::replying(Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Goto(vec![NodeId::new("cancel")]),
+        });
+        let registries = registries_with("compensate", handler.clone());
+        let port: Arc<dyn PaladinPort> = permanent_port();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("custom-goto").unwrap();
+
+        let outcome = run_handled(&graph, thread.clone(), &store, &port, &registries).await;
+        let final_state = completed_state(outcome);
+
+        assert!(cancel.ran(), "the Goto target ran");
+        assert!(!confirm.ran(), "the static successor was replaced");
+        assert_eq!(
+            final_state.get_raw(&field("recovered")),
+            Some(&serde_json::json!("cancelled"))
+        );
+        let mut waypoints = store.saved_waypoints(&thread).await;
+        waypoints.reverse();
+        // superstep 1: prep; superstep 2: book (failed, handled); 3: cancel
+        assert_eq!(waypoints[1].vanguard, vec![NodeId::new("cancel")]);
+        let book_records = records_for(&store, &thread, &book).await;
+        assert_eq!(book_records[0].outcome, NodeOutcomeKind::Failed);
+    }
+
+    /// FT-FR-13: `NextStep::End` from a handler completes the run after
+    /// this superstep's merge, with the handler's delta merged.
+    #[tokio::test]
+    async fn a_custom_handler_returning_end_completes_the_run() {
+        let (graph, _book, confirm, cancel) = compensation_graph();
+        let handler = RecordingErrorHandler::replying(Directive {
+            delta: delta_with("recovered", serde_json::json!("ended")),
+            next: NextStep::End,
+        });
+        let registries = registries_with("compensate", handler.clone());
+        let port: Arc<dyn PaladinPort> = permanent_port();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("custom-end").unwrap();
+
+        let outcome = run_handled(&graph, thread.clone(), &store, &port, &registries).await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(
+            final_state.get_raw(&field("recovered")),
+            Some(&serde_json::json!("ended"))
+        );
+        assert!(!confirm.ran(), "End: nothing after this superstep");
+        assert!(!cancel.ran());
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert_eq!(waypoints.len(), 2, "prep, then the ending superstep");
+        assert_eq!(waypoints[0].status, WaypointStatus::Completed);
+    }
+
+    /// D-13: `Err(NodeError)` from a handler fails the run carrying the
+    /// HANDLER's error, not the original -- on both surfaces.
+    #[tokio::test]
+    async fn a_custom_handler_returning_err_fails_the_run_with_that_error() {
+        let (graph, book, confirm, cancel) = compensation_graph();
+        let handler_error = NodeError {
+            node_id: book.clone(),
+            attempt: 1,
+            transience: Transience::Permanent,
+            source: NodeErrorSource::Function {
+                message: "compensation ledger unreachable".to_string(),
+            },
+        };
+        let handler = RecordingErrorHandler::erroring(handler_error.clone());
+        let registries = registries_with("compensate", handler.clone());
+        let port: Arc<dyn PaladinPort> = permanent_port();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("custom-err").unwrap();
+
+        let outcome = run_handled(&graph, thread.clone(), &store, &port, &registries).await;
+
+        assert_eq!(handler.invocation_count(), 1);
+        let exposed = outcome
+            .node_error()
+            .cloned()
+            .unwrap_or_else(|| panic!("expected Failed(NodeFailed), got {outcome:?}"));
+        assert_eq!(
+            exposed, handler_error,
+            "the handler's own error, not the original"
+        );
+        assert!(matches!(exposed.source, NodeErrorSource::Function { .. }));
+        assert!(!confirm.ran());
+        assert!(!cancel.ran());
+        let waypoints = store.saved_waypoints(&thread).await;
+        match &waypoints[0].status {
+            WaypointStatus::Failed {
+                failed_node,
+                node_error,
+                ..
+            } => {
+                assert_eq!(failed_node, &book);
+                assert_eq!(node_error.as_ref(), Some(&handler_error));
+            }
+            other => panic!("expected a Failed Waypoint, got {other:?}"),
+        }
+        let book_records = records_for(&store, &thread, &book).await;
+        assert_eq!(book_records[0].outcome, NodeOutcomeKind::Failed);
+    }
+
+    /// FT-FR-15, T-25-47: a node reached by routing increments the SAME
+    /// `visit_counts` an ordinary visit does -- no second counter, no
+    /// exemption -- observable on the persisted Waypoint.
+    #[tokio::test]
+    async fn a_handler_routed_visit_counts_against_max_node_visits() {
+        let error_field = field("booking_error");
+        let (graph, book, cancel, recovery) =
+            book_cancel_graph(route_aegis(&NodeId::new("cancel"), &error_field));
+        let port: Arc<dyn PaladinPort> = permanent_port();
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("routed-visit-counts").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &port,
+            &EngineRegistries::default(),
+        )
+        .await;
+        completed_state(outcome);
+
+        assert!(recovery.ran());
+        let waypoints = store.saved_waypoints(&thread).await;
+        let final_counts = &waypoints[0].visit_counts;
+        assert_eq!(final_counts.get(&book), Some(&1));
+        assert_eq!(
+            final_counts.get(&cancel),
+            Some(&1),
+            "the routed target's visit is in the same counter: {final_counts:?}"
+        );
+    }
+
+    /// FT-FR-15, D-21 (CONTEXT.md loop bound): `a` routes to `b` on
+    /// failure, `b` routes to `a`, both always fail, `max_node_visits = 3`
+    /// -- the run ends `NodeVisitLimitExceeded` within a bounded number of
+    /// supersteps. The `tokio::time::timeout` guard turns a regression
+    /// into a loud failure instead of a hung CI job.
+    #[tokio::test]
+    async fn a_compensation_cycle_terminates_with_the_visit_limit() {
+        let mut graph = WarGraph::new(
+            handler_schema(),
+            EngineLimits {
+                max_node_visits: 3,
+                ..EngineLimits::default()
+            },
+        );
+        let a = NodeId::new("a");
+        let b = NodeId::new("b");
+        let a_node = PermanentlyFailingNode::new("a always fails");
+        let b_node = PermanentlyFailingNode::new("b always fails");
+        graph.add_node(a.clone(), NodeSpec::Function(a_node.clone()));
+        graph.add_node(b.clone(), NodeSpec::Function(b_node.clone()));
+        graph.add_entry(a.clone());
+        graph.set_aegis(a.clone(), route_aegis(&b, &field("booking_error")));
+        graph.set_aegis(b.clone(), route_aegis(&a, &field("booking_error")));
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("compensation-cycle").unwrap();
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            run_handled(
+                &graph,
+                thread.clone(),
+                &store,
+                &no_paladin_port(),
+                &EngineRegistries::default(),
+            ),
+        )
+        .await
+        .expect("a compensation cycle must terminate, never spin");
+
+        match &outcome {
+            RunOutcome::Failed {
+                error: EngineError::NodeVisitLimitExceeded { limit, .. },
+                ..
+            } => assert_eq!(*limit, 3),
+            other => panic!("expected Failed(NodeVisitLimitExceeded), got {other:?}"),
+        }
+        // a(1) b(1) a(2) b(2) a(3 -> trips): at most five supersteps ran.
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert!(
+            waypoints.len() <= 6,
+            "bounded: {} waypoints",
+            waypoints.len()
+        );
+        assert!(a_node.run_count() + b_node.run_count() <= 5);
+        assert!(matches!(waypoints[0].status, WaypointStatus::Failed { .. }));
+    }
+
+    // --- Plan 25-11 Task 1: handlers inside a Muster are delta-only (D-22) --
+
+    use crate::engine::test_support::MusterFailThenSucceedWorker;
+
+    /// `planner -> Muster(a, b, c) -> worker` over an `Append` `results`
+    /// field. Task `b` ALWAYS fails (every attempt); `a` and `c` append
+    /// their own key at once. `worker_aegis` is set on the template, so the
+    /// failing task's final failure is dispatched to that handler.
+    fn failing_muster_graph(
+        worker_aegis: Aegis,
+    ) -> (WarGraph, NodeId, Arc<MusterFailThenSucceedWorker>) {
+        let results = field("results");
+        let s = schema(vec![FieldSpec::new(
+            results.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let worker_node =
+            MusterFailThenSucceedWorker::new(results.clone(), [("b", usize::MAX)], None);
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(vec![
+                    muster_task(&worker, serde_json::json!("a"), "a"),
+                    muster_task(&worker, serde_json::json!("b"), "b"),
+                    muster_task(&worker, serde_json::json!("c"), "c"),
+                ]),
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node.clone()));
+        graph.set_aegis(worker.clone(), worker_aegis);
+        graph.add_entry(planner);
+        (graph, worker, worker_node)
+    }
+
+    /// The merged `results` list, sorted.
+    fn sorted_results(state: &Battlefield) -> Vec<String> {
+        let mut out: Vec<String> = state
+            .get(&field("results"))
+            .expect("results reads")
+            .unwrap_or_default();
+        out.sort();
+        out
+    }
+
+    /// The muster superstep's worker records (the superstep whose
+    /// completed list carries `worker` entries), in record order.
+    async fn worker_records(
+        store: &RecordingWaypointStore,
+        thread: &ThreadId,
+        worker: &NodeId,
+    ) -> Vec<NodeExecutionRecord> {
+        let waypoints = store.saved_waypoints(thread).await;
+        waypoints
+            .iter()
+            .filter(|w| w.muster_progress.is_none())
+            .map(|w| {
+                w.completed
+                    .iter()
+                    .filter(|r| &r.node_id == worker)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .find(|records| !records.is_empty())
+            .unwrap_or_default()
+    }
+
+    /// D-22: a failing mustered task whose `Custom` handler returns
+    /// `NextStep::Edges` with a delta contributes THAT delta as its
+    /// aggregation entry -- indistinguishable in shape from a successful
+    /// sibling's contribution -- and the aggregation sees the full task
+    /// count. The task's own record still reads `Failed` (D-21).
+    #[tokio::test]
+    async fn a_worker_handler_returning_edges_contributes_its_delta_to_the_aggregation() {
+        let (graph, worker, worker_node) = failing_muster_graph(custom_aegis("compensate"));
+        let handler = RecordingErrorHandler::replying(Directive {
+            delta: delta_with("results", serde_json::json!("b-fallback")),
+            next: NextStep::Edges,
+        });
+        let registries = registries_with("compensate", handler.clone());
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("worker-handler-edges").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &registries,
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(
+            handler.invocation_count(),
+            1,
+            "one failed task, one dispatch"
+        );
+        assert_eq!(
+            worker_node.run_count("b"),
+            1,
+            "no retry policy: one attempt"
+        );
+        assert_eq!(
+            sorted_results(&final_state),
+            vec!["a", "b-fallback", "c"],
+            "the handler's delta is task b's contribution; the aggregation sees all three"
+        );
+        let records = worker_records(&store, &thread, &worker).await;
+        assert_eq!(
+            records.len(),
+            3,
+            "the aggregation's task count is unchanged"
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|r| r.outcome == NodeOutcomeKind::Failed)
+                .count(),
+            1,
+            "exactly one task (b) records the failure it was"
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|r| r.outcome == NodeOutcomeKind::Succeeded)
+                .count(),
+            2
+        );
+    }
+
+    /// D-22: a `Custom` handler returning `Goto` from inside a Muster task
+    /// is `EngineError::MusterHandlerMustBeDeltaOnly`, naming the worker
+    /// template AND the task key so the failing task is identifiable in a
+    /// wide fan-out; the run fails rather than guessing an aggregation.
+    #[tokio::test]
+    async fn a_worker_handler_returning_goto_fails_the_run_with_a_typed_error() {
+        let (graph, worker, _worker_node) = failing_muster_graph(custom_aegis("compensate"));
+        let handler = RecordingErrorHandler::replying(Directive {
+            delta: StateDelta::new(),
+            next: NextStep::Goto(vec![NodeId::new("planner")]),
+        });
+        let registries = registries_with("compensate", handler.clone());
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("worker-handler-goto").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &registries,
+        )
+        .await;
+
+        match &outcome {
+            RunOutcome::Failed {
+                error:
+                    error @ EngineError::MusterHandlerMustBeDeltaOnly {
+                        node,
+                        task_key,
+                        returned,
+                    },
+                ..
+            } => {
+                assert_eq!(node, &worker);
+                assert_eq!(task_key, "b");
+                assert_eq!(returned, "Goto");
+                let text = error.to_string();
+                assert!(
+                    text.contains("worker") && text.contains("`b`") && text.contains("aggregator"),
+                    "names the template, the task key and the alternative: {text}"
+                );
+            }
+            other => panic!("expected Failed(MusterHandlerMustBeDeltaOnly), got {other:?}"),
+        }
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert!(
+            matches!(waypoints[0].status, WaypointStatus::Failed { .. }),
+            "the failure is durable"
+        );
+    }
+
+    /// D-22: `End`, `Parley` and `Muster` from a worker-task handler are the
+    /// same typed error as `Goto` -- every non-`Edges` arm is control flow
+    /// out of a single task.
+    #[tokio::test]
+    async fn a_worker_handler_returning_end_or_parley_or_muster_is_the_same_typed_error() {
+        let worker_id = NodeId::new("worker");
+        let arms: Vec<(&str, NextStep)> = vec![
+            ("End", NextStep::End),
+            (
+                "Parley",
+                NextStep::Parley(ParleyRequest {
+                    parley_id: ParleyId::new(),
+                    node_id: worker_id.clone(),
+                    kind: ParleyKind::Approval,
+                    prompt: "retry task b?".to_string(),
+                    payload: serde_json::json!({}),
+                    choices: None,
+                    expires_at: None,
+                    created_at: Utc::now(),
+                    on_expire: OnExpire::FailRun,
+                }),
+            ),
+            (
+                "Muster",
+                NextStep::Muster(vec![muster_task(&worker_id, serde_json::json!("b2"), "b2")]),
+            ),
+        ];
+        for (name, next) in arms {
+            let (graph, worker, _worker_node) = failing_muster_graph(custom_aegis("compensate"));
+            let handler = RecordingErrorHandler::replying(Directive {
+                delta: StateDelta::new(),
+                next,
+            });
+            let registries = registries_with("compensate", handler.clone());
+            let store = RecordingWaypointStore::new();
+            let thread = ThreadId::new(format!("worker-handler-{}", name.to_lowercase())).unwrap();
+
+            let outcome = run_handled(
+                &graph,
+                thread.clone(),
+                &store,
+                &no_paladin_port(),
+                &registries,
+            )
+            .await;
+
+            match &outcome {
+                RunOutcome::Failed {
+                    error:
+                        EngineError::MusterHandlerMustBeDeltaOnly {
+                            node,
+                            task_key,
+                            returned,
+                        },
+                    ..
+                } => {
+                    assert_eq!(node, &worker, "{name}");
+                    assert_eq!(task_key, "b", "{name}");
+                    assert_eq!(returned, name);
+                }
+                other => {
+                    panic!("{name}: expected Failed(MusterHandlerMustBeDeltaOnly), got {other:?}")
+                }
+            }
+            // A handler-raised Parley inside a Muster never suspends: no
+            // AwaitingInput Waypoint is written for it (D-22 over D-23).
+            let waypoints = store.saved_waypoints(&thread).await;
+            assert!(
+                waypoints
+                    .iter()
+                    .all(|w| !matches!(w.status, WaypointStatus::AwaitingInput { .. })),
+                "{name}: no suspension"
+            );
+        }
+    }
+
+    /// D-22: an `Absorb`ed mustered task contributes its fallback delta and
+    /// the aggregation's task count is unchanged.
+    #[tokio::test]
+    async fn an_absorbed_worker_task_still_appears_in_the_aggregation() {
+        let (graph, worker, worker_node) = failing_muster_graph(absorb_aegis(delta_with(
+            "results",
+            serde_json::json!("b-absorbed"),
+        )));
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("worker-absorb").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &EngineRegistries::default(),
+        )
+        .await;
+        let final_state = completed_state(outcome);
+
+        assert_eq!(worker_node.run_count("b"), 1);
+        assert_eq!(
+            sorted_results(&final_state),
+            vec!["a", "b-absorbed", "c"],
+            "the fallback delta is task b's contribution"
+        );
+        let records = worker_records(&store, &thread, &worker).await;
+        assert_eq!(
+            records.len(),
+            3,
+            "the aggregation's task count is unchanged"
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|r| r.outcome == NodeOutcomeKind::Failed)
+                .count(),
+            1
+        );
+    }
+
+    // --- Plan 25-11 Task 2: a Custom handler may Parley (D-23) -------------
+
+    use crate::engine::WarEngine;
+    use crate::engine::test_support::ParleyObservingNode;
+    use paladin_core::platform::container::parley::ParleyResponse;
+
+    /// The scripted request the `ask-human` handler raises: `node_id` is
+    /// deliberately left blank to prove the engine re-stamps it from the
+    /// failed node (HITL-01), exactly as for a node-raised parley.
+    fn approval_request(parley_id: ParleyId) -> ParleyRequest {
+        ParleyRequest {
+            parley_id,
+            node_id: NodeId::new(""),
+            kind: ParleyKind::Approval,
+            prompt: "payment failed -- approve a manual retry?".to_string(),
+            payload: serde_json::json!({ "amount": 42 }),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
+        }
+    }
+
+    fn approval(parley_id: ParleyId, value: serde_json::Value) -> ParleyResponse {
+        ParleyResponse {
+            parley_id,
+            kind: ParleyKind::Approval,
+            prompt: String::new(),
+            value,
+            responded_by: Some("tester".to_string()),
+            responded_at: Utc::now(),
+            defaulted: false,
+        }
+    }
+
+    /// `payment` (a [`ParleyObservingNode`], entry, `aegis` with
+    /// `Custom("ask-human")`) beside `peer` (entry, writes `peer_field =
+    /// "ran"`), over `result`/`peer_field` (`LastWrite`).
+    fn payment_graph(
+        payment_node: Arc<ParleyObservingNode>,
+        aegis: Aegis,
+    ) -> (WarGraph, NodeId, NodeId) {
+        let s = schema(vec![
+            FieldSpec::new(field("result"), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(field("peer_field"), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let payment = NodeId::new("payment");
+        let peer = NodeId::new("peer");
+        graph.add_node(payment.clone(), NodeSpec::Function(payment_node));
+        graph.add_node(
+            peer.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("peer_field"),
+                serde_json::json!("ran"),
+            )),
+        );
+        graph.add_entry(payment.clone());
+        graph.add_entry(peer.clone());
+        graph.set_aegis(payment.clone(), aegis);
+        (graph, payment, peer)
+    }
+
+    /// A real `WarEngine` over `store` with the `ask-human` handler
+    /// registered -- the tests below need `resume_with`, which only the
+    /// engine exposes.
+    fn parley_engine(
+        store: Arc<RecordingWaypointStore>,
+        handler: Arc<RecordingErrorHandler>,
+    ) -> WarEngine<RecordingWaypointStore> {
+        WarEngine::new(no_paladin_port(), store).with_error_handler("ask-human", handler)
+    }
+
+    fn custom_aegis_with_retry(name: &str, max_attempts: u32) -> Aegis {
+        Aegis {
+            on_error: Some(ErrorHandlerSpec::Custom(name.to_string())),
+            ..retrying_aegis(max_attempts)
+        }
+    }
+
+    /// D-23, T-25-54: a handler returning `NextStep::Parley` suspends the
+    /// run through the EXISTING HITL-01 path -- `RunOutcome::AwaitingInput`
+    /// carrying the handler's request (re-stamped with the failed node's
+    /// id), exactly one persisted `AwaitingInput` Waypoint for the
+    /// superstep whose `vanguard` is exactly the failed node, and the
+    /// node's record reading `Failed` (it DID fail; the handler asked).
+    #[tokio::test]
+    async fn a_handler_raised_parley_suspends_the_run() {
+        let parley_id = ParleyId::new();
+        let node = ParleyObservingNode::new(field("result"), "card declined");
+        let (graph, payment, _peer) = payment_graph(node.clone(), custom_aegis("ask-human"));
+        let handler = RecordingErrorHandler::parleying(approval_request(parley_id));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = parley_engine(store.clone(), handler.clone());
+        let thread = ThreadId::new("handler-parley-suspends").unwrap();
+
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .expect("start suspends, never errors");
+
+        match &outcome {
+            RunOutcome::AwaitingInput { parleys, .. } => {
+                assert_eq!(parleys.len(), 1);
+                assert_eq!(parleys[0].parley_id, parley_id, "the handler's own request");
+                assert_eq!(
+                    parleys[0].node_id, payment,
+                    "re-stamped with the failed node"
+                );
+                assert_eq!(
+                    parleys[0].prompt,
+                    "payment failed -- approve a manual retry?"
+                );
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+        assert_eq!(handler.invocation_count(), 1);
+        assert_eq!(
+            node.runs().len(),
+            1,
+            "no retry policy: one attempt raised the parley"
+        );
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        let awaiting: Vec<&Waypoint> = waypoints
+            .iter()
+            .filter(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. }))
+            .collect();
+        assert_eq!(
+            awaiting.len(),
+            1,
+            "exactly one AwaitingInput Waypoint is persisted"
+        );
+        match &awaiting[0].status {
+            WaypointStatus::AwaitingInput { parleys, responses } => {
+                assert_eq!(parleys.len(), 1);
+                assert_eq!(parleys[0].parley_id, parley_id);
+                assert_eq!(parleys[0].node_id, payment);
+                assert!(responses.is_empty());
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
+        assert_eq!(
+            awaiting[0].vanguard,
+            vec![payment.clone()],
+            "the persisted vanguard is exactly the parleying node (D-02)"
+        );
+        let record = awaiting[0]
+            .completed
+            .iter()
+            .find(|r| r.node_id == payment)
+            .expect("payment's record");
+        assert_eq!(
+            record.outcome,
+            NodeOutcomeKind::Failed,
+            "a handler-compensated failure records the failure it was (D-21)"
+        );
+    }
+
+    /// D-23 + Phase 24 D-07/D-08: after `resume_with`, the failed node
+    /// re-runs as a FRESH attempt 1 with `ctx.parley_response()` carrying
+    /// the submitted value, and the run completes with that value written.
+    #[tokio::test]
+    async fn the_post_resume_rerun_is_a_fresh_attempt_one() {
+        let parley_id = ParleyId::new();
+        let node = ParleyObservingNode::new(field("result"), "card declined");
+        let (graph, _payment, _peer) =
+            payment_graph(node.clone(), custom_aegis_with_retry("ask-human", 3));
+        let handler = RecordingErrorHandler::parleying(approval_request(parley_id));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = parley_engine(store.clone(), handler.clone());
+        let thread = ThreadId::new("handler-parley-fresh-attempt").unwrap();
+
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .expect("start suspends");
+        assert!(matches!(suspended, RunOutcome::AwaitingInput { .. }));
+        assert_eq!(
+            node.observed_attempts(),
+            vec![1, 2, 3],
+            "the retry budget was spent BEFORE the handler asked"
+        );
+
+        let resumed = engine
+            .resume_with(
+                &graph,
+                thread.clone(),
+                vec![approval(parley_id, serde_json::json!(true))],
+            )
+            .await
+            .expect("resume completes the run");
+        let final_state = completed_state(resumed);
+
+        let runs = node.runs();
+        assert_eq!(
+            runs.len(),
+            4,
+            "three raising attempts, then ONE answered re-run"
+        );
+        assert_eq!(runs[3].0, 1, "the post-resume re-run is a fresh attempt 1");
+        assert_eq!(
+            runs[3].1,
+            Some(serde_json::json!(true)),
+            "ctx.parley_response() carries the submitted value"
+        );
+        assert!(
+            runs[..3].iter().all(|(_, answer)| answer.is_none()),
+            "no raising attempt ever saw a response"
+        );
+        assert_eq!(
+            final_state.get_raw(&field("result")),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            handler.invocation_count(),
+            1,
+            "the answered re-run succeeded"
+        );
+    }
+
+    /// D-23, T-25-55, FT-FR-05: a `Parley` is not an attempt failure. The
+    /// suspension advances no retry counter: a node that fails AGAIN after
+    /// resume has its full `max_attempts` budget, reaching the handler a
+    /// second time only after spending all of it.
+    #[tokio::test]
+    async fn a_handler_raised_parley_does_not_consume_the_retry_budget() {
+        let parley_id = ParleyId::new();
+        let node = ParleyObservingNode::always_failing(field("result"), "card declined");
+        let (graph, payment, _peer) =
+            payment_graph(node.clone(), custom_aegis_with_retry("ask-human", 3));
+        let handler = RecordingErrorHandler::parleying(approval_request(parley_id));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = parley_engine(store.clone(), handler.clone());
+        let thread = ThreadId::new("handler-parley-budget").unwrap();
+
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .expect("start suspends");
+        assert!(matches!(suspended, RunOutcome::AwaitingInput { .. }));
+        assert_eq!(node.observed_attempts(), vec![1, 2, 3]);
+
+        let resumed = engine
+            .resume_with(
+                &graph,
+                thread.clone(),
+                vec![approval(parley_id, serde_json::json!(true))],
+            )
+            .await
+            .expect("resume suspends again, never errors");
+        assert!(
+            matches!(resumed, RunOutcome::AwaitingInput { .. }),
+            "still failing: the handler asks again, got {resumed:?}"
+        );
+        assert_eq!(
+            node.observed_attempts(),
+            vec![1, 2, 3, 1, 2, 3],
+            "the post-resume run has its FULL attempt budget again"
+        );
+        assert_eq!(
+            handler.invocation_count(),
+            2,
+            "one dispatch per exhausted budget"
+        );
+
+        // The second AwaitingInput Waypoint's record shows a full budget
+        // spent this time too: attempt 3 final, two failed attempts before.
+        let waypoints = store.saved_waypoints(&thread).await;
+        let latest = &waypoints[0];
+        assert!(matches!(
+            latest.status,
+            WaypointStatus::AwaitingInput { .. }
+        ));
+        let record = latest
+            .completed
+            .iter()
+            .find(|r| r.node_id == payment)
+            .expect("payment's record");
+        assert_eq!(record.attempt, 3);
+        assert_eq!(record.attempts.len(), 2);
+    }
+
+    /// D-23: peers of the suspending superstep merge their deltas exactly as
+    /// they do for a node-raised parley -- the persisted Battlefield carries
+    /// the peer's write, the peer's record reads `Succeeded`, and the
+    /// vanguard is still exactly the parleying node.
+    #[tokio::test]
+    async fn the_suspending_supersteps_peers_merge_normally() {
+        let parley_id = ParleyId::new();
+        let node = ParleyObservingNode::new(field("result"), "card declined");
+        let (graph, payment, peer) = payment_graph(node.clone(), custom_aegis("ask-human"));
+        let handler = RecordingErrorHandler::parleying(approval_request(parley_id));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine = parley_engine(store.clone(), handler.clone());
+        let thread = ThreadId::new("handler-parley-peers").unwrap();
+
+        let suspended = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .expect("start suspends");
+        assert!(matches!(suspended, RunOutcome::AwaitingInput { .. }));
+
+        let waypoints = store.saved_waypoints(&thread).await;
+        let awaiting = waypoints
+            .iter()
+            .find(|w| matches!(w.status, WaypointStatus::AwaitingInput { .. }))
+            .expect("an AwaitingInput waypoint must exist");
+        assert_eq!(
+            awaiting
+                .battlefield
+                .get::<String>(&field("peer_field"))
+                .unwrap(),
+            Some("ran".to_string()),
+            "the peer's delta merges normally"
+        );
+        let peer_record = awaiting
+            .completed
+            .iter()
+            .find(|r| r.node_id == peer)
+            .expect("peer's record");
+        assert_eq!(peer_record.outcome, NodeOutcomeKind::Succeeded);
+        assert_eq!(awaiting.vanguard, vec![payment.clone()]);
+
+        // And the resumed run completes with both writes intact.
+        let resumed = engine
+            .resume_with(
+                &graph,
+                thread,
+                vec![approval(parley_id, serde_json::json!(true))],
+            )
+            .await
+            .expect("resume completes");
+        let final_state = completed_state(resumed);
+        assert_eq!(
+            final_state.get_raw(&field("peer_field")),
+            Some(&serde_json::json!("ran"))
+        );
+        assert_eq!(
+            final_state.get_raw(&field("result")),
+            Some(&serde_json::json!(true))
+        );
+    }
+
+    /// D-22 over D-23: inside a Muster the delta-only rule wins -- a
+    /// worker-template handler returning `Parley` is
+    /// `MusterHandlerMustBeDeltaOnly`, never a suspension.
+    #[tokio::test]
+    async fn a_handler_raised_parley_inside_a_muster_is_rejected() {
+        let (graph, worker, _worker_node) = failing_muster_graph(custom_aegis("ask-human"));
+        let handler = RecordingErrorHandler::parleying(approval_request(ParleyId::new()));
+        let registries = registries_with("ask-human", handler.clone());
+        let store = RecordingWaypointStore::new();
+        let thread = ThreadId::new("worker-handler-parley").unwrap();
+
+        let outcome = run_handled(
+            &graph,
+            thread.clone(),
+            &store,
+            &no_paladin_port(),
+            &registries,
+        )
+        .await;
+
+        match &outcome {
+            RunOutcome::Failed {
+                error:
+                    EngineError::MusterHandlerMustBeDeltaOnly {
+                        node,
+                        task_key,
+                        returned,
+                    },
+                ..
+            } => {
+                assert_eq!(node, &worker);
+                assert_eq!(task_key, "b");
+                assert_eq!(returned, "Parley");
+            }
+            other => panic!("expected Failed(MusterHandlerMustBeDeltaOnly), got {other:?}"),
+        }
+        assert_eq!(handler.invocation_count(), 1);
+        let waypoints = store.saved_waypoints(&thread).await;
+        assert!(
+            waypoints
+                .iter()
+                .all(|w| !matches!(w.status, WaypointStatus::AwaitingInput { .. })),
+            "a rejected handler parley never suspends"
+        );
+        assert!(matches!(waypoints[0].status, WaypointStatus::Failed { .. }));
+    }
+
+    // --- Plan 25-13 Tasks 2/3: the node cache's hit/miss path and its
+    //     correctness under time, change and backend failure (FT-FR-18,
+    //     FT-FR-20, D-28, D-29) ---------------------------------------------
+
+    use crate::engine::test_support::{
+        RecordingInterceptor, RecordingNodeCache, RecordingTraceSink,
+    };
+    use paladin_core::platform::container::aegis::{CacheKeySpec, CachePolicy};
+
+    fn cache_aegis(ttl: Duration) -> Aegis {
+        Aegis {
+            cache: Some(CachePolicy {
+                ttl,
+                key: CacheKeySpec::Default,
+            }),
+            ..Aegis::default()
+        }
+    }
+
+    /// A cache policy AND a retry policy on the same node, so a hit's
+    /// zero-attempt accounting is observable against a budget that exists.
+    fn cached_retrying_aegis(ttl: Duration, max_attempts: u32) -> Aegis {
+        Aegis {
+            cache: Some(CachePolicy {
+                ttl,
+                key: CacheKeySpec::Default,
+            }),
+            retry: Some(RetryPolicy {
+                max_attempts,
+                initial_interval: Duration::from_millis(1),
+                jitter: false,
+                retry_on:
+                    paladin_core::platform::container::aegis::RetryPredicate::TransientAndUnknown,
+                ..RetryPolicy::default()
+            }),
+            ..Aegis::default()
+        }
+    }
+
+    /// The one-node graph every cache test starts from: `node` under
+    /// `aegis`, entry, writing into the `result` field.
+    fn cached_graph(node: Arc<dyn StateNode>, aegis: Aegis) -> (WarGraph, NodeId) {
+        let s = schema(vec![FieldSpec::new(
+            field("result"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let id = NodeId::new("cached");
+        graph.add_node(id.clone(), NodeSpec::Function(node));
+        graph.add_entry(id.clone());
+        graph.set_aegis(id.clone(), aegis);
+        (graph, id)
+    }
+
+    fn cached_engine(
+        port: Arc<dyn PaladinPort>,
+        store: Arc<RecordingWaypointStore>,
+        cache: Arc<RecordingNodeCache>,
+    ) -> WarEngine<RecordingWaypointStore> {
+        WarEngine::new(port, store).with_node_cache(cache)
+    }
+
+    async fn start_thread(
+        engine: &WarEngine<RecordingWaypointStore>,
+        graph: &WarGraph,
+        thread: &str,
+    ) -> RunOutcome {
+        engine
+            .start(graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap()
+    }
+
+    fn completed_result(outcome: &RunOutcome) -> Option<String> {
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => {
+                final_state.get::<String>(&field("result")).unwrap()
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Every `NodeExecutionRecord` for `node` on `thread`, across every
+    /// persisted Waypoint (newest first) -- a `&str`-thread twin of the
+    /// module's own `records_for`, since every cache test names its threads
+    /// inline.
+    async fn cache_records_for(
+        store: &RecordingWaypointStore,
+        thread: &str,
+        node: &NodeId,
+    ) -> Vec<NodeExecutionRecord> {
+        store
+            .saved_waypoints(&ThreadId::new(thread).unwrap())
+            .await
+            .iter()
+            .flat_map(|w| w.completed.iter())
+            .filter(|r| &r.node_id == node)
+            .cloned()
+            .collect()
+    }
+
+    /// Task 2, Test 7: a pre-populated cache (by a prior run of the same
+    /// graph) serves the second run with zero executions, the stored delta
+    /// merged, and a record reading Succeeded / attempt 1 / cache_hit true.
+    #[tokio::test]
+    async fn a_hit_merges_the_stored_delta_with_no_execution() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("computed"));
+        let (graph, id) = cached_graph(node.clone(), cache_aegis(Duration::from_secs(60)));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(no_paladin_port(), store.clone(), cache.clone());
+
+        let first = start_thread(&engine, &graph, "hit-1").await;
+        assert_eq!(completed_result(&first).as_deref(), Some("computed"));
+        assert_eq!(node.run_count(), 1);
+        assert_eq!(cache.put_count(), 1);
+        let first_record = &cache_records_for(&store, "hit-1", &id).await[0];
+        assert!(!first_record.cache_hit, "the populating run is a miss");
+
+        let second = start_thread(&engine, &graph, "hit-2").await;
+        assert_eq!(
+            completed_result(&second).as_deref(),
+            Some("computed"),
+            "the stored delta is merged"
+        );
+        assert_eq!(node.run_count(), 1, "a hit executes nothing");
+        assert_eq!(cache.get_count(), 2);
+        assert_eq!(cache.put_count(), 1, "a hit stores nothing");
+        let records = cache_records_for(&store, "hit-2", &id).await;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].outcome, NodeOutcomeKind::Succeeded);
+        assert_eq!(records[0].attempt, 1);
+        assert!(records[0].cache_hit);
+        assert_eq!(records[0].token_count, 0);
+    }
+
+    /// Task 2, Test 8: a hit emits exactly `NodeStarted { attempt: 1 }` and
+    /// `NodeFinished { attempt: 1, cache_hit: true }` for the node -- and no
+    /// other node event.
+    #[tokio::test]
+    async fn a_hit_emits_node_started_and_finished_with_cache_hit_true() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("v"));
+        let (graph, id) = cached_graph(node, cache_aegis(Duration::from_secs(60)));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let sink = RecordingTraceSink::new();
+        let engine = cached_engine(no_paladin_port(), store, cache).with_trace_sink(sink.clone());
+
+        start_thread(&engine, &graph, "trace-1").await;
+        start_thread(&engine, &graph, "trace-2").await;
+
+        // Give the background trace consumer a chance to drain.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let hit_thread = ThreadId::new("trace-2").unwrap();
+        let node_events: Vec<(&'static str, u32, Option<bool>)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeStarted {
+                    node_id, attempt, ..
+                } if record.thread_id == hit_thread && node_id == &id => {
+                    Some(("NodeStarted", *attempt, None))
+                }
+                TraceEvent::NodeFinished {
+                    node_id,
+                    attempt,
+                    cache_hit,
+                    ..
+                } if record.thread_id == hit_thread && node_id == &id => {
+                    Some(("NodeFinished", *attempt, Some(*cache_hit)))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            node_events,
+            vec![("NodeStarted", 1, None), ("NodeFinished", 1, Some(true))]
+        );
+        // And the populating run's own pair was NOT a hit.
+        let miss_thread = ThreadId::new("trace-1").unwrap();
+        let miss_finished: Vec<bool> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeFinished { cache_hit, .. } if record.thread_id == miss_thread => {
+                    Some(*cache_hit)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(miss_finished, vec![false]);
+    }
+
+    /// Task 2, Test 9: a miss executes exactly once and issues exactly one
+    /// `put` carrying the `CachePolicy`'s TTL and the merged delta.
+    #[tokio::test]
+    async fn a_miss_executes_and_stores_the_successful_delta_with_the_ttl() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("stored"));
+        let ttl = Duration::from_secs(1234);
+        let (graph, _id) = cached_graph(node.clone(), cache_aegis(ttl));
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(
+            no_paladin_port(),
+            Arc::new(RecordingWaypointStore::new()),
+            cache.clone(),
+        );
+
+        let outcome = start_thread(&engine, &graph, "miss").await;
+        assert_eq!(completed_result(&outcome).as_deref(), Some("stored"));
+        assert_eq!(node.run_count(), 1);
+        assert_eq!(cache.get_count(), 1, "exactly one lookup, before attempt 1");
+        let puts = cache.puts();
+        assert_eq!(puts.len(), 1, "exactly one put");
+        let (key, delta, put_ttl) = &puts[0];
+        assert_eq!(*put_ttl, ttl, "the put carries the policy's TTL");
+        assert_eq!(
+            delta.values.get(&field("result")),
+            Some(&serde_json::json!("stored"))
+        );
+        assert!(key.starts_with(&crate::engine::cache_key::node_prefix(
+            &graph.fingerprint(),
+            &NodeId::new("cached")
+        )));
+    }
+
+    /// Task 2, Test 10: a node that fails every attempt issues zero `put`
+    /// calls -- no error outcome is ever cached.
+    #[tokio::test]
+    async fn a_failed_attempt_is_never_stored() {
+        let (graph, id) = cached_graph(
+            FailingFunctionNode::new("boom"),
+            cached_retrying_aegis(Duration::from_secs(60), 3),
+        );
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(no_paladin_port(), store.clone(), cache.clone());
+
+        let outcome = start_thread(&engine, &graph, "always-fails").await;
+        assert!(matches!(outcome, RunOutcome::Failed { .. }));
+        assert_eq!(cache.get_count(), 1, "looked up once, before attempt 1");
+        assert_eq!(cache.put_count(), 0, "a failed attempt is never stored");
+        assert!(cache.keys().is_empty());
+        let records = cache_records_for(&store, "always-fails", &id).await;
+        assert_eq!(records[0].attempt, 3, "every retry ran");
+        assert!(!records[0].cache_hit);
+    }
+
+    /// Task 2, Test 11: a stored EMPTY delta is a hit that merges nothing --
+    /// `cache_hit: true`, no execution, Battlefield unchanged (FT-06 edge
+    /// assumption, engine side).
+    #[tokio::test]
+    async fn an_empty_cached_delta_is_a_hit_that_merges_nothing() {
+        let node = CountingFunctionNode::new(|_run, _state| StateDelta::new());
+        let (graph, id) = cached_graph(node.clone(), cache_aegis(Duration::from_secs(60)));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(no_paladin_port(), store.clone(), cache.clone());
+
+        start_thread(&engine, &graph, "empty-1").await;
+        assert_eq!(cache.put_count(), 1, "an empty delta IS stored");
+        assert!(cache.puts()[0].1.values.is_empty());
+
+        let second = start_thread(&engine, &graph, "empty-2").await;
+        assert_eq!(completed_result(&second), None, "nothing merged");
+        assert_eq!(node.run_count(), 1, "served from cache, not re-executed");
+        let records = cache_records_for(&store, "empty-2", &id).await;
+        assert!(records[0].cache_hit);
+        assert_eq!(records[0].outcome, NodeOutcomeKind::Succeeded);
+    }
+
+    /// FT-FR-20's Function-node half of the `Deny` guarantee: a `StateNode`'s
+    /// write set is only knowable from its delta, so a delta touching a
+    /// `cache: Deny` field is never stored -- and the next run re-executes.
+    #[tokio::test]
+    async fn a_function_delta_touching_a_deny_field_is_never_stored() {
+        let log = field("log");
+        let s = schema(vec![
+            FieldSpec::new(field("result"), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(log.clone(), DispatchRule::Append, None, false)
+                .with_cache(CacheMarker::Deny),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let id = NodeId::new("appender");
+        let node = CountingFunctionNode::fixed(log.clone(), serde_json::json!("line"));
+        graph.add_node(id.clone(), NodeSpec::Function(node.clone()));
+        graph.add_entry(id.clone());
+        graph.set_aegis(id, cache_aegis(Duration::from_secs(60)));
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(
+            no_paladin_port(),
+            Arc::new(RecordingWaypointStore::new()),
+            cache.clone(),
+        );
+
+        let first = start_thread(&engine, &graph, "deny-1").await;
+        assert!(matches!(first, RunOutcome::Completed { .. }));
+        assert_eq!(
+            cache.put_count(),
+            0,
+            "a Deny-touching delta is never stored"
+        );
+        start_thread(&engine, &graph, "deny-2").await;
+        assert_eq!(node.run_count(), 2, "nothing to hit, so it re-executes");
+    }
+
+    /// D-14: the cache is part of the Aegis, which wraps OUTSIDE the
+    /// interceptor chain -- so a hit runs no `before`/`after` interceptor
+    /// (nothing executes), while the populating miss ran both.
+    #[tokio::test]
+    async fn a_hit_bypasses_the_interceptor_chain() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("v"));
+        let (graph, _id) = cached_graph(node, cache_aegis(Duration::from_secs(60)));
+        let interceptor = RecordingInterceptor::new();
+        let engine = cached_engine(
+            no_paladin_port(),
+            Arc::new(RecordingWaypointStore::new()),
+            RecordingNodeCache::new(),
+        )
+        .with_interceptors(vec![interceptor.clone()]);
+
+        start_thread(&engine, &graph, "intercept-1").await;
+        assert_eq!(interceptor.calls(), vec!["before", "after"]);
+        start_thread(&engine, &graph, "intercept-2").await;
+        assert_eq!(
+            interceptor.calls(),
+            vec!["before", "after"],
+            "the hit ran no interceptor"
+        );
+    }
+
+    /// A `Goto`-routed directive is never stored: a `CachedDelta` carries
+    /// only a delta, and replaying just the delta would drop the routing.
+    #[tokio::test]
+    async fn a_routing_directive_is_never_stored() {
+        let s = schema(vec![FieldSpec::new(
+            field("result"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let router = NodeId::new("router");
+        let target = NodeId::new("target");
+        let target_id = target.clone();
+        graph.add_node(
+            router.clone(),
+            NodeSpec::Function(CountingFunctionNode::with_directive(move |_run, _state| {
+                Directive {
+                    delta: StateDelta::new(),
+                    next: NextStep::Goto(vec![target_id.clone()]),
+                }
+            })),
+        );
+        graph.add_node(
+            target.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("result"),
+                serde_json::json!("routed"),
+            )),
+        );
+        graph.mark_dynamic_target(target);
+        graph.add_entry(router.clone());
+        graph.set_aegis(router, cache_aegis(Duration::from_secs(60)));
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(
+            no_paladin_port(),
+            Arc::new(RecordingWaypointStore::new()),
+            cache.clone(),
+        );
+        let outcome = start_thread(&engine, &graph, "goto").await;
+        assert_eq!(completed_result(&outcome).as_deref(), Some("routed"));
+        assert_eq!(cache.put_count(), 0, "a Goto directive is never cached");
+    }
+
+    // --- Task 3: correctness under time, change and backend failure -------
+
+    /// Task 3, Test 1: under a paused clock, a cached entry whose TTL has
+    /// elapsed is a miss and the node executes again -- the call-count node
+    /// proves it, with no wall-clock sleep anywhere.
+    #[tokio::test(start_paused = true)]
+    async fn ttl_expiry_re_executes_the_node() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("v"));
+        let ttl = Duration::from_secs(10);
+        let (graph, id) = cached_graph(node.clone(), cache_aegis(ttl));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(no_paladin_port(), store.clone(), cache.clone());
+
+        start_thread(&engine, &graph, "ttl-1").await;
+        assert_eq!(node.run_count(), 1);
+        // Still live: well inside the TTL, a hit.
+        tokio::time::advance(ttl / 2).await;
+        start_thread(&engine, &graph, "ttl-2").await;
+        assert_eq!(node.run_count(), 1, "inside the TTL is a hit");
+        // Past the TTL: a miss, re-executed and re-stored.
+        tokio::time::advance(ttl).await;
+        start_thread(&engine, &graph, "ttl-3").await;
+        assert_eq!(node.run_count(), 2, "an elapsed TTL re-executes");
+        assert_eq!(cache.put_count(), 2, "the re-execution re-populates");
+        let records = cache_records_for(&store, "ttl-3", &id).await;
+        assert!(!records[0].cache_hit);
+    }
+
+    /// Task 3, Test 2: an entry read at EXACTLY its `expires_at` is a miss
+    /// at the engine layer too -- the backend still serves it (the double's
+    /// own clock is untouched), so only the engine's closed-boundary
+    /// `is_expired_at` check can produce the re-execution. This pins the
+    /// boundary at both layers (plan 25-04's contract case is the backend
+    /// half), so the two can never disagree about what `expires_at` means.
+    #[tokio::test]
+    async fn an_entry_at_exactly_its_expiry_is_a_miss() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("v"));
+        let (graph, id) = cached_graph(node.clone(), cache_aegis(Duration::from_secs(3600)));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(no_paladin_port(), store.clone(), cache.clone());
+
+        start_thread(&engine, &graph, "boundary-1").await;
+        assert_eq!(node.run_count(), 1);
+        // Move the stored entry's `expires_at` to NOW: by the time the engine
+        // evaluates `is_expired_at(Utc::now())`, `now >= expires_at` holds --
+        // the closed boundary -- even though the backend still returns it.
+        cache.set_expires_at_for_all(Utc::now());
+        start_thread(&engine, &graph, "boundary-2").await;
+        assert_eq!(cache.get_count(), 2);
+        assert_eq!(node.run_count(), 2, "at exactly expires_at is a miss");
+        let records = cache_records_for(&store, "boundary-2", &id).await;
+        assert!(!records[0].cache_hit);
+        // The control: the same entry one hour out is a hit.
+        cache.set_expires_at_for_all(Utc::now() + chrono::Duration::hours(1));
+        start_thread(&engine, &graph, "boundary-3").await;
+        assert_eq!(node.run_count(), 2, "a live entry is a hit");
+    }
+
+    /// Task 3, Test 3: the same graph and input with a changed system
+    /// prompt misses and executes -- the graph fingerprint does NOT cover
+    /// the prompt (a legitimate operator tuning, ENG-FR-14), so this is the
+    /// Paladin-config fingerprint's own guarantee (FT-FR-20).
+    #[tokio::test]
+    async fn changing_the_system_prompt_re_executes() {
+        fn prompt_graph(prompt: &str) -> WarGraph {
+            let s = schema(vec![
+                FieldSpec::new(
+                    field("topic"),
+                    DispatchRule::LastWrite,
+                    Some(serde_json::json!("rust")),
+                    false,
+                ),
+                FieldSpec::new(field("result"), DispatchRule::LastWrite, None, false),
+            ]);
+            let mut graph = WarGraph::new(s, EngineLimits::default());
+            let id = NodeId::new("writer");
+            let data = paladin_core::platform::container::paladin::PaladinData {
+                name: "writer".to_string(),
+                system_prompt: prompt.to_string(),
+                ..Default::default()
+            };
+            let paladin =
+                paladin_core::base::entity::node::Node::new(data, Some("writer".to_string()));
+            graph.add_node(
+                id.clone(),
+                NodeSpec::paladin(
+                    paladin,
+                    InputMapping::new("write about {topic}"),
+                    field("result"),
+                ),
+            );
+            graph.add_entry(id.clone());
+            graph.set_aegis(id, cache_aegis(Duration::from_secs(60)));
+            graph
+        }
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output("writer", "an essay");
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(port.clone(), Arc::new(RecordingWaypointStore::new()), cache);
+
+        let terse = prompt_graph("be terse");
+        let outcome = start_thread(&engine, &terse, "prompt-1").await;
+        assert_eq!(completed_result(&outcome).as_deref(), Some("an essay"));
+        assert_eq!(port.call_count(), 1);
+        start_thread(&engine, &terse, "prompt-2").await;
+        assert_eq!(port.call_count(), 1, "same prompt, same input: a hit");
+
+        let verbose = prompt_graph("be verbose");
+        assert_eq!(
+            terse.fingerprint(),
+            verbose.fingerprint(),
+            "the prompt is deliberately outside the graph fingerprint"
+        );
+        let outcome = start_thread(&engine, &verbose, "prompt-3").await;
+        assert_eq!(completed_result(&outcome).as_deref(), Some("an essay"));
+        assert_eq!(
+            port.call_count(),
+            2,
+            "a changed prompt misses and re-executes"
+        );
+    }
+
+    /// Task 3, Test 4: a structural graph edit changes the fingerprint and
+    /// therefore the key, so the same node executes again.
+    #[tokio::test]
+    async fn changing_the_graph_re_executes() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("v"));
+        let (graph, _id) = cached_graph(node.clone(), cache_aegis(Duration::from_secs(60)));
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(
+            no_paladin_port(),
+            Arc::new(RecordingWaypointStore::new()),
+            cache.clone(),
+        );
+        start_thread(&engine, &graph, "graph-1").await;
+        start_thread(&engine, &graph, "graph-2").await;
+        assert_eq!(node.run_count(), 1, "the unchanged graph hits");
+
+        // The SAME node instance in a structurally different graph.
+        let (mut edited, _) = cached_graph(node.clone(), cache_aegis(Duration::from_secs(60)));
+        edited.add_node(
+            NodeId::new("extra"),
+            NodeSpec::Function(CountingFunctionNode::new(|_, _| StateDelta::new())),
+        );
+        edited.add_entry(NodeId::new("extra"));
+        assert_ne!(graph.fingerprint(), edited.fingerprint());
+        start_thread(&engine, &edited, "graph-3").await;
+        assert_eq!(node.run_count(), 2, "a graph edit invalidates naturally");
+        let keys = cache.keys();
+        assert_eq!(keys.len(), 2, "two graphs, two entries -- never one shared");
+        assert!(keys[0].as_str() != keys[1].as_str());
+    }
+
+    /// Task 3, Test 5: a backend whose `put` always errors leaves the run
+    /// `Completed` with the node's own result intact -- the failure is
+    /// logged only (D-29).
+    #[tokio::test]
+    async fn a_put_failure_leaves_the_run_completed() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("intact"));
+        let (graph, id) = cached_graph(node.clone(), cache_aegis(Duration::from_secs(60)));
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        cache.fail_puts();
+        let engine = cached_engine(no_paladin_port(), store.clone(), cache.clone());
+
+        let outcome = start_thread(&engine, &graph, "put-fails").await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(completed_result(&outcome).as_deref(), Some("intact"));
+        assert_eq!(cache.put_count(), 1, "the put was attempted");
+        assert!(cache.keys().is_empty(), "and stored nothing");
+        let records = cache_records_for(&store, "put-fails", &id).await;
+        assert_eq!(records[0].outcome, NodeOutcomeKind::Succeeded);
+        assert!(!records[0].cache_hit);
+    }
+
+    /// Task 3, Test 6: a backend whose `get` always errors is a MISS -- the
+    /// node executes and the run completes, every time.
+    #[tokio::test]
+    async fn a_get_failure_is_a_miss_not_an_error() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("v"));
+        let (graph, _id) = cached_graph(node.clone(), cache_aegis(Duration::from_secs(60)));
+        let cache = RecordingNodeCache::new();
+        cache.fail_gets();
+        let engine = cached_engine(
+            no_paladin_port(),
+            Arc::new(RecordingWaypointStore::new()),
+            cache.clone(),
+        );
+
+        let first = start_thread(&engine, &graph, "get-fails-1").await;
+        assert!(matches!(first, RunOutcome::Completed { .. }));
+        assert_eq!(node.run_count(), 1);
+        assert_eq!(cache.get_count(), 1);
+        assert_eq!(cache.put_count(), 1, "the successful attempt still stores");
+        let second = start_thread(&engine, &graph, "get-fails-2").await;
+        assert!(matches!(second, RunOutcome::Completed { .. }));
+        assert_eq!(node.run_count(), 2, "every failed get is a miss");
+    }
+
+    /// Task 3, Test 7: two mustered tasks over the same worker template with
+    /// different payloads do not share a cache entry -- and a later run over
+    /// the same fan-out serves BOTH from cache.
+    #[tokio::test]
+    async fn a_cached_node_inside_a_muster_keys_per_task() {
+        let results = field("results");
+        let s = schema(vec![FieldSpec::new(
+            results.clone(),
+            DispatchRule::Append,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let planner = NodeId::new("planner");
+        let worker = NodeId::new("worker");
+        let planner_node = {
+            let worker = worker.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Muster(vec![
+                    muster_task(&worker, serde_json::json!("a"), "a"),
+                    muster_task(&worker, serde_json::json!("b"), "b"),
+                ]),
+            })
+        };
+        let worker_node = {
+            let results = results.clone();
+            CountingFunctionNode::with_context_directive(move |_run, _state, ctx| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(
+                    results.clone(),
+                    ctx.muster_payload().cloned().unwrap_or_default(),
+                );
+                delta.into()
+            })
+        };
+        graph.add_node(planner.clone(), NodeSpec::Function(planner_node));
+        graph.add_worker_template(worker.clone(), NodeSpec::Function(worker_node.clone()));
+        graph.set_aegis(worker.clone(), cache_aegis(Duration::from_secs(60)));
+        graph.add_entry(planner);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(no_paladin_port(), store.clone(), cache.clone());
+
+        let first = start_thread(&engine, &graph, "muster-1").await;
+        match &first {
+            RunOutcome::Completed { final_state, .. } => assert_eq!(
+                final_state.get::<Vec<String>>(&results).unwrap(),
+                Some(vec!["a".to_string(), "b".to_string()])
+            ),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(worker_node.run_count(), 2);
+        let keys = cache.keys();
+        assert_eq!(keys.len(), 2, "one entry per task, never one shared entry");
+        let prefix = crate::engine::cache_key::node_prefix(&graph.fingerprint(), &worker);
+        assert!(keys.iter().all(|k| k.starts_with(&prefix)));
+
+        let second = start_thread(&engine, &graph, "muster-2").await;
+        match &second {
+            RunOutcome::Completed { final_state, .. } => assert_eq!(
+                final_state.get::<Vec<String>>(&results).unwrap(),
+                Some(vec!["a".to_string(), "b".to_string()]),
+                "both tasks' deltas served from cache still aggregate in task_key order"
+            ),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(worker_node.run_count(), 2, "both tasks hit");
+        let worker_records = cache_records_for(&store, "muster-2", &worker).await;
+        assert!(
+            !worker_records.is_empty() && worker_records.iter().all(|r| r.cache_hit),
+            "every worker record on the hit run is a hit: {worker_records:?}"
+        );
+    }
+
+    /// Task 3, Test 8: a hit records `attempt: 1` with an empty `attempts`
+    /// list, and no retry machinery runs -- even under a retry policy.
+    #[tokio::test(start_paused = true)]
+    async fn a_cache_hit_consumes_no_retry_budget() {
+        let node = CountingFunctionNode::fixed(field("result"), serde_json::json!("v"));
+        let (graph, id) = cached_graph(
+            node.clone(),
+            cached_retrying_aegis(Duration::from_secs(60), 3),
+        );
+        let store = Arc::new(RecordingWaypointStore::new());
+        let cache = RecordingNodeCache::new();
+        let engine = cached_engine(no_paladin_port(), store.clone(), cache.clone());
+
+        start_thread(&engine, &graph, "budget-1").await;
+        let before = tokio::time::Instant::now();
+        start_thread(&engine, &graph, "budget-2").await;
+        assert_eq!(
+            before.elapsed(),
+            Duration::ZERO,
+            "no backoff wait ran: the paused clock never advanced"
+        );
+        assert_eq!(node.run_count(), 1);
+        let records = cache_records_for(&store, "budget-2", &id).await;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].attempt, 1);
+        assert!(
+            records[0].attempts.is_empty(),
+            "no failed attempts on a hit"
+        );
+        assert!(records[0].cache_hit);
+    }
+
+    // --- Plan 28-03: `EdgeEvaluated`, `ParleyRaised` and rate-limited
+    //     `NodeProgress::Heartbeat` (D-04) -----------------------------------
+
+    /// Like `run_default`, but over a caller-supplied `Arc<TraceDispatcher>`
+    /// instead of `no_trace()`'s always-silent one -- every test below
+    /// needs to observe the trace stream a real run produces.
+    async fn run_with_trace(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        trace: &Arc<TraceDispatcher>,
+    ) -> RunOutcome {
+        run(
+            store,
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::default(),
+            graph,
+            thread,
+            Battlefield::initialize(
+                graph.schema().clone(),
+                &paladin_core::platform::container::battlefield::StateDelta::new(),
+            )
+            .unwrap(),
+            graph.entry().to_vec(),
+            BTreeMap::new(),
+            None,
+            None,
+            None,
+            1,
+            &no_paladin_port(),
+            trace,
+            &no_interceptors(),
+            &None,
+            &None,
+            None,
+            default_shutdown_grace(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// A "check" node with two `Contains`-conditioned outgoing edges --
+    /// `check -> retry` (a substring never present in what `check` writes)
+    /// and `check -> done` (always present) -- so exactly one fires and one
+    /// does not, every run, deterministically.
+    fn branch_graph() -> (WarGraph, NodeId, NodeId, NodeId) {
+        let s = schema(vec![FieldSpec::new(
+            field("log"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let check = NodeId::new("check");
+        let retry = NodeId::new("retry");
+        let done = NodeId::new("done");
+        graph.add_node(
+            check.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("done"),
+            )),
+        );
+        graph.add_node(
+            retry.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("retry"),
+            )),
+        );
+        graph.add_node(
+            done.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("done-branch"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: check.clone(),
+            to: retry.clone(),
+            condition: Some(EdgeCondition::Contains("retry".to_string())),
+        });
+        graph.add_edge(EdgeSpec {
+            from: check.clone(),
+            to: done.clone(),
+            condition: Some(EdgeCondition::Contains("done".to_string())),
+        });
+        graph.add_entry(check.clone());
+        (graph, check, retry, done)
+    }
+
+    /// Task 1 (tracer): a two-way branch whose gate node's edges are both
+    /// `Contains`-conditioned produces exactly one `EdgeEvaluated` per
+    /// edge -- one `fired: true`, one `fired: false` -- both carrying
+    /// `condition_kind: "contains"` (D-04).
+    #[tokio::test]
+    async fn branch_emits_one_edge_evaluated_per_edge() {
+        let (graph, check, retry, done) = branch_graph();
+        let store = RecordingWaypointStore::new();
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("branch-edge-evaluated").unwrap();
+        let trace = Arc::new(TraceDispatcher::new(
+            thread.clone(),
+            None,
+            Some(sink.clone()),
+        ));
+        let outcome = run_with_trace(&graph, thread, &store, &trace).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        // Give the background trace consumer a chance to drain.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut edge_events: Vec<(NodeId, NodeId, String, bool)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::EdgeEvaluated {
+                    from,
+                    to,
+                    condition_kind,
+                    fired,
+                } if from == &check => {
+                    Some((from.clone(), to.clone(), condition_kind.clone(), *fired))
+                }
+                _ => None,
+            })
+            .collect();
+        edge_events.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(
+            edge_events.len(),
+            2,
+            "exactly one EdgeEvaluated per outgoing edge: {edge_events:?}"
+        );
+        assert!(
+            edge_events.iter().all(|(_, _, kind, _)| kind == "contains"),
+            "both edges are Contains-conditioned: {edge_events:?}"
+        );
+        let retry_event = edge_events
+            .iter()
+            .find(|(_, to, _, _)| to == &retry)
+            .expect("an EdgeEvaluated for check -> retry must exist");
+        assert!(!retry_event.3, "the retry edge must not fire");
+        let done_event = edge_events
+            .iter()
+            .find(|(_, to, _, _)| to == &done)
+            .expect("an EdgeEvaluated for check -> done must exist");
+        assert!(done_event.3, "the done edge must fire");
+    }
+
+    /// Task 1 (tracer): an unconditional edge (`condition: None`) produces
+    /// `condition_kind: "always"` with `fired: true` (D-04).
+    #[tokio::test]
+    async fn always_edge_reports_always() {
+        let s = schema(vec![FieldSpec::new(
+            field("log"),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let a = NodeId::new("a");
+        let b = NodeId::new("b");
+        graph.add_node(
+            a.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("a"),
+            )),
+        );
+        graph.add_node(
+            b.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(
+                field("log"),
+                serde_json::json!("b"),
+            )),
+        );
+        graph.add_edge(EdgeSpec {
+            from: a.clone(),
+            to: b.clone(),
+            condition: None,
+        });
+        graph.add_entry(a.clone());
+
+        let store = RecordingWaypointStore::new();
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("always-edge").unwrap();
+        let trace = Arc::new(TraceDispatcher::new(
+            thread.clone(),
+            None,
+            Some(sink.clone()),
+        ));
+        let outcome = run_with_trace(&graph, thread, &store, &trace).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let always_events: Vec<(String, bool)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::EdgeEvaluated {
+                    from,
+                    to,
+                    condition_kind,
+                    fired,
+                } if from == &a && to == &b => Some((condition_kind.clone(), *fired)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(always_events, vec![("always".to_string(), true)]);
+    }
+
+    /// Task 2: two peer nodes both raise a `NextStep::Parley` in the SAME
+    /// superstep -- exactly two `ParleyRaised` records reach the trace,
+    /// each carrying the matching `parley_id`/`node_id`/`kind` (D-04).
+    /// Unlike a `WarEngine::start`/`resume*` call, this test drives `run`
+    /// directly (`superstep.rs`'s own low-level entry point, which never
+    /// itself emits `RunStarted`/`RunFinished` -- that bracket is
+    /// `engine::mod`'s job) -- so only the emission itself is proven here;
+    /// the "before `RunFinished`" half of the plan's truth is `engine::mod`
+    /// territory.
+    #[tokio::test]
+    async fn awaiting_input_emits_one_parley_raised_per_request() {
+        let field_a = field("a_field");
+        let field_b = field("b_field");
+        let s = schema(vec![
+            FieldSpec::new(field_a.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(field_b.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let a = NodeId::new("asker-a");
+        let b = NodeId::new("asker-b");
+        let parley_id_a = ParleyId::new();
+        let parley_id_b = ParleyId::new();
+        let a_node = {
+            let field_a = field_a.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(field_a.clone(), serde_json::json!("a"));
+                Directive {
+                    delta,
+                    next: NextStep::Parley(ParleyRequest {
+                        parley_id: parley_id_a,
+                        node_id: NodeId::new(""),
+                        kind: ParleyKind::Approval,
+                        prompt: "need a".to_string(),
+                        payload: serde_json::json!({}),
+                        choices: None,
+                        expires_at: None,
+                        created_at: Utc::now(),
+                        on_expire: OnExpire::FailRun,
+                    }),
+                }
+            })
+        };
+        let b_node = {
+            let field_b = field_b.clone();
+            CountingFunctionNode::with_directive(move |_run, _state| {
+                let mut delta = StateDelta::new();
+                delta.set_raw(field_b.clone(), serde_json::json!("b"));
+                Directive {
+                    delta,
+                    next: NextStep::Parley(ParleyRequest {
+                        parley_id: parley_id_b,
+                        node_id: NodeId::new(""),
+                        kind: ParleyKind::Choice,
+                        prompt: "need b".to_string(),
+                        payload: serde_json::json!({}),
+                        choices: Some(vec!["yes".to_string(), "no".to_string()]),
+                        expires_at: None,
+                        created_at: Utc::now(),
+                        on_expire: OnExpire::FailRun,
+                    }),
+                }
+            })
+        };
+        graph.add_node(a.clone(), NodeSpec::Function(a_node));
+        graph.add_node(b.clone(), NodeSpec::Function(b_node));
+        graph.add_entry(a.clone());
+        graph.add_entry(b.clone());
+
+        let store = RecordingWaypointStore::new();
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("two-parley-raised").unwrap();
+        let trace = Arc::new(TraceDispatcher::new(
+            thread.clone(),
+            None,
+            Some(sink.clone()),
+        ));
+        let outcome = run_with_trace(&graph, thread, &store, &trace).await;
+        assert!(matches!(outcome, RunOutcome::AwaitingInput { .. }));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut raised: Vec<(ParleyId, NodeId, ParleyKind)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::ParleyRaised {
+                    parley_id,
+                    node_id,
+                    parley_kind,
+                } => Some((*parley_id, node_id.clone(), parley_kind.clone())),
+                _ => None,
+            })
+            .collect();
+        raised.sort_by(|x, y| x.1.cmp(&y.1));
+        assert_eq!(
+            raised.len(),
+            2,
+            "exactly one ParleyRaised per raised request: {raised:?}"
+        );
+        assert_eq!(raised[0], (parley_id_a, a.clone(), ParleyKind::Approval));
+        assert_eq!(raised[1], (parley_id_b, b.clone(), ParleyKind::Choice));
+    }
+
+    /// Task 2: a node heartbeating every second for seven seconds (well
+    /// within a 30s idle timeout) produces exactly two rate-limited
+    /// `NodeProgress::Heartbeat` records for it under the 5s default
+    /// interval -- one at the first beat, one once the interval has
+    /// elapsed since -- never one per raw beat. Seven beats, not six: the
+    /// boundary-crossing 6th beat must NOT be the attempt's very last
+    /// action, or `race_attempt`'s `biased` `select!` can resolve via the
+    /// attempt branch (which has nothing left to await) before
+    /// `idle_or_pending` is ever polled again to observe that final
+    /// `changed()` notification -- the 7th beat gives the attempt one more
+    /// pending `sleep` after the boundary crossing, so the compound future
+    /// is still Pending on that poll and `idle_or_pending` reliably runs.
+    #[tokio::test(start_paused = true)]
+    async fn heartbeat_is_rate_limited_per_node() {
+        let out = field("out");
+        let node = TimedFunctionNode::new(
+            out.clone(),
+            vec![(Duration::from_secs(7), serde_json::json!("done"))],
+            Some(Duration::from_secs(1)),
+        );
+        let (mut graph, node_id) = one_function_graph(&out, node);
+        graph.set_aegis(
+            node_id.clone(),
+            timeout_aegis(None, Some(Duration::from_secs(30))),
+        );
+
+        let store = RecordingWaypointStore::new();
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("heartbeat-rate-limit").unwrap();
+        let trace = Arc::new(TraceDispatcher::new(
+            thread.clone(),
+            None,
+            Some(sink.clone()),
+        ));
+        let outcome = run_with_trace(&graph, thread, &store, &trace).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let heartbeats: Vec<NodeId> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeProgress {
+                    node_id,
+                    progress: NodeProgressKind::Heartbeat,
+                } => Some(node_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            heartbeats,
+            vec![node_id.clone(), node_id.clone()],
+            "exactly two rate-limited emissions: the first beat, and the \
+             first beat past the interval boundary"
+        );
+    }
+
+    /// Task 2: two nodes heartbeating concurrently, each well within one
+    /// interval of its OWN beats, each produce their own single rate-
+    /// limited record -- the limiter is keyed by node, not global.
+    #[tokio::test(start_paused = true)]
+    async fn heartbeat_rate_limit_is_per_node() {
+        let out_a = field("out_a");
+        let out_b = field("out_b");
+        let s = schema(vec![
+            FieldSpec::new(out_a.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out_b.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(s, EngineLimits::default());
+        let id_a = NodeId::new("beater-a");
+        let id_b = NodeId::new("beater-b");
+        let node_a = TimedFunctionNode::new(
+            out_a.clone(),
+            vec![(Duration::from_millis(500), serde_json::json!("a"))],
+            Some(Duration::from_millis(100)),
+        );
+        let node_b = TimedFunctionNode::new(
+            out_b.clone(),
+            vec![(Duration::from_millis(500), serde_json::json!("b"))],
+            Some(Duration::from_millis(100)),
+        );
+        graph.add_node(id_a.clone(), NodeSpec::Function(node_a));
+        graph.add_node(id_b.clone(), NodeSpec::Function(node_b));
+        graph.set_aegis(
+            id_a.clone(),
+            timeout_aegis(None, Some(Duration::from_secs(30))),
+        );
+        graph.set_aegis(
+            id_b.clone(),
+            timeout_aegis(None, Some(Duration::from_secs(30))),
+        );
+        graph.add_entry(id_a.clone());
+        graph.add_entry(id_b.clone());
+
+        let store = RecordingWaypointStore::new();
+        let sink = RecordingTraceSink::new();
+        let thread = ThreadId::new("heartbeat-per-node").unwrap();
+        let trace = Arc::new(TraceDispatcher::new(
+            thread.clone(),
+            None,
+            Some(sink.clone()),
+        ));
+        let outcome = run_with_trace(&graph, thread, &store, &trace).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut heartbeats: Vec<NodeId> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeProgress {
+                    node_id,
+                    progress: NodeProgressKind::Heartbeat,
+                } => Some(node_id.clone()),
+                _ => None,
+            })
+            .collect();
+        heartbeats.sort();
+        assert_eq!(
+            heartbeats,
+            vec![id_a.clone(), id_b.clone()],
+            "one rate-limited emission per node, keyed independently: {heartbeats:?}"
+        );
     }
 }

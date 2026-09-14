@@ -1,0 +1,1185 @@
+//! Kill-mid-run redelivery, `AwaitingInput` ack, resume-with-pending
+//! responses, heartbeat cadence and shutdown-drain -- the InMemory twin of
+//! PRD 06 acceptance 2 (27-04 Task 2, D-51). Every assertion here is
+//! Tier 1: InMemory queue, InMemory repository, `InMemoryWaypointStore`, no
+//! Docker. The Redis twin is 27-03's CI job.
+//!
+//! `CountingFunctionNode` (`paladin_battalion::engine::test_support`) is
+//! `pub(crate)` to `paladin-battalion` and unreachable from this facade
+//! crate, so this module defines its own minimal `StateNode` doubles
+//! (`DelayedCountingNode`), mirroring `tracer_e2e.rs`'s own
+//! `AlwaysFailingNode` precedent of a small, local test double rather than
+//! reaching for a crate-private one.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use tokio::sync::Notify;
+
+use paladin_battalion::engine::shutdown::ShutdownCoordinator;
+use paladin_battalion::engine::{
+    EdgeSpec, EngineLimits, NodeContext, NodeSpec, StateNode, StateNodeError, WarEngine, WarGraph,
+};
+use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema, StateDelta};
+use paladin_core::platform::container::directive::Directive;
+use paladin_core::platform::container::execution_result::PaladinResult;
+use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::parley::ParleyResponse;
+use paladin_core::platform::container::run::{
+    AssistantRef, Run, RunEventKind, RunId, RunStatus, WebhookSpec,
+};
+use paladin_core::platform::container::waypoint::{
+    NodeId, ThreadId, Waypoint, WaypointId, WaypointStatus,
+};
+use paladin_core::platform::container::webhook::{
+    WebhookAttemptResult, WebhookDelivery, WebhookDeliveryId,
+};
+use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
+use paladin_ports::output::run_queue_port::{QueuedRun, RunQueuePort};
+use paladin_ports::output::run_repository_port::RunRepositoryPort;
+use paladin_ports::output::waypoint_port::{
+    ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
+};
+use paladin_ports::output::webhook_delivery_port::{
+    WebhookDeliveryPage, WebhookDeliveryRepositoryError, WebhookDeliveryRepositoryPort,
+};
+use paladin_storage::run::in_memory::InMemoryRunRepository;
+use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+use paladin_storage::webhook::in_memory::InMemoryWebhookDeliveryRepository;
+
+use super::resolver::{AssistantResolver, CodeWorkflowResolver};
+use super::worker::{LeaseHeartbeat, RunWorkerOptions, RunWorkerPool};
+
+/// A [`PaladinPort`] that must never be called -- every graph in this
+/// module is Function/Gate-only, mirroring the `UnusedPaladinPort`
+/// precedent (`src/config/engine.rs`, `src/bin/paladin-server.rs`).
+struct UnusedPaladinPort;
+
+#[async_trait]
+impl PaladinPort for UnusedPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        unreachable!("this test's WarGraph has no NodeSpec::Paladin nodes")
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unreachable!("this test's WarGraph has no NodeSpec::Paladin nodes")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// A [`StateNode`] that counts its own executions and, if `delay` is
+/// non-zero, sleeps that long before returning -- the instrument for both
+/// "no node re-executes beyond the interrupted superstep" and a
+/// deliberately slow superstep (heartbeat / shutdown-drain tests).
+struct DelayedCountingNode {
+    run_count: Arc<AtomicUsize>,
+    delay: Duration,
+}
+
+impl DelayedCountingNode {
+    fn new(delay: Duration) -> (Arc<Self>, Arc<AtomicUsize>) {
+        let run_count = Arc::new(AtomicUsize::new(0));
+        (
+            Arc::new(Self {
+                run_count: run_count.clone(),
+                delay,
+            }),
+            run_count,
+        )
+    }
+}
+
+#[async_trait]
+impl StateNode for DelayedCountingNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        if !self.delay.is_zero() {
+            tokio::time::sleep(self.delay).await;
+        }
+        self.run_count.fetch_add(1, Ordering::SeqCst);
+        Ok(StateDelta::new().into())
+    }
+}
+
+/// A [`WaypointPort`] wrapper around an [`InMemoryWaypointStore`] that, the
+/// first time it saves a Waypoint whose `superstep` equals `pause_after`,
+/// performs the real save (so the state is durably persisted first), fires
+/// a one-shot `Notify`, then parks forever.
+///
+/// This makes "kill worker A right after superstep N persists" exact rather
+/// than racy: the wrapped `save` call is what the engine's own superstep
+/// loop is awaiting when the pause fires, so NO subsequent code path
+/// (including spawning the next superstep's node tasks) has run yet when
+/// the test aborts the outer future -- there is no stray node task to
+/// reason about.
+struct PausingAfterSuperstep {
+    inner: Arc<InMemoryWaypointStore>,
+    pause_after: u64,
+    paused: Arc<Notify>,
+}
+
+impl PausingAfterSuperstep {
+    fn new(inner: Arc<InMemoryWaypointStore>, pause_after: u64) -> (Self, Arc<Notify>) {
+        let paused = Arc::new(Notify::new());
+        (
+            Self {
+                inner,
+                pause_after,
+                paused: paused.clone(),
+            },
+            paused,
+        )
+    }
+}
+
+#[async_trait]
+impl WaypointPort for PausingAfterSuperstep {
+    async fn save(&self, wp: &Waypoint) -> Result<(), WaypointError> {
+        self.inner.save(wp).await?;
+        if wp.superstep == self.pause_after {
+            self.paused.notify_one();
+            std::future::pending::<()>().await;
+        }
+        Ok(())
+    }
+
+    async fn latest(&self, thread: &ThreadId) -> Result<Option<Waypoint>, WaypointError> {
+        self.inner.latest(thread).await
+    }
+
+    async fn get(
+        &self,
+        thread: &ThreadId,
+        id: &WaypointId,
+    ) -> Result<Option<Waypoint>, WaypointError> {
+        self.inner.get(thread, id).await
+    }
+
+    async fn history(
+        &self,
+        thread: &ThreadId,
+        limit: Option<u32>,
+        before: Option<WaypointId>,
+    ) -> Result<Vec<WaypointSummary>, WaypointError> {
+        self.inner.history(thread, limit, before).await
+    }
+
+    async fn list_threads(
+        &self,
+        limit: Option<u32>,
+        before: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<ThreadSummary>, WaypointError> {
+        self.inner.list_threads(limit, before).await
+    }
+
+    async fn delete_thread(&self, thread: &ThreadId) -> Result<u64, WaypointError> {
+        self.inner.delete_thread(thread).await
+    }
+
+    async fn delete_waypoint(
+        &self,
+        thread: &ThreadId,
+        id: &WaypointId,
+    ) -> Result<bool, WaypointError> {
+        self.inner.delete_waypoint(thread, id).await
+    }
+}
+
+/// Build a linear `count` node chain (`n0 -> n1 -> ... -> n{count-1}`) of
+/// [`DelayedCountingNode`]s, each with `delay`, returning the graph and each
+/// node's own run-count handle in chain order.
+fn build_chain_graph(count: usize, delay: Duration) -> (Arc<WarGraph>, Vec<Arc<AtomicUsize>>) {
+    let mut graph = WarGraph::new(BattlefieldSchema::new(vec![]), EngineLimits::default());
+    let mut counters = Vec::with_capacity(count);
+    let mut ids = Vec::with_capacity(count);
+    for i in 0..count {
+        let id = NodeId::new(format!("n{i}"));
+        let (node, counter) = DelayedCountingNode::new(delay);
+        graph.add_node(id.clone(), NodeSpec::Function(node));
+        ids.push(id);
+        counters.push(counter);
+    }
+    for pair in ids.windows(2) {
+        graph.add_edge(EdgeSpec {
+            from: pair[0].clone(),
+            to: pair[1].clone(),
+            condition: None,
+        });
+    }
+    graph.add_entry(ids[0].clone());
+    (Arc::new(graph), counters)
+}
+
+/// Build a single-node graph whose only node is a
+/// [`paladin_battalion::engine::graph::NodeSpec::Gate`] approval request --
+/// the fixture for `awaiting_input_acks_queue` and
+/// `resume_dispatch_uses_pending_responses`.
+fn build_gate_graph() -> Arc<WarGraph> {
+    use paladin_battalion::engine::InputMapping;
+    use paladin_battalion::engine::graph::GateRequestTemplate;
+    use paladin_core::platform::container::battlefield::{DispatchRule, FieldName, FieldSpec};
+    use paladin_core::platform::container::parley::ParleyKind;
+
+    let field = FieldName::new("approved").unwrap();
+    let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+        field.clone(),
+        DispatchRule::LastWrite,
+        Some(serde_json::json!(false)),
+        false,
+    )]);
+    let mut graph = WarGraph::new(schema, EngineLimits::default());
+    let gate_id = NodeId::new("gate");
+    graph.add_node(
+        gate_id.clone(),
+        NodeSpec::gate(
+            GateRequestTemplate::new(ParleyKind::Approval, InputMapping::new("Proceed?")),
+            Some(field),
+        ),
+    );
+    graph.add_entry(gate_id);
+    Arc::new(graph)
+}
+
+/// Insert a fresh `Queued` run against `graph_id` on a fresh thread, and
+/// enqueue its pointer, returning the run id and thread id.
+async fn submit(
+    repository: &Arc<dyn RunRepositoryPort>,
+    queue: &Arc<dyn RunQueuePort>,
+    assistant_id: &str,
+) -> (RunId, ThreadId) {
+    let run_id = RunId::new_v7();
+    let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+    let run = Run::new(
+        run_id.clone(),
+        thread_id.clone(),
+        AssistantRef {
+            assistant_id: assistant_id.to_string(),
+            version: 1,
+        },
+        serde_json::json!({}),
+    );
+    repository.insert(&run).await.unwrap();
+    queue
+        .enqueue(QueuedRun {
+            run_id: run_id.clone(),
+            thread_id: thread_id.clone(),
+            attempt: 1,
+            enqueued_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    (run_id, thread_id)
+}
+
+// --- worker_pool_lease_expiry_exactly_once ------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn worker_pool_lease_expiry_exactly_once() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let (graph, counters) = build_chain_graph(4, Duration::ZERO);
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("chain", graph));
+
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let (pausing, paused) = PausingAfterSuperstep::new(store.clone(), 2);
+        let pausing = Arc::new(pausing);
+
+        let lease = Duration::from_millis(300);
+        let engine_a = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), pausing.clone()));
+        let pool_a = Arc::new(RunWorkerPool::new(
+            engine_a,
+            pausing,
+            repository.clone(),
+            queue.clone(),
+            resolver.clone(),
+            lease,
+        ));
+
+        let engine_b = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+        let pool_b = Arc::new(RunWorkerPool::new(
+            engine_b,
+            store.clone(),
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            lease,
+        ));
+
+        let (run_id, thread_id) = submit(&repository, &queue, "chain").await;
+
+        let a_handle = tokio::spawn(async move { pool_a.run_once().await });
+        paused.notified().await;
+        // Superstep 2 is durably persisted at this point (observed via
+        // `WaypointPort::history`) and worker A's task is parked inside its
+        // own `save()` call -- no superstep 3 node has been spawned yet.
+        let history_at_pause = store.history(&thread_id, None, None).await.unwrap();
+        assert_eq!(
+            history_at_pause.len(),
+            2,
+            "exactly two waypoints must be persisted before the kill"
+        );
+        a_handle.abort();
+        let _ = a_handle.await;
+
+        // Let the lease expire so worker B can dequeue the redelivered
+        // message (real wall-clock wait -- the queue lease uses wall-clock
+        // instants, D-51's own instruction against `tokio::time::pause`
+        // here).
+        tokio::time::sleep(lease + Duration::from_millis(100)).await;
+
+        let processed = pool_b.run_once().await.unwrap();
+        assert!(processed, "worker B must process the redelivered message");
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+
+        for (i, counter) in counters.iter().enumerate() {
+            assert_eq!(
+                counter.load(Ordering::SeqCst),
+                1,
+                "node n{i} must execute exactly once"
+            );
+        }
+
+        let history = store.history(&thread_id, None, None).await.unwrap();
+        assert_eq!(history.len(), 4, "exactly one waypoint per superstep");
+        let mut supersteps: Vec<u64> = history.iter().map(|w| w.superstep).collect();
+        supersteps.sort_unstable();
+        assert_eq!(supersteps, vec![1, 2, 3, 4]);
+
+        assert_eq!(queue.depth().await.unwrap(), 0);
+    })
+    .await
+    .expect("worker_pool_lease_expiry_exactly_once must finish within 30s");
+}
+
+// --- awaiting_input_acks_queue -------------------------------------------
+
+#[tokio::test]
+async fn awaiting_input_acks_queue() {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("gate", build_gate_graph()));
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let worker = RunWorkerPool::new(
+        engine,
+        store,
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    );
+
+    let (run_id, _thread_id) = submit(&repository, &queue, "gate").await;
+
+    let processed = worker.run_once().await.unwrap();
+    assert!(processed);
+
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::AwaitingInput);
+    assert_eq!(run.attempt, 1);
+    assert_eq!(queue.depth().await.unwrap(), 0);
+}
+
+// --- resume_dispatch_uses_pending_responses ------------------------------
+
+#[tokio::test]
+async fn resume_dispatch_uses_pending_responses() {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("gate", build_gate_graph()));
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let worker = RunWorkerPool::new(
+        engine,
+        store.clone(),
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    );
+
+    let (run_id, thread_id) = submit(&repository, &queue, "gate").await;
+    assert!(worker.run_once().await.unwrap());
+    let suspended = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(suspended.status, RunStatus::AwaitingInput);
+
+    let latest = store.latest(&thread_id).await.unwrap().unwrap();
+    let parleys = match latest.status {
+        WaypointStatus::AwaitingInput { parleys, .. } => parleys,
+        other => panic!("expected AwaitingInput, got {other:?}"),
+    };
+    let parley = parleys.first().expect("gate raised exactly one parley");
+
+    let response = ParleyResponse {
+        parley_id: parley.parley_id,
+        kind: parley.kind.clone(),
+        prompt: parley.prompt.clone(),
+        value: serde_json::json!(true),
+        responded_by: Some("tester".to_string()),
+        responded_at: chrono::Utc::now(),
+        defaulted: false,
+    };
+    let attempt = repository
+        .record_resume(&run_id, vec![response])
+        .await
+        .unwrap();
+    assert_eq!(attempt, 2);
+
+    // The AwaitingInput ack already removed the original message (D-22);
+    // a resume re-enqueues the SAME run_id (D-19).
+    queue
+        .enqueue(QueuedRun {
+            run_id: run_id.clone(),
+            thread_id: thread_id.clone(),
+            attempt,
+            enqueued_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let processed = worker.run_once().await.unwrap();
+    assert!(processed);
+
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+    assert!(run.pending_responses.is_empty());
+    assert_eq!(run.attempt, 2);
+}
+
+// --- heartbeat_extends_at_lease_over_four --------------------------------
+
+/// A [`RunQueuePort`] wrapping [`InMemoryRunQueue`] that records every
+/// `extend_lease` call's timestamp -- shared by
+/// `heartbeat_extends_at_lease_over_four` (a positive lease keeps
+/// extending) and `lease_heartbeat_with_a_zero_lease_never_extends` (a
+/// zero lease extends zero times, WR-04).
+struct RecordingQueue {
+    inner: InMemoryRunQueue,
+    extend_calls: std::sync::Mutex<Vec<tokio::time::Instant>>,
+}
+
+impl RecordingQueue {
+    fn new() -> Self {
+        Self {
+            inner: InMemoryRunQueue::new(),
+            extend_calls: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl RunQueuePort for RecordingQueue {
+    async fn enqueue(
+        &self,
+        run: QueuedRun,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.inner.enqueue(run).await
+    }
+
+    async fn dequeue(
+        &self,
+        lease: Duration,
+    ) -> Result<
+        Option<paladin_ports::output::run_queue_port::LeasedRun>,
+        paladin_ports::output::run_queue_port::QueueError,
+    > {
+        self.inner.dequeue(lease).await
+    }
+
+    async fn extend_lease(
+        &self,
+        token: &paladin_ports::output::run_queue_port::LeaseToken,
+        lease: Duration,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.extend_calls
+            .lock()
+            .unwrap()
+            .push(tokio::time::Instant::now());
+        self.inner.extend_lease(token, lease).await
+    }
+
+    async fn ack(
+        &self,
+        token: &paladin_ports::output::run_queue_port::LeaseToken,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.inner.ack(token).await
+    }
+
+    async fn nack(
+        &self,
+        token: &paladin_ports::output::run_queue_port::LeaseToken,
+        requeue_delay: Duration,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.inner.nack(token, requeue_delay).await
+    }
+
+    async fn depth(&self) -> Result<u64, paladin_ports::output::run_queue_port::QueueError> {
+        self.inner.depth().await
+    }
+}
+
+/// (WR-04) Constructing a [`LeaseHeartbeat`] with a zero-duration lease
+/// must start no background task: a zero interval would make
+/// `tokio::time::sleep` resolve immediately, turning the extend-lease loop
+/// into a CPU-bound spin. This is the tripwire for that guard -- letting
+/// real time pass and asserting the recorded `extend_lease` count is
+/// EXACTLY zero (not merely bounded), so any future regression to a
+/// spinning heartbeat fails immediately.
+#[tokio::test(flavor = "multi_thread")]
+async fn lease_heartbeat_with_a_zero_lease_never_extends() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let recording = Arc::new(RecordingQueue::new());
+        let queue: Arc<dyn RunQueuePort> = recording.clone();
+        let token = paladin_ports::output::run_queue_port::LeaseToken::new("zero-lease-token");
+
+        let heartbeat = LeaseHeartbeat::spawn(queue, token, Duration::ZERO);
+
+        // Let enough real time pass that a spinning implementation would
+        // have made many `extend_lease` calls by now.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        drop(heartbeat);
+
+        let calls = recording.extend_calls.lock().unwrap();
+        assert_eq!(
+            calls.len(),
+            0,
+            "a zero-duration lease must start no heartbeat task at all, got {} extend_lease calls",
+            calls.len()
+        );
+    })
+    .await
+    .expect("lease_heartbeat_with_a_zero_lease_never_extends must finish within 5s");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn heartbeat_extends_at_lease_over_four() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let recording = Arc::new(RecordingQueue::new());
+        let queue: Arc<dyn RunQueuePort> = recording.clone();
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let (graph, _counters) = build_chain_graph(1, Duration::from_secs(1));
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("slow", graph));
+        let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+        let worker = RunWorkerPool::new(
+            engine,
+            store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_millis(400),
+        );
+
+        let (run_id, _thread_id) = submit(&repository, &queue, "slow").await;
+        assert!(worker.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+
+        let calls = recording.extend_calls.lock().unwrap();
+        assert!(
+            calls.len() >= 8,
+            "expected at least 8 lease extensions over a 1s run with a 400ms lease, got {}",
+            calls.len()
+        );
+    })
+    .await
+    .expect("heartbeat_extends_at_lease_over_four must finish within 15s");
+}
+
+// --- shutdown_drains_in_flight_run ---------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shutdown_drains_in_flight_run() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        // Two supersteps: the first (500ms) is in flight when shutdown
+        // fires; the engine observes cancellation at the boundary BEFORE
+        // the second superstep starts, so the run ends `Halted` after
+        // exactly one superstep, never running the second node.
+        let (graph, counters) = build_chain_graph(2, Duration::from_millis(500));
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("slow-chain", graph));
+
+        let coordinator = ShutdownCoordinator::new();
+        let engine = Arc::new(
+            WarEngine::new(Arc::new(UnusedPaladinPort), store.clone())
+                .with_cancellation_token(coordinator.token()),
+        );
+        let pool = Arc::new(
+            RunWorkerPool::new(
+                engine,
+                store,
+                repository.clone(),
+                queue.clone(),
+                resolver,
+                Duration::from_secs(30),
+            )
+            .with_shutdown_coordinator(coordinator.clone()),
+        );
+
+        let (run_id, _thread_id) = submit(&repository, &queue, "slow-chain").await;
+
+        let handles = pool.spawn(RunWorkerOptions {
+            concurrency: 1,
+            lease: Duration::from_secs(30),
+            min_probe_interval: Duration::from_millis(20),
+        });
+
+        // Let the worker dequeue and start the first (slow) superstep
+        // before requesting shutdown.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let outcome = coordinator.cancel_and_wait(Duration::from_secs(2)).await;
+        assert!(
+            outcome.drained(),
+            "the in-flight run must drain within grace"
+        );
+
+        for handle in handles {
+            // Every spawned task must have exited on its own by now.
+            tokio::time::timeout(Duration::from_millis(500), handle)
+                .await
+                .expect("worker task must have exited after drain")
+                .expect("worker task must not panic");
+        }
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(
+            run.status,
+            RunStatus::Running,
+            "a shutdown-halted run stays Running -- it is a redelivery point, not a finish"
+        );
+        assert_eq!(
+            counters[1].load(Ordering::SeqCst),
+            0,
+            "the second node must never run"
+        );
+
+        // The message was nacked with a zero delay: it must be visible
+        // again immediately.
+        assert_eq!(queue.depth().await.unwrap(), 1);
+        let redelivered = queue
+            .dequeue(Duration::from_secs(30))
+            .await
+            .unwrap()
+            .expect("the message must be visible again after the shutdown nack");
+        assert_eq!(redelivered.queued.run_id, run_id);
+    })
+    .await
+    .expect("shutdown_drains_in_flight_run must finish within 15s");
+}
+
+// --- webhook delivery hook (27-13, D-40, PLAT-FR-14) --------------------
+
+/// Insert a fresh `Queued` run carrying `webhook`, enqueue its pointer, and
+/// return the run/thread ids -- mirrors `submit` but for the webhook-hook
+/// tests.
+async fn submit_with_webhook(
+    repository: &Arc<dyn RunRepositoryPort>,
+    queue: &Arc<dyn RunQueuePort>,
+    assistant_id: &str,
+    webhook: WebhookSpec,
+) -> (RunId, ThreadId) {
+    let run_id = RunId::new_v7();
+    let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+    let run = Run::new(
+        run_id.clone(),
+        thread_id.clone(),
+        AssistantRef {
+            assistant_id: assistant_id.to_string(),
+            version: 1,
+        },
+        serde_json::json!({}),
+    )
+    .with_webhook(webhook);
+    repository.insert(&run).await.unwrap();
+    queue
+        .enqueue(QueuedRun {
+            run_id: run_id.clone(),
+            thread_id: thread_id.clone(),
+            attempt: 1,
+            enqueued_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    (run_id, thread_id)
+}
+
+/// A [`WebhookDeliveryRepositoryPort`] test double whose `enqueue` always
+/// fails -- proves a delivery-repository error is logged and NEVER changes
+/// the run's own status (prohibition P2).
+struct AlwaysErrorWebhookDeliveries;
+
+#[async_trait]
+impl WebhookDeliveryRepositoryPort for AlwaysErrorWebhookDeliveries {
+    async fn enqueue(
+        &self,
+        _delivery: WebhookDelivery,
+    ) -> Result<(), WebhookDeliveryRepositoryError> {
+        Err(WebhookDeliveryRepositoryError::Backend {
+            source: "always fails".into(),
+        })
+    }
+
+    async fn get(
+        &self,
+        delivery_id: &WebhookDeliveryId,
+    ) -> Result<Option<WebhookDelivery>, WebhookDeliveryRepositoryError> {
+        Err(WebhookDeliveryRepositoryError::NotFound {
+            delivery_id: delivery_id.clone(),
+        })
+    }
+
+    async fn claim_due(
+        &self,
+        _now: chrono::DateTime<chrono::Utc>,
+        _limit: u32,
+    ) -> Result<Vec<WebhookDelivery>, WebhookDeliveryRepositoryError> {
+        Ok(vec![])
+    }
+
+    async fn record_attempt(
+        &self,
+        delivery_id: &WebhookDeliveryId,
+        _result: WebhookAttemptResult,
+    ) -> Result<(), WebhookDeliveryRepositoryError> {
+        Err(WebhookDeliveryRepositoryError::NotFound {
+            delivery_id: delivery_id.clone(),
+        })
+    }
+
+    async fn list_for_run(
+        &self,
+        _run_id: &RunId,
+        _limit: u32,
+        _cursor: Option<WebhookDeliveryId>,
+    ) -> Result<WebhookDeliveryPage, WebhookDeliveryRepositoryError> {
+        Ok(WebhookDeliveryPage::default())
+    }
+}
+
+#[tokio::test]
+async fn webhook_delivery_enqueued_on_completed_event() {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let (graph, _counters) = build_chain_graph(1, Duration::ZERO);
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("chain-webhook", graph));
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let worker = RunWorkerPool::new(
+        engine,
+        store,
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_webhook_deliveries(Arc::clone(&deliveries));
+
+    let webhook = WebhookSpec {
+        url: "https://example.com/hook".to_string(),
+        secret: None,
+        events: vec![RunEventKind::Completed],
+    };
+    let (run_id, _thread_id) =
+        submit_with_webhook(&repository, &queue, "chain-webhook", webhook).await;
+
+    assert!(worker.run_once().await.unwrap());
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+
+    let page = deliveries.list_for_run(&run_id, 10, None).await.unwrap();
+    assert_eq!(page.items.len(), 1, "exactly one delivery must be enqueued");
+    assert!(matches!(page.items[0].event, RunEventKind::Completed));
+    assert!(page.items[0].payload.contains(run_id.as_str()));
+}
+
+#[tokio::test]
+async fn webhook_delivery_repository_error_never_affects_run_status() {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let (graph, _counters) = build_chain_graph(1, Duration::ZERO);
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("chain-webhook-err", graph));
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> = Arc::new(AlwaysErrorWebhookDeliveries);
+    let worker = RunWorkerPool::new(
+        engine,
+        store,
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_webhook_deliveries(deliveries);
+
+    let webhook = WebhookSpec {
+        url: "https://example.com/hook".to_string(),
+        secret: None,
+        events: vec![RunEventKind::Completed],
+    };
+    let (run_id, _thread_id) =
+        submit_with_webhook(&repository, &queue, "chain-webhook-err", webhook).await;
+
+    assert!(worker.run_once().await.unwrap());
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(
+        run.status,
+        RunStatus::Completed,
+        "a webhook delivery repository error must never change the run's own status"
+    );
+}
+
+// --- agent_kind_run_with_a_webhook_enqueues_no_delivery (WR-02) ---------
+
+/// An [`AssistantResolver`] resolving every id to a code-registered
+/// `Runnable::Agent` -- the legacy dispatch path `run_once` routes to
+/// [`super::worker::RunWorkerPool::run_agent`] BEFORE any event-bus
+/// bind/publish or webhook-delivery enqueue call.
+struct AgentOnlyResolver;
+
+#[async_trait]
+impl AssistantResolver for AgentOnlyResolver {
+    async fn resolve(
+        &self,
+        assistant_id: &str,
+        version: Option<u32>,
+    ) -> Result<super::resolver::ResolvedAssistant, super::resolver::ResolveError> {
+        use paladin_core::base::entity::node::Node;
+        use paladin_core::platform::container::paladin::PaladinData;
+
+        Ok(super::resolver::ResolvedAssistant {
+            reference: AssistantRef {
+                assistant_id: assistant_id.to_string(),
+                version: version.unwrap_or(1),
+            },
+            runnable: super::resolver::Runnable::Agent(Arc::new(Node::new(
+                PaladinData::default(),
+                Some(assistant_id.to_string()),
+            ))),
+            allowed_roles: vec![],
+            source: paladin_core::platform::container::assistant::AssistantSource::Code,
+        })
+    }
+}
+
+/// A [`PaladinPort`] that always succeeds with a fixed output, standing in
+/// for a real LLM call -- this test only cares about the webhook/event-bus
+/// carve-out, not agent execution semantics.
+struct AlwaysSucceedsPaladinPort;
+
+#[async_trait]
+impl PaladinPort for AlwaysSucceedsPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        Ok(PaladinResult {
+            output: "agent completed".to_string(),
+            ..Default::default()
+        })
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unreachable!("this test never calls execute_stream")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// (WR-02) An `Agent`-kind run carrying a `webhook` spec subscribed to
+/// `completed` must complete normally and enqueue ZERO webhook deliveries
+/// -- `run_agent`'s dispatch never reaches the `webhook_delivery_for_outcome`
+/// -> `deliveries.enqueue` block that the `Runnable::Workflow` path uses
+/// (`webhook_delivery_enqueued_on_completed_event`, above). This is the
+/// tripwire for the documented carve-out on `RunWorkerPool`'s
+/// `event_bus`/`webhook_deliveries` field docs and on `run_agent` itself:
+/// if a future change wires the hook into `run_agent`, this test goes red
+/// and those docs must move with it.
+#[tokio::test]
+async fn agent_kind_run_with_a_webhook_enqueues_no_delivery() {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let resolver: Arc<dyn AssistantResolver> = Arc::new(AgentOnlyResolver);
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let worker = RunWorkerPool::new(
+        engine,
+        store,
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_paladin_port(Arc::new(AlwaysSucceedsPaladinPort))
+    .with_webhook_deliveries(Arc::clone(&deliveries));
+
+    let webhook = WebhookSpec {
+        url: "https://example.com/hook".to_string(),
+        secret: None,
+        events: vec![RunEventKind::Completed],
+    };
+    let (run_id, _thread_id) =
+        submit_with_webhook(&repository, &queue, "code-agent", webhook).await;
+
+    assert!(worker.run_once().await.unwrap());
+
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(
+        run.status,
+        RunStatus::Completed,
+        "the agent-kind run's status transitions are unaffected by the carve-out"
+    );
+
+    let page = deliveries.list_for_run(&run_id, 10, None).await.unwrap();
+    assert!(
+        page.items.is_empty(),
+        "an Agent-kind run must enqueue zero webhook deliveries, got {}",
+        page.items.len()
+    );
+}
+
+// --- 28-06: per-run trace composition (Task 1) --------------------------
+
+/// Build a `RunWorkerPool` over a fresh `InMemoryWaypointStore`/repository/
+/// queue, wired with an `engine_factory` (required for per-run trace
+/// composition, D-24's own documented limitation) and the given
+/// `trace_config`/`event_bus`. Returns the pool plus the pieces a test
+/// needs to submit a run and inspect its outcome.
+#[allow(clippy::type_complexity)]
+fn build_traced_pool(
+    trace_config: crate::config::trace::TraceConfig,
+    event_bus: Option<Arc<super::events::RunEventBus>>,
+) -> (
+    RunWorkerPool<InMemoryWaypointStore>,
+    Arc<dyn RunRepositoryPort>,
+    Arc<dyn RunQueuePort>,
+    Arc<InMemoryWaypointStore>,
+    Vec<Arc<AtomicUsize>>,
+) {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let (graph, counters) = build_chain_graph(2, Duration::ZERO);
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("chain", graph));
+    let base_engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+
+    let factory_store = store.clone();
+    let engine_factory: Arc<
+        dyn Fn(tokio_util::sync::CancellationToken) -> WarEngine<InMemoryWaypointStore>
+            + Send
+            + Sync,
+    > = Arc::new(move |token| {
+        WarEngine::new(Arc::new(UnusedPaladinPort), factory_store.clone())
+            .with_cancellation_token(token)
+    });
+
+    let mut pool = RunWorkerPool::new(
+        base_engine,
+        store.clone(),
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_engine_factory(engine_factory)
+    .with_trace_config(trace_config);
+    if let Some(bus) = event_bus {
+        pool = pool.with_event_bus(bus);
+    }
+
+    (pool, repository, queue, store, counters)
+}
+
+/// Behavior (Task 1): with `trace.log_sink` on and an event bus present,
+/// the run's bus sink is live -- proving the worker attached a composite
+/// (or, at minimum, a sink that still forwards to the bus alongside the
+/// log sink `build_run_sink`'s own unit tests already prove is fanned into
+/// the same composite when both are configured). With `trace.log_sink`
+/// off, the run still completes and the bus sink alone still works. With
+/// neither configured, the run completes using the engine's own untraced
+/// path (no sink attached at all).
+#[tokio::test]
+async fn worker_builds_one_composite_per_run() {
+    use crate::application::services::run::events::RunEventBus;
+    use crate::config::trace::TraceConfig;
+
+    // --- Both `log_sink` and the event bus configured: the bus sink must
+    // still receive every record, proving it is part of whatever sink
+    // `build_run_sink` assembled (its own unit tests prove that assembly
+    // is a `CompositeSink` of both when both are configured).
+    let bus = Arc::new(RunEventBus::new());
+    let (pool, repository, queue, _store, _counters) = build_traced_pool(
+        TraceConfig {
+            log_sink: true,
+            ..TraceConfig::default()
+        },
+        Some(bus.clone()),
+    );
+    let (run_id, thread_id) = submit(&repository, &queue, "chain").await;
+    // Pre-bind so a subscriber can attach before `run_once`'s own `bind`
+    // call re-affirms the SAME channel (`bind` is idempotent -- see
+    // `RunEventBus::bind`'s own doc comment).
+    bus.bind(thread_id.clone(), run_id.clone()).await;
+    let mut rx = bus
+        .subscribe(&run_id)
+        .await
+        .expect("the channel exists once bound");
+
+    assert!(pool.run_once().await.unwrap());
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+
+    let mut saw_any_event = false;
+    while let Ok(event) = rx.try_recv() {
+        let _ = event;
+        saw_any_event = true;
+    }
+    assert!(
+        saw_any_event,
+        "the bus sink must have received at least one record through whatever sink \
+         build_run_sink assembled for this run"
+    );
+
+    // --- `trace.log_sink` off, bus still present: the bus-only path still
+    // works (build_run_sink returns the bus sink alone, unwrapped).
+    let bus2 = Arc::new(RunEventBus::new());
+    let (pool2, repository2, queue2, _store2, _counters2) = build_traced_pool(
+        TraceConfig {
+            log_sink: false,
+            ..TraceConfig::default()
+        },
+        Some(bus2.clone()),
+    );
+    let (run_id2, thread_id2) = submit(&repository2, &queue2, "chain").await;
+    bus2.bind(thread_id2.clone(), run_id2.clone()).await;
+    let mut rx2 = bus2
+        .subscribe(&run_id2)
+        .await
+        .expect("the channel exists once bound");
+    assert!(pool2.run_once().await.unwrap());
+    let run2 = repository2.get(&run_id2).await.unwrap().unwrap();
+    assert_eq!(run2.status, RunStatus::Completed);
+    assert!(
+        rx2.try_recv().is_ok(),
+        "the bus sink alone (log_sink off) must still receive records"
+    );
+
+    // --- Neither configured: the run still completes -- the engine's own
+    // untraced path (no `TraceSink` attached at all) never affects
+    // correctness.
+    let (pool3, repository3, queue3, _store3, _counters3) = build_traced_pool(
+        TraceConfig {
+            log_sink: false,
+            ..TraceConfig::default()
+        },
+        None,
+    );
+    let (run_id3, _thread_id3) = submit(&repository3, &queue3, "chain").await;
+    assert!(pool3.run_once().await.unwrap());
+    let run3 = repository3.get(&run_id3).await.unwrap().unwrap();
+    assert_eq!(run3.status, RunStatus::Completed);
+}
+
+/// Behavior (Task 1, prohibition): enabling any sink combination MUST NOT
+/// change a run's outcome or its final executed node count -- the same
+/// fixture graph, dispatched once with sinks fully off and once with both
+/// `trace.log_sink` and an event bus on, must reach the SAME terminal
+/// status and each of its two chain nodes must have executed EXACTLY once
+/// either way.
+#[tokio::test]
+async fn worker_run_result_is_identical_with_and_without_sinks() {
+    use crate::application::services::run::events::RunEventBus;
+    use crate::config::trace::TraceConfig;
+
+    // Sinks fully off.
+    let (pool_off, repository_off, queue_off, _store_off, counters_off) = build_traced_pool(
+        TraceConfig {
+            log_sink: false,
+            ..TraceConfig::default()
+        },
+        None,
+    );
+    let (run_id_off, _thread_id_off) = submit(&repository_off, &queue_off, "chain").await;
+    assert!(pool_off.run_once().await.unwrap());
+    let run_off = repository_off.get(&run_id_off).await.unwrap().unwrap();
+
+    // Both sinks on.
+    let bus = Arc::new(RunEventBus::new());
+    let (pool_on, repository_on, queue_on, _store_on, counters_on) = build_traced_pool(
+        TraceConfig {
+            log_sink: true,
+            ..TraceConfig::default()
+        },
+        Some(bus),
+    );
+    let (run_id_on, _thread_id_on) = submit(&repository_on, &queue_on, "chain").await;
+    assert!(pool_on.run_once().await.unwrap());
+    let run_on = repository_on.get(&run_id_on).await.unwrap().unwrap();
+
+    assert_eq!(
+        run_off.status, run_on.status,
+        "the run's terminal status must be identical with and without sinks"
+    );
+    assert_eq!(run_off.status, RunStatus::Completed);
+
+    assert_eq!(
+        counters_off.len(),
+        counters_on.len(),
+        "the same fixture graph must have the same node count either way"
+    );
+    for (off, on) in counters_off.iter().zip(counters_on.iter()) {
+        assert_eq!(
+            off.load(Ordering::SeqCst),
+            on.load(Ordering::SeqCst),
+            "each node's own execution count must be identical with and without sinks"
+        );
+        assert_eq!(
+            off.load(Ordering::SeqCst),
+            1,
+            "each of this chain's two nodes must execute exactly once"
+        );
+    }
+}

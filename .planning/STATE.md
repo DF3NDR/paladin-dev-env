@@ -2,33 +2,33 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 23
-current_phase_name: Control Flow — Dynamic Routing, Fan-Out & Subgraphs
+current_phase: 29
+current_phase_name: Program Gates & Release
 status: executing
-stopped_at: Phase 23 executed (12/12 plans, code review fixed, verification human_needed) — awaiting UAT in 23-UAT.md
-last_updated: "2026-09-04T04:23:24.779Z"
-last_activity: 2026-09-03
-last_activity_desc: Phase 23 execution started
+stopped_at: Phase 29 context gathered
+last_updated: "2026-09-10T00:16:18.383Z"
+last_activity: 2026-09-10
+last_activity_desc: Phase 29 execution started
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 36
-  completed_plans: 36
+  total_phases: 9
+  completed_phases: 8
+  total_plans: 137
+  completed_plans: 128
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-03 after Phase 22.1)
+See: .planning/PROJECT.md (updated 2026-09-09 after Phase 28)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 23 — Control Flow — Dynamic Routing, Fan-Out & Subgraphs
+**Current focus:** Phase 29 — Program Gates & Release
 `.planning/REQUIREMENTS.md` is removed and opened fresh there).
 
-**Progress:** [██████████] 100% — v0.9.0 shipped
+**Progress:** [█████████░] v0.10.0 — 8 of 9 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28); 128/128 planned plans executed
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -51,16 +51,16 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 23 (Control Flow — Dynamic Routing, Fan-Out & Subgraphs) — EXECUTING
-Plan: 1 of 12
-Status: Executing Phase 23
-Last activity: 2026-09-03 — Phase 23 execution started
+Phase: 29 (Program Gates & Release) — EXECUTING
+Plan: 1 of 9
+Status: Executing Phase 29
+Last activity: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 211
+- Total plans completed: 315
 - Average duration: —
 - Total execution time: —
 
@@ -89,6 +89,12 @@ Last activity: 2026-09-03 — Phase 23 execution started
 | 21 | 6 | - | - |
 | 22 | 17 | - | - |
 | 22.1 | 7 | - | - |
+| 23 | 12 | - | - |
+| 24 | 14 | - | - |
+| 25 | 14 | - | - |
+| 26 | 21 | - | - |
+| 27 | 26 | - | - |
+| 28 | 17 | - | - |
 
 *Updated after each plan completion*
 
@@ -121,6 +127,53 @@ Last activity: 2026-09-03 — Phase 23 execution started
 ## Accumulated Context
 
 ### Decisions
+
+**Phase 28 (closed 2026-09-09) — recorded as D-01 … D-41 in `28-CONTEXT.md`; the ones later
+phases must honor:**
+
+- D-02/D-03: `TraceRecord` is a `#[serde(flatten)]` envelope over the `#[serde(tag = "kind")]`
+  `TraceEvent`; one per-run `seq` authority (the engine's `TraceDispatcher`) reached only through
+  `TraceEmitter` handles (below-engine producers via the `RUN_TRACE_EMITTER` task-local). The
+  `NodeProgress`/`ParleyRaised` payload fields are `progress`/`parley_kind`, not the PRD's literal
+  `kind` (it would collide with the enum tag).
+
+- D-05: state values are never traced by default — opt-in, redacted before truncation, then capped.
+
+- D-14/D-15/D-16: the run event bus has one producer (`RunEventBusSink`); the wire `seq` stays the
+  bus counter and payloads carry `trace_seq`; `RunStreamMode::Replay` reads persisted `run_traces`
+  (migration 006, pruned with Waypoint retention).
+
+- D-27/D-33 + ADR-0048: `paladin-eval` is a published composition crate depending downward on the
+  leaf crates; the facade's only dependency on it is optional, behind `cli`.
+
+- D-35: live eval mode needs `--live` AND `PALADIN_EVAL_LIVE=1` AND a provider key — never in
+  default CI.
+
+- D-37: the ≤3 % tracing-overhead bar was measured and FAILED (log sink +22.18 %, composite
+  +18.46 %, `28-BENCH-EVIDENCE.md`); non-CI-gating by decision, accepted by maintainer sign-off at
+  close-out UAT (2026-09-09).
+
+**Phase 23 (closed 2026-09-04) — recorded as D-01 … D-30 in `23-CONTEXT.md`; the ones later
+phases must honor:**
+
+- D-05/D-06: BUG-01 fixed fail-closed in one RED-then-GREEN commit pair through a registered
+  `EdgeConditionEvaluator`; M-B-01 is the program's sole sanctioned behavioral break (worked
+  example in `MIGRATION.md` §9.1).
+
+- D-07: `StateNode::run` returns `Result<Directive, NodeError>`; `From<StateDelta>` keeps
+  plain-delta nodes source-compatible.
+
+- D-14: mid-muster resume rides intra-superstep progress Waypoints — `MusterProgress` is a stored
+  payload contract from v0.10.0 onward, so any shape change needs a data migration.
+
+- D-18: `GRAPH_FINGERPRINT_VERSION` is `v3`; every `EngineLimits` field (including
+  `max_muster_tasks`) stays excluded from the hash.
+
+- D-20/D-21: child subgraph checkpoints run under an injective `ThreadId::child`; the child
+  inherits the parent engine wholesale but uses its own graph's limits.
+
+- D-26: LLM-evaluated routing and `StrategySelection::Semantic` are code-configured only — no env
+  var, cargo feature or config field may switch them on.
 
 Decisions are logged in PROJECT.md Key Decisions table — **empty by evidence, and now finally so.**
 **All 263 corpus documents are ingested and 0 ADR-typed and 0 SPEC-typed documents exist among
@@ -330,9 +383,55 @@ Entering them here would fabricate authority the corpus does not contain.
 
 ### Pending Todos
 
-None yet.
+- `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md` — evaluate RustFS as the dev/test object store; the quay.io MinIO pin from quick task 260913-15w is terminal (no newer community tags will exist).
 
 ### Blockers/Concerns
+
+**Phase 28 close (2026-09-09): no blockers.** 17 plans in 8 waves; verification `passed` 4/4 roadmap
+truths (51/51 artifacts, 32/32 key links); UAT 2/2 human checkpoints passed (`28-UAT.md`,
+`a9d4a2ee`); `28-SECURITY.md` `verified`, `threats_open: 0` (75/75); `28-VALIDATION.md` present.
+Close-out gates (`28-17-SUMMARY.md`, `28-CI-EVIDENCE.md`): coverage 90.28 % on `ff78a6b5`,
+api-surface baseline regenerated (3936 items — closes the carried Phase 25/26 concern), semver
+allowlist set-equality PASS, ADR-0048, `MIGRATION.md` §9.2–9.7 filled. Carried concerns: (1) PRD 07
+criterion 6 (≤3 % tracing overhead) measured FAIL at +22.18 %/+18.46 % on the synthetic
+all-Function-node bench — the maintainer signed it off at UAT, but no WINDOWS.md entry records the
+adjudication (only #33/#34 exist for this phase); add one if a written record is wanted before
+v0.10.0 ships. (2) Production-wiring caveat from `28-SECURITY.md`: replay, trace persistence and the
+`dev-ui` router are not wired at the composition root — re-secure whichever phase wires them.
+(3) The OTel sink uses `SimpleSpanProcessor` (one OTLP POST per span), unoptimized. (4) WINDOWS
+#33 (reduced `parley`/`done` SSE payload content) and #34 (`run export` derives no fired edges from
+Waypoints without a real graph) remain open.
+
+**Phase 26 close (2026-09-07): no blockers.** 21 plans in 14 waves (two executors in flight at most; per-executor worktree merges), verification `passed` 10/10 and re-verified after the code-review fix pass (`26-REVIEW.md`: CR-01 unredacted `ArmamentResult` text, CR-02 dropped after_model Finish, WR-01 `key=` false positives, WR-02 structured path bypasses middleware [documented], WR-03 unredacted tool output — all closed in `26-REVIEW-FIX.md`; IN-01 JWT heuristic false positive left open, advisory). Release gates recorded in `26-21-SUMMARY.md`: coverage 89.58 %, semver 11/11, MSRV 1.88, `make security`, api-surface regenerated (3057). Carried concerns: (1) CI "Check documentation" fails on ~60 pre-existing rustdoc warnings (none from Phase 26 after `93f22cce`); (2) Docker tiers CI/UAT-only; (3) Resolved: `26-SECURITY.md` written 2026-09-07 (`eb9051a2`, status `verified`, `threats_open: 0`). Learnings folded into `~/.claude/projects/-workspace/memory/gsd-run-mechanics-paladin.md`.
+
+**Phase 25 close (2026-09-06): no blockers.** UAT 76/76 passed (`25-UAT.md`: 72 deliverables
+auto-passed from SUMMARY coverage blocks, 4 human checkpoints; the CI-only Redis node-cache and
+Postgres Waypoint tiers were read green on runs `34042790005` and `34051074633`). Carried concerns:
+(1) The `api-surface` CI job had been red since Phase 24: `.project/current-exports.txt` was last
+regenerated at plan 23-12 and Phases 24 + 25 added 123 public items (purely additive) without
+regenerating it. Fixed by `0e5c106c` (gap G-25-1); no close-out plan runs
+`scripts/check-api-surface.sh`, so add it to the X-10/X-11 gate list from Phase 26 on. (2)
+Resolved: `25-05-SUMMARY.md`'s coverage block labelled one verification `kind: doc`, which `uat
+classify-coverage` rejects — `83133f00` changed it to `kind: other` so D1 auto-passes on re-run.
+(3) Resolved: `25-SECURITY.md` (`1860bb00`, status `verified`, `threats_open: 0`) and
+`25-VALIDATION.md` (`aee5134e`, status `validated`, `nyquist_compliant: true`) were produced on
+2026-09-06 after the transition to Phase 26. (4) Phase 23's carried concern (3) is closed: plan
+25-12 replaced the E2E-3 mock attempt-counter seam with a real per-task Aegis retry.
+
+**Phase 24 close (2026-09-05): no blockers.** Carried concern from UAT: the untracked, gitignored
+local `config.yml` in the devcontainer no longer deserialises into `Settings` (it lacks
+`llm.deepseek.api_key` unless `DEEPSEEK_API_KEY` is exported, and `rag.retrieval_trigger`, which has
+been a required field since `e5c58f4a`, 2026-01-30). Pre-existing, unrelated to Phase 24; the
+tracked `config.test.yml` boots `paladin-server` cleanly. Regenerate the local file from
+`config.example.yml` or add the two fields.
+
+**Phase 23 close (2026-09-04): no blockers.** Carried concerns: (1) Docker is unavailable in the
+devcontainer, so the Postgres Tier-2 Waypoint contract suite is provable only through CI's
+`postgres-integration` job — its SKIP-path and declared-count guards make a green job sufficient
+evidence; route it to UAT, never mark it passed locally. (2) `MIGRATION.md`'s remaining `TBD` rows
+are owned by Phase 24 (HITL-04 / M-B-02), Phase 26 (RT-07) and Phase 29 (SHIP-01/02). (3) The
+E2E-3 recovering-worker half is exercised through a mock attempt counter at a marked Phase 25 /
+FT-FR-06 seam, not a real Aegis retry — Phase 25 must replace the seam.
 
 **No blockers. 0 across all five ingest runs.** Everything below is a concern with an owning
 requirement.
@@ -685,6 +784,14 @@ requirement.
   it is rotated. Redacting the source document and running a repository-wide secret scan is still
   recommended — the same value may appear in `.env` history or coverage artefacts.
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260912-whj | Regenerate API surface snapshot so ci.yml API Surface Tracking check passes on feature/v0.10.0-web3sec-dogfooding | 2026-09-12 | 786a3ba5 | [260912-whj-regenerate-api-surface-snapshot-so-ci-ym](./quick/260912-whj-regenerate-api-surface-snapshot-so-ci-ym/) |
+| 260913-15w | Pin MinIO service image to quay.io last known-good release after Docker Hub minio/minio removal | 2026-09-13 | 06765765 | [260913-15w-pin-minio-service-image-to-quay-io-last-](./quick/260913-15w-pin-minio-service-image-to-quay-io-last-/) |
+| 260913-h7l | Replace dl.min.io mc download in ci.yml with checksum-verified pinned GitHub release asset after MinIO retired community downloads | 2026-09-13 | 9d0aa7a0 | [260913-h7l-replace-dl-min-io-mc-download-in-ci-yml-](./quick/260913-h7l-replace-dl-min-io-mc-download-in-ci-yml-/) |
+
 ### Roadmap Evolution
 
 - Phase 15.1 inserted after Phase 15: Git & CI Governance — branch protection, trigger surface, gitflow model, docs/BRANCH_PROTECTION.md (URGENT)
@@ -788,16 +895,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 23 executed (12/12 plans, code review fixed, verification human_needed) — awaiting UAT in 23-UAT.md
+**Stopped at:** Phase 29 context gathered
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-04T04:23:24.734Z
-Resume file:
-
-/workspace/.planning/phases/23-control-flow-dynamic-routing-fan-out-subgraphs/23-UAT.md
+Last session: 2026-09-09T22:39:52.815Z
+Resume file: .planning/phases/29-program-gates-release/29-CONTEXT.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**
@@ -830,7 +935,7 @@ What run 5 produced:
   was rewritten so the file reads as one roadmap rather than five appended fragments. All 16
   `### Phase N:` headers verified present and matching the 16 summary checklist entries.
 
-Resume file: .planning/phases/02-functional-gap-closure/02-CONTEXT.md
+Resume file: .planning/phases/26-agent-runtime-enhancements/26-VERIFICATION.md
 
 **Next ingest run: none. There is no run 6.** All 263 documents in `.project/` are covered — 199
 classified plus 64 task lists measured deterministically. Every shipped subsystem in the workspace
@@ -858,4 +963,5 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Phase 28 closed 2026-09-09: UAT 2/2 passed (`28-UAT.md`, `a9d4a2ee`), `28-VERIFICATION.md` `passed`, `28-SECURITY.md` `verified` (`threats_open: 0`, 75/75). Carried: the production-wiring caveat (replay / trace persistence / `dev-ui` router not wired at the composition root — re-secure the phase that wires them) and the D-37 bench-overhead deviation signed off at UAT without a WINDOWS.md entry.
+- Next: `/gsd-discuss-phase 29` (no `29-CONTEXT.md` yet) then `/gsd-plan-phase 29` — SHIP-01…04, the v0.10.0 release phase. `/gsd-ship 28` is available for the feature-branch PR.

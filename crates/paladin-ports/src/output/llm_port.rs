@@ -52,21 +52,15 @@
 //! ```rust,no_run
 //! use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
 //! use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-//! use uuid::Uuid;
-//! use std::collections::HashMap;
 //!
 //! async fn basic_completion(llm: &dyn LlmPort) -> Result<String, Box<dyn std::error::Error>> {
-//!     let request = LlmRequest {
-//!         id: Uuid::new_v4(),
-//!         model: "gpt-4".to_string(),
-//!         prompt: PromptItem::new(PromptType::User(UserPrompt {
+//!     let request = LlmRequest::new(
+//!         "gpt-4",
+//!         PromptItem::new(PromptType::User(UserPrompt {
 //!             query: "Explain hexagonal architecture".to_string(),
 //!             context: None,
 //!         })).unwrap(),
-//!         attachments: vec![],
-//!         stream: false,
-//!         metadata: HashMap::new(),
-//!     };
+//!     );
 //!
 //!     let response = llm.generate(request).await?;
 //!     Ok(response.content)
@@ -78,9 +72,7 @@
 //! ```rust,no_run
 //! use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
 //! use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-//! use uuid::Uuid;
 //! use futures::StreamExt;
-//! use std::collections::HashMap;
 //!
 //! async fn stream_completion(llm: &dyn LlmPort) -> Result<(), Box<dyn std::error::Error>> {
 //!     // Check if streaming is supported
@@ -90,17 +82,13 @@
 //!         return Ok(());
 //!     }
 //!
-//!     let request = LlmRequest {
-//!         id: Uuid::new_v4(),
-//!         model: "gpt-4".to_string(),
-//!         prompt: PromptItem::new(PromptType::User(UserPrompt {
+//!     let request = LlmRequest::new(
+//!         "gpt-4",
+//!         PromptItem::new(PromptType::User(UserPrompt {
 //!             query: "Write a story".to_string(),
 //!             context: None,
 //!         })).unwrap(),
-//!         attachments: vec![],
-//!         stream: true,
-//!         metadata: HashMap::new(),
-//!     };
+//!     ).with_stream(true);
 //!
 //!     let mut stream = llm.generate_stream(request).await?;
 //!     // Note: Use pin_mut! or tokio::pin! to pin the stream before iterating
@@ -243,6 +231,7 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::content::ContentItem;
 use paladin_core::platform::container::prompt::PromptItem;
+use paladin_core::platform::container::transience::Transience;
 
 /// Errors that can occur during LLM operations
 ///
@@ -287,7 +276,16 @@ use paladin_core::platform::container::prompt::PromptItem;
 ///     }
 /// }
 /// ```
+///
+/// # Non-exhaustive (X-10.2, D-04)
+///
+/// Marked `#[non_exhaustive]` so a future variant can be added without a
+/// semver-major bump. Registered as deliberate-breaking in `MIGRATION.md`
+/// §9.2 and `.cargo/semver-checks-allowlist.toml` (the `enum_marked_non_exhaustive`
+/// lint) in the same commit that added this attribute. Every downstream
+/// exhaustive match gained a wildcard arm at that commit.
 #[derive(Debug, Clone, Error)]
+#[non_exhaustive]
 pub enum LlmError {
     /// Network communication failure (DNS, connection, socket errors)
     ///
@@ -455,6 +453,134 @@ pub enum LlmError {
     /// **Recovery**: Retry with potentially longer timeout
     #[error("Timeout: {0}")]
     Timeout(String),
+
+    /// A non-2xx HTTP response from a provider with no dedicated variant
+    /// above (D-03): every adapter's non-2xx match routes through one shared
+    /// `map_http_status` helper (plan 25-05), which builds this variant for
+    /// any status that is not one of the dedicated 401/429/400/402/404
+    /// mappings already covered by [`LlmError::AuthenticationError`],
+    /// [`LlmError::RateLimitExceeded`], [`LlmError::InvalidPrompt`],
+    /// [`LlmError::UsageLimitExceeded`] and [`LlmError::ModelNotAvailable`].
+    ///
+    /// `message` crosses a trust boundary (T-25-06): it is populated only by
+    /// `map_http_status`, which redacts through `paladin-llm`'s
+    /// `redaction.rs` **before** bounding -- never parsed by
+    /// [`LlmError::transience`], which classifies `status` only.
+    #[error("Provider '{provider}' returned HTTP {status}: {message}")]
+    ProviderError {
+        /// The provider that returned the non-2xx response (e.g.
+        /// `"openai"`, `"deepseek"`).
+        provider: String,
+        /// The HTTP status code.
+        status: u16,
+        /// A redacted, human-readable summary of the response body.
+        message: String,
+    },
+
+    /// Every provider in a fallback chain (Doc 04 FT-FR-16/17) failed; the
+    /// chain gives up and surfaces the LAST provider's own error alongside
+    /// the full attempt history.
+    #[error(
+        "All {} provider(s) in the fallback chain failed; last error: {last}",
+        attempts.len()
+    )]
+    AllProvidersFailed {
+        /// One `(provider, error message)` pair per hop attempted, in
+        /// chronological order.
+        attempts: Vec<(String, String)>,
+        /// The last provider's own error -- this variant's `transience()` is
+        /// exactly this error's own `transience()`.
+        last: Box<LlmError>,
+    },
+}
+
+impl LlmError {
+    /// Classify whether this error is worth retrying (Doc 04 FT-FR-01, D-05).
+    ///
+    /// Every arm reads a typed field or a variant identity only -- never a
+    /// rendered `Display` string, a substring or a parsed status code out of
+    /// message text. Dedicated variants ([`LlmError::AuthenticationError`],
+    /// [`LlmError::RateLimitExceeded`], [`LlmError::InvalidPrompt`],
+    /// [`LlmError::UsageLimitExceeded`], [`LlmError::ModelNotAvailable`],
+    /// [`LlmError::TokenLimitExceeded`]) are matched on their own arms and
+    /// never fall through to [`LlmError::ProviderError`]'s status-range arms.
+    pub fn transience(&self) -> Transience {
+        match self {
+            // Obviously transient: a network blip, a request timeout or a
+            // rate limit all describe conditions that clear with time.
+            LlmError::NetworkError(_) => Transience::Transient,
+            LlmError::Timeout(_) => Transience::Transient,
+            LlmError::RateLimitExceeded => Transience::Transient,
+
+            // Obviously permanent: retrying the exact same request
+            // reproduces the exact same failure. Each of these is matched on
+            // its own dedicated arm -- never falling through to
+            // `ProviderError`'s status-range classification below.
+            LlmError::AuthenticationError(_) => Transience::Permanent,
+            LlmError::InvalidPrompt(_) => Transience::Permanent,
+            LlmError::UsageLimitExceeded { .. } => Transience::Permanent,
+            LlmError::ModelNotAvailable(_) => Transience::Permanent,
+            LlmError::TokenLimitExceeded => Transience::Permanent,
+            LlmError::EmptyCompletion(_) => Transience::Permanent,
+
+            // Unresolvable from a bare string: no typed field distinguishes
+            // a transient cause from a permanent one.
+            LlmError::ProcessingError(_) => Transience::Unknown,
+
+            // Status-carrying provider error, classified by value only
+            // (T-25-07): never by inspecting `message`. 408 (request
+            // timeout), 429 (rate limited) and every 5xx (server-side fault)
+            // are transient; every other 4xx (client-side fault: bad
+            // request, unauthorized, payment required, not found, and any
+            // other 4xx not enumerated above) is permanent. This arm is only
+            // reached for a status with no dedicated variant above (D-03) --
+            // a dedicated variant's own arm always wins.
+            LlmError::ProviderError { status, .. } => match status {
+                408 | 429 => Transience::Transient,
+                500..=599 => Transience::Transient,
+                _ => Transience::Permanent,
+            },
+
+            // A fallback chain's own transience is exactly its last
+            // attempt's transience (D-05, FT-FR-16).
+            LlmError::AllProvidersFailed { last, .. } => last.transience(),
+        }
+    }
+}
+
+/// A structured-output request hint attached to an [`LlmRequest`] (RT-FR-17, D-28).
+///
+/// `ResponseFormat` tells an adapter that the caller wants its completion constrained
+/// to JSON, optionally against a named JSON Schema. It is a **hint**, not a contract:
+/// an adapter with no native structured-output mode -- Anthropic, as of this writing,
+/// see the per-provider table in the `agent-runtime` user guide (plan 26-21) -- ignores
+/// this field harmlessly. Correctness never depends on native support, because the
+/// caller separately appends a schema-conformance instruction block to the prompt
+/// (D-27's belt-and-braces rule): `response_format` is an optimization a supporting
+/// provider can use, never the only mechanism enforcing shape.
+///
+/// # Non-exhaustive (X-10.2, D-28)
+///
+/// Marked `#[non_exhaustive]` so a future variant (e.g. a provider-specific mode) can
+/// be added without a semver-major bump.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ResponseFormat {
+    /// Constrain the completion to a syntactically valid JSON object, with no schema
+    /// attached.
+    JsonObject,
+    /// Constrain the completion to a JSON object conforming to `schema`.
+    JsonSchema {
+        /// A human-readable name for the schema (required by some providers' native
+        /// JSON-schema modes).
+        name: String,
+        /// The JSON Schema the completion must conform to.
+        schema: serde_json::Value,
+        /// Whether the provider should enforce the schema strictly (rejecting
+        /// additional properties) where it supports doing so.
+        strict: bool,
+    },
 }
 
 /// Request structure for LLM generation operations
@@ -471,6 +597,16 @@ pub enum LlmError {
 /// - `attachments`: Additional content items (images, documents) for context
 /// - `stream`: Whether to stream the response incrementally
 /// - `metadata`: Custom key-value pairs for tracking, logging, or provider-specific options
+/// - `response_format`: Optional structured-output hint (see [`ResponseFormat`])
+///
+/// # Construction (X-10.3, D-28)
+///
+/// As of v0.10.0 this struct is `#[non_exhaustive]` and gained the additive
+/// `response_format` field. Construct it through [`LlmRequest::new`] plus the
+/// chainable `with_*` builders (`with_attachments`, `with_stream`, `with_metadata`,
+/// `with_response_format`) -- a full struct literal no longer compiles outside this
+/// crate. This is a one-way decision: `LlmRequest` has no `Default`, so there was no
+/// functional-update escape hatch, and the constructor keeps the *next* field free.
 ///
 /// # Examples
 ///
@@ -479,20 +615,14 @@ pub enum LlmError {
 /// ```rust
 /// use paladin_ports::output::llm_port::LlmRequest;
 /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-/// use uuid::Uuid;
-/// use std::collections::HashMap;
 ///
-/// let request = LlmRequest {
-///     id: Uuid::new_v4(),
-///     model: "gpt-4".to_string(),
-///     prompt: PromptItem::new(PromptType::User(UserPrompt {
+/// let request = LlmRequest::new(
+///     "gpt-4",
+///     PromptItem::new(PromptType::User(UserPrompt {
 ///         query: "Explain Rust ownership".to_string(),
 ///         context: None,
 ///     })).unwrap(),
-///     attachments: vec![],
-///     stream: false,
-///     metadata: HashMap::new(),
-/// };
+/// );
 /// ```
 ///
 /// ## Request with Metadata
@@ -500,7 +630,6 @@ pub enum LlmError {
 /// ```rust
 /// use paladin_ports::output::llm_port::LlmRequest;
 /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-/// use uuid::Uuid;
 /// use std::collections::HashMap;
 ///
 /// let mut metadata = HashMap::new();
@@ -508,19 +637,16 @@ pub enum LlmError {
 /// metadata.insert("session_id".to_string(), "sess456".to_string());
 /// metadata.insert("temperature".to_string(), "0.7".to_string());
 ///
-/// let request = LlmRequest {
-///     id: Uuid::new_v4(),
-///     model: "gpt-4".to_string(),
-///     prompt: PromptItem::new(PromptType::User(UserPrompt {
+/// let request = LlmRequest::new(
+///     "gpt-4",
+///     PromptItem::new(PromptType::User(UserPrompt {
 ///         query: "Analyze this data".to_string(),
 ///         context: None,
 ///     })).unwrap(),
-///     attachments: vec![],
-///     stream: false,
-///     metadata,
-/// };
+/// ).with_metadata(metadata);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LlmRequest {
     /// Unique identifier for request tracking and correlation
     pub id: Uuid,
@@ -535,6 +661,142 @@ pub struct LlmRequest {
     /// Custom metadata for tracking, logging, or provider-specific options
     /// Common keys: "temperature", "max_tokens", "top_p", "user_id"
     pub metadata: HashMap<String, String>,
+    /// Optional structured-output hint for this request (see [`ResponseFormat`]).
+    ///
+    /// `None` by default; absent from a deserialized document also resolves to
+    /// `None` (`#[serde(default)]`), so legacy JSON without this field still
+    /// deserializes.
+    #[serde(default)]
+    pub response_format: Option<ResponseFormat>,
+}
+
+impl LlmRequest {
+    /// Construct a new [`LlmRequest`] with sensible defaults for every field except
+    /// `model` and `prompt`.
+    ///
+    /// Produces a fresh [`Uuid`] (different on every call), no attachments,
+    /// `stream: false`, empty `metadata`, and `response_format: None`. Use the
+    /// chainable `with_*` methods to override any default.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmRequest;
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Hello".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt);
+    ///
+    /// assert_eq!(request.model, "gpt-4");
+    /// assert!(request.attachments.is_empty());
+    /// assert!(!request.stream);
+    /// assert!(request.metadata.is_empty());
+    /// assert!(request.response_format.is_none());
+    /// ```
+    pub fn new(model: impl Into<String>, prompt: PromptItem) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            model: model.into(),
+            prompt,
+            attachments: Vec::new(),
+            stream: false,
+            metadata: HashMap::new(),
+            response_format: None,
+        }
+    }
+
+    /// Attach additional content (images, documents) for multimodal models.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmRequest;
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Describe this image".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4-vision", prompt).with_attachments(vec![]);
+    ///
+    /// assert!(request.attachments.is_empty());
+    /// ```
+    pub fn with_attachments(mut self, attachments: Vec<ContentItem>) -> Self {
+        self.attachments = attachments;
+        self
+    }
+
+    /// Enable or disable streaming for this request.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmRequest;
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Write a story".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt).with_stream(true);
+    ///
+    /// assert!(request.stream);
+    /// ```
+    pub fn with_stream(mut self, stream: bool) -> Self {
+        self.stream = stream;
+        self
+    }
+
+    /// Attach custom metadata (e.g. `"temperature"`, `"user_id"`) to this request.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmRequest;
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    /// use std::collections::HashMap;
+    ///
+    /// let mut metadata = HashMap::new();
+    /// metadata.insert("user_id".to_string(), "user123".to_string());
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Hello".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt).with_metadata(metadata);
+    ///
+    /// assert_eq!(request.metadata.get("user_id"), Some(&"user123".to_string()));
+    /// ```
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Request a structured-output mode from a supporting provider (see
+    /// [`ResponseFormat`]).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{LlmRequest, ResponseFormat};
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Return JSON".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt)
+    ///     .with_response_format(ResponseFormat::JsonObject);
+    ///
+    /// assert_eq!(request.response_format, Some(ResponseFormat::JsonObject));
+    /// ```
+    pub fn with_response_format(mut self, response_format: ResponseFormat) -> Self {
+        self.response_format = Some(response_format);
+        self
+    }
 }
 
 /// Response structure for LLM generation operations
@@ -926,8 +1188,6 @@ impl Default for ProviderCapabilities {
 /// ```rust,no_run
 /// # use paladin_ports::output::llm_port::{LlmPort, LlmRequest, LlmError};
 /// # use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-/// # use uuid::Uuid;
-/// # use std::collections::HashMap;
 /// # async fn example(llm: &dyn LlmPort) -> Result<(), LlmError> {
 /// // Check provider capabilities
 /// let caps = llm.get_capabilities();
@@ -941,17 +1201,13 @@ impl Default for ProviderCapabilities {
 /// }
 ///
 /// // Generate completion
-/// let request = LlmRequest {
-///     id: Uuid::new_v4(),
-///     model: "gpt-4".to_string(),
-///     prompt: PromptItem::new(PromptType::User(UserPrompt {
+/// let request = LlmRequest::new(
+///     "gpt-4",
+///     PromptItem::new(PromptType::User(UserPrompt {
 ///         query: "Hello, world!".to_string(),
 ///         context: None,
 ///     })).unwrap(),
-///     attachments: vec![],
-///     stream: false,
-///     metadata: HashMap::new(),
-/// };
+/// );
 ///
 /// let response = llm.generate(request).await?;
 /// println!("Response: {}", response.content);
@@ -1007,21 +1263,15 @@ pub trait LlmPort: Send + Sync {
     /// ```rust,no_run
     /// use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
     /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-    /// use uuid::Uuid;
-    /// use std::collections::HashMap;
     ///
     /// async fn generate_text(llm: &dyn LlmPort) -> Result<String, Box<dyn std::error::Error>> {
-    ///     let request = LlmRequest {
-    ///         id: Uuid::new_v4(),
-    ///         model: "gpt-4".to_string(),
-    ///         prompt: PromptItem::new(PromptType::User(UserPrompt {
+    ///     let request = LlmRequest::new(
+    ///         "gpt-4",
+    ///         PromptItem::new(PromptType::User(UserPrompt {
     ///             query: "Write a haiku about Rust".to_string(),
     ///             context: None,
     ///         })).unwrap(),
-    ///         attachments: vec![],
-    ///         stream: false,
-    ///         metadata: HashMap::new(),
-    ///     };
+    ///     );
     ///
     ///     let response = llm.generate(request).await?;
     ///     Ok(response.content)
@@ -1033,21 +1283,15 @@ pub trait LlmPort: Send + Sync {
     /// ```rust,no_run
     /// use paladin_ports::output::llm_port::{LlmPort, LlmRequest, LlmError};
     /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-    /// use uuid::Uuid;
-    /// use std::collections::HashMap;
     ///
     /// async fn generate_with_retry(llm: &dyn LlmPort) -> Result<String, LlmError> {
-    ///     let request = LlmRequest {
-    ///         id: Uuid::new_v4(),
-    ///         model: "gpt-4".to_string(),
-    ///         prompt: PromptItem::new(PromptType::User(UserPrompt {
+    ///     let request = LlmRequest::new(
+    ///         "gpt-4",
+    ///         PromptItem::new(PromptType::User(UserPrompt {
     ///             query: "Explain async Rust".to_string(),
     ///             context: None,
     ///         })).unwrap(),
-    ///         attachments: vec![],
-    ///         stream: false,
-    ///         metadata: HashMap::new(),
-    ///     };
+    ///     );
     ///
     ///     match llm.generate(request).await {
     ///         Ok(response) => Ok(response.content),
@@ -1108,22 +1352,16 @@ pub trait LlmPort: Send + Sync {
     /// ```rust,no_run
     /// use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
     /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-    /// use uuid::Uuid;
     /// use futures::StreamExt;
-    /// use std::collections::HashMap;
     ///
     /// async fn stream_response(llm: &dyn LlmPort) -> Result<String, Box<dyn std::error::Error>> {
-    ///     let request = LlmRequest {
-    ///         id: Uuid::new_v4(),
-    ///         model: "gpt-4".to_string(),
-    ///         prompt: PromptItem::new(PromptType::User(UserPrompt {
+    ///     let request = LlmRequest::new(
+    ///         "gpt-4",
+    ///         PromptItem::new(PromptType::User(UserPrompt {
     ///             query: "Write a story".to_string(),
     ///             context: None,
     ///         })).unwrap(),
-    ///         attachments: vec![],
-    ///         stream: true,
-    ///         metadata: HashMap::new(),
-    ///     };
+    ///     ).with_stream(true);
     ///
     ///     let mut stream = llm.generate_stream(request).await?;
     ///     let mut complete_response = String::new();
@@ -1366,6 +1604,124 @@ pub trait LlmPort: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_core::platform::container::prompt::{PromptType, UserPrompt};
+
+    /// D-28 / RT-FR-17: `LlmRequest::new` sets documented defaults for every
+    /// field except `model` and `prompt`.
+    #[test]
+    fn llm_request_new_sets_documented_defaults() {
+        let prompt = PromptItem::new(PromptType::User(UserPrompt {
+            query: "hi".to_string(),
+            context: None,
+        }))
+        .unwrap();
+        let request = LlmRequest::new("gpt-4", prompt);
+
+        assert_eq!(request.model, "gpt-4");
+        assert!(request.attachments.is_empty());
+        assert!(!request.stream);
+        assert!(request.metadata.is_empty());
+        assert!(request.response_format.is_none());
+    }
+
+    /// D-28: two `new` calls with identical arguments produce different ids.
+    #[test]
+    fn llm_request_new_generates_a_fresh_id_each_call() {
+        let prompt_a = PromptItem::new(PromptType::User(UserPrompt {
+            query: "a".to_string(),
+            context: None,
+        }))
+        .unwrap();
+        let prompt_b = PromptItem::new(PromptType::User(UserPrompt {
+            query: "b".to_string(),
+            context: None,
+        }))
+        .unwrap();
+        let request_a = LlmRequest::new("gpt-4", prompt_a);
+        let request_b = LlmRequest::new("gpt-4", prompt_b);
+
+        assert_ne!(request_a.id, request_b.id);
+    }
+
+    /// D-28: chaining the same `with_*` setter twice replaces rather than
+    /// accumulates -- last write wins.
+    #[test]
+    fn builder_methods_chain_and_last_write_wins() {
+        let prompt = PromptItem::new(PromptType::User(UserPrompt {
+            query: "hi".to_string(),
+            context: None,
+        }))
+        .unwrap();
+        let request = LlmRequest::new("gpt-4", prompt)
+            .with_stream(true)
+            .with_response_format(ResponseFormat::JsonObject)
+            .with_stream(false);
+
+        assert!(!request.stream);
+        assert_eq!(request.response_format, Some(ResponseFormat::JsonObject));
+    }
+
+    /// D-28: a document with no `response_format` key deserializes with
+    /// `response_format: None` (`#[serde(default)]`); a json-schema-shaped
+    /// value round-trips unchanged.
+    #[test]
+    fn response_format_round_trips_through_serde_and_defaults_to_none() {
+        let prompt = PromptItem::new(PromptType::User(UserPrompt {
+            query: "hi".to_string(),
+            context: None,
+        }))
+        .unwrap();
+        let request = LlmRequest::new("gpt-4", prompt);
+        let mut json = serde_json::to_value(&request).unwrap();
+        json.as_object_mut().unwrap().remove("response_format");
+        let deserialized: LlmRequest = serde_json::from_value(json).unwrap();
+        assert!(deserialized.response_format.is_none());
+
+        let format = ResponseFormat::JsonSchema {
+            name: "answer".to_string(),
+            schema: serde_json::json!({"type": "object"}),
+            strict: true,
+        };
+        let json = serde_json::to_value(&format).unwrap();
+        let round_tripped: ResponseFormat = serde_json::from_value(json).unwrap();
+        assert_eq!(format, round_tripped);
+    }
+
+    /// D-28: both `ResponseFormat` variants survive a serde round trip with
+    /// equality.
+    #[test]
+    fn response_format_carries_both_variants() {
+        let json_object = ResponseFormat::JsonObject;
+        let json = serde_json::to_value(&json_object).unwrap();
+        let round_tripped: ResponseFormat = serde_json::from_value(json).unwrap();
+        assert_eq!(json_object, round_tripped);
+
+        let json_schema = ResponseFormat::JsonSchema {
+            name: "answer".to_string(),
+            schema: serde_json::json!({"type": "object", "properties": {}}),
+            strict: false,
+        };
+        let json = serde_json::to_value(&json_schema).unwrap();
+        let round_tripped: ResponseFormat = serde_json::from_value(json).unwrap();
+        assert_eq!(json_schema, round_tripped);
+    }
+
+    /// D-28: compile-time guard for the prohibition -- `ProviderCapabilities`
+    /// is constructed here by exhaustive struct literal, so this test stops
+    /// compiling the moment a field is added to the struct.
+    #[test]
+    fn provider_capabilities_gained_no_field() {
+        let _capabilities = ProviderCapabilities {
+            supports_streaming: true,
+            supports_tool_calling: false,
+            supports_function_calling: false,
+            supports_vision: false,
+            supports_embeddings: false,
+            max_context_tokens: None,
+            supports_system_messages: true,
+            temperature_range: None,
+        };
+    }
 
     #[test]
     fn test_provider_capabilities_default() {
@@ -1453,5 +1809,97 @@ mod tests {
         };
 
         assert_eq!(caps1, caps2);
+    }
+
+    /// One row per `LlmError` variant (D-05), so a variant added later
+    /// cannot silently inherit a neighbour's classification.
+    #[test]
+    fn llm_error_transience_table() {
+        use Transience::*;
+        let cases: Vec<(LlmError, Transience)> = vec![
+            (LlmError::NetworkError("x".into()), Transient),
+            (LlmError::Timeout("x".into()), Transient),
+            (LlmError::RateLimitExceeded, Transient),
+            (LlmError::AuthenticationError("x".into()), Permanent),
+            (LlmError::InvalidPrompt("x".into()), Permanent),
+            (
+                LlmError::UsageLimitExceeded {
+                    provider: "openai".into(),
+                    regain_hint: None,
+                },
+                Permanent,
+            ),
+            (LlmError::ModelNotAvailable("x".into()), Permanent),
+            (LlmError::TokenLimitExceeded, Permanent),
+            (LlmError::EmptyCompletion("x".into()), Permanent),
+            (LlmError::ProcessingError("x".into()), Unknown),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(
+                err.transience(),
+                expected,
+                "variant {err:?} classified as {:?}, expected {expected:?}",
+                err.transience()
+            );
+        }
+    }
+
+    /// `ProviderError`'s boundary statuses classify by value only: 408, 429
+    /// and every 5xx are Transient; every other 4xx (400, 401, 402, 404,
+    /// 407, 418, 499) is Permanent.
+    #[test]
+    fn provider_error_status_boundaries_classify_by_value() {
+        for status in [408u16, 429, 500, 503, 599] {
+            let err = LlmError::ProviderError {
+                provider: "openai".into(),
+                status,
+                message: "boom".into(),
+            };
+            assert_eq!(
+                err.transience(),
+                Transience::Transient,
+                "status {status} should classify Transient"
+            );
+        }
+        for status in [400u16, 401, 402, 404, 407, 418, 499] {
+            let err = LlmError::ProviderError {
+                provider: "openai".into(),
+                status,
+                message: "boom".into(),
+            };
+            assert_eq!(
+                err.transience(),
+                Transience::Permanent,
+                "status {status} should classify Permanent"
+            );
+        }
+    }
+
+    /// Classification never reads the message: an empty `ProviderError`
+    /// message still classifies by status.
+    #[test]
+    fn empty_provider_message_does_not_change_classification() {
+        let err = LlmError::ProviderError {
+            provider: "openai".into(),
+            status: 503,
+            message: String::new(),
+        };
+        assert_eq!(err.transience(), Transience::Transient);
+    }
+
+    /// `AllProvidersFailed` takes the transience of its LAST error.
+    #[test]
+    fn all_providers_failed_takes_the_transience_of_its_last_error() {
+        let transient = LlmError::AllProvidersFailed {
+            attempts: vec![("openai".into(), "boom".into())],
+            last: Box::new(LlmError::NetworkError("connection reset".into())),
+        };
+        assert_eq!(transient.transience(), Transience::Transient);
+
+        let permanent = LlmError::AllProvidersFailed {
+            attempts: vec![("openai".into(), "boom".into())],
+            last: Box::new(LlmError::AuthenticationError("bad key".into())),
+        };
+        assert_eq!(permanent.transience(), Transience::Permanent);
     }
 }

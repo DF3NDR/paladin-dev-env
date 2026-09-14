@@ -1,0 +1,890 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Paladin Agent API",
+    "description": "HTTP API for executing and managing resident Paladin agents. Agent routes are served under `/v1`; `/health`, `/ready`, and the docs are unversioned.",
+    "contact": {
+      "name": "Juha Kukkonen",
+      "email": "juha7kukkonen@gmail.com"
+    },
+    "license": {
+      "name": "MIT OR Apache-2.0",
+      "identifier": "MIT OR Apache-2.0"
+    },
+    "version": "0.9.0"
+  },
+  "paths": {
+    "/v1/agents": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "`GET /agents` — list every registered agent as a safe [`AgentSummary`].",
+        "description": "Always returns `200 OK` with a JSON array (empty when no agents are registered).\nOrder is unspecified.",
+        "operationId": "list_agents",
+        "responses": {
+          "200": {
+            "description": "Registered agents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgentSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "`POST /agents` — register a new agent at runtime from an [`AgentSpec`].",
+        "description": "Because `paladin-web` cannot build a [`Paladin`] itself, this delegates to the\ninjected [`AgentProvisioner`]. Returns:\n- `201 Created` with the new agent's [`AgentSummary`] on success;\n- `409 Conflict` if an agent is already registered under the spec's id;\n- `422 Unprocessable Entity` if provisioning fails;\n- `400 Bad Request` (via the `Json` extractor) if the body is missing/invalid;\n- `501 Not Implemented` if no provisioner is wired (registration disabled).",
+        "operationId": "register_agent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Agent registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Agent id already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Provisioning failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Runtime registration not enabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "`GET /agents/{id}` — describe a single agent.",
+        "description": "Returns `200 OK` with the agent's [`AgentSummary`], or `404 Not Found` with\n`{ \"error\": ... }` if no agent is registered under `id`.",
+        "operationId": "describe_agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Registry id of the agent",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Agent summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "`DELETE /agents/{id}` — deregister an agent.",
+        "description": "Returns `204 No Content` (empty body) on success, or `404 Not Found` with\n`{ \"error\": ... }` if no agent is registered under `id`.",
+        "operationId": "deregister_agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Registry id of the agent to remove",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Agent deregistered"
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/execute": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "`POST /agents/{id}/execute` — look the agent up by id and run it.",
+        "description": "Returns:\n- `200 OK` with [`ExecuteResponse`] on success;\n- `404 Not Found` if no agent is registered under `id`;\n- `502 Bad Gateway` if execution fails; `504` on timeout;\n- `400 Bad Request` (via the `Json` extractor) if the body is missing/invalid.",
+        "operationId": "execute_agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Registry id of the agent to run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Execution result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecuteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not permitted for this agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Upstream execution failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Execution timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/execute/stream": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "`POST /agents/{id}/execute/stream` — run an agent, streaming its output over SSE.",
+        "description": "Returns a `text/event-stream` of `chunk` events ending with a `done` event. For an\nagent with a streaming backend these are real incremental LLM tokens; for an agent\nwithout one, the buffered result is framed as a single `chunk` + `done` (so the\nendpoint always works). Execution is bounded by the resolved timeout: on expiry the\nstream yields a terminal `error` event (streaming) or returns `504` (buffered\nfallback). Maps unknown id → `404`, invalid `timeout_seconds` → `400`, and an\nup-front execution failure → `502`.",
+        "operationId": "execute_agent_stream",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Registry id of the agent to run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream: `chunk` events carry `{ \"text\": ... }`, a terminal `done` event carries the final result, and an `error` event (with the standard error envelope) is emitted on mid-stream failure or timeout.",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "400": {
+            "description": "Invalid timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not permitted for this agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Upstream execution failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Execution timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/jobs": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "`POST /agents/{id}/jobs` — enqueue an async run and return its job id immediately.",
+        "description": "Spawns a task that runs the agent (buffered) under the resolved timeout, recording\nthe outcome in the job store. Returns `202 Accepted` with `{ \"job_id\": ... }`. Maps\nunknown id → `404` and invalid `timeout_seconds` → `400`.",
+        "operationId": "enqueue_job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Registry id of the agent to run",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Job accepted; body carries `{ \"job_id\": ... }`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not permitted for this agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{id}/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "`GET /agents/{id}/jobs/{job_id}` — poll an async job's status and result.",
+        "description": "Returns `200 OK` with the [`JobRecord`], or `404` if no\njob is found under `job_id` (jobs are ephemeral and may have been evicted).",
+        "operationId": "get_job",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Registry id of the agent",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "description": "Job id returned by enqueue",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job status/result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRecord"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AgentSpec": {
+        "type": "object",
+        "description": "Declarative description of an agent to provision at runtime.\n\nSent in the body of `POST /agents`. Because `paladin-web` cannot itself build a\n[`Paladin`] (that needs an `LlmPort` and the builder, which live behind the\nfacade), an [`AgentProvisioner`] turns this spec into a concrete\n`(Paladin, executor)` pair.\n\nOnly the fields needed to identify and shape an agent are included here; the\nprovisioner is free to apply defaults for everything else. More fields can be\nadded without breaking existing callers (all optional fields use `#[serde(default)]`).",
+        "required": [
+          "id",
+          "name",
+          "model",
+          "system_prompt"
+        ],
+        "properties": {
+          "allowed_roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Roles permitted to invoke this agent (`\"admin\"`/`\"user\"`); empty ⇒ any caller."
+          },
+          "id": {
+            "type": "string",
+            "description": "Registry id (the path segment in `/agents/{id}/…`). Client-supplied and unique."
+          },
+          "model": {
+            "type": "string",
+            "description": "LLM model identifier (e.g. `\"gpt-4\"`)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-friendly display name."
+          },
+          "stop_words": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional stop words that terminate execution."
+          },
+          "system_prompt": {
+            "type": "string",
+            "description": "System prompt defining the agent's behavior."
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Optional response randomness (`0.0`–`1.0`); the provisioner applies a default when absent."
+          },
+          "timeout_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional per-agent execution timeout (seconds); `None` uses the server default.",
+            "minimum": 0
+          }
+        }
+      },
+      "AgentSummary": {
+        "type": "object",
+        "description": "Safe, public-facing summary of an agent for the discovery endpoints.\n\nDeliberately omits anything sensitive. Note that secrets (API keys, provider\ncredentials) never live on the [`Paladin`] entity in the first place — they are\nsupplied to executors at composition time — so none can leak here. The raw system\nprompt is reduced to a short `description` preview rather than returned verbatim\n(see PRD Open Question 1 on whether to omit it entirely).",
+        "required": [
+          "id",
+          "name",
+          "model",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Short, single-line preview derived from the system prompt."
+          },
+          "id": {
+            "type": "string",
+            "description": "Registry id (the `{id}` path segment)."
+          },
+          "model": {
+            "type": "string",
+            "description": "LLM model identifier."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-friendly display name."
+          }
+        }
+      },
+      "ApiErrorBody": {
+        "type": "object",
+        "description": "OpenAPI schema for the error envelope returned by every failing handler.\n\nMirrors [`ApiError::to_body`] (`{ \"error\": { \"code\", \"message\", \"details\" } }`); it exists\npurely so the generated spec can describe error responses. The runtime body is built by\n`ApiError`, not this type.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ApiErrorDetail",
+            "description": "The error detail object."
+          }
+        }
+      },
+      "ApiErrorDetail": {
+        "type": "object",
+        "description": "The `error` object inside [`ApiErrorBody`].",
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable, machine-readable error code (e.g. `\"not_found\"`, `\"unauthorized\"`)."
+          },
+          "details": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Optional structured context; `null` when absent."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable message."
+          }
+        }
+      },
+      "ExecuteRequest": {
+        "type": "object",
+        "description": "Request body for `POST /agents/{id}/execute`.\n\nOnly `input` is required today; later epics may add optional fields (streaming\nflags, per-call overrides) without breaking this contract.",
+        "required": [
+          "input"
+        ],
+        "properties": {
+          "input": {
+            "type": "string",
+            "description": "The task / prompt to run the agent against."
+          },
+          "timeout_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional per-request timeout (seconds), clamped to the server max. `0` is rejected.",
+            "minimum": 0
+          }
+        }
+      },
+      "ExecuteResponse": {
+        "type": "object",
+        "description": "Response body for a successful agent execution.\n\nCarries the agent output plus the safe execution metadata from\n[`PaladinResult`]. The `stop_reason` is rendered as a stable lowercase label\n(`\"completed\"`, `\"max_loops\"`, `\"stop_word\"`, `\"timeout\"`) rather than the raw\nserde enum shape, so the wire contract is stable.",
+        "required": [
+          "output",
+          "token_count",
+          "execution_time_ms",
+          "loop_count",
+          "stop_reason"
+        ],
+        "properties": {
+          "execution_time_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Wall-clock execution time in milliseconds.",
+            "minimum": 0
+          },
+          "loop_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of reasoning loops executed.",
+            "minimum": 0
+          },
+          "output": {
+            "type": "string",
+            "description": "The generated output text."
+          },
+          "stop_reason": {
+            "type": "string",
+            "description": "Why execution stopped, as a stable label."
+          },
+          "token_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Total tokens used (prompt + completion).",
+            "minimum": 0
+          }
+        }
+      },
+      "JobRecord": {
+        "type": "object",
+        "description": "A stored job: its status plus, when finished, a result or error.\n\n`result` is the serialized success payload (an `ExecuteResponse` as JSON), kept as a\n[`Value`] so the store stays decoupled from the controller's wire types.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Error message, present once `status == Failed`/`TimedOut`."
+          },
+          "result": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Success payload (an `ExecuteResponse` as JSON), present once `status == Completed`."
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus",
+            "description": "Current status."
+          }
+        }
+      },
+      "JobStatus": {
+        "type": "string",
+        "description": "Lifecycle status of an async job.",
+        "enum": [
+          "running",
+          "completed",
+          "failed",
+          "timed_out"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "api_key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      },
+      "bearer_token": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}

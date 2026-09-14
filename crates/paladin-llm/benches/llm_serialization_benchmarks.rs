@@ -16,14 +16,7 @@ fn sample_request() -> LlmRequest {
     metadata.insert("temperature".to_string(), "0.2".to_string());
     metadata.insert("max_tokens".to_string(), "1024".to_string());
 
-    LlmRequest {
-        id: Uuid::new_v4(),
-        model: "mock-llm-model".to_string(),
-        prompt,
-        attachments: Vec::new(),
-        stream: false,
-        metadata,
-    }
+    LlmRequest::new("mock-llm-model", prompt).with_metadata(metadata)
 }
 
 fn sample_response(request_id: Uuid) -> LlmResponse {

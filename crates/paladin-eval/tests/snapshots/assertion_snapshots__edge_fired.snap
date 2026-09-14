@@ -1,0 +1,8 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: edge_fired { from: "planner", to: "reviewer" }
+  expected: edge planner -> reviewer to fire at least once
+  observed: edge planner -> reviewer was evaluated but did not fire
+  seq: 5..=5

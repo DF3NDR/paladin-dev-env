@@ -39,14 +39,12 @@
 //! model's raw response body -- an evaluator failure names only this
 //! evaluator and a short, fixed failure class (see [`llm_error_class`]).
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 use paladin_ports::output::llm_port::{LlmError, LlmPort, LlmRequest};
-use uuid::Uuid;
 
 use crate::edge_evaluator::{EdgeConditionEvaluator, EdgeContext, EdgeEvaluatorError};
 use crate::engine::InputMapping;
@@ -199,7 +197,10 @@ impl LlmDecisionEvaluator {
             Some(battlefield) => InputMapping::new(self.prompt_template.clone())
                 // CF-03, D-15: `LlmDecision`'s prompt template is never a
                 // Muster worker execution, so no muster context applies.
-                .render(battlefield, None)
+                // HITL-01, D-07: nor is it ever a parleying node's own
+                // execution context (an edge evaluator has no `NodeContext`
+                // at all) -- no parley context applies either.
+                .render(battlefield, None, None)
                 .map_err(|e| self.evaluation_error(format!("template rendering failed: {e}"))),
             None => Ok(self.prompt_template.replace("{output}", output)),
         }
@@ -251,14 +252,7 @@ impl LlmDecisionEvaluator {
         }))
         .map_err(|e| self.evaluation_error(format!("prompt construction failed: {e}")))?;
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: self.model.clone(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new(self.model.clone(), prompt);
 
         let response = self
             .llm
@@ -315,6 +309,12 @@ pub(crate) fn llm_error_class(error: &LlmError) -> &'static str {
         LlmError::EmptyCompletion(_) => "empty completion",
         LlmError::ProcessingError(_) => "processing error",
         LlmError::Timeout(_) => "timeout",
+        LlmError::ProviderError { .. } => "provider error",
+        LlmError::AllProvidersFailed { .. } => "all providers failed",
+        // X-10.2 (D-04): `LlmError` is `#[non_exhaustive]`; a future variant
+        // gets this generic classification until this match is updated with
+        // its own arm.
+        _ => "unknown error",
     }
 }
 

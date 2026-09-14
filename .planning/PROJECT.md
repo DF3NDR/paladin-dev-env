@@ -109,6 +109,114 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 28 complete (2026-09-09)** — observability-tooling, the v0.10.0 milestone's seventh planned
+phase (OBS-01…04): the authoritative `TraceRecord`/`TraceEvent` stream with a per-run gapless `seq`,
+panic-isolated `CompositeSink` fan-out and a default-on structured-log sink; an `otel`-gated OTLP
+exporter with span-per-attempt trees verified against an axum collector stub; persisted `run_traces`
+(migration 006, three backends) feeding `RunStreamMode::Replay` on the one-producer SSE bus;
+golden-tested `WarGraphDoc → Mermaid/DOT` exporters with an execution overlay reachable via
+`paladin-cli graph export`/`run export` and an admin-gated `dev-ui` inspector page; and the new
+`paladin-eval` composition crate (ADR-0048) running `.eval.yaml` scenarios through a `libtest-mimic`
+harness and `paladin-cli eval run --repeat/--bless`, with E2E-1/2/3 dogfooded as eval scenarios.
+17 plans in 8 waves; verification `passed` 4/4; UAT 2/2 human checkpoints; `28-SECURITY.md`
+`verified` (75/75 threats closed); coverage 90.28 % on `ff78a6b5`; api-surface baseline regenerated
+(3936 items). Known deviation: PRD 07 criterion 6's ≤3 % tracing-overhead bar measured at
++22.18 % (log sink) / +18.46 % (composite) on the synthetic all-Function-node bench — non-CI-gating by
+D-37 and accepted by maintainer sign-off at close-out UAT.
+
+**Phase 27 complete (2026-09-08)** — platform-api, the v0.10.0 milestone's sixth planned phase: durable background runs (`Run` status machine, `RunRepositoryPort` SQLite/Postgres, `RunQueuePort` InMemory/Redis with Lua lease claims), a worker pool with lease heartbeats, resume-not-restart redelivery and cross-instance cancellation, Parley `AwaitingInput` release and same-`run_id` resume, live SSE streaming with a documented polling degraded mode, append-only versioned assistants with `WarGraphDoc` compile and a restart-stable fingerprint, cron schedules, HMAC-signed webhook delivery behind an SSRF guard, and the production-shaped HTTP surface (auth, rate limits, scopes, pagination, regenerated `openapi.json`, generated Python/TypeScript clients smoke-tested in CI). 26 plans (18 planned + 8 gap-closure), verification passed 6/6 after a gap-closure cycle whose live proof is `27-CI-EVIDENCE.md` (CI run 34245093476 @ `2bf43cd2`: `redis-queue` 19/19 live, `postgres-integration` 87/87 live, coverage 89.98 % ≥ 82 % floor, `sdk-clients` both generated clients reach `completed`, `api-surface` unchanged at 3763 items on CI's own nightly via the new `normalize-api-bounds.py` canonicaliser, new `e2e-platform-api` job 1/1). Code review of the gap-closure set: CR-01/WR-01…04 remediated; the second-pass advisories WR-27-01 (the `Ok(None)` signing-key arm in `webhook/service.rs`, fixed `4b6592de`) and IN-27-01 (stale eslint comment in `smoke.ts`, fixed `b5ee33d4`) are both closed in `27-REVIEW-FIX.md`. Security: `27-SECURITY.md` is `verified` with `threats_open: 0` — 107/107 threats closed at ASVS L1, the one blocking `high` (T-27-22-02, the WR-27-01 arm) re-audited closed on 2026-09-08 (`849acdb1`). Carried concerns: WINDOWS.md rows 31/32 track the deferred `Agent`-kind webhook/live-bus delivery and the unscoped run-read routes; webhook SSRF DNS rebinding remains a documented limitation.
+
+**Phase 26 complete (2026-09-07)** — agent-runtime-enhancements, the v0.10.0 milestone's
+fifth planned phase: the `ExecutionMiddleware` onion chain on `PaladinExecutionService` with
+`AgentRuntimeConfig` (twelve inert-by-default sub-structs, `build_chain`), the limit / guardrail /
+retry-fallback / history-trimmer / summarization / vault-recall built-ins and a `#[non_exhaustive]`
+`StopReason`; the `LlmRequest` builder with native `response_format` across OpenAI / compat /
+Gemini / DeepSeek; `GarrisonEntry.is_summary` with latest-summary-wins effective history; the Vault
+(`VaultPort`, in-memory / SQLite / semantic adapters under one contract suite, embedded sqlx
+migrations, `ConfinedVault` segment-wise namespace confinement in `paladin-ports`, `RunScope` /
+`execute_scoped`, engine Vault grants on every `NodeContext`, `VaultTools` over `InProcessArsenal`);
+first-class structured output (`StructuredExecutorPort` / `StructuredExecutorExt`, `output_schema`
+on engine nodes with fail-closed validation and graph fingerprint `v6`); the shared LLM conformance
+suite (24/24 cells measured, 0 adapter gaps); the tool-error policy (redact-then-bound
+`format_result` / `format_error`, `PaladinError::ArmamentFailed`, FeedToModel / FailRun with per-tool
+override) plus the opt-in prompt-level tool-call protocol; and the `reasoning_agent` preset. 21 plans,
+verification passed 10/10 (re-verified after a code-review fix pass: CR-01, CR-02, WR-01, WR-03 fixed,
+WR-02 documented, IN-01 open advisory), coverage 89.58 % (floor 82 %), semver 11/11 vs 0.9.0, MSRV
+1.88, `.project/current-exports.txt` regenerated (3057 items — closes the Phase 25 api-surface
+concern). Carried concerns: CI's "Check documentation" step fails on any rustdoc warning and the
+workspace carries ~60 pre-existing ones unrelated to Phase 26 (Phase 26's own were removed);
+Docker-gated tiers (Qdrant `SemanticVault`, live Ollama, Postgres/Redis) are CI/UAT-only.
+`26-SECURITY.md` is `verified` with `threats_open: 0` (`eb9051a2`, 2026-09-07).
+
+**Phase 25 complete (2026-09-06)** — node-level-fault-tolerance, the v0.10.0 milestone's
+fourth planned phase: the Aegis policy bundle (a `Transience` taxonomy with table-driven
+`transience()` on `PaladinError`/`LlmError`, structured `NodeError`, `BattalionError::Node`,
+three enums `#[non_exhaustive]`), per-node retry with provable backoff (paused-clock sequence and
+jitter bounds, `TransientOnly` predicate, fail-closed `EngineRegistries` for predicates and
+handlers, per-task Muster retry with ordered `AttemptRecord` history and per-attempt trace
+events), nested timeouts (`HeartbeatHandle`, per-attempt `run_timeout`/`idle_timeout` named by
+`TimeoutKind`, an enforced `EngineLimits.run_timeout`), typed error handlers (`Route`/`Absorb`/
+`Custom` dispatch after retries exhaust, worker-template restrictions, handler-raised Parley
+through the HITL-01 path, `max_node_visits` bounding compensation cycles), the shared
+`map_http_status` redact-then-bound helper across all nine provider adapters,
+`FallbackLlmAdapter` (Transient/Unknown-only hops, the first-chunk streaming rule,
+`PaladinResult.served_by` under option (b)/D-26 registered deliberate-breaking), and node result
+caching (`NodeCachePort` with in-memory and `redis-cache` adapters under one contract suite,
+`CachedDelta`, blake3 key composition, fail-closed cache validation) — persisted
+Waypoint/Battlefield shapes unchanged, graph fingerprint bumped to `v5`, the mdBook
+`fault-tolerance` guide, MIGRATION §9.1–§9.7 rows resolved. 14/14 plans over 9 waves;
+verification passed 5/5 first time. Gate evidence on the final code commit (`462a1442`):
+coverage 89.34 % (floor 82 %), `cargo semver-checks` 11/11 vs 0.9.0 with exactly the five
+allowlisted lints, `make security` clean, MSRV 1.88 clean. Code review `25-REVIEW.md`: 2
+critical (CR-01 the Anthropic usage-cap hint is read from the unredacted body; CR-02
+openai/anthropic/deepseek clients still follow redirects with a credential header — pre-existing,
+tracked in `deferred-items.md`), 3 warnings, 1 info — fixes outstanding
+(`/gsd-code-review 25 --fix`). FT-01 … FT-06 complete. `25-SECURITY.md` not yet produced
+(`/gsd-secure-phase 25` outstanding).
+
+**Phase 24 complete (2026-09-05)** — pause-resume-history-graceful-shutdown, the v0.10.0
+milestone's third planned phase: the Parley value types and the suspend-persist-resume spine (a
+node, or a first-class `Gate` node with Battlefield templating, raising `ParleyRequest`s suspends
+the run into one `AwaitingInput` Waypoint carrying every parley of the superstep, releases its
+resources, and resumes from a different process), the `parley.` directive envelope for LLM-raised
+parleys, `resume_with` total validation per response kind with typed errors that leave the thread
+suspended plus `expires_at`/`on_expire`, Chronicle lineage (`fork_of`, `child_on_branch`,
+`replay`/`fork`-with-edit through `ChronicleService` with the original chain byte-identical),
+graceful shutdown (`ShutdownCoordinator` grace handling, over-grace nodes `Skipped` and re-listed
+in the vanguard, SIGTERM/SIGINT drain wired in `paladin-server` with `k8s/` manifests and docs
+updated — M-B-02), the `ParleyPort` seam with `GraphRegistry`/`WaypointStoreConfig`, thread
+routes `GET /v1/threads/{id}/state`, `POST /v1/threads/{id}/resume`, `GET /v1/threads/{id}/history`
+with `openapi.json` regenerated, the graph fingerprint bumped to `v4`, and the mdBook
+`parley-and-chronicle` guide. 14/14 plans (12 executed + 2 gap closure); first verification
+`gaps_found` 5/6 (post-CR-01 documentation drift), re-verification 6/6 after 24-13 aligned
+CHANGELOG/MIGRATION §9.6/user guide to the admin-gated resume posture and 24-14 recorded the human
+read of the CR-02 fix as `approved`. Code review CR-01 (any authenticated role could resume any
+thread — now `require_admin` on resume, interim narrowing of D-24 pending PLAT-06) and CR-02
+(`MusterProgress` lost on a shutdown-grace abort mid-Muster) plus WR-01…03 fixed in tree; the
+post-fix re-review left 0 critical / 3 advisory warnings in `24-REVIEW.md` (in-memory
+`list_threads` ordering, `TraceDispatcher` lock-poison `expect`, the accepted any-role read
+routes). HITL-01 … HITL-05 complete. `24-SECURITY.md` not yet produced (`/gsd-secure-phase 24`
+outstanding).
+
+**Phase 23 complete (2026-09-04)** — control-flow-dynamic-routing-fan-out-subgraphs, the v0.10.0
+milestone's second planned phase: BUG-01 fixed fail-closed on both `CampaignExecutionService` and
+`WarEngine` (RED `b2d05045` → GREEN `8d5ef333`; an unregistered `EdgeCondition::Custom` now fails
+graph validation before any node executes, through a registered async `EdgeConditionEvaluator` —
+M-B-01, the program's sole sanctioned behavioral break, with its worked example in `MIGRATION.md`
+§9.1), node-driven routing via `Directive`/`NextStep::{Edges, Goto, End, Muster, Parley}` with a
+per-node `DirectiveParser` defaulting to `PlainOutput`, Muster map-reduce fan-out (runtime-N
+workers in one superstep, `task_key`-ordered merge, payload isolation under the `muster.`
+namespace, `max_muster_tasks` carried by the new `EngineConfig` at `src/config/engine.rs`,
+mid-muster resume from intra-superstep progress Waypoints), `NodeSpec::Battalion` subgraph nesting
+(`StateMap` mapping, injective child `ThreadId`s, `checkpoint_ns`, resume-mid-child, recursion
+rejected at validation), LLM-evaluated routing (`LlmDecisionEvaluator` and Commander
+`StrategySelection::Semantic`, off by default, falling back to Heuristic with the cause recorded),
+and the graph fingerprint bumped `v2` → `v3`. 12/12 plans; verification 5/5; UAT 80/80 — 76
+deliverables covered by their own passing tests, 4 human sign-offs including the Postgres Tier-2
+contract suite proven on CI run 33901818056 (the devcontainer has no Docker). CF-01 … CF-05
+complete. Code review's CR-01 (empty-Vanguard panic at the recursion limit) and WR-01/WR-02 fixed
+in tree; security register verified with 0 open threats.
+
 **Phase 22.1 complete (2026-09-03)** — engine-readiness-defect-and-msrv-follow-up, the inserted
 follow-up that closed Phase 22's residuals plus one defect found while discussing it: BUG-03
 (cycle-bootstrap starvation — a starvation-release tier in `compute_next_vanguard`, a validate-time
@@ -547,21 +655,21 @@ while the code ships):
 as capability clusters over the `.project/v0.10.0/` PRD corpus (the PRDs remain the FR-level
 source of truth). Eight categories, mirroring the epic structure plus program-level gates:
 
-- [ ] **ENG-01 … ENG-08** — Battlefield typed state, superstep engine with cycles, Waypoint
+- [x] **ENG-01 … ENG-08** (✓ Phases 22 and 22.1, 2026-09-03) — Battlefield typed state, superstep engine with cycles, Waypoint
   checkpointing/resume, three storage backends, legacy string bridge, engine seams, and the
   program scaffolding (`MIGRATION.md` skeleton, semver + MSRV CI jobs) mandated for the first
   epic by X-10.5/X-11.1 (Doc 01)
-- [ ] **CF-01 … CF-05** — BUG-01 fail-closed custom edge conditions (the program's single
+- [x] **CF-01 … CF-05** (✓ Phase 23, 2026-09-04) — BUG-01 fail-closed custom edge conditions (the program's single
   sanctioned behavioral break), Directive routing, Muster fan-out, subgraphs, LLM routing (Doc 02)
-- [ ] **HITL-01 … HITL-05** — Parley pause, validated resume, Chronicle history/replay/fork,
+- [x] **HITL-01 … HITL-05** (✓ Phase 24, 2026-09-05) — Parley pause, validated resume, Chronicle history/replay/fork,
   graceful shutdown, minimal thread HTTP endpoints (Doc 03)
-- [ ] **FT-01 … FT-06** — Transience taxonomy + structured NodeError, Aegis retry/timeout/error
+- [x] **FT-01 … FT-06** (✓ Phase 25, 2026-09-06) — Transience taxonomy + structured NodeError, Aegis retry/timeout/error
   handlers, model fallback, node caching (Doc 04)
-- [ ] **RT-01 … RT-06** — Middleware chain + built-ins, context management, Vault, structured
-  output, provider-conformance close-out (Doc 05)
-- [ ] **PLAT-01 … PLAT-06** — Background runs, worker pool + queue, parley/streaming integration,
+- [x] **RT-01 … RT-07** (✓ Phase 26, 2026-09-07) — Middleware chain + built-ins, context management, Vault,
+  structured output, provider-conformance close-out, reasoning_agent preset (Doc 05)
+- [x] **PLAT-01 … PLAT-06** (✓ Phase 27, 2026-09-08) — Background runs, worker pool + queue, parley/streaming integration,
   versioned assistants, schedules + webhooks, API cross-cutting + generated-client gate (Doc 06)
-- [ ] **OBS-01 … OBS-04** — Trace event model + sinks, visualization export, eval harness (Doc 07)
+- [x] **OBS-01 … OBS-04** (✓ Phase 28, 2026-09-09) — Trace event model + sinks, visualization export, eval harness (Doc 07)
 - [ ] **SHIP-01 … SHIP-04** — `MIGRATION.md` complete, compat proofs (v0.9-config boot test,
   `openapi.json` golden diff), program acceptance audit, v0.10.0 release readiness (overview §5, §9)
 
@@ -1530,5 +1638,9 @@ requirements, 86 forward requirements across 16 phases, 60 variant entries acros
 69 warnings, 0 locked decisions, 0 blockers, 11 ADR candidates**)*
 
 ---
-*Last updated: 2026-09-03 after Phase 22.1 completion (v0.10.0 milestone; next: Phase 23
-control-flow — dynamic routing, fan-out and subgraphs).*
+*Last updated: 2026-09-08 after Phase 27 completion (v0.10.0 milestone; next: Phase 28
+observability & tooling).*
+
+---
+*Last updated: 2026-09-09 after Phase 28 completion (v0.10.0 milestone; OBS-01…04 validated;
+next: Phase 29 program gates & release — SHIP-01…04, the milestone's final phase).*

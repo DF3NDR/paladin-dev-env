@@ -68,12 +68,24 @@ pub enum NextStep {
     /// takes precedence over a `Goto` emitted by another node in the same
     /// superstep.
     End,
-    /// Pause the run awaiting external input (Doc 03's suspension
-    /// mechanism). This phase does not implement suspension: a node
-    /// returning `Parley` fails the run with a typed error
-    /// (`EngineError::ParleyNotSupported`) rather than pausing it — it is
-    /// never silently treated as `Edges`, and no `WaypointStatus::AwaitingInput`
-    /// checkpoint is written for it here.
+    /// Pause the run awaiting external input (HITL-01, D-02, D-03). Never
+    /// silently treated as `Edges`: the emitting node's static outgoing
+    /// edges resolve `NotFiring` for this superstep, exactly like `Goto`/
+    /// `Muster`/`End` (D-08c), and its own `StateDelta` merges normally (it
+    /// already emitted it). Every `ParleyRequest` raised anywhere in the
+    /// suspending superstep is collected onto ONE `WaypointStatus::
+    /// AwaitingInput { parleys, responses: vec![] }` checkpoint whose
+    /// `vanguard` is exactly the parleying node(s); `WarEngine::start`/
+    /// `resume_with_options` return `RunOutcome::AwaitingInput` rather than
+    /// continuing the loop. `WarEngine::resume_with(graph, thread,
+    /// responses)` is the only path that advances a suspended thread
+    /// (HITL-02): it seeds the next superstep with `vanguard` = the
+    /// parleying nodes, each dispatched node's `NodeContext.parley_response`
+    /// populated with its matching response, and runs the node again (D-08)
+    /// — a plain `resume`/`resume_with_options` against a suspended thread
+    /// fails closed with `EngineError::ThreadAwaitingInput` rather than
+    /// silently re-running the parleying nodes as ordinary vanguard entries
+    /// (D-11).
     Parley(ParleyRequest),
 }
 

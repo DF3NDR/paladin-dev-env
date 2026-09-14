@@ -24,6 +24,12 @@ use paladin_ports::output::llm_port::{
     StreamingResponse, TokenUsage,
 };
 
+use crate::http_status::map_http_status;
+
+/// The provider name this adapter reports through [`LlmPort::get_provider_name`]
+/// and stamps on every [`LlmError::ProviderError`] it emits.
+const ANTHROPIC_PROVIDER: &str = "anthropic";
+
 /// The exact phrase observed VERBATIM in Anthropic's HTTP 400
 /// `invalid_request_error` body when an account has reached its configured
 /// API usage limit (live run `4a3b749d`). Matched narrowly and deliberately:
@@ -143,6 +149,18 @@ impl AnthropicAdapter {
 
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout_seconds))
+            // CR-02 (`25-REVIEW.md`): `AnthropicConfig::base_url` is
+            // operator-configurable and every request carries the
+            // `x-api-key` credential header, which reqwest's built-in
+            // cross-host redirect header-stripping does NOT cover (it only
+            // strips `Authorization`/`Cookie`/`Cookie2`/`Proxy-Authorization`/
+            // `WWW-Authenticate`). Refusing redirects means a `3xx` from
+            // whatever host `base_url` resolves to can never replay the key
+            // to a different, attacker-influenced host — matches every
+            // `CompatEngine`-based preset and the bespoke Gemini adapter
+            // (T-17-18/T-17-52). A refused redirect surfaces via
+            // [`Self::map_error`]'s `300..=399` arm.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
@@ -293,39 +311,65 @@ impl AnthropicAdapter {
         })
     }
 
-    /// Map Anthropic API errors to LlmError.
+    /// Map a non-2xx Anthropic response to [`LlmError`].
+    ///
+    /// Two Anthropic-specific pre-checks run first; everything else is the
+    /// crate-wide [`map_http_status`] (Phase 25 D-03, FT-FR-01), which
+    /// redacts the raw `body` before bounding it and emits a typed
+    /// `ProviderError { status }` for every status without a dedicated
+    /// variant.
+    ///
+    /// - `403` stays [`LlmError::AuthenticationError`]: Anthropic reports a
+    ///   key without permission for the resource as `403`, and
+    ///   [`Self::execute_with_retry`]'s non-retryable set halts on
+    ///   `AuthenticationError`. Letting it fall through to the helper's
+    ///   generic `ProviderError { 403 }` would re-transmit a rejected
+    ///   credential up to `max_retries` times.
+    /// - `400` is disambiguated on the body: a `max_tokens` complaint and
+    ///   the usage-cap signature (Phase 41 D-04/D-05) are Anthropic-shaped,
+    ///   so they are recognised here; any other `400` reaches the helper's
+    ///   own `400` arm.
+    /// - `300..=399` is named explicitly (CR-02, mirroring
+    ///   `CompatEngine::map_error`/`GeminiAdapter::map_error`) because this
+    ///   client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
+    ///   response is never followed — it arrives here as an ordinary
+    ///   non-success status instead.
     fn map_error(&self, status: u16, body: &str) -> LlmError {
         match status {
-            401 => LlmError::AuthenticationError(
-                "Invalid API key. Check your ANTHROPIC_API_KEY environment variable.".to_string(),
-            ),
             403 => LlmError::AuthenticationError(
                 "API key does not have permission for this resource.".to_string(),
             ),
-            429 => LlmError::RateLimitExceeded,
-            400 => {
-                if body.contains("max_tokens") {
-                    LlmError::InvalidPrompt(
-                        "Invalid max_tokens value. Claude requires max_tokens to be set."
-                            .to_string(),
-                    )
-                } else if body.contains(ANTHROPIC_USAGE_CAP_SIGNATURE) {
-                    LlmError::UsageLimitExceeded {
-                        provider: "anthropic".to_string(),
-                        regain_hint: extract_regain_hint(body),
-                    }
-                } else {
-                    LlmError::InvalidPrompt(format!("Bad request: {}", body))
+            400 if body.contains("max_tokens") => LlmError::InvalidPrompt(
+                "Invalid max_tokens value. Claude requires max_tokens to be set.".to_string(),
+            ),
+            300..=399 => LlmError::ProviderError {
+                provider: ANTHROPIC_PROVIDER.to_string(),
+                status,
+                message: format!(
+                    "the configured base URL responded with a redirect (HTTP {status}), which \
+                     this client refuses to follow because doing so would forward the \
+                     credential header to a different, potentially attacker-influenced host. \
+                     Correct the configured base-URL setting to point directly at the intended \
+                     endpoint. Response excerpt: {}",
+                    crate::redaction::diagnostic_excerpt(body, &self.config.api_key)
+                ),
+            },
+            400 if body.contains(ANTHROPIC_USAGE_CAP_SIGNATURE) => {
+                // Redact before extracting/bounding (load-bearing ordering,
+                // see `crate::redaction`'s module doc): `body` is
+                // attacker- or third-party-influenceable (a gateway in
+                // front of `AnthropicConfig::base_url` that echoes request
+                // context), and `regain_hint` is displayed VERBATIM to the
+                // operator, so it must go through the same redact-then-bound
+                // discipline as every other body-derived string in this
+                // crate before `extract_regain_hint` slices and bounds it.
+                let redacted = crate::redaction::redact_credentials(body, &self.config.api_key);
+                LlmError::UsageLimitExceeded {
+                    provider: ANTHROPIC_PROVIDER.to_string(),
+                    regain_hint: extract_regain_hint(&redacted),
                 }
             }
-            500..=599 => LlmError::ProcessingError(format!(
-                "Anthropic server error ({}). Please retry.",
-                status
-            )),
-            _ => LlmError::ProcessingError(format!(
-                "Request failed with status {}: {}",
-                status, body
-            )),
+            _ => map_http_status(ANTHROPIC_PROVIDER, status, body, &self.config.api_key),
         }
     }
 
@@ -422,7 +466,11 @@ impl LlmPort for AnthropicAdapter {
                      — see the `thinking`-block precedent in this adapter's tests): {} — \
                      body excerpt: {}",
                     e,
-                    bounded_excerpt(&body, RESPONSE_EXCERPT_CHAR_BUDGET)
+                    // Redact BEFORE bounding (load-bearing ordering, see
+                    // `crate::redaction`): a 2xx body from a gateway in front
+                    // of `base_url` can echo request headers -- including the
+                    // `x-api-key` credential -- back verbatim.
+                    crate::redaction::diagnostic_excerpt(&body, &self.config.api_key)
                 ))
             })?;
 
@@ -537,7 +585,7 @@ impl LlmPort for AnthropicAdapter {
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "anthropic"
+        ANTHROPIC_PROVIDER
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -617,13 +665,6 @@ struct ClaudeUsage {
     output_tokens: u32,
 }
 
-/// Character budget for the diagnostic body excerpt shown in a
-/// deserialization-failure message. Large enough to reach the offending
-/// field in a typical response body; small enough not to dump a full
-/// generation (a captured production `thinking` block alone ran past
-/// 10,000 characters) into a single log line.
-const RESPONSE_EXCERPT_CHAR_BUDGET: usize = 512;
-
 /// Character budget for [`extract_regain_hint`]'s extracted prose. This is
 /// the T-41-03 mitigation against an oversized/adversarial provider body
 /// flooding the operator's terminal.
@@ -675,24 +716,6 @@ fn extract_regain_hint(body: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
-}
-
-/// Build a diagnostic excerpt of a response body, bounded by character
-/// count rather than byte count.
-///
-/// Slicing a UTF-8 `&str` by byte offset panics when the offset lands
-/// mid-character, and panics are forbidden in this library — a captured
-/// production response body is full of multi-byte characters in its
-/// markdown text. When `body` is longer than `budget` characters, an ASCII
-/// elision marker is appended reporting the total byte length of the
-/// untruncated body, so the reader knows how much was withheld.
-fn bounded_excerpt(body: &str, budget: usize) -> String {
-    if body.chars().count() <= budget {
-        return body.to_string();
-    }
-
-    let truncated: String = body.chars().take(budget).collect();
-    format!("{truncated}... [truncated, {} total bytes]", body.len())
 }
 
 /// Concatenate the text of every text-bearing content block, in array
@@ -770,6 +793,7 @@ struct ClaudeDelta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::redaction::{RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1055,6 +1079,43 @@ stake, so an attacker donating to himself alone is a strict loss.";
         );
     }
 
+    // ── Phase 25 (FT-FR-01, D-03): non-2xx routes through map_http_status ──
+
+    #[test]
+    fn anthropic_non_2xx_routes_through_the_shared_mapper() {
+        let adapter = test_adapter();
+        match adapter.map_error(503, r#"{"error":{"type":"overloaded_error"}}"#) {
+            LlmError::ProviderError {
+                provider, status, ..
+            } => {
+                assert_eq!(provider, "anthropic");
+                assert_eq!(status, 503);
+            }
+            other => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn anthropic_dedicated_status_mappings_are_unchanged() {
+        let adapter = test_adapter();
+        assert!(matches!(
+            adapter.map_error(401, "bad key"),
+            LlmError::AuthenticationError(_)
+        ));
+        assert!(matches!(
+            adapter.map_error(403, "no permission"),
+            LlmError::AuthenticationError(_)
+        ));
+        assert!(matches!(
+            adapter.map_error(429, "slow down"),
+            LlmError::RateLimitExceeded
+        ));
+        assert!(matches!(
+            adapter.map_error(400, "bad prompt"),
+            LlmError::InvalidPrompt(_)
+        ));
+    }
+
     // ── Task 41-01/2: usage-cap body classification (D-04/D-05) ───────────
 
     #[test]
@@ -1077,6 +1138,33 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 );
             }
             other => panic!("expected UsageLimitExceeded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_error_maps_a_redirect_status_to_an_actionable_provider_error() {
+        // CR-02 (`25-REVIEW.md`): named explicitly because this client's
+        // redirect policy is `none` (see `AnthropicAdapter::new`), so a
+        // `3xx` response is never followed by the underlying HTTP client —
+        // it arrives here as an ordinary non-success status instead.
+        let adapter = test_adapter();
+
+        for expected in [301u16, 302, 307] {
+            match adapter.map_error(expected, "moved") {
+                LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                } => {
+                    assert_eq!(provider, "anthropic");
+                    assert_eq!(status, expected, "typed status field must carry the code");
+                    assert!(
+                        message.contains("redirect"),
+                        "status {expected}: message must name the refused redirect, got: {message}"
+                    );
+                }
+                other => panic!("status {expected}: expected ProviderError, got {other:?}"),
+            }
         }
     }
 
@@ -1114,6 +1202,36 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 assert!(
                     regain_hint.is_none(),
                     "a missing hint must never be an error: {regain_hint:?}"
+                );
+            }
+            other => panic!("expected UsageLimitExceeded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_error_400_usage_cap_redacts_the_configured_api_key_before_extracting_the_regain_hint() {
+        // CR-01 regression: a gateway/proxy in front of `base_url` that
+        // echoes request context near "regain access" must never have that
+        // context (including a live credential) forwarded into the
+        // operator-facing `regain_hint` unredacted.
+        let adapter = test_adapter();
+        let secret = "sk-ant-test123"; // matches `test_adapter()`'s configured api_key
+        let body = format!(
+            r#"{{"type":"error","error":{{"type":"invalid_request_error","message":"You have reached your specified API usage limits. You will regain access after re-authenticating with key {secret} on 2026-08-01."}}}}"#
+        );
+
+        let error = adapter.map_error(400, &body);
+
+        match error {
+            LlmError::UsageLimitExceeded { regain_hint, .. } => {
+                let hint = regain_hint.expect("regain hint must still be extracted");
+                assert!(
+                    !hint.contains(secret),
+                    "regain hint leaked the configured API key: {hint}"
+                );
+                assert!(
+                    hint.contains("2026-08-01"),
+                    "redaction must not destroy surrounding diagnostic prose: {hint}"
                 );
             }
             other => panic!("expected UsageLimitExceeded, got {other:?}"),
@@ -1175,6 +1293,77 @@ stake, so an attacker donating to himself alone is a strict loss.";
             calls.load(Ordering::SeqCst),
             1,
             "a usage-cap error must not be retried — it will not clear on backoff"
+        );
+    }
+
+    // ── Phase 26 (RT-05, D-28): the documented no-native-mode path ─────────
+
+    /// Anthropic has no native structured-output mode (D-28): `ClaudeRequest`
+    /// has no `response_format` field at all, so a caller-supplied
+    /// [`paladin_ports::output::llm_port::ResponseFormat`] is ignored
+    /// harmlessly by construction — there is no code path that could even
+    /// read it. This test pins that as an executable fact rather than an
+    /// assumption: building and sending a `response_format`-carrying
+    /// request produces a wire body with no JSON-mode field and the call
+    /// still succeeds, exactly like a request with the field unset.
+    #[tokio::test]
+    async fn anthropic_ignores_response_format() {
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_ports::output::llm_port::ResponseFormat;
+        use std::sync::Mutex as StdMutex;
+
+        let mut server = Server::new_async().await;
+        let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+
+        server
+            .mock("POST", "/messages")
+            .with_status(200)
+            .with_body_from_request(move |req| {
+                let body_text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                *captured_clone.lock().unwrap() = Some(body_text);
+                TEXT_ONLY_OPUS_4_8_JSON.as_bytes().to_vec()
+            })
+            .create_async()
+            .await;
+
+        let config = AnthropicConfig::new(
+            "sk-ant-test123".to_string(),
+            server.url(),
+            "claude-opus-4-8".to_string(),
+            4096,
+        );
+        let adapter =
+            AnthropicAdapter::new(config).expect("test config must build a valid adapter");
+
+        let request = LlmRequest::new(
+            "claude-opus-4-8",
+            PromptItem::new(PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }))
+            .unwrap(),
+        )
+        .with_response_format(ResponseFormat::JsonObject);
+
+        let result = adapter.generate(request).await;
+        assert!(
+            result.is_ok(),
+            "a response_format-carrying request must still succeed: {result:?}"
+        );
+
+        let body_text = captured
+            .lock()
+            .unwrap()
+            .take()
+            .expect("mock must have been called exactly once");
+        let body: serde_json::Value =
+            serde_json::from_str(&body_text).expect("captured body must be valid JSON");
+        assert!(
+            body.as_object().unwrap().get("response_format").is_none(),
+            "Anthropic has no native JSON mode -- response_format must not \
+             appear on the wire, got: {body_text}"
         );
     }
 }

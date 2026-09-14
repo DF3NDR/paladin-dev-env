@@ -7,11 +7,12 @@ use paladin::core::base::entity::node::Node;
 use paladin::core::platform::container::prompt::{
     PromptData, PromptItem, PromptParameters, PromptType, UserPrompt,
 };
-use paladin_ports::output::llm_port::{FinishReason, LlmError, LlmPort, LlmRequest};
-use std::collections::{BTreeMap, HashMap};
+use paladin_ports::output::llm_port::{
+    FinishReason, LlmError, LlmPort, LlmRequest, ResponseFormat,
+};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
-use uuid::Uuid;
 
 #[tokio::test]
 async fn test_mock_llm_adapter_simple_success() {
@@ -248,6 +249,39 @@ async fn test_mock_llm_adapter_default_values() {
     assert_eq!(response.model, "mock-model");
 }
 
+/// D-28 / X-03 (plan 26-03): `response_format` is a new, additive field that
+/// no adapter reads yet -- it stays inert on the wire until plan 26-06 wires
+/// the four native JSON-mode paths. `MockLlmAdapter` stands in for "any
+/// shipped adapter" here: attaching `response_format` must not change
+/// dispatch or the resulting response in any observable way.
+#[tokio::test]
+async fn all_adapters_ignore_response_format_until_wired() {
+    let adapter = MockLlmAdapter::new().with_response("Hello, world!".to_string());
+
+    let plain_response = adapter
+        .generate(create_test_request())
+        .await
+        .expect("plain request must succeed");
+
+    let structured_request = create_test_request().with_response_format(ResponseFormat::JsonObject);
+    let structured_response = adapter
+        .generate(structured_request)
+        .await
+        .expect("a request carrying response_format must succeed identically");
+
+    assert_eq!(plain_response.content, structured_response.content);
+    assert_eq!(
+        plain_response.usage.total_tokens,
+        structured_response.usage.total_tokens
+    );
+    assert_eq!(
+        format!("{:?}", plain_response.finish_reason),
+        format!("{:?}", structured_response.finish_reason),
+        "attaching response_format must not change finish_reason on an adapter \
+         that does not read it (plan 26-06 wires this later)"
+    );
+}
+
 // Helper function to create a test request
 fn create_test_request() -> LlmRequest {
     let prompt_data = PromptData {
@@ -276,12 +310,5 @@ fn create_test_request() -> LlmRequest {
         node: Node::new(prompt_data, Some("test-prompt".to_string())),
     };
 
-    LlmRequest {
-        id: Uuid::new_v4(),
-        model: "mock-model".to_string(),
-        prompt: prompt_item,
-        attachments: vec![],
-        stream: false,
-        metadata: HashMap::new(),
-    }
+    LlmRequest::new("mock-model", prompt_item)
 }

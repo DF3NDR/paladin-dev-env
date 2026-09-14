@@ -1,4 +1,6 @@
+pub mod aegis;
 pub mod arsenal;
+pub mod assistant;
 pub mod autonomous_config;
 pub mod battalion;
 pub mod battlefield;
@@ -14,27 +16,44 @@ pub mod execution_result;
 pub mod garrison;
 pub mod garrison_error;
 pub mod handoff;
+pub mod heartbeat;
 pub mod herald;
 pub mod herald_error;
 pub mod job;
 pub mod log;
+pub mod node_cache;
+pub mod node_error;
 pub mod notification;
 pub mod orchestration_context;
 pub mod paladin;
 pub mod paladin_config;
 pub mod paladin_error;
+pub mod parley;
 pub mod planning;
 pub mod prompt;
 pub mod queue_config;
 pub mod queue_item;
 pub mod registry_error;
+pub mod run;
+pub mod run_schedule;
+pub mod run_scope;
 pub mod sanctum;
 pub mod schedule;
+/// Structured output machinery: pure value types and free functions (D-26, RT-05).
+pub mod structured;
 pub mod task;
 pub mod token_usage;
+/// The authoritative trace model (OBS-01): `TraceEvent`, `TraceRecord` and
+/// their supporting types (D-01, D-02).
+pub mod trace;
+pub mod transience;
 pub mod trigger;
 pub mod user;
 pub mod user_group;
+pub mod vault;
 pub mod vision;
 pub mod waypoint;
+/// Webhook delivery identity and the persisted `WebhookDelivery` aggregate
+/// (PLAT-FR-14/15, D-40..D-43).
+pub mod webhook;
 pub mod workflow;

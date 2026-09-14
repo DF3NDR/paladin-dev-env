@@ -928,6 +928,33 @@ Ok(ArmamentResult {
 })
 ```
 
+### 8. Model-Level Structured Output (`response_format`)
+
+The structured `ArmamentResult` output above is about the *shape a tool returns*, not the
+shape the *model itself* is asked to produce. To constrain a model's own completion to JSON
+(with an optional JSON Schema), attach a `ResponseFormat` to the request through
+`LlmRequest::with_response_format` — this is a request-level hint, not an Arsenal/tool
+concept, and it is independent of everything else in this guide.
+
+Native support for `response_format` varies by provider: some adapters put it on the wire as
+a real constrained-decoding mode, and at least one ignores it harmlessly because it has no
+native JSON mode. This guide does not duplicate that per-provider breakdown — see the
+per-provider table in the `agent-runtime` user guide for the authoritative list of which
+adapters honor `response_format` natively and which fall back to prompt-only instructions.
+
+## The Tool-Call Protocol and `InProcessArsenal`
+
+The reachability note above is about LLM-*initiated* tool calls; giving an agent a tool it can
+actually invoke through the reasoning loop is what the [Agent Runtime guide](agent-runtime.md)'s
+prompt-level **tool-call protocol** and `InProcessArsenal` add. `InProcessArsenal` is a
+closure-backed `ArsenalPort` — no MCP server or subprocess required — for registering a Rust
+closure directly as an `Armament`, and `ToolCallProtocolMiddleware` is what makes a shipped
+provider (which never populates `LlmResponse.function_call`, per ADR-0042) actually reach that
+tool: it renders the arsenal's catalogue into the prompt and decodes the model's JSON reply back
+into a synthesized tool call. See the Agent Runtime guide's
+[Tool-Call Protocol](agent-runtime.md#the-tool-call-protocol) section for the full envelope and the
+`reasoning_agent` preset, which wires both together in one call.
+
 ## Troubleshooting
 
 ### Tool Not Being Called

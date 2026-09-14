@@ -1,0 +1,92 @@
+{
+  "schema_version": "1",
+  "entry": [
+    "start"
+  ],
+  "nodes": [
+    {
+      "id": "start",
+      "kind": "paladin",
+      "paladin": {
+        "name": "Start",
+        "model": "gpt-4",
+        "system_prompt": "Begin the task: {topic}.",
+        "stop_words": [],
+        "input_template": "{topic}",
+        "output_field": "step_one"
+      },
+      "defer": false
+    },
+    {
+      "id": "middle",
+      "kind": "paladin",
+      "paladin": {
+        "name": "Middle",
+        "model": "gpt-4",
+        "system_prompt": "Continue from: {step_one}.",
+        "stop_words": [],
+        "input_template": "{step_one}",
+        "output_field": "step_two"
+      },
+      "defer": false
+    },
+    {
+      "id": "end",
+      "kind": "paladin",
+      "paladin": {
+        "name": "End",
+        "model": "gpt-4",
+        "system_prompt": "Conclude from: {step_two}.",
+        "stop_words": [],
+        "input_template": "{step_two}",
+        "output_field": "step_three"
+      },
+      "defer": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "middle"
+    },
+    {
+      "from": "middle",
+      "to": "end"
+    }
+  ],
+  "schema": {
+    "fields": [
+      {
+        "name": "topic",
+        "kind": "string",
+        "reducer": "last_write",
+        "default": "widgets",
+        "required": false
+      },
+      {
+        "name": "step_one",
+        "kind": "string",
+        "reducer": "last_write",
+        "required": false
+      },
+      {
+        "name": "step_two",
+        "kind": "string",
+        "reducer": "last_write",
+        "required": false
+      },
+      {
+        "name": "step_three",
+        "kind": "string",
+        "reducer": "last_write",
+        "required": false
+      }
+    ]
+  },
+  "limits": {
+    "max_supersteps": 50,
+    "max_node_visits": 25,
+    "run_timeout_secs": null,
+    "max_muster_tasks": 100
+  }
+}

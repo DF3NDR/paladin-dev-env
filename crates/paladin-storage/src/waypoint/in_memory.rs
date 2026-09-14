@@ -46,6 +46,7 @@ impl InMemoryWaypointStore {
             superstep: wp.superstep,
             status: wp.status.clone(),
             created_at: wp.created_at,
+            fork_of: wp.fork_of,
         }
     }
 }
@@ -417,5 +418,41 @@ mod tests {
     #[tokio::test]
     async fn checkpoint_ns_none_round_trips() {
         contract_tests::checkpoint_ns_none_round_trips(&InMemoryWaypointStore::new()).await;
+    }
+
+    // ── D-02 / D-14 / D-15: AwaitingInput payload, fork_of, branch-aware
+    //    latest ordering (Phase 24 Plan 06) ─────────────────────────────
+
+    #[tokio::test]
+    async fn awaiting_input_payload_round_trips() {
+        contract_tests::awaiting_input_payload_round_trips(&InMemoryWaypointStore::new()).await;
+    }
+
+    #[tokio::test]
+    async fn fork_of_round_trips() {
+        contract_tests::fork_of_round_trips(&InMemoryWaypointStore::new()).await;
+    }
+
+    #[tokio::test]
+    async fn latest_prefers_most_recently_created_across_branches() {
+        contract_tests::latest_prefers_most_recently_created_across_branches(
+            &InMemoryWaypointStore::new(),
+        )
+        .await;
+    }
+
+    // ── FT-FR-03 / D-16: attempt history on the execution record
+    //    (Phase 25 Plan 07) ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn waypoint_with_attempt_history_round_trips() {
+        contract_tests::waypoint_with_attempt_history_round_trips(&InMemoryWaypointStore::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn failed_waypoint_with_node_error_round_trips() {
+        contract_tests::failed_waypoint_with_node_error_round_trips(&InMemoryWaypointStore::new())
+            .await;
     }
 }

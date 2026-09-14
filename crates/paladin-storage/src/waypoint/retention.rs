@@ -169,12 +169,31 @@ mod tests {
     use crate::waypoint::in_memory::InMemoryWaypointStore;
     use async_trait::async_trait;
     use chrono::{DateTime, Duration};
-    use paladin_core::platform::container::waypoint::{ParleyRequest, Waypoint, WaypointStatus};
+    use paladin_core::platform::container::waypoint::{
+        NodeId, OnExpire, ParleyId, ParleyKind, ParleyRequest, Waypoint, WaypointStatus,
+    };
     use paladin_ports::output::waypoint_port::ThreadSummary;
     use std::sync::Mutex;
 
     fn thread(name: &str) -> ThreadId {
         ThreadId::new(name).unwrap()
+    }
+
+    /// A minimal, fully-populated `ParleyRequest` (D-01/D-02 shape) for
+    /// tests that only care that an `AwaitingInput` Waypoint exists, not
+    /// what it is asking about.
+    fn sample_parley_request() -> ParleyRequest {
+        ParleyRequest {
+            parley_id: ParleyId::new(),
+            node_id: NodeId::new("asker"),
+            kind: ParleyKind::FreeText,
+            prompt: "confirm?".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
+        }
     }
 
     /// The same shape of protected-set definition the real
@@ -424,9 +443,8 @@ mod tests {
         // both bounds.
         let mut awaiting = sample_waypoint_at(&t, 0, now - Duration::days(365));
         awaiting.status = WaypointStatus::AwaitingInput {
-            parley: ParleyRequest {
-                prompt: "confirm?".to_string(),
-            },
+            parleys: vec![sample_parley_request()],
+            responses: Vec::new(),
         };
         store.save(&awaiting).await.unwrap();
 
@@ -452,6 +470,61 @@ mod tests {
         );
         // Sanity: something else in the old/over-count zone WAS removed.
         assert!(report.total_removed() > 0);
+    }
+
+    /// Case 4 (Phase 24 Plan 06, D-14): the SAME protection holds for an
+    /// `AwaitingInput` Waypoint that lives on a BRANCH (`fork_of: Some(..)`)
+    /// -- the wildcard `AwaitingInput { .. }` match in
+    /// `latest_and_awaiting_protected` above (and the real
+    /// `src/application/services/waypoint_retention.rs` it mirrors) is
+    /// unaffected by the payload reshape, so a branch-resident suspension
+    /// is protected exactly like a mainline one.
+    #[tokio::test]
+    async fn retention_protects_awaiting_input_on_any_branch() {
+        let store = InMemoryWaypointStore::new();
+        let t = thread("retention-awaiting-input-on-branch-survives");
+        let now = Utc::now();
+        let branch_root = WaypointId::generate();
+
+        // An old, BRANCH-RESIDENT AwaitingInput waypoint that would
+        // otherwise be pruned by both bounds.
+        let mut awaiting = sample_waypoint_at(&t, 0, now - Duration::days(365));
+        awaiting.fork_of = Some(branch_root);
+        awaiting.status = WaypointStatus::AwaitingInput {
+            parleys: vec![sample_parley_request()],
+            responses: Vec::new(),
+        };
+        store.save(&awaiting).await.unwrap();
+
+        // Nine more recent waypoints, so a max_waypoints_per_thread bound
+        // would also want to evict the old one by count.
+        for superstep in 1..10u64 {
+            store
+                .save(&sample_waypoint_at(&t, superstep, now))
+                .await
+                .unwrap();
+        }
+
+        let report = prune(&store, Some(1), Some(3), &latest_and_awaiting_protected)
+            .await
+            .unwrap();
+
+        let remaining = store.history(&t, None, None).await.unwrap();
+        assert!(
+            remaining
+                .iter()
+                .any(|s| s.waypoint_id == awaiting.waypoint_id),
+            "a branch-resident AwaitingInput waypoint must survive both bounds"
+        );
+        assert!(report.total_removed() > 0);
+
+        // Confirm the surviving summary still carries its branch marker --
+        // retention did not silently strip it.
+        let survivor = remaining
+            .iter()
+            .find(|s| s.waypoint_id == awaiting.waypoint_id)
+            .unwrap();
+        assert_eq!(survivor.fork_of, Some(branch_root));
     }
 
     #[tokio::test]
@@ -519,9 +592,8 @@ mod tests {
 
         let mut awaiting = sample_waypoint_at(&t, 0, now - Duration::days(365));
         awaiting.status = WaypointStatus::AwaitingInput {
-            parley: ParleyRequest {
-                prompt: "confirm?".to_string(),
-            },
+            parleys: vec![sample_parley_request()],
+            responses: Vec::new(),
         };
         store.save(&awaiting).await.unwrap();
 

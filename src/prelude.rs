@@ -49,4 +49,10 @@ pub use paladin_memory::sanctum::InMemorySanctum;
 
 pub use crate::application::services::battalion::commander::CommanderBuilder;
 pub use crate::application::services::paladin::error::PaladinError;
+pub use crate::application::services::paladin::middleware::{
+    ExecutionMiddleware, FinalResult, LlmResponseView, MiddlewareFlow, ModelCallContext,
+    PromptAssembly, PromptSection, ToolCallContext, ToolFlow,
+};
 pub use crate::application::services::paladin::paladin_builder::PaladinBuilder;
+pub use crate::application::services::paladin::structured::StructuredExecutorExt;
+pub use crate::application::services::paladin::vault_confined::ConfinedVault;

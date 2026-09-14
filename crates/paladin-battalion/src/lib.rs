@@ -23,6 +23,7 @@
 //!
 //! - [`error_aggregation`] — Collect and summarise errors across parallel agent runs
 //! - [`retry`] — Exponential back-off retry helper
+//! - [`llm_failure`] — Structured `LlmError` -> `PaladinError::LlmFailure` conversion
 
 #![warn(missing_docs)]
 
@@ -38,6 +39,9 @@ pub mod edge_evaluator;
 /// Superstep execution engine over typed `Battlefield` state (Phase 22).
 pub mod engine;
 pub mod error_aggregation;
+/// Registered handlers for `ErrorHandlerSpec::Custom` (D-13), resolved
+/// through `engine::registries::EngineRegistries` by `WarGraph::validate`.
+pub mod error_handler;
 pub mod formation_service;
 pub mod grove_service;
 /// `LlmDecisionEvaluator`: LLM-evaluated edge routing (CF-05), registered
@@ -45,9 +49,16 @@ pub mod grove_service;
 /// default -- reachable only when a workflow author constructs and
 /// registers one in code.
 pub mod llm_decision;
+/// The one `LlmError` -> `PaladinError::LlmFailure` conversion (D-02, X-06),
+/// shared by the engine-side and application-side call sites that used to
+/// erase a real `LlmError` into the stringly `PaladinError::LlmError`.
+pub mod llm_failure;
 pub mod maneuver;
 pub mod phalanx_service;
 pub mod retry;
+/// Registered evaluators for `RetryPredicate::Custom` (D-13), resolved
+/// through `engine::registries::EngineRegistries` by `WarGraph::validate`.
+pub mod retry_predicate;
 
 /// In-memory `PaladinRegistry` implementation (also used by the application facade).
 pub mod in_memory_registry;
@@ -55,4 +66,6 @@ pub mod in_memory_registry;
 pub use edge_evaluator::{
     EdgeConditionEvaluator, EdgeContext, EdgeEvaluatorError, EdgeEvaluatorRegistry,
 };
+pub use error_handler::{ErrorHandler, ErrorHandlerRegistry};
 pub use llm_decision::{LlmDecisionEvaluator, OnAmbiguous};
+pub use retry_predicate::{RetryPredicateError, RetryPredicateEvaluator, RetryPredicateRegistry};

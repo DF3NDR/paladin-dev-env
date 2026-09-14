@@ -1,0 +1,7 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: field_json_path_equals { path: "/count", value: 99 }
+  expected: 99
+  observed: 3

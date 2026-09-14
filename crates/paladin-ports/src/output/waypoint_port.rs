@@ -93,6 +93,19 @@ pub struct WaypointSummary {
     pub status: WaypointStatus,
     /// When this waypoint was created.
     pub created_at: DateTime<Utc>,
+    /// The ROOT `WaypointId` of the branch this waypoint belongs to
+    /// (HITL-03, D-14) -- `None` for every mainline waypoint, carrying the
+    /// SAME value `Waypoint.fork_of` carries for the full checkpoint this
+    /// summarizes. See `Waypoint::fork_of`'s rustdoc (`paladin-core`) for
+    /// the full branch-inheritance contract; carried here too so the whole
+    /// branch tree is reconstructible from a `WaypointSummary` list alone,
+    /// without loading a single full `Waypoint`.
+    ///
+    /// `#[serde(default)]`, matching `Waypoint.fork_of`'s own precedent: a
+    /// `WaypointSummary` payload written before this field existed still
+    /// loads, with `None`, rather than failing to deserialize.
+    #[serde(default)]
+    pub fork_of: Option<WaypointId>,
 }
 
 /// A lightweight summary of one thread, returned by
@@ -406,10 +419,136 @@ mod tests {
             superstep: 3,
             status: WaypointStatus::Running,
             created_at: Utc::now(),
+            fork_of: None,
         };
         let json = serde_json::to_string(&summary).unwrap();
         let restored: WaypointSummary = serde_json::from_str(&json).unwrap();
         assert_eq!(summary, restored);
+    }
+
+    /// Test 2 (Phase 24 Plan 06): a serialised `WaypointSummary` with the
+    /// `fork_of` key removed entirely deserialises with `fork_of: None` --
+    /// the strip-key test, mirroring `Waypoint`'s own
+    /// `waypoint_payload_without_fork_of_deserializes_as_none`.
+    #[test]
+    fn waypoint_summary_payload_without_fork_of_deserializes_as_none() {
+        let summary = WaypointSummary {
+            waypoint_id: WaypointId::generate(),
+            parent_waypoint_id: Some(WaypointId::generate()),
+            superstep: 2,
+            status: WaypointStatus::Running,
+            created_at: Utc::now(),
+            fork_of: Some(WaypointId::generate()),
+        };
+
+        let mut value = serde_json::to_value(&summary).unwrap();
+        value
+            .as_object_mut()
+            .expect("WaypointSummary serializes to a JSON object")
+            .remove("fork_of");
+        assert!(
+            !value.to_string().contains("fork_of"),
+            "the fork_of key must be genuinely absent from the fixture payload"
+        );
+
+        let restored: WaypointSummary = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.fork_of, None);
+        assert_eq!(restored.waypoint_id, summary.waypoint_id);
+        assert_eq!(restored.superstep, summary.superstep);
+    }
+
+    /// Test 6 (Phase 24 Plan 06, D-14): the whole branch tree -- a mainline
+    /// and two forks off different mainline waypoints -- is reconstructible
+    /// from a `WaypointSummary` list alone, grouping purely by `fork_of`,
+    /// with no full `Waypoint` ever loaded.
+    #[test]
+    fn branch_tree_reconstructs_from_summaries_alone() {
+        let mainline_root = WaypointId::generate();
+        let mainline_next = WaypointId::generate();
+        let branch_a_root = WaypointId::generate(); // forked from mainline_root
+        let branch_a_next = WaypointId::generate();
+        let branch_b_root = WaypointId::generate(); // forked from mainline_next
+
+        let now = Utc::now();
+        let summaries = [
+            WaypointSummary {
+                waypoint_id: mainline_root,
+                parent_waypoint_id: None,
+                superstep: 0,
+                status: WaypointStatus::Running,
+                created_at: now,
+                fork_of: None,
+            },
+            WaypointSummary {
+                waypoint_id: mainline_next,
+                parent_waypoint_id: Some(mainline_root),
+                superstep: 1,
+                status: WaypointStatus::Running,
+                created_at: now,
+                fork_of: None,
+            },
+            WaypointSummary {
+                waypoint_id: branch_a_root,
+                parent_waypoint_id: Some(mainline_root),
+                superstep: 1,
+                status: WaypointStatus::Running,
+                created_at: now,
+                fork_of: Some(mainline_root),
+            },
+            WaypointSummary {
+                waypoint_id: branch_a_next,
+                parent_waypoint_id: Some(branch_a_root),
+                superstep: 2,
+                status: WaypointStatus::Running,
+                created_at: now,
+                fork_of: Some(mainline_root),
+            },
+            WaypointSummary {
+                waypoint_id: branch_b_root,
+                parent_waypoint_id: Some(mainline_next),
+                superstep: 2,
+                status: WaypointStatus::Running,
+                created_at: now,
+                fork_of: Some(mainline_next),
+            },
+        ];
+
+        // The tree is reconstructed purely by grouping on `fork_of` -- no
+        // `parent_waypoint_id` walk back to a root is needed, and nothing
+        // here touches a full `Waypoint`.
+        let mainline: Vec<WaypointId> = summaries
+            .iter()
+            .filter(|s| s.fork_of.is_none())
+            .map(|s| s.waypoint_id)
+            .collect();
+        assert_eq!(mainline, vec![mainline_root, mainline_next]);
+
+        let branch_a: Vec<WaypointId> = summaries
+            .iter()
+            .filter(|s| s.fork_of == Some(mainline_root))
+            .map(|s| s.waypoint_id)
+            .collect();
+        assert_eq!(branch_a, vec![branch_a_root, branch_a_next]);
+
+        let branch_b: Vec<WaypointId> = summaries
+            .iter()
+            .filter(|s| s.fork_of == Some(mainline_next))
+            .map(|s| s.waypoint_id)
+            .collect();
+        assert_eq!(branch_b, vec![branch_b_root]);
+
+        // Every branch's own first waypoint (its root marker) carries a
+        // `parent_waypoint_id` pointing at the exact mainline waypoint it
+        // forked from, so the fork POINT (not just the branch's own
+        // members) is also reconstructible without a full Waypoint load.
+        let branch_a_root_summary = summaries
+            .iter()
+            .find(|s| s.waypoint_id == branch_a_root)
+            .unwrap();
+        assert_eq!(
+            branch_a_root_summary.parent_waypoint_id,
+            Some(mainline_root)
+        );
     }
 
     #[test]

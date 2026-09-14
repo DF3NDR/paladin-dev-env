@@ -2,19 +2,48 @@
 //!
 //! Defines [`StateNode`], the pure state -> delta node trait `Function`
 //! variants of [`crate::engine::graph::NodeSpec`] implement, its execution
-//! context [`NodeContext`], and its error type [`NodeError`].
+//! context [`NodeContext`], and its error type [`StateNodeError`].
+//!
+//! `StateNodeError` (renamed from `NodeError`, D-06) is deliberately a
+//! bare-`String` newtype -- the same shape it has always had -- rather than
+//! the structured `paladin_core::platform::container::node_error::NodeError`
+//! Doc 04 introduces: a `StateNode` author still just returns a message, and
+//! `impl From<StateNodeError> for NodeErrorSource` is where that message
+//! crosses into the structured family, at the engine boundary where the
+//! node identity and attempt number are in scope (D-07).
 
 use async_trait::async_trait;
 use thiserror::Error;
 
 use paladin_core::platform::container::battlefield::Battlefield;
 use paladin_core::platform::container::directive::{Directive, MusterContext};
+use paladin_core::platform::container::node_error::NodeErrorSource;
+use paladin_core::platform::container::parley::ParleyResponse;
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
+use paladin_ports::output::vault_confined::ConfinedVault;
+
+use crate::engine::heartbeat::HeartbeatHandle;
 
 /// Error returned by a [`StateNode`]'s execution.
+///
+/// Renamed from `NodeError` (D-06): the PRD's own `NodeError` name is taken
+/// by the structured
+/// `paladin_core::platform::container::node_error::NodeError` this phase
+/// lands, so this pre-existing, new-in-`v0.10.0` engine newtype (absent at
+/// `v0.9.0`, so this rename breaks no published contract) moves aside.
 #[derive(Debug, Clone, PartialEq, Error)]
 #[error("{0}")]
-pub struct NodeError(pub String);
+pub struct StateNodeError(pub String);
+
+impl From<StateNodeError> for NodeErrorSource {
+    /// A `StateNode`'s own error becomes a `NodeErrorSource::Function`
+    /// (D-07): its message is already first-party text (never a
+    /// provider-sourced excerpt), so no redaction step applies here -- D-34
+    /// governs `Paladin`/`Llm` variant construction, not this one.
+    fn from(err: StateNodeError) -> Self {
+        NodeErrorSource::Function { message: err.0 }
+    }
+}
 
 /// The read-only context a [`StateNode`] runs with. Carries only what this
 /// phase needs; later plans extend this rather than changing its existing
@@ -34,9 +63,77 @@ pub struct NodeContext {
     /// only through this field and its accessors, and through
     /// `{muster.payload}`/`{muster.task_key}` in an `InputMapping` template.
     pub muster: Option<MusterContext>,
+    /// The answer to this node's own outstanding `ParleyRequest`, populated
+    /// only on the post-resume re-run of a parleying node (HITL-01, D-07,
+    /// D-08): `Some` when `WarEngine::resume_with` seeded this superstep's
+    /// vanguard with a matching `ParleyResponse`, `None` for every ordinary
+    /// execution -- including a node's own FIRST run, the one that raises
+    /// the parley in the first place. Never merged into the Battlefield --
+    /// reachable only through this field and its accessor, and through the
+    /// `parley.` `InputMapping` namespace (a later plan).
+    pub parley_response: Option<ParleyResponse>,
+    /// The 1-indexed attempt this execution is (Doc 04 D-18): `1` for a
+    /// node's first run, `2` for its first RETRY under an Aegis retry
+    /// policy, and so on. A node with no retry policy always sees `1`. The
+    /// context is rebuilt per attempt, so a `StateNode` never observes a
+    /// stale value from a previous attempt.
+    pub attempt: u32,
+    /// This attempt's progress channel (D-18, D-19): fresh per attempt,
+    /// beaten by [`NodeContext::heartbeat`], by `PaladinPort::execute_observed`
+    /// for a Paladin node, and once per child superstep for a Battalion
+    /// node. Only an `idle_timeout` on this node's resolved
+    /// `TimeoutPolicy` ever subscribes to it; without one the handle exists
+    /// but nothing is watching, so beating it is a cheap no-op. Never
+    /// merged into the Battlefield and never part of a context's identity
+    /// (any two handles compare equal).
+    pub heartbeat: HeartbeatHandle,
+    /// This run's confined Vault handle (Doc 05 RT-04, D-21), if the
+    /// `WarEngine` was configured with [`crate::engine::WarEngine::with_vault`].
+    /// `None` when the engine has no Vault store wired -- a node then has
+    /// no handle at all, never one silently granted the root namespace.
+    /// `NodeContext`'s `PartialEq` compares this field by its granted
+    /// namespace ([`ConfinedVault`]'s own `PartialEq`), not by which `Arc`
+    /// it happens to wrap.
+    ///
+    /// Not part of any persisted Waypoint/Battlefield payload -- it is a
+    /// live handle, never serialized -- so `BATTLEFIELD_SCHEMA_VERSION`
+    /// does NOT bump for this field (this is the answer D-21 leaves open as
+    /// Claude's Discretion; evidence: neither `Battlefield` nor `Waypoint`
+    /// derives from or serializes `NodeContext`, and this field carries no
+    /// `serde` derive at all).
+    pub vault: Option<ConfinedVault>,
 }
 
 impl NodeContext {
+    /// The 1-indexed attempt this execution is (D-18); `1` for a node with
+    /// no retry policy.
+    pub fn attempt(&self) -> u32 {
+        self.attempt
+    }
+
+    /// Report progress (D-18, FT-FR-09): resets this attempt's
+    /// `TimeoutPolicy::idle_timeout` timer, if the node has one. On a node
+    /// with no `idle_timeout` this is a cheap no-op -- the handle exists
+    /// but nothing subscribes to it, so a `StateNode` author can call this
+    /// unconditionally inside a long loop without checking the policy.
+    ///
+    /// A `StateNode` that never calls this under an `idle_timeout` is
+    /// bounded by that timeout exactly as a stalled node would be: the idle
+    /// bound degrades to a per-attempt wall clock (D-19).
+    pub fn heartbeat(&self) {
+        self.heartbeat.beat();
+    }
+
+    /// This execution's confined Vault handle (Doc 05 RT-04, D-21), or
+    /// `None` when the engine has no Vault store wired via
+    /// [`crate::engine::WarEngine::with_vault`]. A `StateNode` reads or
+    /// writes memory within its granted subtree through this handle; a
+    /// `None` here means there is nothing to fall back to -- never a
+    /// root-granted handle.
+    pub fn vault(&self) -> Option<&ConfinedVault> {
+        self.vault.as_ref()
+    }
+
     /// This execution's Muster task payload (CF-FR-10), or `None` outside a
     /// Muster worker-task dispatch.
     pub fn muster_payload(&self) -> Option<&serde_json::Value> {
@@ -47,6 +144,12 @@ impl NodeContext {
     /// Muster worker-task dispatch.
     pub fn task_key(&self) -> Option<&str> {
         self.muster.as_ref().map(|m| m.task_key.as_str())
+    }
+
+    /// The answer to this node's own outstanding `ParleyRequest` (HITL-01,
+    /// D-07), or `None` outside a post-resume re-run of a parleying node.
+    pub fn parley_response(&self) -> Option<&ParleyResponse> {
+        self.parley_response.as_ref()
     }
 }
 
@@ -63,5 +166,136 @@ pub trait StateNode: Send + Sync {
     /// `StateDelta` -- adopts this via `Ok(delta.into())`
     /// (`impl From<StateDelta> for Directive` defaults `next:
     /// NextStep::Edges`, preserving the prior behavior exactly).
-    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError>;
+    async fn run(
+        &self,
+        state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use crate::engine::heartbeat::HeartbeatHandle;
+
+    fn ctx(heartbeat: HeartbeatHandle) -> NodeContext {
+        NodeContext {
+            node_id: NodeId::new("n"),
+            thread_id: ThreadId::new("t").unwrap(),
+            superstep: 1,
+            muster: None,
+            parley_response: None,
+            attempt: 1,
+            heartbeat,
+            vault: None,
+        }
+    }
+
+    /// D-18: the `Debug, Clone, PartialEq` derive set on `NodeContext` is
+    /// load-bearing (interceptor tests and `Directive` plumbing compare
+    /// contexts by value), so `HeartbeatHandle` must satisfy it -- two
+    /// contexts differing ONLY in their handle compare equal, cloning
+    /// works, and `Debug` renders without exposing the handle's internals.
+    #[test]
+    fn node_context_keeps_its_derives_with_a_heartbeat_handle() {
+        fn assert_derives<T: Clone + PartialEq + std::fmt::Debug>() {}
+        assert_derives::<NodeContext>();
+
+        let a = ctx(HeartbeatHandle::new());
+        let b = ctx(HeartbeatHandle::new());
+        b.heartbeat.beat();
+        assert_eq!(a, b, "handles compare equal regardless of beat state");
+
+        let c = a.clone();
+        assert_eq!(a, c);
+        assert_eq!(c.attempt(), 1);
+        assert!(
+            format!("{a:?}").contains("HeartbeatHandle"),
+            "Debug renders an opaque placeholder for the handle"
+        );
+    }
+
+    /// A no-op `VaultPort` used only to construct `ConfinedVault` handles
+    /// for the equality test below -- never actually called.
+    struct NoopVault;
+
+    #[async_trait]
+    impl paladin_ports::output::vault_port::VaultPort for NoopVault {
+        async fn put(
+            &self,
+            _ns: &paladin_ports::output::vault_port::Namespace,
+            _key: &str,
+            _value: serde_json::Value,
+        ) -> Result<(), paladin_ports::output::vault_port::VaultError> {
+            unreachable!("not exercised")
+        }
+
+        async fn get(
+            &self,
+            _ns: &paladin_ports::output::vault_port::Namespace,
+            _key: &str,
+        ) -> Result<
+            Option<paladin_ports::output::vault_port::VaultRecord>,
+            paladin_ports::output::vault_port::VaultError,
+        > {
+            unreachable!("not exercised")
+        }
+
+        async fn delete(
+            &self,
+            _ns: &paladin_ports::output::vault_port::Namespace,
+            _key: &str,
+        ) -> Result<bool, paladin_ports::output::vault_port::VaultError> {
+            unreachable!("not exercised")
+        }
+
+        async fn list(
+            &self,
+            _ns: &paladin_ports::output::vault_port::Namespace,
+            _prefix: Option<&str>,
+            _page: paladin_ports::output::vault_port::Page,
+        ) -> Result<
+            Vec<paladin_ports::output::vault_port::VaultRecord>,
+            paladin_ports::output::vault_port::VaultError,
+        > {
+            unreachable!("not exercised")
+        }
+    }
+
+    /// Test 5 (plan 26-13, D-21): two `NodeContext`s differing only in
+    /// their vault handle's granted namespace are unequal; two with the
+    /// same grant are equal -- `ConfinedVault`'s own `PartialEq` (by
+    /// granted namespace, Task 1) is what `NodeContext`'s derived
+    /// `PartialEq` rides on for this field.
+    #[test]
+    fn node_context_equality_compares_the_grant() {
+        use paladin_ports::output::vault_port::Namespace;
+
+        let alice = Namespace::parse("user/alice").unwrap();
+        let bob = Namespace::parse("user/bob").unwrap();
+
+        let mut a = ctx(HeartbeatHandle::new());
+        a.vault = Some(ConfinedVault::new(Arc::new(NoopVault), alice.clone()));
+
+        let mut b = ctx(HeartbeatHandle::new());
+        b.vault = Some(ConfinedVault::new(Arc::new(NoopVault), alice));
+
+        let mut c = ctx(HeartbeatHandle::new());
+        c.vault = Some(ConfinedVault::new(Arc::new(NoopVault), bob));
+
+        assert_eq!(
+            a, b,
+            "two handles granted the same namespace make their contexts equal"
+        );
+        assert_ne!(
+            a, c,
+            "two handles granted different namespaces make their contexts unequal"
+        );
+
+        let mut none_vault = ctx(HeartbeatHandle::new());
+        none_vault.vault = None;
+        assert_ne!(a, none_vault, "a grant and no grant are never equal");
+    }
 }

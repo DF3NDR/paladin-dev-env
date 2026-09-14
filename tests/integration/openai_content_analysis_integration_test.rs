@@ -1,6 +1,4 @@
-use std::collections::HashMap;
 use std::time::Duration;
-use uuid::Uuid;
 
 use paladin::core::platform::container::content::{ContentItem, ContentType, TextContent};
 use paladin::core::platform::container::prompt::{PromptItem, PromptRole, PromptType, TextPrompt};
@@ -45,14 +43,7 @@ async fn test_openai_integration() {
     )
     .expect("Failed to create content item");
 
-    let request = LlmRequest {
-        id: Uuid::new_v4(),
-        model: "gpt-3.5-turbo".to_string(),
-        prompt,
-        attachments: vec![content],
-        stream: false,
-        metadata: HashMap::new(),
-    };
+    let request = LlmRequest::new("gpt-3.5-turbo", prompt).with_attachments(vec![content]);
 
     // Add retry logic with exponential backoff for rate limits
     let mut retries = 0;
@@ -166,14 +157,7 @@ fn create_minimal_request() -> LlmRequest {
     )
     .expect("Failed to create prompt");
 
-    LlmRequest {
-        id: Uuid::new_v4(),
-        model: "gpt-3.5-turbo".to_string(),
-        prompt,
-        attachments: vec![],
-        stream: false,
-        metadata: HashMap::new(),
-    }
+    LlmRequest::new("gpt-3.5-turbo", prompt)
 }
 
 #[tokio::test]

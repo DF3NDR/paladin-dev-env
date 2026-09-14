@@ -25,7 +25,11 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY crates ./crates
 COPY benches ./benches
-COPY migrations ./migrations
+# `paladin-cli eval run` compiles the shared E2E graph builders from tests/helpers
+# via a `#[path]` include (plan 28-16); the lib target needs the file present.
+COPY tests ./tests
+# SQL migrations are embedded in the binary at compile time (D-17,
+# crates/paladin-memory/src/migrations.rs) -- no migrations/ directory to copy.
 # config.yml is gitignored (env-specific); provide at runtime via volume mount
 
 # Build the application in release mode
@@ -52,9 +56,8 @@ RUN apt-get update && apt-get install -y \
 
 # Copy the binary from builder
 COPY --from=builder /app/target/release/paladin /usr/local/bin/paladin
-
-# Copy migrations (config.yml must be provided at runtime via volume mount)
-COPY --from=builder /app/migrations /app/migrations
+# Migrations are embedded in the binary (D-17); config.yml must be provided at
+# runtime via volume mount
 
 # Create non-root user
 RUN groupadd -g 65532 paladin && \

@@ -28,6 +28,32 @@ kubectl apply -f k8s/server/secret.yaml -f k8s/server/
 > single replica — that store is in-process and per-pod, so a token issued by one replica
 > does not verify on another. See ADR-0041.
 
+### Worker replicas (Platform API, v0.10)
+
+- [`server/worker-deployment.yaml`](server/worker-deployment.yaml) — a `paladin-worker`
+  Deployment (`replicas: 2`) running the SAME image as `server/deployment.yaml`, with `APP_RUN_
+  STORE_BACKEND=postgres`, `APP_RUN_QUEUE_BACKEND=redis` and `APP_RUN_WORKER_CONCURRENCY=4` set
+  so its pods drive `RunWorkerPool` against the durable run store and queue instead of serving
+  API traffic. No separate Service is needed — worker pods only consume work.
+
+```bash
+# The worker Deployment needs a run-db-url and redis-url key on a `paladin-secrets` Secret,
+# in addition to the paladin-server-secrets the API replicas already use for provider keys:
+kubectl -n paladin create secret generic paladin-secrets \
+  --from-literal=run-db-url=postgres://paladin:CHANGE_ME@postgres:5432/paladin_runs \
+  --from-literal=redis-url=redis://redis:6379
+kubectl apply -f k8s/server/worker-deployment.yaml
+```
+
+> **Auth token store, revisited for a worker/API split.** Running `paladin-worker` pods
+> alongside multiple `paladin-server` API replicas does not change ADR-0041's scope: the
+> in-process bearer-token store is still per-pod. The worker Deployment above never serves
+> the `/v1` auth-gated routes at all (it has no reason to — it only dequeues), so it carries
+> no new exposure; the existing guidance for `paladin-server` (static API keys are safe to
+> scale, `bearer_token.enabled: true` is not, past one replica) is unchanged. See
+> [Queue / Worker (Distributed)](../docs/src/deployment-topologies/queue-worker.md) for the
+> full producer/worker-replica topology writeup.
+
 ## Quick Start
 
 ### Prerequisites
@@ -165,6 +191,31 @@ Paladin includes three types of probes:
 Health check endpoints:
 - `/health` - Overall health status
 - `/ready` - Readiness status
+
+## Graceful Shutdown
+
+Both `server/deployment.yaml` and `deployment.yaml` set
+`terminationGracePeriodSeconds: 60` on the pod spec (HITL-04, D-23). **The rule: set
+`terminationGracePeriodSeconds` to at least twice the configured
+`APP_ENGINE_SHUTDOWN_GRACE_SECS`.** 60 is 2x the 30-second default — if you tune the grace
+window via the env var below, raise `terminationGracePeriodSeconds` to match, or the
+kubelet's SIGKILL deadline can fire while the process is still mid-drain.
+
+Two env vars, both read by `EngineConfig` (`src/config/engine.rs`), control the wait:
+
+- `APP_ENGINE_SHUTDOWN_GRACE_SECS` (default `30`) — how long the process waits, after
+  SIGTERM/SIGINT, for in-flight superstep runs to finish before giving up on the
+  stragglers.
+- `APP_ENGINE_GRACEFUL_SHUTDOWN` (default `true`) — set to `false` to restore the legacy
+  no-wait behavior: the process exits immediately on SIGTERM/SIGINT without waiting for
+  any in-flight run to drain.
+
+On SIGTERM, an operator observes one of two outcomes per in-flight run: it finishes
+inside the grace window and its Waypoint records completion normally, or it is still
+running at the deadline, in which case it is aborted, its `NodeExecutionRecord` reads
+`Skipped { reason: "shutdown" }`, and its node id is re-listed in the Halted Waypoint's
+vanguard so `resume`/`WarEngine::resume` re-runs it exactly once on the next process
+start — no work silently vanishes.
 
 ## Monitoring
 

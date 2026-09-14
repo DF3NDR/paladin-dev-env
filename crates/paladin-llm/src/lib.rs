@@ -20,6 +20,7 @@
 //! | `openai-compatible` | Any OpenAI-compatible endpoint (operator-configured) | [`openai_compatible::OpenAiCompatibleAdapter`], [`openai_compatible::OpenAiCompatibleConfig`] |
 //! | `gemini` | Google Gemini (text-only, bespoke protocol) | [`gemini::GeminiAdapter`], [`gemini::GeminiConfig`] |
 //! | `mock` (default) | Testing | [`mock::MockLlmAdapter`], [`mock::MultiStepMockLlmPort`] |
+//! | *(none — always compiled)* | Model fallback chain over any of the above | [`fallback::FallbackLlmAdapter`] |
 //! | `openai-embeddings` | OpenAI Embeddings | [`openai::OpenAIEmbeddingAdapter`] |
 //! | `vision` | Vision (multimodal) | Extends OpenAI and Anthropic adapters |
 //!
@@ -50,9 +51,41 @@
 /// Shared configuration types for LLM providers and request behavior.
 #[allow(missing_docs)]
 pub mod config;
+/// Shared LLM adapter conformance suite (RT-06, D-31): one fixed case list,
+/// instantiated once per adapter via [`llm_conformance_suite!`], so every
+/// provider is measured against the same bar rather than its own
+/// hand-written tests. `#[cfg(test)]`-only, gated on any feature that pulls
+/// in `reqwest` (its own in-file `TrivialAdapter` needs an HTTP client) --
+/// `reqwest`'s implicit same-named feature is suppressed here because
+/// `openai`/etc already reference it via `dep:reqwest` (Cargo's namespaced-
+/// features rule), so this lists every feature that declares that edge.
+#[cfg(all(
+    test,
+    any(
+        feature = "openai",
+        feature = "anthropic",
+        feature = "deepseek",
+        feature = "kimi",
+        feature = "qwen",
+        feature = "grok",
+        feature = "ollama",
+        feature = "openai-compatible",
+        feature = "gemini"
+    )
+))]
+mod conformance;
 /// Error types returned by provider adapters.
 #[allow(missing_docs)]
 pub mod error;
+/// Model fallback (FT-FR-16/17): [`fallback::FallbackLlmAdapter`] composes an
+/// ordered chain of plain `LlmPort`s and hops on Transient/Unknown errors
+/// only. Not feature-gated (ADR-0046) — it needs no provider adapter itself.
+pub mod fallback;
+/// The one shared HTTP-status-to-`LlmError` mapping every provider adapter
+/// routes its non-2xx branch through (FT-FR-01, D-03) — redacts before it
+/// bounds, and emits a typed `ProviderError { status }` for every status
+/// without a dedicated variant. Not feature-gated.
+pub mod http_status;
 /// LLM-backed content analysis service orchestration.
 #[allow(missing_docs)]
 pub mod llm_analysis_service;
@@ -63,6 +96,13 @@ pub mod provider_factory;
 /// — reused by the shared compatible core and by bespoke adapters alike).
 #[allow(missing_docs)]
 pub mod redaction;
+/// Application-layer services composing this crate's ports (provider capabilities,
+/// [`paladin_ports::output::token_counter_port::TokenCounterPort`]) rather than
+/// implementing a provider adapter themselves. Houses [`services::commissary`], the
+/// v0.10.0-native prompt-budgeting service (fail-loud pre-flight guard + bounded,
+/// priority-ordered allocator with explicit truncation markers).
+#[allow(missing_docs)]
+pub mod services;
 
 #[cfg(any(
     feature = "kimi",

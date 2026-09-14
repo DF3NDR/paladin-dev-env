@@ -1,0 +1,8 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: supersteps_max 1
+  expected: total_supersteps <= 1
+  observed: total_supersteps = 2
+  seq: 13..=13

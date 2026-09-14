@@ -500,6 +500,11 @@ fn is_plaintext_to_non_loopback_host(base_url: &str) -> bool {
     }
 }
 
+/// The provider name this adapter reports through [`LlmPort::get_provider_name`]
+/// and that its engine stamps on every `LlmError::ProviderError` (Phase 25
+/// D-03). Deliberately host-independent (D-07/D-09/T-17-20).
+const OPENAI_COMPATIBLE_PROVIDER: &str = "openai-compatible";
+
 /// Generic operator-configured OpenAI-compatible LLM Adapter implementing
 /// [`LlmPort`].
 ///
@@ -568,7 +573,10 @@ impl OpenAiCompatibleAdapter {
         };
 
         Ok(Self {
-            engine: CompatEngine::new(engine_config)?,
+            // Phase 25 D-03: name the engine explicitly (it matches the
+            // engine's own default, but the preset owns its identity).
+            engine: CompatEngine::new(engine_config)?
+                .with_provider_name(OPENAI_COMPATIBLE_PROVIDER),
         })
     }
 }
@@ -612,7 +620,7 @@ impl LlmPort for OpenAiCompatibleAdapter {
     /// This value never contains the configured `base_url` or any other
     /// operator-supplied value (D-07) — it is a compile-time constant.
     fn get_provider_name(&self) -> &'static str {
-        "openai-compatible"
+        OPENAI_COMPATIBLE_PROVIDER
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -623,26 +631,21 @@ impl LlmPort for OpenAiCompatibleAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http_status::map_http_status;
     use mockito::Server;
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
     use paladin_ports::output::llm_port::FinishReason;
     use serde_json::json;
-    use std::collections::HashMap;
-    use uuid::Uuid;
 
     fn build_request(model: &str) -> LlmRequest {
-        LlmRequest {
-            id: Uuid::new_v4(),
-            model: model.to_string(),
-            prompt: PromptItem::new(PromptType::User(UserPrompt {
+        LlmRequest::new(
+            model,
+            PromptItem::new(PromptType::User(UserPrompt {
                 query: "Hello".to_string(),
                 context: None,
             }))
             .unwrap(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        }
+        )
     }
 
     fn default_capabilities() -> OpenAiCompatibleCapabilitiesConfig {
@@ -1080,6 +1083,52 @@ mod tests {
         assert!(matches!(result, Err(LlmError::InvalidPrompt(_))));
     }
 
+    /// Phase 25 (FT-FR-01, D-03): the preset's non-2xx path is the shared
+    /// `map_http_status` — proven by comparing the adapter's error against
+    /// the helper's own output for the same status, body and key.
+    #[tokio::test]
+    async fn openai_compatible_non_2xx_routes_through_the_shared_mapper() {
+        let body = r#"{"error":"overloaded"}"#;
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(503)
+            .with_body(body)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let config = OpenAiCompatibleConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            "some-model".to_string(),
+            default_capabilities(),
+        );
+        let adapter = OpenAiCompatibleAdapter::new(config).unwrap();
+
+        let result = adapter.generate(build_request("some-model")).await;
+        let expected = map_http_status("openai-compatible", 503, body, "test-key");
+        match (result, expected) {
+            (
+                Err(LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                }),
+                LlmError::ProviderError {
+                    provider: want_provider,
+                    status: want_status,
+                    message: want_message,
+                },
+            ) => {
+                assert_eq!(provider, want_provider);
+                assert_eq!(status, want_status);
+                assert_eq!(message, want_message);
+            }
+            (other, _) => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+        }
+    }
+
     // ── Provider identity (D-07/D-09/T-17-20) ──
 
     #[test]
@@ -1213,5 +1262,66 @@ mod tests {
         assert!(!is_plaintext_to_non_loopback_host(
             "https://remote-gateway.example.invalid/v1"
         ));
+    }
+
+    // ── Shared conformance suite (RT-06, D-31) ──
+    //
+    // Nested in its own module (rather than inline in `mod tests`) so every generated test's
+    // full path contains "conformance" -- `cargo test --lib conformance` (the plan's own
+    // acceptance criterion) selects it by that substring. Bodies below are copied verbatim from
+    // this module's own hand-written tests above
+    // (`generate_posts_to_configured_base_url_chat_completions`,
+    // `generate_stream_assembles_deltas_in_wire_order_with_terminal_stop`) rather than invented
+    // for this suite (26-PATTERNS.md).
+    mod conformance_suite {
+        use super::*;
+        use std::sync::Arc;
+
+        struct OpenAiCompatibleFixture;
+
+        impl crate::conformance::ConformanceFixture for OpenAiCompatibleFixture {
+            const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
+
+            fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
+                let config = OpenAiCompatibleConfig::new(
+                    "test-key".to_string(),
+                    base_url.to_string(),
+                    "some-model".to_string(),
+                    default_capabilities(),
+                );
+                Arc::new(OpenAiCompatibleAdapter::new(config).expect("test config must build"))
+            }
+
+            fn success_body() -> String {
+                json!({
+                    "id": "cmpl-1",
+                    "model": "some-model",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi there"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+                })
+                .to_string()
+            }
+
+            fn stream_body() -> String {
+                concat!(
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"lo \"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"world\"},\"finish_reason\":\"stop\"}]}\n\n",
+                    "data: [DONE]\n\n",
+                )
+                .to_string()
+            }
+
+            fn error_body(status: u16) -> String {
+                json!({"error": {"message": format!("mock error for status {status}"), "type": "mock_error"}})
+                    .to_string()
+            }
+        }
+
+        crate::llm_conformance_suite!(OpenAiCompatibleFixture);
     }
 }

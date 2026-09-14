@@ -142,6 +142,10 @@ pub mod infrastructure;
 /// Prelude: convenient re-exports of the most commonly used types.
 pub mod prelude;
 
+/// Presets: one-liner compositions over ports and services built and
+/// tested in isolation elsewhere in the facade (Doc 05 RT-07, D-35).
+pub mod presets;
+
 /// Shared test infrastructure for co-located `#[cfg(test)]` modules in `src/` — the doubles the
 /// coverage work in DEFER-01/02/03 consumes. Declared `#[cfg(test)]` **on the module declaration
 /// itself**, so nothing here reaches a release build even if an individual item were left
@@ -187,9 +191,26 @@ pub use paladin_llm::deepseek::{DeepSeekAdapter, DeepSeekConfig};
 
 pub use paladin_llm::mock::{MockLlmAdapter, MultiStepMockLlmPort};
 
+// Commissary (prompt-budgeting) service types (from paladin-llm crate) -- the
+// v0.10.0-native re-port of the removed Quartermaster/Convoy/apportion capability
+// (D-01/D-02): a fail-loud pre-flight guard plus a bounded, priority-ordered allocator
+// with explicit truncation markers. Not feature-gated -- `services` compiles
+// unconditionally in paladin-llm.
+pub use paladin_llm::services::commissary::{
+    Commissary, CommissaryError, CommissaryPlan, Consignment, ConsignmentItem, DispensedItem,
+    ShedItem, Stockpile,
+};
+
 // Paladin (Agent) Types
 pub use core::platform::container::paladin::{Paladin, PaladinData, PaladinStatus};
 pub use core::platform::container::paladin_config::PaladinConfig;
 
 // Battalion (Multi-Agent) Types
 pub use core::platform::container::battalion::{BattalionConfig, BattalionError};
+
+// Arsenal (Tool) Types -- in-process tool execution and composition (D-22)
+pub use application::services::arsenal::composite_arsenal::CompositeArsenalPort;
+pub use application::services::arsenal::in_process_arsenal::InProcessArsenal;
+
+// Structured Output -- the generic, typed extension over StructuredExecutorPort (D-27)
+pub use application::services::paladin::structured::StructuredExecutorExt;

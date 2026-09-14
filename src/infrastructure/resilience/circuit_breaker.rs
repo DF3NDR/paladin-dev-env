@@ -312,6 +312,28 @@ impl CircuitBreaker {
         state.clone()
     }
 
+    /// The number of consecutive failures configured to open the circuit
+    /// (the `failure_threshold` constructor argument), so a caller can pin
+    /// what figures a `CircuitBreaker` was actually built with -- e.g.
+    /// `paladin::presets::reasoning_agent`'s documented default (Doc 05
+    /// D-35).
+    pub fn failure_threshold(&self) -> u32 {
+        self.failure_threshold
+    }
+
+    /// The number of consecutive half-open successes configured to close
+    /// the circuit (the `success_threshold` constructor argument). See
+    /// [`Self::failure_threshold`].
+    pub fn success_threshold(&self) -> u32 {
+        self.success_threshold
+    }
+
+    /// The configured open-state recovery wait (the `timeout` constructor
+    /// argument). See [`Self::failure_threshold`].
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
     /// Handles successful operation
     ///
     /// Updates the circuit state based on success:

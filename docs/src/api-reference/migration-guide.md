@@ -2,8 +2,20 @@
 
 This guide covers all breaking changes since v0.1.0 up to the current **v0.5.0** release.
 
+## Upgrading to v0.10.0 (from v0.9.x)
+
+This historical guide stops at v0.5.0. The v0.10.0 upgrade record lives on the
+[Upgrading](upgrading.md) page and in the root
+[`MIGRATION.md`](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md) file, which
+together cover every behavioral change, Rust API change, schema migration, configuration
+change and the operator upgrade checklist for v0.9.x → v0.10.0. The intervening 0.6 through 0.9
+changes are recorded in
+[`CHANGELOG.md`](https://github.com/DF3NDR/paladin-dev-env/blob/main/CHANGELOG.md), not in this
+guide.
+
 ## Table of Contents
 
+- [Upgrading to v0.10.0 (from v0.9.x)](#upgrading-to-v0100-from-v09x)
 - [Migrating to v0.5.0 (from v0.4.x)](#migrating-to-v050-from-v04x)
 - [Migrating to v0.4.x (from v0.3.x)](#migrating-to-v04x-from-v03x)
 - [Migrating to v0.2.0 (from v0.1.x)](#migrating-to-v020-from-v01x)

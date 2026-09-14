@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The Commissary prompt-budgeting types are now re-exported from the `paladin` facade:
+  `Commissary`, `CommissaryError`, `CommissaryPlan`, `Consignment`, `ConsignmentItem`,
+  `DispensedItem`, `ShedItem`, and `Stockpile`.
+
+## [0.10.0] - 2026-09-10
+
+### Behavioral changes
+
+Four user-visible behavior changes ship in this release without requiring a code change. Each is
+detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes).
+
+- **M-B-01 — `EdgeCondition::Custom` no longer defaults to `true` when no evaluator is registered
+  (BUG-01 fix).** Campaign/graph validation now fails, naming every unregistered condition, before
+  any node executes. Register an evaluator via `CampaignExecutionService::with_evaluator` /
+  `WarEngine::with_edge_evaluator`, or replace the condition with `Contains`/`Regex`/`Always`.
+- **M-B-02 — Graceful shutdown is on by default.** On SIGTERM/SIGINT the process now waits up to
+  `shutdown_grace` (default 30s, env `APP_ENGINE_SHUTDOWN_GRACE_SECS`) for in-flight engine runs to
+  halt before exiting. Set `terminationGracePeriodSeconds` ≥ 2 × `shutdown_grace` in any Kubernetes
+  Deployment manifest before rolling out this upgrade (both shipped manifests already ship `60`).
+  Set `APP_ENGINE_GRACEFUL_SHUTDOWN=false` to restore the old immediate-exit behavior.
+- **M-B-03 — `tool_error_mode` defaults to `FeedToModel`, naming v0.9's existing behavior rather
+  than changing it.** A failed Arsenal/handoff tool call was always fed back to the model and the
+  run continued — that is unchanged. The only observable difference: the fed-back text is now
+  redacted (bearer tokens, API-key shapes, `key=`/`token=` values, JWT-shaped triples) before the
+  model ever sees it. Set `tool_error_mode = FailRun` to opt into failing the run on a tool error
+  instead.
+- **M-B-04 — Automatic per-superstep checkpointing for any graph executed through the new
+  `WarEngine`.** Every superstep writes one `Waypoint` (a full `Battlefield` snapshot) to whichever
+  `WaypointPort` backend is wired in. **Legacy `FormationExecutionService`, `PhalanxExecutionService`,
+  `CampaignExecutionService`, and `Commander` execution paths are completely unaffected** — they
+  write no Waypoints and their behavior is byte-for-byte unchanged. A v0.9 workflow gains no new
+  persistence unless it is explicitly rebuilt against the new engine.
+
 ### Changed
 
 - **Workspace MSRV floor raised from 1.85 to 1.88 (X-11.2 stop-and-flag resolution).** The
@@ -30,8 +64,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`MIGRATION.md` §9.1, M-B-01](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes)
   for the worked before/after example.
 
+- **Graph fingerprint bumped `v3` → `v4` (HITL-01, D-09).** The new `Gate` node's
+  routing-relevant properties (`kind`, `output_field`, `choices`, `on_expire`'s discriminant) are
+  now part of the hashed graph shape. A thread suspended under a `v3` fingerprint fails closed
+  with `EngineError::GraphMismatch` on resume rather than being silently reinterpreted under the
+  new hash — resume it against the graph it suspended with, or restart the run under the
+  `v4`-fingerprinted graph.
+
+- **Graph fingerprint bumped `v4` → `v5` (FT-04/FT-06, D-11).** Each node's `Aegis.on_error` and
+  `Aegis.cache` (and the graph-wide `default_aegis`) are now part of the hashed graph shape,
+  because they change what a run does; `retry` and `timeout` are deliberately excluded, so tuning
+  either never makes `resume` fail with `GraphMismatch`. A thread suspended under a `v4`
+  fingerprint fails closed on resume exactly as the `v3` → `v4` bump did.
+
 ### Added
 
+- **Typed error taxonomy (FT-01).** `Transience { Transient, Permanent, Unknown }` in `paladin-core`,
+  with table-driven `PaladinError::transience()` and `LlmError::transience()` reading typed fields
+  only — never a message. Provider adapters now emit `LlmError::ProviderError { provider, status,
+  message }` for every non-2xx status without a dedicated variant (408/429/5xx classify Transient,
+  every other 4xx Permanent, by value), through one shared `map_http_status` helper that redacts
+  credentials *before* bounding the excerpt. A node's failure travels as one structured
+  `NodeError { node_id, attempt, transience, source }` — on the failed Waypoint
+  (`WaypointStatus::Failed.node_error`), `RunOutcome::node_error()`, `EngineError::NodeFailed` and
+  `BattalionError::Node` — while the persisted display line is unchanged. `PaladinError`, `LlmError`
+  and `BattalionError` are now `#[non_exhaustive]` (registered deliberate-breaking in
+  [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)).
+- **Aegis: per-node retry (FT-02).** `Aegis { retry, timeout, on_error, cache }` attaches to a node
+  through `WarGraph::set_aegis` / `with_default_aegis` (a node's own entry wins wholesale — no
+  field-level merge). `RetryPolicy` retries a failed attempt inside the same superstep with exact
+  exponential backoff (`min(initial_interval × backoff_factor^(n−2), max_interval)` plus optional
+  uniform jitter), gated by a `RetryPredicate` (`TransientOnly` default, `TransientAndUnknown`, or
+  a registered `Custom` evaluator via `WarEngine::with_retry_predicate`). Attempts are isolated —
+  a failed attempt's delta never reaches the Battlefield, every attempt reads the same snapshot,
+  interceptors run once per attempt, no Waypoint is written between attempts — and are recorded
+  as `NodeExecutionRecord.attempts: Vec<AttemptRecord>` with per-attempt `NodeStarted`/`NodeFinished`
+  trace events. Retry is per task inside a Muster; a Parley is a success, never retried; a run
+  cancelled mid-backoff aborts at once and resumes at attempt 1. See the
+  [Aegis guide](docs/src/user-guides/fault-tolerance.md).
+- **Per-attempt timeouts and the run-level budget (FT-03).** `TimeoutPolicy { run_timeout,
+  idle_timeout }` bounds each attempt with a wall clock and a progress-aware idle window, named by
+  a typed `TimeoutKind::{Run, Idle, EngineRun}`; progress flows through a new `HeartbeatHandle`
+  (`ctx.heartbeat()` in Function nodes; `PaladinExecutionService` beats on every LLM completion,
+  streamed chunk and Armament call through the new defaulted `PaladinPort::execute_observed`).
+  `EngineLimits.run_timeout` (`EngineConfig.run_timeout_secs` / `APP_ENGINE_RUN_TIMEOUT_SECS`,
+  declared in 0.10's Phase 23) is now enforced as `EngineError::RunTimeoutExceeded`, nesting outside
+  every per-attempt bound; an attempt cut by the engine budget records `Timeout(EngineRun)` and is
+  never retried.
+- **Typed error handlers and compensation (FT-04).** `Aegis.on_error` runs on a node's *final*
+  failure: `ErrorHandlerSpec::Route { to, error_field }` writes the structured `NodeError` JSON into
+  a declared non-`Sum` field and places `to` in the next Vanguard in place of the failed node's
+  static successors; `Absorb { fallback_delta }` merges a schema-validated delta and continues;
+  `Custom(name)` awaits an `ErrorHandler` registered via `WarEngine::with_error_handler` over the
+  pre-superstep Battlefield and honours whatever `Directive` it returns — including
+  `NextStep::Parley`. Routed visits count against `max_node_visits`, so a compensation cycle
+  terminates. On a worker template only `Absorb` and a delta-only `Custom` are allowed. Every
+  wiring fault is a typed validation error listing all offenders before a node runs.
+- **Model fallback: `FallbackLlmAdapter` (FT-05).** An ordered chain of `LlmPort`s exposed as one
+  plain `LlmPort` (`paladin_llm::fallback`, ungated): hops on Transient/Unknown errors only,
+  short-circuits on Permanent, reports exhaustion as `LlmError::AllProvidersFailed { attempts,
+  last }` in chain order, never switches provider after a streamed chunk has been delivered, emits
+  `TraceEvent::FallbackHop` plus a `warn!` per hop, and stamps the serving provider into the new
+  additive `PaladinResult.served_by` (registered deliberate-breaking, D-26).
+- **Node result caching (FT-06).** `Aegis.cache: CachePolicy { ttl, key }` serves a node's stored
+  delta instead of executing it, recorded as `cache_hit: true` on the record and trace event. Keys
+  are a versioned blake3 digest over the graph fingerprint, node id, rendered input (or Battlefield
+  snapshot / `CacheKeySpec::Fields` subset), muster task and the Paladin's configuration, so a
+  prompt or graph change is a miss by construction; `ttl` has a closed boundary; only a successful
+  `Edges`-routed delta is stored; backend errors are best-effort (a `get` error is a miss, a `put`
+  error is logged). New `NodeCachePort` (`paladin-ports`), `InMemoryNodeCache` and, behind the new
+  `redis-cache` feature on `paladin-storage` (facade passthrough `redis-cache`, in no default set),
+  `RedisNodeCache`; `WarEngine::with_node_cache` wires one, and a `cache` policy with no backend
+  fails validation. The schema-level `FieldSpec.cache: CacheMarker::Deny` marker opts a field out
+  (the documented `Append`-replay hazard on forks). `NodeCacheConfig` (`src/config/node_cache.rs`,
+  `APP_NODE_CACHE_*`) selects the backend and is **off by default**.
 - **Node-driven `Directive` routing (CF-02).** A `StateNode::run` now returns a `Directive` — its
   `StateDelta` plus a `NextStep` (`Edges`, `Goto`, `Muster`, `End`, or the not-yet-implemented
   `Parley`) — letting a node author its own routing instead of relying solely on static graph
@@ -68,6 +174,153 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delete-then-resave loop. `WaypointRetentionConfig` (`config::waypoint_retention`) configures
   it, with env overrides and validation. Additive API only (no pre-existing item changed);
   API-surface baseline regenerated to match.
+
+- **Human-in-the-loop pause and resume: the `Gate` node and typed `resume_with` (HITL-01,
+  HITL-02).** `NextStep::Parley` now really suspends a run instead of failing it: the emitting
+  superstep's deltas merge, a Waypoint with `status: AwaitingInput { parleys, responses }` is
+  persisted, every resource for the run is released, and the run survives full process
+  termination — resumable from a different process instance over the same `WaypointPort`. A new
+  first-class `NodeSpec::Gate` node renders its prompt/payload from the Battlefield and is the
+  primary approval-gate building block: one `Gate` plus two conditional edges is a complete
+  approval gate. `WarEngine::resume_with(graph, thread, responses)` validates every submitted
+  response totally before persisting anything (unknown/already-answered/wrong-shape/expired, each
+  a distinct typed `EngineError`), persists a valid-but-partial submission as a same-superstep
+  `AwaitingInput` Waypoint chain, and evaluates each request's `on_expire` policy
+  (`FailRun` | `ResumeWithDefault`) lazily at resume time — no background timer. A Paladin node can
+  also raise a parley through the structured directive envelope's `next.parley` key and read the
+  answer back through a new `parley.` `InputMapping` namespace, reserved at graph-validation time
+  exactly like the existing `muster.` namespace. See the
+  [Parley & Chronicle guide](docs/src/user-guides/parley-and-chronicle.md).
+- **Chronicle: inspectable, forkable execution history (HITL-03).** `Waypoint`/`WaypointSummary`
+  gain an additive `fork_of: Option<WaypointId>` branch marker; `WarEngine::replay`/
+  `WarEngine::fork` re-enter the superstep loop from any past Waypoint, each producing a new
+  branch while the original chain stays byte-identical (a hard, tested invariant) — `fork` merges
+  a caller-supplied `StateDelta` edit before the first forked superstep, letting a "what-if" edit
+  flip a conditional edge's routing. `ChronicleService::{history, inspect, latest_on_branch}`
+  exposes this as a thin, port-only read facade with no engine dependency. A branch's
+  `NodeSpec::Battalion` children run under `ThreadId::child_on_branch`, so a fork's subgraph
+  children never share Waypoints with the mainline's.
+- **Graceful shutdown (HITL-04).** A mid-superstep cancellation now races the whole in-flight
+  batch of node tasks against one shared `shutdown_grace` deadline (default 30s, tunable via
+  `EngineConfig`) instead of a per-node timeout; a node still running past the deadline is aborted
+  and recorded `NodeOutcomeKind::Skipped { reason: "shutdown" }`, its id re-listed in the Halted
+  Waypoint's vanguard so `resume` re-executes it exactly once. `ShutdownCoordinator`
+  (`paladin-battalion::engine::shutdown`) tracks every in-flight run; both `paladin-server`'s
+  `shutdown_signal` and `ServiceRunner::wait_for_shutdown` cancel the same coordinator on
+  SIGTERM/SIGINT and wait up to `shutdown_grace` for the batch to drain. Two new env vars:
+  `APP_ENGINE_SHUTDOWN_GRACE_SECS` (default `30`) and `APP_ENGINE_GRACEFUL_SHUTDOWN` (default
+  `true`; set `false` to restore the old immediate-exit behavior). Both shipped Kubernetes
+  manifests now declare `terminationGracePeriodSeconds: 60` (2× the default grace). See
+  [`MIGRATION.md` §9.1, M-B-02](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes)
+  for the worked before/after example.
+- **Threads over HTTP (HITL-05).** `paladin-web` gains three routes behind the same
+  authentication middleware `/v1/agents/*` already uses: `GET /v1/threads/{id}/state`,
+  `POST /v1/threads/{id}/resume` (returns `202 Accepted { thread_id, state_url }` immediately —
+  the engine continuation runs as a background task, never holding the connection open; a client
+  polls `.../state` for the outcome), and `GET /v1/threads/{id}/history` (paginated, `limit` ≤
+  100, opaque cursor). `POST /v1/threads/{id}/resume` additionally requires an admin-role
+  credential and answers `403` to an authenticated non-admin caller, while
+  `GET /v1/threads/{id}/state` and `GET /v1/threads/{id}/history` remain reachable by any
+  authenticated role — an interim narrowing of this phase's own D-24 decision, applied because no
+  per-thread ownership exists yet to scope against, with PLAT-06 (Phase 27) named as the successor
+  that replaces it. See [`MIGRATION.md` §9.6](MIGRATION.md#96-http-api) for the status-code
+  registry. Backed by a new `ParleyPort` (`paladin-ports`) with zero `paladin-battalion`
+  dependency; `paladin-server` wires a real backend via the new `WaypointStoreConfig`
+  (`APP_WAYPOINT_STORE_BACKEND=sqlite|postgres`, disabled by default — every thread route answers
+  `501 not_implemented` naming the config key until an operator sets it). `openapi.json`
+  regenerated with the three new paths; every pre-existing `/v1/agents/*` path is unchanged.
+- **Execution middleware chain (RT-01, RT-02).** `PaladinExecutionService` gains an ordered
+  `Vec<Arc<dyn ExecutionMiddleware>>` (`with_middleware`/`with_middleware_chain`) hooking
+  `before_model`/`after_model`/`around_tool` — onion-ordered, short-circuiting on `Finish`, with
+  per-run state living on the context rather than the (stateless, `Arc`-shared) middleware itself.
+  An empty chain reproduces v0.9's rendered prompt bytes, port call count and `PaladinResult`
+  exactly. Applies automatically to a `NodeSpec::Paladin` node dispatched through a `WarEngine` —
+  no engine-side registry, documented as the second of two independent hook layers alongside
+  `NodeInterceptor` (see the [Agent Runtime guide](docs/src/user-guides/agent-runtime.md)).
+  Built-ins: `ModelCallLimit`/`TokenBudget` (new `StopReason::CallLimit`/`TokenBudget` variants,
+  both `is_successful() == true`), `ToolCallLimit` (denies via `ToolFlow::Deny`, never fails the
+  run), `Guardrail` (`Regex`/`Predicate` rules over prompt/response, `Fail`/`Redact`/`Finish`,
+  patterns compiled once under an explicit size bound), and retry/fallback middleware delegating
+  to Phase 25's `RetryPolicy`/`FallbackLlmAdapter` without duplicating logic. Every built-in is
+  configured through one grouped `AgentRuntimeConfig` (`APP_AGENT_RUNTIME_*`), every section
+  `enabled: false` by default — a v0.9 config boots v0.10 with an empty chain
+  (`build_chain_on_a_default_config_returns_an_empty_chain`).
+- **Context-window management (RT-03).** A synchronous, infallible `TokenCounterPort` (heuristic
+  default; the existing `content-processing`-gated tiktoken counter now also implements it — no
+  new dependency), a stable `HistoryTrimmer` that never splits a message, and a compounding
+  `SummarizationMiddleware` persisting summaries to Garrison via the new `GarrisonEntry.is_summary`
+  field (`#[serde(default)]`, additive SQLite column `002_add_garrison_is_summary.sql`) —
+  degrading to trimming, never failing the run, on summarizer failure.
+- **Vault: cross-session namespaced memory (RT-04).** New `VaultPort` (put/get/delete/list/search)
+  with `InMemoryVault`, `SqliteVault` (`003_create_vault_tables.sql`) and an ungated `SemanticVault`
+  composing an existing `SanctumPort` + `EmbeddingPort`, all sharing one contract suite.
+  Confinement is structural: a host-issued `RunScope` grants a `Namespace` subtree, and
+  `ConfinedVault` rejects any call outside it with `VaultError::NamespaceDenied` before the inner
+  store is ever touched (attack-tested: a sibling or parent namespace is always denied). New
+  `vault_get`/`vault_put` Armaments (via the new `InProcessArsenal` closure-backed `ArsenalPort`
+  and `CompositeArsenalPort`) take an absolute namespace argument. `PaladinPort::execute_scoped`
+  (defaulted) carries the grant through the engine to `NodeContext::vault()`.
+- **Structured output (RT-05).** `execute_structured<T: DeserializeOwned + JsonSchema>` via a new
+  `StructuredExecutorPort` (deliberately not on `PaladinPort`), schemas from `schemars::schema_for!`
+  (new direct facade dependency `schemars = "1.2"`, zero new lockfile packages — already resolved
+  via `rmcp`), a bounded repair loop (`PaladinError::StructuredOutputInvalid`, raw output
+  preserved), and native `response_format` on `LlmRequest` (new `#[non_exhaustive]` field, wired
+  for OpenAI/compat-engine/DeepSeek/Gemini; Anthropic has no native mode and relies on the
+  prompt-level instruction block — see the per-provider table in the Agent Runtime guide). A
+  `NodeSpec::Paladin.output_schema` writes the engine's parsed JSON to `output_field`
+  (`GRAPH_FINGERPRINT_VERSION` bumped `v5` → `v6`).
+- **Provider conformance close-out (RT-06).** A shared `ConformanceFixture` +
+  `llm_conformance_suite!` macro (`paladin-llm::conformance`) measures the shipped
+  OpenAI-compatible/Gemini/Ollama paths against one fixed case list (success, streaming assembly,
+  mid-stream errors, `401`/`404`/`400`/`402` dedicated mappings, `408`/`429`/`5xx` transient-by-value,
+  credential redaction, no credential-header redirect) and closes only the gaps it measures — no
+  adapter rebuilt. The Ollama recipe (env-probed `tests/integration/ollama_docker_test.rs`, CI's
+  `ollama-integration` job) is documented in the Agent Runtime guide rather than duplicated.
+- **`reasoning_agent` preset and tool-call protocol (RT-07).** `paladin::presets::reasoning_agent(llm,
+  arsenal, opts)` assembles a runnable `ReasoningAgent` from an executable `Arc<dyn ArsenalPort>` in
+  a ≤15-line, `{{#include}}`-compiled doc example. A prompt-level `ToolCallProtocolMiddleware` +
+  `FinishOnPlainAnswerMiddleware` pair (opt-in; installed by the preset) makes the reasoning loop's
+  tool branch reachable for a shipped provider without any wire-level change — ADR-0042's deferred
+  native tool calling is untouched. `tool_error_mode` (`FeedToModel` default, `FailRun` new opt-in
+  raising `PaladinError::ArmamentFailed`) names v0.9's existing feed-back-and-continue behavior
+  rather than changing it; the fed-back text is now redacted (bearer tokens, API-key shapes,
+  `key=`/`token=` values, JWT-shaped triples) before being bounded — see
+  [`MIGRATION.md` §9.1, M-B-03](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes).
+
+### Fixed
+
+- **`ToolResultFormatter` now redacts-then-bounds every tool text path, not just the `Err` path
+  (26-REVIEW.md CR-01/WR-03).** The redact-then-bound control RT-07 introduced for a tool's
+  `ArsenalError`/handoff failure text (`format_error`) was not applied to `format_result`'s
+  `ArmamentResult { success: false, .. }` business-failure `Error:` field, nor to its successful
+  `Output:` field — both embedded tool-supplied text raw. A shared `sanitize_tool_text` helper now
+  covers all three: `format_error`, `format_result`'s `Error:` field, and `format_result`'s
+  `Output:` field.
+- **`key=`/`token=` redaction no longer misfires on ordinary words (26-REVIEW.md WR-01).** The
+  pattern matched any word ending in `key`/`token` directly followed by `=` (`monkey=5`,
+  `donkey=3`, `turkey=roast`, `jockey=true`), corrupting benign tool-error text fed back to the
+  model. A word-boundary check (non-alphanumeric or start-of-string immediately before the marker)
+  now excludes these while still catching `api_key=`/`access_token=`.
+- **A later `after_model` `Finish` no longer lost to an earlier `before_model` `Finish`
+  (26-REVIEW.md CR-02).** When a middleware finished the run early from `before_model`, the reached
+  prefix's `after_model` pass still ran (per the onion-chain contract), but its own `Finish` result
+  was discarded — the run always reported the *original* `before_model` `Finish`'s `stop_reason`,
+  even if a later `after_model` hook (e.g. a `Guardrail` rule) requested a different one. The
+  `after_model` pass's own `FinalResult` now wins when present, mirroring the already-correct
+  sibling post-model-call path.
+
+### Known limitations
+
+- **Tracing overhead exceeds the ≤3% bar (Phase 28, PRD 07 acceptance criterion 6).** Measured
+  superstep overhead with tracing enabled: **+22.18%** (log sink), **+18.46%** (composite sink), on
+  an all-Function-node synthetic superstep benchmark with no LLM latency to amortize against (see
+  `.planning/phases/28-observability-tooling/28-BENCH-EVIDENCE.md`). **Accepted as a documented
+  deviation for v0.10.0**, per maintainer sign-off at Phase 28 close-out UAT (2026-09-09): tracing
+  sinks are opt-in (no sink configured → no overhead) and `trace.state_values` defaults off, so no
+  v0.9 workflow and no default v0.10 deployment pays this cost. Follow-up: re-scope the bar to an
+  I/O-bound superstep and re-measure. See
+  [`docs/src/operations/observability.md`](docs/src/operations/observability.md#known-limitations)
+  for the full disposition.
 
 ## [0.9.0] - 2026-09-01
 

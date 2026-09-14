@@ -4,9 +4,14 @@ use paladin::application::cli::commands::{
     agent::{AgentCommands, handle_agent_new, handle_agent_run},
     arsenal::{ArsenalCommands, handle_arsenal_command},
     battalion::{BattalionCommands, handle_battalion_new, handle_battalion_run},
-    council, features,
+    council,
+    eval::{EvalCommands, run_eval},
+    features,
+    graph::{GraphCommands, run_graph_export},
     maneuver::{ManeuverCommands, handle_maneuver_command},
-    muster, onboarding, setup_check,
+    muster, onboarding,
+    run::{RunCommands, run_run_export},
+    setup_check,
 };
 use paladin::application::cli::error::CliError;
 use std::process;
@@ -88,6 +93,21 @@ enum Commands {
         #[arg(long)]
         no_review: bool,
     },
+    /// Evaluation harness operations (run scripted scenarios)
+    Eval {
+        #[command(subcommand)]
+        action: EvalCommands,
+    },
+    /// Graph document operations (export to Mermaid/DOT)
+    Graph {
+        #[command(subcommand)]
+        action: GraphCommands,
+    },
+    /// Run/thread execution overlay operations (export to Mermaid)
+    Run {
+        #[command(subcommand)]
+        action: RunCommands,
+    },
     /// Run a council discussion
     Council {
         /// Discussion topic
@@ -150,6 +170,28 @@ async fn main() {
                 })
         }
         Commands::Features { category, format } => features::run_features(category, format).await,
+        Commands::Eval { action } => match action {
+            EvalCommands::Run(args) => {
+                run_eval(
+                    args.glob,
+                    args.repeat,
+                    args.bless,
+                    args.live,
+                    args.registries,
+                )
+                .await
+            }
+        },
+        Commands::Graph { action } => match action {
+            GraphCommands::Export(args) => {
+                run_graph_export(args.format, args.file, args.assistant, args.out).await
+            }
+        },
+        Commands::Run { action } => match action {
+            RunCommands::Export(args) => {
+                run_run_export(args.thread, args.waypoint, args.run, args.graph, args.out).await
+            }
+        },
         Commands::Muster {
             task,
             output,

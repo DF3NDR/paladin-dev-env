@@ -1,8 +1,16 @@
 // Output port modules
 pub mod arsenal_port;
+/// Assistant repository port (D-28, D-29): the persisted, append-only
+/// immutable [`crate::output::assistant_repository_port::AssistantRepositoryPort`]
+/// contract every backend adapter (InMemory/SQLite/Postgres) implements.
+pub mod assistant_repository_port;
 /// Authentication port for issuing and verifying bearer tokens.
 pub mod auth_port;
 pub mod battalion_port;
+/// Cancellation probe port (D-14): the seam a durable, cross-instance cancel
+/// signal attaches to the superstep engine through, consulted at every
+/// superstep boundary beside the existing `CancellationToken`.
+pub mod cancellation_probe;
 pub mod citadel_port;
 pub mod content_delivery_port;
 pub mod embedding_port;
@@ -10,6 +18,8 @@ pub mod file_storage_port;
 pub mod garrison_port;
 pub mod llm_port;
 pub mod log_port;
+/// Node cache port for per-node result caching (Doc 04 FT-FR-18…20, D-27).
+pub mod node_cache_port;
 pub mod notification_port;
 /// Agent → Orchestrator bridge port.
 pub mod orchestrator_port;
@@ -19,6 +29,20 @@ pub mod paladin_registry;
 pub mod queue_port;
 /// SQL database repository port traits.
 pub mod repository_port;
+/// Run queue port (D-06): lease-based work queue for dispatching runs to
+/// workers.
+pub mod run_queue_port;
+/// Run repository port (D-03): the persisted-`Run` contract every backend
+/// adapter (InMemory/SQLite/Postgres) implements.
+pub mod run_repository_port;
+/// Run schedule repository port (D-36, D-37): the persisted, restart- and
+/// replica-safe `RunSchedule` contract every backend adapter
+/// (InMemory/SQLite/Postgres) implements.
+pub mod run_schedule_repository_port;
+/// Run trace persistence port (OBS-02, D-17): the durable, append-only
+/// `TraceRecord` contract every backend adapter (InMemory/SQLite/Postgres)
+/// implements.
+pub mod run_trace_port;
 /// Sanctum (vector store / RAG) port.
 pub mod sanctum_port;
 /// Scheduler port.
@@ -27,13 +51,29 @@ pub mod scheduler_port;
 pub mod search_engine_port;
 /// Streaming counterpart to `paladin_executor_port` (SSE / token streaming).
 pub mod streaming_executor_port;
+/// Structured output executor port: the bounded JSON-schema repair loop
+/// (Doc 05 RT-FR-17…19, D-26, D-27).
+pub mod structured_executor_port;
+/// Synchronous, infallible token-counting port (Doc 05 RT-FR-10, D-13).
+pub mod token_counter_port;
 /// Trace event stream port (ENG-FR-21): standardized execution
 /// observability the superstep engine emits, with no consumer yet.
 pub mod trace_sink_port;
 /// User persistence repository port.
 pub mod user_repository_port;
+/// `ConfinedVault` -- the Vault's namespace-confinement enforcement point
+/// (Doc 05 RT-04, D-20/D-21). Lives beside `vault_port` (not in the facade
+/// crate) so both the facade's `PaladinExecutionService` and
+/// `paladin-battalion`'s `WarEngine`/`NodeContext` can hold one without
+/// either depending on the other.
+pub mod vault_confined;
+/// Vault (cross-thread namespaced key/value memory) port (Doc 05 RT-FR-13…16, D-18/D-19).
+pub mod vault_port;
 /// Waypoint (superstep checkpoint) persistence port.
 pub mod waypoint_port;
+/// Webhook delivery repository port (D-40): the persisted, durable retry
+/// queue every backend adapter (InMemory/SQLite/Postgres) implements.
+pub mod webhook_delivery_port;
 /// Workflow persistence repository port.
 pub mod workflow_repository_port;
 // Vision ports are unconditional in paladin-ports; the root `paladin` crate

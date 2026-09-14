@@ -16,6 +16,7 @@ pub mod container {
     pub use paladin_core::platform::container::garrison;
     pub use paladin_core::platform::container::garrison_error;
     pub use paladin_core::platform::container::handoff;
+    pub use paladin_core::platform::container::heartbeat;
     pub use paladin_core::platform::container::herald;
     pub use paladin_core::platform::container::herald_error;
     pub use paladin_core::platform::container::job;

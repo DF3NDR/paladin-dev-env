@@ -1,0 +1,697 @@
+{
+  "$defs": {
+    "Assertion": {
+      "description": "One assertion evaluated against a case's captured trace records and final\n`Battlefield` (D-28, D-29, PRD 07 OBS-FR-12).\n\nA closed, externally tagged enum -- an unrecognised tag is a deserialize error\nnaming the tag, never a silently-ignored no-op (X-04's \"closed, not silently\npermissive\" rule). `custom(fn)` (a later plan's Rust-API-only escape hatch) has no\nvariant here and can never be deserialized from a file (T-28-05-01).\n\nEvery variant name below is PRD 07 OBS-FR-12's verbatim, snake-cased wire name.\n\n`Serialize`/`Deserialize` are hand-written -- see this module's top-level \"A note on\nhand-rolled (de)serialization\" doc section for why.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "`final_state_field_equals`: the named final-`Battlefield` field equals `value`\nexactly.",
+          "properties": {
+            "final_state_field_equals": {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "description": "The `Battlefield` field name.",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "The expected value."
+                }
+              },
+              "required": [
+                "field",
+                "value"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "final_state_field_equals"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`final_state_field_matches`: the named final-`Battlefield` field, rendered as a\nstring, matches the `pattern` regular expression.",
+          "properties": {
+            "final_state_field_matches": {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "description": "The `Battlefield` field name.",
+                  "type": "string"
+                },
+                "pattern": {
+                  "description": "The regular expression the field's rendered value must match.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field",
+                "pattern"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "final_state_field_matches"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`field_json_path_equals`: the value at `path` (a JSON Pointer / JSONPath-style\npath into the final `Battlefield`) equals `value`.",
+          "properties": {
+            "field_json_path_equals": {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "description": "The path into the final `Battlefield`'s JSON representation.",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "The expected value at `path`."
+                }
+              },
+              "required": [
+                "path",
+                "value"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "field_json_path_equals"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`node_executed`: the named node ran the number of times `times` bounds.",
+          "properties": {
+            "node_executed": {
+              "additionalProperties": false,
+              "properties": {
+                "node": {
+                  "description": "The node id.",
+                  "type": "string"
+                },
+                "times": {
+                  "$ref": "#/$defs/Times",
+                  "description": "The execution-count bound."
+                }
+              },
+              "required": [
+                "node",
+                "times"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "node_executed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`node_not_executed`: the named node never ran.",
+          "properties": {
+            "node_not_executed": {
+              "additionalProperties": false,
+              "properties": {
+                "node": {
+                  "description": "The node id.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "node"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "node_not_executed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`edge_fired`: the edge `from -> to` fired at least once (needs `EdgeEvaluated`\nrecords, D-04).",
+          "properties": {
+            "edge_fired": {
+              "additionalProperties": false,
+              "properties": {
+                "from": {
+                  "description": "The source node id.",
+                  "type": "string"
+                },
+                "to": {
+                  "description": "The destination node id.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "edge_fired"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`route_taken`: the sequence of node ids in `NodeStarted` order contains this\nlist as a subsequence.",
+          "properties": {
+            "route_taken": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "route_taken"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`run_status`: the run's terminal status equals this value.",
+          "properties": {
+            "run_status": {
+              "$ref": "#/$defs/RunStatusValue"
+            }
+          },
+          "required": [
+            "run_status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`total_tokens_max`: the run's total token usage does not exceed this bound.",
+          "properties": {
+            "total_tokens_max": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "total_tokens_max"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`supersteps_max`: the run's total superstep count does not exceed this bound.",
+          "properties": {
+            "supersteps_max": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "supersteps_max"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`parley_raised`: a Parley of `kind` was raised by `node`.",
+          "properties": {
+            "parley_raised": {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "description": "The Parley kind (mirrors `ParleyKind`'s wire vocabulary).",
+                  "type": "string"
+                },
+                "node": {
+                  "description": "The node that raised it.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "node"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "parley_raised"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "final_state_snapshot",
+          "description": "`final_state_snapshot`: the final `Battlefield` matches a blessed snapshot file\n(`--bless` regenerates it, D-33).",
+          "type": "string"
+        }
+      ]
+    },
+    "Case": {
+      "additionalProperties": false,
+      "description": "One test case within a [`Scenario`] (D-28, D-34).",
+      "properties": {
+        "assertions": {
+          "description": "The assertions evaluated against the captured trace records and the final\n`Battlefield` once this case's run finishes.",
+          "items": {
+            "$ref": "#/$defs/Assertion"
+          },
+          "type": "array"
+        },
+        "input": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "Initial input fields, by name, handed to the run.",
+          "type": "object"
+        },
+        "interrupt_after_superstep": {
+          "default": null,
+          "description": "Simulate a crash after this superstep completes: the runner drops the engine\nand builds a fresh one over the same [`StoreKind::SqliteTemp`] store to resume\n(D-34's E2E-1 technique). Requires `store: sqlite_temp`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "llm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LlmScript"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A case-specific LLM script overriding [`Scenario::llm`] for this case only."
+        },
+        "name": {
+          "description": "This case's name, used in `libtest-mimic` trial naming and failure output.",
+          "type": "string"
+        },
+        "parley_responses": {
+          "default": [],
+          "description": "Scripted Parley responses, consumed in order whenever the run raises a Parley\n(D-34's E2E-2 technique).",
+          "items": {
+            "$ref": "#/$defs/ParleyScript"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "assertions"
+      ],
+      "type": "object"
+    },
+    "LiveOptions": {
+      "additionalProperties": false,
+      "description": "Live-mode options (D-35): whether a scenario opts in to running content-bearing\nassertions against a real provider instead of skipping them.",
+      "properties": {
+        "allow_content_assertions": {
+          "default": false,
+          "description": "When `true` and the runner is invoked with `--live`, content-bearing assertions\n(`final_state_field_equals`, `final_state_field_matches`, `field_json_path_equals`,\n`final_state_snapshot`) run instead of being skipped. Defaults to `false`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "LlmErrorKind": {
+      "description": "A closed vocabulary of [`paladin_ports::output::llm_port::LlmError`] shapes a\nscenario file can script (D-28, D-30).\n\n[`LlmError`] itself does not implement [`Deserialize`], so this mirrors its\nvocabulary for the file format the same way `WarGraphDoc`'s `NodeKindDoc` mirrors\n`NodeSpec` -- [`LlmErrorKind::to_llm_error`] is the one place a scripted kind becomes\na real [`LlmError`].\n\n`#[non_exhaustive]`: a future `LlmError` variant may need its own scriptable kind.",
+      "oneOf": [
+        {
+          "const": "network",
+          "description": "Maps to [`LlmError::NetworkError`].",
+          "type": "string"
+        },
+        {
+          "const": "authentication",
+          "description": "Maps to [`LlmError::AuthenticationError`].",
+          "type": "string"
+        },
+        {
+          "const": "invalid_prompt",
+          "description": "Maps to [`LlmError::InvalidPrompt`].",
+          "type": "string"
+        },
+        {
+          "const": "rate_limit",
+          "description": "Maps to [`LlmError::RateLimitExceeded`].",
+          "type": "string"
+        },
+        {
+          "const": "usage_limit",
+          "description": "Maps to [`LlmError::UsageLimitExceeded`].",
+          "type": "string"
+        },
+        {
+          "const": "model_not_available",
+          "description": "Maps to [`LlmError::ModelNotAvailable`].",
+          "type": "string"
+        },
+        {
+          "const": "token_limit",
+          "description": "Maps to [`LlmError::TokenLimitExceeded`].",
+          "type": "string"
+        },
+        {
+          "const": "empty_completion",
+          "description": "Maps to [`LlmError::EmptyCompletion`].",
+          "type": "string"
+        },
+        {
+          "const": "processing",
+          "description": "Maps to [`LlmError::ProcessingError`].",
+          "type": "string"
+        },
+        {
+          "const": "timeout",
+          "description": "Maps to [`LlmError::Timeout`].",
+          "type": "string"
+        },
+        {
+          "const": "transient",
+          "description": "A generic transient failure (maps to [`LlmError::NetworkError`]) for a scenario\nthat only cares about the retry/fallback behaviour a transient error drives, not\nwhich specific variant produced it.",
+          "type": "string"
+        }
+      ]
+    },
+    "LlmScript": {
+      "additionalProperties": false,
+      "description": "The scenario-wide (or per-case) scripted LLM behaviour (D-28, D-30).\n\nResolution order, applied per call by `ScenarioLlm`: [`LlmScript::match_rules`]\nfirst (first match wins, does not advance a sequence), then\n[`LlmScript::per_node`] for the node the call is attributed to, then\n[`LlmScript::global`].",
+      "properties": {
+        "global": {
+          "default": [],
+          "description": "The default sequence consulted when no per-node sequence exists for a call's\nnode, consumed one entry per call (cycling is `ScenarioLlm`'s decision, not the\nformat's).",
+          "items": {
+            "$ref": "#/$defs/ScriptEntry"
+          },
+          "type": "array"
+        },
+        "match": {
+          "default": [],
+          "description": "Prompt-substring match rules, checked in declaration order before either\nsequence; the wire key is `match` (a Rust keyword, hence the field rename).",
+          "items": {
+            "$ref": "#/$defs/MatchRule"
+          },
+          "type": "array"
+        },
+        "per_node": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/$defs/ScriptEntry"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "description": "Per-node sequences, keyed by the Paladin node id. A call routed to a node with\nan entry here consumes THIS sequence and leaves [`LlmScript::global`] untouched.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "MatchRule": {
+      "additionalProperties": false,
+      "description": "A prompt-substring match rule (D-28), checked before either script sequence.",
+      "properties": {
+        "prompt_contains": {
+          "description": "If the incoming prompt contains this substring, [`MatchRule::response`] is\nreturned and neither sequence is advanced.",
+          "type": "string"
+        },
+        "response": {
+          "$ref": "#/$defs/ScriptEntry",
+          "description": "The response returned when [`MatchRule::prompt_contains`] matches."
+        }
+      },
+      "required": [
+        "prompt_contains",
+        "response"
+      ],
+      "type": "object"
+    },
+    "ParleyScript": {
+      "additionalProperties": false,
+      "description": "One scripted response to a Parley the run raises (D-28, D-34).",
+      "properties": {
+        "kind": {
+          "description": "The Parley kind this response answers (mirrors\n`paladin_core::platform::container::parley::ParleyKind`'s wire vocabulary).",
+          "type": "string"
+        },
+        "value": {
+          "description": "The value handed back as the Parley's resolution."
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "RunStatusValue": {
+      "description": "The vocabulary [`Assertion::RunStatus`] compares against.\n\nMirrors `paladin_core::platform::container::trace::RunFinishStatus` field-for-field.\nThat core type carries no `schemars::JsonSchema` derive (ADR-0015: `paladin-core`\ndoes not take the `schemars` dependency), so this crate mirrors the vocabulary\nlocally -- exactly the pattern `WarGraphDoc`'s `NodeKindDoc` uses for `NodeSpec`.",
+      "oneOf": [
+        {
+          "const": "completed",
+          "description": "The run completed normally.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "The run failed.",
+          "type": "string"
+        },
+        {
+          "const": "halted",
+          "description": "The run was halted.",
+          "type": "string"
+        },
+        {
+          "const": "awaiting_input",
+          "description": "The run suspended awaiting Parley input.",
+          "type": "string"
+        }
+      ]
+    },
+    "ScenarioTarget": {
+      "anyOf": [
+        {
+          "description": "Compile the named `WarGraphDoc` file (JSON or YAML) through the scenario's\n(optional) named registries.",
+          "properties": {
+            "graph_doc": {
+              "description": "Path to the `WarGraphDoc` file, resolved relative to the scenario file's own\ndirectory by the runner.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "graph_doc"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Build the graph from a Rust closure a host test binary registered under this\nname (`ScenarioRunner::register_graph`).",
+          "properties": {
+            "registered": {
+              "description": "The name a host test binary passed to `ScenarioRunner::register_graph`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "registered"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "What a [`Scenario`] runs (D-31): a `WarGraphDoc` file on disk, or a Rust closure a\nhost test binary registered by name.\n\nUntagged so both documented spellings parse directly with no wrapping \"type\" key --\n`{ graph_doc: <path> }` or `{ registered: <name> }` -- unambiguous because the two\nvariants' field names never overlap."
+    },
+    "ScriptEntry": {
+      "description": "One scripted response to an incoming LLM call (D-28, D-30).\n\nExternally tagged so the three documented spellings are `{ text: \"...\" }`,\n`{ tool_call: { name, arguments } }` and `{ error: <kind> }` -- exactly D-28's `{\ntext | tool_call: {name, arguments} | error: <LlmError kind> }`.\n\n`Serialize`/`Deserialize` are hand-written -- see this module's top-level \"A note on\nhand-rolled (de)serialization\" doc section for why.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "`text`: a plain success completion.",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`tool_call`: a success completion carrying a [`FunctionCall`](paladin_ports::output::llm_port::FunctionCall)-shaped\ntool invocation.",
+          "properties": {
+            "tool_call": {
+              "properties": {
+                "arguments": {
+                  "description": "The JSON-encoded call arguments."
+                },
+                "name": {
+                  "description": "The tool/function name the mocked model \"calls\".",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "arguments"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "tool_call"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`error`: the call returns this [`LlmErrorKind`] instead of a completion.",
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/LlmErrorKind"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StoreKind": {
+      "description": "Which state store backs a scenario run (D-28). Defaults to [`StoreKind::InMemory`].",
+      "oneOf": [
+        {
+          "const": "in_memory",
+          "description": "An in-memory `WaypointPort`, discarded when the run ends. The default.",
+          "type": "string"
+        },
+        {
+          "const": "sqlite_temp",
+          "description": "A temp-file SQLite `WaypointPort`, needed by any case that simulates a crash\n(`interrupt_after_superstep`) and resumes over the same store.",
+          "type": "string"
+        }
+      ]
+    },
+    "Times": {
+      "description": "A bound on how many times [`Assertion::NodeExecuted`] expects its node to have run.\n\n`Serialize`/`Deserialize` are hand-written -- see this module's top-level \"A note on\nhand-rolled (de)serialization\" doc section for why.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The node ran exactly this many times.",
+          "properties": {
+            "exact": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "exact"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The node ran at least this many times.",
+          "properties": {
+            "min": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "min"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The node ran at most this many times.",
+          "properties": {
+            "max": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "max"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A parsed, validated `.eval.yaml` (or `.eval.json`) scenario document (D-28).\n\n# Example\n\n```rust\nuse paladin_eval::scenario::{Scenario, StoreKind};\n\nlet yaml = r#\"\nschema_version: \"1\"\ntarget:\n  graph_doc: \"fixtures/linear.json\"\ncases:\n  - name: happy_path\n    assertions:\n      - run_status: completed\n\"#;\n\nlet scenario: Scenario = serde_yaml::from_str(yaml).unwrap();\nassert_eq!(scenario.store, StoreKind::InMemory);\nassert_eq!(scenario.cases.len(), 1);\n```",
+  "properties": {
+    "cases": {
+      "description": "One or more cases run against [`Scenario::target`], each with its own\nassertions.",
+      "items": {
+        "$ref": "#/$defs/Case"
+      },
+      "type": "array"
+    },
+    "live": {
+      "$ref": "#/$defs/LiveOptions",
+      "default": {
+        "allow_content_assertions": false
+      },
+      "description": "Live-mode options (D-35): whether content-bearing assertions are allowed to run\nagainst a real provider instead of being skipped."
+    },
+    "llm": {
+      "$ref": "#/$defs/LlmScript",
+      "default": {
+        "global": [],
+        "match": [],
+        "per_node": {}
+      },
+      "description": "The scenario-wide scripted LLM behaviour (global sequence, per-node sequences,\nprompt-match rules). Defaults to an empty script."
+    },
+    "registries": {
+      "default": null,
+      "description": "The name of a host-registered `EngineRegistries` constructor\n(`ScenarioRunner::register_registries`) this scenario's [`ScenarioTarget::GraphDoc`]\ntarget compiles through, if it needs one beyond the harness default.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "description": "The scenario schema version this document was authored against. Checked against\n[`EVAL_SCHEMA_VERSION`] by [`Scenario::from_path`] and [`Scenario::validate_schema_version`].",
+      "type": "string"
+    },
+    "store": {
+      "$ref": "#/$defs/StoreKind",
+      "default": "in_memory",
+      "description": "Which `WaypointPort`/state store backs the run. Defaults to\n[`StoreKind::InMemory`] when absent."
+    },
+    "target": {
+      "$ref": "#/$defs/ScenarioTarget",
+      "description": "What this scenario runs: a `WarGraphDoc` file or a Rust-registered constructor\n(D-31)."
+    }
+  },
+  "required": [
+    "schema_version",
+    "target",
+    "cases"
+  ],
+  "title": "Scenario",
+  "type": "object"
+}

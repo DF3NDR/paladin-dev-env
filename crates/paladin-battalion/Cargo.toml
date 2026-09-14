@@ -1,6 +1,6 @@
 [package]
 name = "paladin-battalion"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -13,8 +13,8 @@ categories = ["development-tools", "asynchronous", "api-bindings"]
 documentation = "https://docs.rs/paladin-battalion"
 
 [dependencies]
-paladin-core  = { package = "paladin-ai-core", version = "0.9.0", path = "../paladin-core" }
-paladin-ports = { version = "0.9.0", path = "../paladin-ports" }
+paladin-core  = { package = "paladin-ai-core", version = "0.10.0", path = "../paladin-core" }
+paladin-ports = { version = "0.10.0", path = "../paladin-ports" }
 tokio         = { workspace = true }
 async-trait   = { workspace = true }
 serde         = { workspace = true }
@@ -28,17 +28,45 @@ rand          = "0.8"
 tokio-util    = "0.7"
 petgraph      = "0.6"
 regex         = "1.11.1"
+# The node-cache key digest (`engine::cache_key`, plan 25-13, D-28): the
+# same blake3 `paladin-core`'s `GraphFingerprint` already hashes with, at
+# the same pinned version -- a new dependency EDGE on an already-resolved
+# workspace package, never a new package in the lock file.
+blake3        = "1.8.2"
+# `WarGraphDoc`'s schemars derive (`engine::graph_doc`, plan 27-05, D-34
+# revised): the root `paladin-ai` facade crate already pins `schemars = "1.2"`
+# directly (Cargo.toml:143, resolved to 1.2.1 in Cargo.lock via both `rmcp`
+# and that direct edge) -- this is NOT declared under `[workspace.dependencies]`
+# there, so `{ workspace = true }` is unavailable here; pinning the identical
+# version string is a new dependency EDGE on the already-resolved package,
+# mirroring `blake3`'s own precedent immediately above, never a new package
+# in the lock file (`cargo tree -i schemars` still shows exactly two
+# versions: 0.9.0 via serde_with, 1.2.1 via rmcp/paladin-ai/paladin-battalion).
+schemars      = "1.2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }
+# `test-util` is NOT part of the workspace `tokio` feature set (`full` does
+# not imply it, deliberately -- it exists so a non-test build never links
+# tokio's fake-clock machinery). Added here, dev-dependencies-only, so
+# `#[tokio::test(start_paused = true)]` (`engine::retry`'s paused-clock
+# tests, Doc 04 plan 25-01) can pause/auto-advance the runtime's virtual
+# clock. A feature addition to the ALREADY-declared workspace `tokio`
+# dependency, not a new dependency (RESEARCH.md's "Don't Hand-Roll" note:
+# `tokio::time::pause` is the tool, never a fake-clock crate).
+tokio = { workspace = true, features = ["test-util"] }
 # In-memory WaypointPort fixture for the engine module's own unit tests
 # (Phase 22 Plan 01). No cycle: paladin-storage depends on paladin-core +
 # paladin-ports only, never on paladin-battalion.
-paladin-storage = { version = "0.9.0", path = "../paladin-storage" }
+paladin-storage = { version = "0.10.0", path = "../paladin-storage" }
 # MockLlmAdapter for LlmDecisionEvaluator / Commander StrategySelection::Semantic
-# tests (CF-05, Phase 23 Plan 03). No cycle: it depends only on paladin-core +
-# paladin-ports, never on paladin-battalion.
-paladin-llm = { version = "0.9.0", path = "../paladin-llm" }
+# tests (CF-05, Phase 23 Plan 03) and the redaction helper the DeltaMerged
+# value tests inject (plan 28-03 post-merge fix). Dev-only on purpose:
+# ADR-0031 forbids a leaf-to-leaf edge in the default build, so production
+# engine code receives its redactor through `TraceDispatcher::with_state_values`
+# (`ValueRedactor`) from the facade instead. No cycle: paladin-llm depends
+# only on paladin-core + paladin-ports, never on paladin-battalion.
+paladin-llm = { version = "0.10.0", path = "../paladin-llm" }
 
 [[bench]]
 name = "battalion_benchmarks"

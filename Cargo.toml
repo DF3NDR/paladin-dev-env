@@ -31,22 +31,31 @@ rand = "0.8"
 base64 = "0.22"
 futures = "0.3"
 regex = "1.11.1"
-paladin-core = { package = "paladin-ai-core", version = "0.9.0", path = "crates/paladin-core" }
-paladin-ports = { version = "0.9.0", path = "crates/paladin-ports" }
-paladin-battalion = { version = "0.9.0", path = "crates/paladin-battalion" }
-paladin-herald = { version = "0.9.0", path = "crates/paladin-herald" }
-paladin-llm = { version = "0.9.0", path = "crates/paladin-llm" }
-paladin-memory = { version = "0.9.0", path = "crates/paladin-memory" }
-paladin-storage = { version = "0.9.0", path = "crates/paladin-storage" }
-paladin-notifications = { version = "0.9.0", path = "crates/paladin-notifications" }
-paladin-content = { version = "0.9.0", path = "crates/paladin-content" }
-paladin-web = { version = "0.9.0", path = "crates/paladin-web" }
+paladin-core = { package = "paladin-ai-core", version = "0.10.0", path = "crates/paladin-core" }
+paladin-ports = { version = "0.10.0", path = "crates/paladin-ports" }
+paladin-battalion = { version = "0.10.0", path = "crates/paladin-battalion" }
+paladin-herald = { version = "0.10.0", path = "crates/paladin-herald" }
+paladin-llm = { version = "0.10.0", path = "crates/paladin-llm" }
+paladin-memory = { version = "0.10.0", path = "crates/paladin-memory" }
+paladin-storage = { version = "0.10.0", path = "crates/paladin-storage" }
+paladin-notifications = { version = "0.10.0", path = "crates/paladin-notifications" }
+paladin-content = { version = "0.10.0", path = "crates/paladin-content" }
+paladin-web = { version = "0.10.0", path = "crates/paladin-web" }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "json", "migrate", "macros"] }
 qdrant-client = { version = "1.14" }
+# croner is already resolved in Cargo.lock at 2.2.0, pulled transitively via
+# tokio-cron-scheduler -- pinning the same "2.2" here (D-38) promotes it to a
+# direct dependency with no new package entering the graph (27-CONTEXT.md
+# "Dependency head start", 2026-09-08).
+croner = "2.2"
+# chrono-tz is NOT in Cargo.lock today -- a genuinely new dependency (D-38's
+# IANA timezone support), MSRV-verified at 1.88 (X-11.1, see MIGRATION.md
+# §9.3).
+chrono-tz = "0.10"
 
 [package]
 name = "paladin-ai"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -67,11 +76,25 @@ include = [
     "tests/**",
     "examples/**",
     "benches/**",
-    "migrations/**",
     "README.md",
     "LICENSE-APACHE",
     "LICENSE-MIT",
 ]
+
+# X-10.6 deliberate-breaking suppression (RT-02, MIGRATION.md §9.2, Phase 26 plan 26-02).
+# `Settings` gained the additive `agent_runtime: AgentRuntimeConfig` field with
+# `#[serde(default)]`, so an absent `agent_runtime:` key resolves to a fully inert
+# default and a v0.9 config boots byte-identically. It deliberately stays a
+# constructible, NOT-`#[non_exhaustive]` struct for the same reason `PaladinResult`
+# does (D-26): `Settings` implements `Default`, and cross-crate functional-update
+# syntax (`..Default::default()`) is disallowed on `#[non_exhaustive]` structs, so
+# marking it would break every such downstream construction site. Only full struct
+# literals break; every in-tree one was migrated with the field.
+# Register/remove this suppression only in the same commit as the matching
+# MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml` entry (kept
+# set-equal by CI's `semver` job).
+[package.metadata.cargo-semver-checks.lints]
+constructible_struct_adds_field = "allow"
 
 [lib]
 name = "paladin"
@@ -83,7 +106,7 @@ paladin-core = { workspace = true }
 paladin-ports = { workspace = true }
 paladin-battalion = { workspace = true }
 paladin-herald = { workspace = true }
-paladin-llm = { version = "0.9.0", path = "crates/paladin-llm", default-features = false, features = ["mock"] }
+paladin-llm = { version = "0.10.0", path = "crates/paladin-llm", default-features = false, features = ["mock"] }
 paladin-memory = { workspace = true, features = ["sqlite"] }
 paladin-storage = { workspace = true, features = ["sqlite"] }
 paladin-notifications = { workspace = true, optional = true }
@@ -120,6 +143,13 @@ http = "1"
 reqwest_mcp = { package = "reqwest", version = "0.13", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# D-26 (RT-05, plan 26-12): direct facade dependency for `execute_structured<T>`'s
+# schema derivation (`schemars::schema_for!`), landing in plan 26-17. Pinned to
+# the same minor version already resolved via `rmcp 2.1.0` in `Cargo.lock`
+# (1.2.1), so this adds ZERO new packages to the dependency graph -- confirmed
+# by `cargo tree -i schemars` showing exactly two versions (0.9.0 via
+# serde_with, 1.2.1 via both rmcp and this direct edge). No cargo feature added.
+schemars = "1.2"
 
 tokio = { workspace = true }
 tokio-util = "0.7"
@@ -140,6 +170,12 @@ regex = "1.11.1"
 urlencoding = "2.1.3"
 sqlx = { workspace = true }
 sha2 = "0.10.9"
+# HMAC-SHA256 webhook delivery signing (PLAT-FR-15, D-41). Already resolved
+# transitively at 0.12.1 in Cargo.lock (pulled in via an existing crypto
+# dependency) -- this promotes it to a direct facade dependency with no new
+# package entering the graph, mirroring `sha2`'s own placement immediately
+# above (facade-only, not a `[workspace.dependencies]` entry).
+hmac = "0.12"
 blake3 = "1.8.2"
 toml = "0.8.23"
 md5 = "0.8.0"
@@ -158,6 +194,17 @@ serde_yaml = { version = "0.9", optional = true }
 indicatif = { version = "0.17", optional = true }
 console = { version = "0.15", optional = true }
 dialoguer = { version = "0.11", optional = true }
+# D-33 (plan 28-12): `paladin-cli eval run` builds a `ScenarioRunner`
+# directly. Optional, `cli`-feature-gated only -- the facade's DEFAULT build
+# (no `cli` feature) gains no edge to this crate; the `evals` `[[test]]`
+# target's OWN need for it (independent of `cli`) is the separate,
+# unconditional `[dev-dependencies]` entry below.
+paladin-eval = { version = "0.10.0", path = "crates/paladin-eval", optional = true }
+# `paladin-cli eval run`'s own glob matching over its `<glob>` argument --
+# the SAME "0.3.4" pin `crates/paladin-eval/Cargo.toml` already resolved, so
+# this is a new EDGE on an already-resolved package, never a new package in
+# the lock file.
+glob = { version = "0.3.4", optional = true }
 qdrant-client = { workspace = true, optional = true }
 base64 = "0.22"
 # Encryption dependencies for Sentinel Vision System (Epic 13, Task 11.0)
@@ -169,6 +216,26 @@ tokio-cron-scheduler = "0.13"
 # source instead of requiring a target-arch system libssl. Not enabled by
 # default; native and Docker builds keep using the system OpenSSL.
 openssl = { version = "0.10", optional = true }
+
+# OTLP trace export (28-09, D-12/D-13, X-11.4): all three optional, gated by
+# the `otel` feature declared below -- absent from `default` and from
+# `full`'s explicit member list, mirroring the `storage-postgres`/
+# `redis-cache` precedent. `default-features = false` on each: only the
+# `trace` signal is used (no metrics/logs export), and
+# `opentelemetry-otlp`'s DEFAULT feature set pulls in reqwest's *blocking*
+# client feature, which is NOT the async client D-12 specifies --
+# `reqwest-client` (the async one) is enabled explicitly instead.
+opentelemetry = { version = "0.32.0", default-features = false, features = ["trace"], optional = true }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["trace"], optional = true }
+# `reqwest-client` needs an ASYNC `reqwest` client at the SAME major version
+# `opentelemetry-http` depends on internally (0.13.x) -- not this crate's
+# own default `reqwest` line above (0.12.x). `reqwest_mcp` (below, an
+# existing unconditional dependency for the Arsenal MCP client) already
+# resolves to that exact 0.13.x line, so `otel_sink.rs` reuses
+# `reqwest_mcp::Client` for its no-redirect OTLP HTTP client rather than
+# declaring a second reqwest-0.13 alias here -- one compiled `reqwest`
+# 0.13.x unit serves both, not two.
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["http-proto", "reqwest-client", "trace"], optional = true }
 
 [dev-dependencies]
 mockito = "1.7.0"
@@ -196,6 +263,59 @@ rmcp = { version = "=2.1.0", default-features = false, features = [
     "transport-streamable-http-server",
 ] }
 axum = "0.8.4"
+# `paladin-server.rs`'s own `#[cfg(test)]` module (Phase 24 Plan 11, HITL-05)
+# drives the thread/agent routers directly via `tower::util::oneshot`,
+# mirroring `paladin-web`'s own test convention -- dev-only, unified with
+# `paladin-web`'s pinned `tower = "0.5"` by the workspace resolver.
+tower = { version = "0.5", features = ["util"] }
+# `src/application/services/run/tracer_e2e.rs` (Phase 27, Task 3, D-11) is
+# the only crate that sees the engine, the queue adapter and the HTTP
+# router at once, and mounts `paladin-web`'s `run_router` over a real
+# `WarEngine` via `tower::util::oneshot` -- the same pattern as
+# `paladin-server.rs`'s own test module above. `paladin-web` is normally an
+# OPTIONAL runtime dependency (the `web-server` feature, `[dependencies]`
+# above); this unconditional dev-dependency entry is what makes it
+# available to `cargo test -p paladin-ai --lib` with no feature flags,
+# mirroring how `axum`/`tower` above are already dev-only-unconditional.
+paladin-web = { workspace = true }
+# `src/application/services/run/schedule/tests.rs` (Phase 27, plan 27-11,
+# D-37) needs `tokio::time::pause` to freeze the tick loop's own `interval`
+# under `schedule_restart_exactly_once`/`two_services_one_tick_exactly_one_fire`
+# -- a feature addition to the already-`{ workspace = true }`-pinned `tokio`
+# runtime dependency above, not a new package, mirroring
+# `crates/paladin-battalion/Cargo.toml`'s identical extra-feature dev-dependency
+# precedent.
+tokio = { workspace = true, features = ["test-util"] }
+# `opentelemetry_sdk::trace::InMemorySpanExporter` (28-09, D-13a) -- the
+# `[dependencies]` entry above is `optional = true` behind the `otel`
+# feature and deliberately does NOT enable `testing` (a dev-only need, per
+# X-11.4, must not leak into the production `otel` feature's dependency
+# set); this dev-dependency entry adds ONLY that feature for test builds.
+# `src/infrastructure/telemetry/otel_sink.rs`'s own tests are still gated
+# `#[cfg(feature = "otel")]`, so this crate is compiled for test binaries
+# but never actually exercised unless `--features otel` is also passed --
+# mirroring `paladin-web`/`tower` above, this is a KNOWN, accepted
+# dev-build-only widening: `cargo tree` run against a TEST target (not a
+# plain `cargo build`) will show it regardless of `otel`; the `otel`
+# feature gate is what keeps it out of the compiled `paladin` library/
+# binary artifacts (X-11.4's actual scope), recorded in 28-09-SUMMARY.md.
+opentelemetry_sdk = { version = "0.32.1", features = ["testing"] }
+# `tests/integration/otel_transport_test.rs` (28-09 Task 2, D-13b) decodes
+# the OTLP/HTTP protobuf body an axum stub captures, to assert the
+# resource's `service.name`. Both crates are ALREADY resolved transitively
+# via `opentelemetry-otlp`'s `http-proto` feature (`[dependencies]` above)
+# whenever `--features otel` is passed -- this dev-dependency entry adds no
+# new package, only names them directly for the test file to `use`. Same
+# `gen-tonic-messages`/`trace` feature pair `opentelemetry-otlp`'s own
+# `http-proto` feature already requests (no `tonic`/gRPC).
+opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
+prost = "0.14"
+# D-32: the `evals` harness target (`tests/evals.rs`) needs `ScenarioRunner`
+# unconditionally, independent of the `cli` feature -- `cargo test --test
+# evals` must work with no `--features` at all. paladin-eval's own default
+# build depends downward only (paladin-core/ports/battalion/llm-mock/storage-
+# sqlite), never on this facade (D-27) -- this is a one-way dev-only edge.
+paladin-eval = { version = "0.10.0", path = "crates/paladin-eval" }
 
 # Integration test configuration
 [[test]]
@@ -275,6 +395,47 @@ path = "tests/integration/subgraph_formation_in_campaign_test.rs"
 [[test]]
 name = "e2e_muster_defer_order"
 path = "tests/integration/e2e_muster_defer_order_test.rs"
+
+[[test]]
+name = "e2e_approval_gate"
+path = "tests/integration/e2e_approval_gate_test.rs"
+
+[[test]]
+name = "e2e_platform_api"
+path = "tests/integration/e2e_platform_api_test.rs"
+required-features = ["web-server"]
+
+[[test]]
+name = "v0_9_config_boot"
+path = "tests/integration/v0_9_config_boot_test.rs"
+required-features = ["web-server"]
+
+[[test]]
+name = "multi_parley_suspension"
+path = "tests/integration/multi_parley_suspension_test.rs"
+
+[[test]]
+name = "parley_resume_stress"
+path = "tests/integration/parley_resume_stress_test.rs"
+
+[[test]]
+name = "e2e_compensation_chain"
+path = "tests/integration/e2e_compensation_chain_test.rs"
+
+[[test]]
+name = "aegis_retry_stress"
+path = "tests/integration/aegis_retry_stress_test.rs"
+
+# D-32 (28-RESEARCH.md Q4): the FIRST `harness = false` `[[test]]` target in
+# this workspace -- every other `harness = false` hit in this manifest is a
+# `[[bench]]`. `tests/evals.rs` expands `paladin_eval::eval_scenarios!` into
+# its own `fn main()`; `libtest-mimic` tolerates the coverage script's
+# trailing `--test-threads=1` (a no-op it accepts rather than an
+# unrecognised-flag failure), so no CI change is needed for this target.
+[[test]]
+name = "evals"
+harness = false
+path = "tests/evals.rs"
 
 [[example]]
 name = "vision_analysis"
@@ -363,8 +524,25 @@ storage-mysql = ["paladin-storage/mysql"]
 storage-postgres = ["paladin-storage/postgres"]
 storage = ["storage-mysql", "storage-postgres"]
 
+# Redis-backed `NodeCachePort` adapter (Doc 04 FT-FR-18…20, D-27). Deliberately
+# NOT part of `default`, `storage`, or `full`'s implicit set -- see X-11.4: the
+# default `paladin-ai` build must gain no Redis driver beyond what `redis-queue`
+# already opts in separately.
+redis-cache = ["paladin-storage/redis-cache"]
+
+# OTLP trace export (28-09, D-12/D-13). Deliberately NOT part of `default`
+# or `full`'s implicit set -- see X-11.4: the default `paladin-ai` build
+# must gain no OTel dependency.
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
+
+# Feature-gated (28-15, D-25/D-26), admin-only `dev-ui` run inspector page
+# (`GET /v1/dev-ui/threads/{id}` in `paladin-web`). Deliberately NOT part of `default`
+# or `full`'s implicit set -- see X-11.4: the default `paladin-ai` build must gain no
+# dev-ui HTML page, mirroring `otel`'s identical precedent immediately above.
+dev-ui = ["paladin-web/dev-ui"]
+
 # CLI (binary and test tooling only — not compiled into the library)
-cli = ["dep:clap", "dep:dialoguer", "dep:indicatif", "dep:console", "dep:serde_yaml", "dep:colored", "dep:comfy-table", "paladin-herald/table", "paladin-herald/color"]
+cli = ["dep:clap", "dep:dialoguer", "dep:indicatif", "dep:console", "dep:serde_yaml", "dep:colored", "dep:comfy-table", "dep:paladin-eval", "dep:glob", "paladin-herald/table", "paladin-herald/color"]
 
 # Convenience flag for enabling all optional features
 full = ["llm-all", "content-processing", "web-server", "notifications", "storage", "vision", "redis-queue", "s3-storage", "openai-embeddings", "qdrant", "cli"]

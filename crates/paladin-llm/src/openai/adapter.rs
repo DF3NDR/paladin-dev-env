@@ -9,7 +9,7 @@ use futures::{Stream, StreamExt};
 use paladin_core::platform::container::content::{ContentItem, ContentType};
 use paladin_core::platform::container::prompt::{PromptItem, PromptRole, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
     StreamingResponse, TokenUsage,
 };
 use rand::Rng;
@@ -20,6 +20,12 @@ use std::env;
 use std::pin::Pin;
 use std::time::Duration;
 use uuid::Uuid;
+
+use crate::http_status::map_http_status;
+
+/// The provider name this adapter reports through [`LlmPort::get_provider_name`]
+/// and stamps on every [`LlmError::ProviderError`] it emits.
+const OPENAI_PROVIDER: &str = "openai";
 
 /// Configuration for the OpenAI adapter.
 #[derive(Debug, Clone)]
@@ -116,6 +122,56 @@ struct OpenAIRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f32>,
     stream: bool,
+    /// `LlmRequest.response_format` on the wire (RT-FR-17, D-28). Omitted
+    /// entirely when the caller sets no hint, keeping the body byte
+    /// -identical to a pre-0.10 request (X-03).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<OpenAIResponseFormat>,
+}
+
+/// OpenAI's own two native JSON-mode wire shapes (RT-FR-17, D-28).
+///
+/// `{"type":"json_object"}` for [`ResponseFormat::JsonObject`], or
+/// `{"type":"json_schema","json_schema":{"name":..,"schema":..,"strict":..}}`
+/// for [`ResponseFormat::JsonSchema`] — OpenAI's documented `json_schema`
+/// response-format shape.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OpenAIResponseFormat {
+    JsonObject,
+    JsonSchema { json_schema: OpenAIJsonSchemaSpec },
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAIJsonSchemaSpec {
+    name: String,
+    schema: serde_json::Value,
+    strict: bool,
+}
+
+/// Convert the provider-agnostic [`ResponseFormat`] hint into OpenAI's wire
+/// shape.
+///
+/// `ResponseFormat` is `#[non_exhaustive]` (D-28), so a future variant this
+/// match has not been taught degrades to the plain JSON-object form rather
+/// than silently dropping the field — EDGE(RT-05/wire shape) requires
+/// `response_format` is never omitted once the caller asked for JSON.
+fn to_openai_response_format(format: &ResponseFormat) -> OpenAIResponseFormat {
+    match format {
+        ResponseFormat::JsonObject => OpenAIResponseFormat::JsonObject,
+        ResponseFormat::JsonSchema {
+            name,
+            schema,
+            strict,
+        } => OpenAIResponseFormat::JsonSchema {
+            json_schema: OpenAIJsonSchemaSpec {
+                name: name.clone(),
+                schema: schema.clone(),
+                strict: *strict,
+            },
+        },
+        _ => OpenAIResponseFormat::JsonObject,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -186,9 +242,44 @@ impl OpenAIAdapter {
         config.validate()?;
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout_seconds))
+            // CR-02 (`25-REVIEW.md`): `OPENAI_BASE_URL` is
+            // operator-configurable and every request carries the
+            // `Authorization: Bearer` credential header. Refusing redirects
+            // means a `3xx` from whatever host it resolves to can never
+            // replay that header to a different, attacker-influenced host —
+            // matches every `CompatEngine`-based preset and the bespoke
+            // Gemini adapter (T-17-18/T-17-52). A refused redirect surfaces
+            // via `Self::map_error`'s `300..=399` arm.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
         Ok(Self { config, client })
+    }
+
+    /// Map a non-2xx OpenAI response to [`LlmError`].
+    ///
+    /// `300..=399` is named explicitly (mirroring
+    /// `CompatEngine::map_error`/`GeminiAdapter::map_error`) because this
+    /// client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
+    /// response is never followed — it arrives here as an ordinary
+    /// non-success status instead. Everything else is the crate-wide
+    /// [`map_http_status`] (Phase 25 D-03, FT-FR-01).
+    fn map_error(&self, status: u16, body: &str) -> LlmError {
+        match status {
+            300..=399 => LlmError::ProviderError {
+                provider: OPENAI_PROVIDER.to_string(),
+                status,
+                message: format!(
+                    "the configured base URL responded with a redirect (HTTP {status}), which \
+                     this client refuses to follow because doing so would forward the \
+                     credential header to a different, potentially attacker-influenced host. \
+                     Correct the configured base-URL setting to point directly at the intended \
+                     endpoint. Response excerpt: {}",
+                    crate::redaction::diagnostic_excerpt(body, &self.config.api_key)
+                ),
+            },
+            _ => map_http_status(OPENAI_PROVIDER, status, body, &self.config.api_key),
+        }
     }
 
     /// Create an adapter by loading configuration from environment variables.
@@ -372,27 +463,10 @@ impl OpenAIAdapter {
             .map_err(|e| LlmError::ProcessingError(format!("Failed to read response: {}", e)))?;
 
         if !status.is_success() {
-            return match status.as_u16() {
-                401 => Err(LlmError::AuthenticationError(
-                    "Invalid OpenAI API key".to_string(),
-                )),
-                429 => Err(LlmError::RateLimitExceeded),
-                400 => {
-                    if response_text.contains("maximum context length") {
-                        Err(LlmError::TokenLimitExceeded)
-                    } else {
-                        Err(LlmError::InvalidPrompt(response_text))
-                    }
-                }
-                500..=599 => Err(LlmError::ProcessingError(format!(
-                    "OpenAI server error: {}",
-                    response_text
-                ))),
-                _ => Err(LlmError::ProcessingError(format!(
-                    "HTTP {}: {}",
-                    status, response_text
-                ))),
-            };
+            // Shared status-to-variant mapping for every adapter (D-03,
+            // FT-FR-01), with a `300..=399` pre-check (CR-02) since this
+            // client refuses to follow redirects.
+            return Err(self.map_error(status.as_u16(), &response_text));
         }
 
         serde_json::from_str::<OpenAIResponse>(&response_text)
@@ -425,12 +499,9 @@ impl OpenAIAdapter {
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
-            return Err(match status.as_u16() {
-                401 => LlmError::AuthenticationError("Invalid OpenAI API key".to_string()),
-                429 => LlmError::RateLimitExceeded,
-                400 => LlmError::InvalidPrompt(error_text),
-                _ => LlmError::ProcessingError(format!("HTTP {}: {}", status, error_text)),
-            });
+            // Same shared mapping as the generate path, so a status yields
+            // the same typed variant whether or not the call streams.
+            return Err(self.map_error(status.as_u16(), &error_text));
         }
 
         let stream = response.bytes_stream().map(|chunk_result| {
@@ -524,6 +595,10 @@ impl LlmPort for OpenAIAdapter {
             max_tokens: Some(max_tokens),
             top_p: Some(1.0),
             stream: false,
+            response_format: request
+                .response_format
+                .as_ref()
+                .map(to_openai_response_format),
         };
 
         let response = self.make_request_with_retries(&openai_request).await?;
@@ -582,6 +657,10 @@ impl LlmPort for OpenAIAdapter {
             max_tokens: Some(max_tokens),
             top_p: Some(1.0),
             stream: true,
+            response_format: request
+                .response_format
+                .as_ref()
+                .map(to_openai_response_format),
         };
 
         let stream = self.make_streaming_request(&openai_request).await?;
@@ -611,10 +690,9 @@ impl LlmPort for OpenAIAdapter {
             .map_err(|e| LlmError::NetworkError(format!("Failed to fetch models: {}", e)))?;
 
         if !response.status().is_success() {
-            return Err(LlmError::ProcessingError(format!(
-                "HTTP {}",
-                response.status()
-            )));
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(self.map_error(status.as_u16(), &error_text));
         }
 
         let response_text = response
@@ -636,7 +714,7 @@ impl LlmPort for OpenAIAdapter {
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "openai"
+        OPENAI_PROVIDER
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -737,5 +815,329 @@ mod tests {
             max_retries: 3,
         };
         assert!(config.validate().is_err());
+    }
+
+    // ── CR-02 (`25-REVIEW.md`): refused-redirect mapping ───────────────────
+
+    #[test]
+    fn map_error_maps_a_redirect_status_to_an_actionable_provider_error() {
+        let config = OpenAIConfig::new("test-key".to_string());
+        let adapter = OpenAIAdapter::new(config).unwrap();
+
+        for expected in [301u16, 302, 307] {
+            match adapter.map_error(expected, "moved") {
+                LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                } => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(status, expected, "typed status field must carry the code");
+                    assert!(
+                        message.contains("redirect"),
+                        "status {expected}: message must name the refused redirect, got: {message}"
+                    );
+                }
+                other => panic!("status {expected}: expected ProviderError, got {other:?}"),
+            }
+        }
+    }
+
+    // ── Phase 25 (FT-FR-01, D-03): non-2xx routes through map_http_status ──
+
+    mod status_mapping {
+        use super::*;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+        /// `max_retries: 0` so a retryable status surfaces after one attempt
+        /// instead of sleeping through the adapter's 1s-base backoff.
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request(stream: bool) -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+            .with_stream(stream)
+        }
+
+        #[tokio::test]
+        async fn openai_non_2xx_routes_through_the_shared_mapper() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(503)
+                .with_body(r#"{"error":{"message":"overloaded"}}"#)
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await;
+            match result {
+                Err(LlmError::ProviderError {
+                    provider, status, ..
+                }) => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(status, 503);
+                }
+                other => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_dedicated_status_mappings_are_unchanged() {
+            for (status, body, expect) in [
+                (401u16, r#"{"error":"invalid key"}"#, "AuthenticationError"),
+                (429, r#"{"error":"slow down"}"#, "RateLimitExceeded"),
+                (400, r#"{"error":"bad request"}"#, "InvalidPrompt"),
+                (
+                    400,
+                    r#"{"error":"This model's maximum context length is 8192 tokens"}"#,
+                    "TokenLimitExceeded",
+                ),
+            ] {
+                let mut server = Server::new_async().await;
+                server
+                    .mock("POST", "/chat/completions")
+                    .with_status(status.into())
+                    .with_body(body)
+                    .create_async()
+                    .await;
+
+                let err = adapter_at(&server.url())
+                    .generate(build_request(false))
+                    .await
+                    .expect_err("non-2xx must be an error");
+                let ok = matches!(
+                    (expect, &err),
+                    ("AuthenticationError", LlmError::AuthenticationError(_))
+                        | ("RateLimitExceeded", LlmError::RateLimitExceeded)
+                        | ("InvalidPrompt", LlmError::InvalidPrompt(_))
+                        | ("TokenLimitExceeded", LlmError::TokenLimitExceeded)
+                );
+                assert!(ok, "status {status}: expected {expect}, got {err:?}");
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_client_refuses_to_follow_a_redirect() {
+            // CR-02 (`25-REVIEW.md`) end-to-end regression: a `302` from the
+            // configured base URL must surface as a refused-redirect
+            // `ProviderError`, and the redirect target must never receive a
+            // request — proving the `Authorization` header was never
+            // replayed rather than merely asserting on the returned error
+            // shape.
+            let mut server = Server::new_async().await;
+            let redirect_target = server
+                .mock("POST", "/redirected")
+                .expect(0)
+                .create_async()
+                .await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(302)
+                .with_header("Location", "/redirected")
+                .with_body("moved")
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await;
+
+            match result {
+                Err(LlmError::ProviderError {
+                    provider,
+                    status,
+                    message,
+                }) => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(status, 302);
+                    assert!(message.contains("redirect"), "got: {message}");
+                }
+                other => panic!("expected ProviderError {{ status: 302 }}, got {other:?}"),
+            }
+            redirect_target.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn streaming_non_2xx_routes_through_the_shared_mapper() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(503)
+                .with_body(r#"{"error":{"message":"overloaded"}}"#)
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url())
+                .generate_stream(build_request(true))
+                .await;
+            // `Ok` carries a boxed `dyn Stream` with no `Debug`, so match by hand.
+            match &result {
+                Err(LlmError::ProviderError {
+                    provider, status, ..
+                }) => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(*status, 503);
+                }
+                Ok(_) => panic!("expected Err(ProviderError), got Ok(<stream>)"),
+                Err(other) => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
+            }
+        }
+    }
+
+    // ── Phase 26 (RT-05, D-28): response_format reaches the wire ──────────
+
+    mod response_format_wiring {
+        use super::*;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use serde_json::Value;
+        use std::collections::BTreeSet;
+        use std::sync::{Arc, Mutex};
+
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        /// Runs `generate()` against a mock `/chat/completions` endpoint,
+        /// capturing the raw outgoing request body as parsed JSON — mirrors
+        /// `CompatEngine`'s `generate_and_capture_body` test helper
+        /// (`compat/engine.rs`). Asserting on the parsed JSON rather than a
+        /// raw-string substring keeps this immune to key-ordering changes.
+        async fn generate_and_capture_body(request: LlmRequest) -> Value {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let captured_clone = Arc::clone(&captured);
+
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    let body_text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                    *captured_clone.lock().unwrap() = Some(body_text);
+                    serde_json::json!({
+                        "id": "cmpl-1",
+                        "model": "gpt-4o",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                    })
+                    .to_string()
+                    .into_bytes()
+                })
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url()).generate(request).await;
+            assert!(
+                result.is_ok(),
+                "mock server returned a well-formed response: {result:?}"
+            );
+
+            let body_text = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("mock must have been called exactly once");
+            serde_json::from_str(&body_text).expect("captured body must be valid JSON")
+        }
+
+        #[tokio::test]
+        async fn openai_request_carries_response_format_json_object() {
+            let request = build_request().with_response_format(ResponseFormat::JsonObject);
+            let body = generate_and_capture_body(request).await;
+
+            assert_eq!(
+                body.get("response_format"),
+                Some(&serde_json::json!({"type": "json_object"}))
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_request_carries_response_format_json_schema() {
+            let schema = serde_json::json!({
+                "type": "object",
+                "properties": {"answer": {"type": "string"}}
+            });
+            let request = build_request().with_response_format(ResponseFormat::JsonSchema {
+                name: "answer_schema".to_string(),
+                schema: schema.clone(),
+                strict: true,
+            });
+
+            let body = generate_and_capture_body(request).await;
+
+            assert_eq!(body["response_format"]["type"], "json_schema");
+            assert_eq!(
+                body["response_format"]["json_schema"]["name"],
+                "answer_schema"
+            );
+            assert_eq!(body["response_format"]["json_schema"]["schema"], schema);
+            assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+        }
+
+        #[tokio::test]
+        async fn openai_request_without_response_format_is_byte_identical_to_today() {
+            let body = generate_and_capture_body(build_request()).await;
+            let obj = body.as_object().expect("body must be a JSON object");
+
+            assert!(
+                !obj.contains_key("response_format"),
+                "absent response_format must not appear on the wire, got: {obj:?}"
+            );
+            // The full key set must be exactly what a pre-0.10 request
+            // produced -- proving this is an additive, X-03-compliant change
+            // rather than an accidental reshape of the existing fields.
+            let keys: BTreeSet<&str> = obj.keys().map(String::as_str).collect();
+            assert_eq!(
+                keys,
+                BTreeSet::from([
+                    "model",
+                    "messages",
+                    "temperature",
+                    "max_tokens",
+                    "top_p",
+                    "stream"
+                ])
+            );
+        }
     }
 }

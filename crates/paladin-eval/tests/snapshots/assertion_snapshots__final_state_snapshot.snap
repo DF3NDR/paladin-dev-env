@@ -1,0 +1,9 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: final_state_snapshot
+  expected: the final state to match the blessed snapshot
+  observed: first differing path: /status
+  detail:
+    run with --bless to update the snapshot

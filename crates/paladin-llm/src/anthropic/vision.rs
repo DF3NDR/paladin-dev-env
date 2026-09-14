@@ -603,21 +603,15 @@ mod tests {
 
         use paladin_core::platform::container::prompt::{PromptItem, PromptType, TextPrompt};
         use paladin_ports::output::llm_port::LlmRequest;
-        use std::collections::HashMap;
-        use uuid::Uuid;
 
-        let llm_request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: "claude-2.1".to_string(),
-            prompt: PromptItem::new(PromptType::Text(TextPrompt {
+        let llm_request = LlmRequest::new(
+            "claude-2.1",
+            PromptItem::new(PromptType::Text(TextPrompt {
                 content: "test".to_string(),
                 role: paladin_core::platform::container::prompt::PromptRole::User,
             }))
             .unwrap(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        );
 
         let vision = VisionRequest::new(
             "Describe this".to_string(),

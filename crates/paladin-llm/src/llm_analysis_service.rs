@@ -104,14 +104,9 @@ impl LlmAnalysisService {
         self.validate_input(input)?;
 
         // Create LLM request
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: config.model.clone(),
-            prompt: input.prompt.clone(),
-            attachments: input.content_attachments.clone(),
-            stream: config.enable_streaming,
-            metadata: std::collections::HashMap::new(),
-        };
+        let request = LlmRequest::new(config.model.clone(), input.prompt.clone())
+            .with_attachments(input.content_attachments.clone())
+            .with_stream(config.enable_streaming);
 
         // Call LLM with retries
         let mut last_error = None;

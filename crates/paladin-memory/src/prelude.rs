@@ -14,6 +14,12 @@ pub use crate::garrison::{TiktokenCounter, TokenCounter, TokenCounterFactory};
 pub use crate::sanctum::QdrantSanctumAdapter;
 pub use crate::sanctum::{InMemorySanctum, InMemorySanctumConfig};
 
+// Vault
+pub use crate::vault::InMemoryVault;
+pub use crate::vault::SemanticVault;
+#[cfg(feature = "sqlite")]
+pub use crate::vault::SqliteVault;
+
 // Services
 pub use crate::services::{
     MemoryExtractionService, MemoryExtractionStrategy, RagConfig, RagRetrievalService,
@@ -24,3 +30,6 @@ pub use crate::config::{
     GarrisonSettings, MemoryExtractionConfig, QdrantSanctumConfig, SanctumAdapterType,
     SanctumConfig,
 };
+
+// Token Counter
+pub use crate::token_counter::HeuristicTokenCounter;

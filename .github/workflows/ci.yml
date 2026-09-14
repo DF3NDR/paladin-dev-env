@@ -326,6 +326,16 @@ jobs:
 
       # Every publishable crate, addressed by its crates.io PACKAGE name (see
       # the job comment above) -- never a `crates/` directory path.
+      #
+      # `paladin-eval` (the twelfth publishable crate, ADR-0048, landed
+      # Phase 28) is DELIBERATELY EXCLUDED from this list. It first shipped
+      # in this same v0.10.0 cycle and has no published 0.9.0 baseline on
+      # crates.io to diff against -- `cargo semver-checks check-release
+      # --baseline-version 0.9.0` would ERROR for a nonexistent baseline,
+      # not skip cleanly. It is still registered in
+      # `scripts/publish-crates.sh`'s dependency-ordered array and the
+      # `Makefile`'s `publish-dry-run` target; this omission is scoped to
+      # the semver-diff check only.
       - name: Check semver against the published v0.9.0 baseline
         run: |
           set -euo pipefail
@@ -354,17 +364,38 @@ jobs:
       # have a matching allowlist entry. Reads both files directly -- a
       # missing file fails this step rather than silently treating either
       # side as an empty set.
+      #
+      # ROW-LEVEL (D-04): the comparison is the SET of `crate | type` PAIRS,
+      # not just crate names -- a §9.2 row and an allowlist entry naming
+      # DIFFERENT types under the SAME crate must fail. The set is a
+      # DEDUPLICATED set, never a row count against an entry count:
+      # `paladin-ai | Settings` is deliberately marked `Y` on two separate
+      # §9.2 rows (the `agent_runtime` field, Phase 26, and the
+      # `trace`/`web_server` fields, Phase 28) that both legitimately mirror
+      # the SAME allowlist entry -- they must collapse to one set member, not
+      # report a false 10-rows-vs-9-entries mismatch.
       - name: Verify allowlist is set-equal to the MIGRATION.md §9.2 register
         run: |
           set -euo pipefail
           test -f .cargo/semver-checks-allowlist.toml
           test -f MIGRATION.md
 
-          # Deliberate-breaking §9.2 rows: the "Deliberate-breaking?" column
-          # (6th pipe-delimited field) starting with "Y". Scoped to the §9.2
-          # section only, so a "Y" elsewhere in the document can't leak in.
-          # Trimming happens inside awk (no sed backreferences) to keep this
-          # script shellcheck-clean.
+          # Register side: scoped to the §9.2 section only, so a "Y"
+          # elsewhere in the document can't leak in. Data rows are selected
+          # by a leading pipe immediately followed by a backtick, which
+          # excludes the table header and its `---` separator row. Field 2
+          # is the crate (trimmed of spaces/tabs/backticks); field 3's FIRST
+          # backtick-quoted identifier is the type, so a long parenthetical
+          # like "StopReason (defined in ...)" still reduces to `StopReason`.
+          # The deliberate-breaking marker is located by scanning fields 6
+          # through NF (never a fixed column) for a trimmed value that is
+          # exactly "Y" or begins with "Y" followed by a space, em dash or
+          # hyphen: one §9.2 row's Mitigation cell contains a literal `|`
+          # inside a backticked span, which under naive `-F'|'` splitting
+          # shifts that row's marker one field to the right -- scanning the
+          # range instead of a fixed column is what keeps that row from
+          # being silently skipped. All trimming happens inside awk (no sed
+          # backreferences) to keep this script shellcheck-clean.
           # Both greps below tolerate exit 1 (no matches: an empty register or
           # an empty allowlist is a legal state — both empty is the set-equal
           # baseline this check shipped with) while still failing on exit 2
@@ -372,31 +403,68 @@ jobs:
           # kills the step before it prints anything, which is exactly how
           # this step failed on its first-ever run.
           awk '/^## 9\.2 /{flag=1; next} /^## 9\.3 /{flag=0} flag' MIGRATION.md \
-            | { grep -E '^\|' || test $? -eq 1; } \
+            | { grep -E '^\| `' || test $? -eq 1; } \
             | awk -F'|' '{
                 crate=$2; gsub(/^[ \t`]+|[ \t`]+$/, "", crate);
-                deliberate=$6; gsub(/^[ \t]+|[ \t]+$/, "", deliberate);
-                if (deliberate ~ /^Y/) print crate
+                type=$3; ident="";
+                if (match(type, /`[^`]+`/)) ident = substr(type, RSTART+1, RLENGTH-2);
+                deliberate="";
+                for (k = 6; k <= NF; k++) {
+                  v = $k; gsub(/^[ \t]+|[ \t]+$/, "", v);
+                  if (v == "Y" || v ~ /^Y[ \t—-]/) { deliberate = "Y"; break }
+                }
+                if (deliberate == "Y") print crate " | " ident
               }' \
-            | sort -u > /tmp/migration-deliberate-crates.txt
+            | sort -u > /tmp/migration-deliberate-pairs.txt
 
-          # Allowlist entries: each [[entry]] carries a `crate = "..."` key.
-          # Extracted via awk field-splitting on the quote character rather
-          # than a sed backreference, for the same shellcheck-cleanliness reason.
-          { grep -E '^\s*crate\s*=' .cargo/semver-checks-allowlist.toml || test $? -eq 1; } \
+          # Allowlist side: each [[entry]]'s `migration_row = "crate | type"`
+          # value is split on the pipe (with surrounding whitespace), and the
+          # type portion has backticks stripped and is reduced to its first
+          # whitespace-delimited token -- e.g. `require_authentication (fn)`
+          # reduces to `require_authentication`, matching the register side's
+          # reduction of `` `require_authentication` (fn) `` to the same
+          # identifier. Same shellcheck-cleanliness reasoning as the register
+          # side: all trimming happens inside awk, never a sed backreference.
+          { grep -E '^\s*migration_row\s*=' .cargo/semver-checks-allowlist.toml || test $? -eq 1; } \
             | awk -F'"' '{print $2}' \
-            | sort -u > /tmp/allowlist-crates.txt
+            | awk -F' *\\| *' '{
+                crate=$1; type=$2; gsub(/`/, "", type); sub(/ .*$/, "", type);
+                print crate " | " type
+              }' \
+            | sort -u > /tmp/allowlist-pairs.txt
 
-          echo "MIGRATION.md §9.2 deliberate-breaking crates:"
-          cat /tmp/migration-deliberate-crates.txt
-          echo "Allowlist crates:"
-          cat /tmp/allowlist-crates.txt
+          echo "MIGRATION.md §9.2 deliberate-breaking crate|type pairs:"
+          cat /tmp/migration-deliberate-pairs.txt
+          echo "Allowlist crate|type pairs:"
+          cat /tmp/allowlist-pairs.txt
 
-          if ! diff -u /tmp/migration-deliberate-crates.txt /tmp/allowlist-crates.txt; then
-            echo "::error::Allowlist and MIGRATION.md §9.2 deliberate-breaking rows are not set-equal (see diff above)."
+          if ! diff -u /tmp/migration-deliberate-pairs.txt /tmp/allowlist-pairs.txt; then
+            echo "::error::Allowlist and MIGRATION.md §9.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
             exit 1
           fi
-          echo "Allowlist is set-equal to the MIGRATION.md §9.2 deliberate-breaking register."
+          echo "Allowlist is set-equal to the MIGRATION.md §9.2 deliberate-breaking register (crate|type pairs)."
+
+      # D-01: MIGRATION.md's §9 sections previously carried a placeholder
+      # marker naming the requirement or phase that owned closing it -- every
+      # prior phase's own verification had to recalibrate around "a marker
+      # owned by a later phase" (28-17-SUMMARY.md, 29-RESEARCH.md). This step
+      # makes the absence permanent so the pattern cannot recur in v0.11: any
+      # future edit that reintroduces the four-letter placeholder token
+      # anywhere in MIGRATION.md fails CI. Any prose describing this
+      # convention -- including this comment -- must paraphrase the token
+      # (e.g. "marker", "placeholder"), never spell it out, or it would
+      # immediately re-trip the grep below.
+      - name: Verify MIGRATION.md carries no unfilled placeholder marker
+        run: |
+          set -euo pipefail
+          test -f MIGRATION.md
+          COUNT=$(grep -c 'TBD' MIGRATION.md || true)
+          if [ "${COUNT:-0}" -gt 0 ]; then
+            echo "::error::MIGRATION.md still carries ${COUNT} unfilled placeholder marker(s) -- every §9 section must be substantive before release. Offending lines:"
+            grep -n 'TBD' MIGRATION.md
+            exit 1
+          fi
+          echo "MIGRATION.md carries no unfilled placeholder marker."
 
   # Unit tests
   test:
@@ -576,7 +644,15 @@ jobs:
           --health-retries 5
 
       minio:
-        image: minio/minio:latest
+        # Pinned rather than floating: Docker Hub deleted the community MinIO
+        # repositories on 2026-09-12 and MinIO no longer publishes
+        # community-edition images. quay.io still serves this last
+        # known-good community release and no newer community tag will ever
+        # appear. Server manifest digest:
+        # sha256:cf3dadcfa1fb0324f43958bad1abba986d53c4ecc04d4d50b46c7dcda28bd3cd
+        # Long-term replacement tracked in
+        # .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
         ports:
           - 9010:9000
           - 9011:9001
@@ -607,11 +683,22 @@ jobs:
         with:
           cache-on-failure: true
 
+      # MinIO retired its community binary downloads; its former community download host
+      # answered HTTP 410 Gone for the mc binary on 2026-09-13. The binary is now fetched
+      # from the archived github.com/minio/mc repository's release assets (assets on
+      # archived repositories remain downloadable), pinned to the same release the quay.io
+      # client image from quick task 260913-15w already carries. The checksum is the one
+      # published as that release's own .sha256sum asset. Long-term replacement tracked in .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
       - name: Install MinIO Client
         run: |
-          wget https://dl.min.io/client/mc/release/linux-amd64/mc
+          set -euo pipefail
+          MC_RELEASE="RELEASE.2025-08-13T08-35-41Z"
+          MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
+          curl -fsSL -o mc \
+            "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}"
+          echo "${MC_SHA256}  mc" | sha256sum -c -
           chmod +x mc
-          sudo mv mc /usr/local/bin/
+          sudo mv mc /usr/local/bin/mc
 
       - name: Setup MinIO buckets
         run: |
@@ -815,7 +902,7 @@ jobs:
   # and the selected-count assertion below are what give this job its meaning
   # -- do not remove them.
   postgres-integration:
-    name: Postgres Waypoint Contract Suite (live server)
+    name: Postgres Storage Contract Suites (live server)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -842,44 +929,57 @@ jobs:
       - name: Assert the live server accepts connections
         run: docker exec paladin-postgres-test pg_isready -U paladin -d paladin_waypoint_test
 
-      - name: Run PostgresWaypointStore contract suite
+      - name: Run every *::postgres contract suite
         run: |
           set -o pipefail
           # --nocapture: store_or_skip() announces its early-return path on
           # stdout, which cargo swallows without it -- the detection step below
-          # would have nothing to read. --test-threads=1: this module's tests
+          # would have nothing to read. --test-threads=1: these modules' tests
           # share one database (unlike the SQLite suite's per-test in-memory
           # database), and
           # list_threads_empty_then_three_threads_newest_activity_first asserts
           # a literally empty store; under default parallelism a peer test's
           # writes land inside that assertion's window and the job goes red for
           # a reason that is not a real contract violation.
+          #
+          # The `--lib postgres` filter is a substring match, not a path
+          # anchor: it selects every `*::postgres` module this crate declares
+          # (today `waypoint::postgres`; 27-09/27-11/27-13 add more under the
+          # same convention), so this job picks up each new Postgres suite
+          # automatically as the phase lands them, with no per-suite CI edit.
+          # Both env vars point at the same live server -- `WAYPOINT_POSTGRES_TEST_URL`
+          # for the existing waypoint suite's own var name, `STORAGE_POSTGRES_TEST_URL`
+          # for every later *::postgres suite this phase adds under its own name.
           WAYPOINT_POSTGRES_TEST_URL=postgres://paladin:paladin@localhost:5433/paladin_waypoint_test \
-            cargo test -p paladin-storage --features postgres --lib waypoint::postgres \
+          STORAGE_POSTGRES_TEST_URL=postgres://paladin:paladin@localhost:5433/paladin_waypoint_test \
+            cargo test -p paladin-storage --features postgres --lib postgres \
             -- --test-threads=1 --nocapture 2>&1 | tee /tmp/postgres-waypoint-test.log
 
       - name: Fail if the suite took the SKIP path
         run: |
           if grep -q 'SKIP:' /tmp/postgres-waypoint-test.log; then
-            echo "::error::waypoint::postgres took the SKIP path — the live server was NOT exercised."
+            echo "::error::a *::postgres suite took the SKIP path — the live server was NOT exercised."
             grep 'SKIP:' /tmp/postgres-waypoint-test.log
             exit 1
           fi
-          echo "All waypoint::postgres tests exercised the live server."
+          echo "All *::postgres tests exercised the live server."
 
       - name: Fail if the suite selected fewer tests than it declares
         run: |
           set -o pipefail
           # Anchored to attribute position (leading whitespace then the attr):
           # an unanchored count also matches the literal inside comments — the
-          # module's own "One #[tokio::test] per shared contract function"
-          # comment inflated the declared count to 27 vs 26 real tests and
-          # failed a run in which every selected test passed.
-          EXPECTED=$(grep -cE '^\s*#\[tokio::test\]' crates/paladin-storage/src/waypoint/postgres.rs)
+          # waypoint module's own "One #[tokio::test] per shared contract
+          # function" comment once inflated its declared count to 27 vs 26
+          # real tests and failed a run in which every selected test passed.
+          # Summed over every `*/postgres.rs` file so a later plan's new
+          # Postgres suite is covered by this same declared-count assertion
+          # without a CI edit.
+          EXPECTED=$(grep -hcE '^\s*#\[tokio::test\]' crates/paladin-storage/src/*/postgres.rs | awk '{sum+=$1} END {print sum+0}')
           ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/postgres-waypoint-test.log | tail -1)
           echo "Declared tests: $EXPECTED, passed: ${ACTUAL:-0}"
           if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then
-            echo "::error::waypoint::postgres selected fewer tests (${ACTUAL:-0}) than the module declares ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
+            echo "::error::*::postgres selected fewer tests (${ACTUAL:-0}) than the modules declare ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
             exit 1
           fi
 
@@ -890,6 +990,348 @@ jobs:
       - name: Stop services
         if: always()
         run: docker compose -f docker/docker-compose.test.yml down -v
+
+  # Redis-cache live-server integration (Doc 04 FT-FR-18…20, D-27). The
+  # RedisNodeCache Tier 2 contract suite self-skips -- and therefore passes --
+  # when no server is reachable (mirroring the Postgres job above exactly).
+  # Docker is absent from every authoring environment for this phase, so
+  # before this job the suite would execute in no environment at all while
+  # every CI run reported green -- the same failure shape the Postgres and
+  # Ollama jobs above were each added to close.
+  #
+  # Reuses the `redis-test` service `docker-integration` already brings up
+  # (docker/docker-compose.test.yml) rather than defining a second Redis
+  # container, per this plan's own instruction to prefer an existing job's
+  # infrastructure over standing up a new one.
+  #
+  # The reachability assertion (`redis-cli ping`), the early-return detection
+  # step and the selected-count assertion below are what give this job its
+  # meaning -- do not remove them.
+  redis-cache-integration:
+    name: Redis Node Cache Contract Suite (live server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: redis-cache-integration
+
+      - name: Start redis-test and wait for healthy
+        run: |
+          docker compose -f docker/docker-compose.test.yml up -d redis-test
+          echo "Waiting for redis-test to report healthy..."
+          timeout 120 sh -c 'until docker inspect paladin-redis-test --format="{{.State.Health.Status}}" 2>/dev/null | grep -qx healthy; do sleep 3; done'
+
+      - name: Assert the live server accepts connections
+        run: docker exec paladin-redis-test redis-cli ping
+
+      - name: Run RedisNodeCache contract suite
+        run: |
+          set -o pipefail
+          # --nocapture: cache_or_skip() announces its early-return path on
+          # stdout, which cargo swallows without it -- the detection step
+          # below would have nothing to read.
+          NODE_CACHE_REDIS_TEST_URL=redis://127.0.0.1:6380/0 \
+            cargo test -p paladin-storage --features redis-cache --lib node_cache::redis \
+            -- --nocapture 2>&1 | tee /tmp/redis-node-cache-test.log
+
+      - name: Fail if the suite took the SKIP path
+        run: |
+          if grep -q 'SKIP:' /tmp/redis-node-cache-test.log; then
+            echo "::error::node_cache::redis took the SKIP path — the live server was NOT exercised."
+            grep 'SKIP:' /tmp/redis-node-cache-test.log
+            exit 1
+          fi
+          echo "All node_cache::redis tests exercised the live server."
+
+      - name: Fail if the suite selected fewer tests than it declares
+        run: |
+          set -o pipefail
+          EXPECTED=$(grep -cE '^\s*#\[test\]|^\s*#\[tokio::test\]' crates/paladin-storage/src/node_cache/redis.rs)
+          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/redis-node-cache-test.log | tail -1)
+          echo "Declared tests: $EXPECTED, passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then
+            echo "::error::node_cache::redis selected fewer tests (${ACTUAL:-0}) than the module declares ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
+            exit 1
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.test.yml logs redis-test
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker/docker-compose.test.yml down -v
+
+  # Redis run-queue live-server integration (D-06/D-08, D-51). The
+  # RedisRunQueue Tier 2 contract suite self-skips -- and therefore passes --
+  # when no server is reachable, exactly like the redis-cache-integration job
+  # above. Docker is absent from every authoring environment for this phase,
+  # so before this job the suite would execute in no environment at all while
+  # every CI run reported green -- the same failure shape the Postgres,
+  # Ollama and redis-cache jobs above were each added to close.
+  #
+  # Reuses the `redis-test` service `docker-integration`/`redis-cache-integration`
+  # already bring up (docker/docker-compose.test.yml) rather than defining a
+  # second Redis container. Uses logical database index 1
+  # (`redis://127.0.0.1:6380/1`), never index 0, so this job's keys never
+  # share a keyspace with the redis-cache-integration job above even if both
+  # ever ran against the same server.
+  #
+  # The reachability assertion (`redis-cli ping`), the early-return detection
+  # step and the selected-count assertion below are what give this job its
+  # meaning -- do not remove them.
+  redis-queue:
+    name: Redis Run Queue Contract Suite (live server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: redis-queue
+
+      - name: Start redis-test and wait for healthy
+        run: |
+          docker compose -f docker/docker-compose.test.yml up -d redis-test
+          echo "Waiting for redis-test to report healthy..."
+          timeout 120 sh -c 'until docker inspect paladin-redis-test --format="{{.State.Health.Status}}" 2>/dev/null | grep -qx healthy; do sleep 3; done'
+
+      - name: Assert the live server accepts connections
+        run: docker exec paladin-redis-test redis-cli ping
+
+      - name: Run RedisRunQueue contract suite
+        run: |
+          set -o pipefail
+          # --nocapture: queue_or_skip() announces its early-return path on
+          # stdout, which cargo swallows without it -- the detection step
+          # below would have nothing to read. Database index 1 (not 0, which
+          # redis-cache-integration uses) so this job never shares keys with
+          # that job even if both ever ran against the same server.
+          RUN_QUEUE_REDIS_TEST_URL=redis://127.0.0.1:6380/1 \
+            cargo test -p paladin-storage --features redis-queue --lib run_queue::redis \
+            -- --nocapture 2>&1 | tee /tmp/redis-run-queue-test.log
+
+      - name: Fail if the suite took the SKIP path
+        run: |
+          if grep -q 'SKIP:' /tmp/redis-run-queue-test.log; then
+            echo "::error::run_queue::redis took the SKIP path — the live server was NOT exercised."
+            grep 'SKIP:' /tmp/redis-run-queue-test.log
+            exit 1
+          fi
+          echo "All run_queue::redis tests exercised the live server."
+
+      - name: Fail if the suite selected fewer tests than it declares
+        run: |
+          set -o pipefail
+          EXPECTED=$(grep -cE '^\s*#\[test\]|^\s*#\[tokio::test\]' crates/paladin-storage/src/run_queue/redis.rs)
+          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/redis-run-queue-test.log | tail -1)
+          echo "Declared tests: $EXPECTED, passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then
+            echo "::error::run_queue::redis selected fewer tests (${ACTUAL:-0}) than the module declares ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
+            exit 1
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.test.yml logs redis-test
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker/docker-compose.test.yml down -v
+
+  # Generated SDK clients smoke (PLAT-FR-17, D-49, 27-18): proves
+  # `crates/paladin-web/openapi.json` is genuinely generatable into a working Python
+  # AND TypeScript client, not just schema-valid — runs on every PR/push (no path
+  # filter, matching this file's own D-03 policy). `ubuntu-latest` ships Docker
+  # (27-RESEARCH.md Environment Availability), so the pinned image below is the
+  # primary path; the npm package is the documented fallback if the pull fails.
+  # Every assertion below is a REAL check on generated output (file counts, a
+  # compile step, a live 202 + terminal status), never a bare exit-code pass-through
+  # — this job's own prohibition (P1) is that it must not be able to go green on a
+  # client that failed to install, listed nothing, or submitted nothing.
+  sdk-clients:
+    name: Generated SDK Clients (Python + TypeScript) smoke
+    runs-on: ubuntu-latest
+    env:
+      # Pinned to the current stable v7.x tag (looked up on Docker Hub at
+      # execution time, 2026-09-08). Bump deliberately, not silently, when a
+      # newer v7.x lands.
+      OPENAPI_GENERATOR_IMAGE: "openapitools/openapi-generator-cli:v7.25.0"
+      OPENAPI_GENERATOR_NPM_FALLBACK: "@openapitools/openapi-generator-cli@2.41.0"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: sdk-clients
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate the Python client
+        run: |
+          set -euo pipefail
+          mkdir -p target/sdk/python target/sdk/typescript
+          if ! docker run --rm -v "$PWD:/local" "$OPENAPI_GENERATOR_IMAGE" generate \
+              -i /local/crates/paladin-web/openapi.json \
+              -g python \
+              -o /local/target/sdk/python \
+              --additional-properties packageName=openapi_client; then
+            echo "::warning::docker pull/run of $OPENAPI_GENERATOR_IMAGE failed — falling back to the npm openapi-generator-cli package (documented fallback, D-49)."
+            npx --yes "$OPENAPI_GENERATOR_NPM_FALLBACK" generate \
+              -i crates/paladin-web/openapi.json \
+              -g python \
+              -o target/sdk/python \
+              --additional-properties packageName=openapi_client
+          fi
+
+      - name: Generate the TypeScript client
+        run: |
+          set -euo pipefail
+          if ! docker run --rm -v "$PWD:/local" "$OPENAPI_GENERATOR_IMAGE" generate \
+              -i /local/crates/paladin-web/openapi.json \
+              -g typescript-fetch \
+              -o /local/target/sdk/typescript \
+              --additional-properties npmName=paladin-sdk,supportsES6=true; then
+            echo "::warning::docker pull/run of $OPENAPI_GENERATOR_IMAGE failed — falling back to the npm openapi-generator-cli package (documented fallback, D-49)."
+            npx --yes "$OPENAPI_GENERATOR_NPM_FALLBACK" generate \
+              -i crates/paladin-web/openapi.json \
+              -g typescript-fetch \
+              -o target/sdk/typescript \
+              --additional-properties npmName=paladin-sdk,supportsES6=true
+          fi
+
+      # Prohibition P1: a zero (or near-zero) generated tree must fail the job, not
+      # read as success because every later step happened to also exit 0.
+      - name: Assert the Python client generated a non-empty tree
+        run: |
+          set -euo pipefail
+          count=$(find target/sdk/python -type f | wc -l)
+          echo "generated $count files (python)"
+          if [ "$count" -lt 20 ]; then
+            echo "::error::Python client generation produced only $count files (< 20) — the generator likely failed silently."
+            exit 1
+          fi
+
+      - name: Assert the TypeScript client generated a non-empty tree
+        run: |
+          set -euo pipefail
+          count=$(find target/sdk/typescript -type f | wc -l)
+          echo "generated $count files (typescript)"
+          if [ "$count" -lt 20 ]; then
+            echo "::error::TypeScript client generation produced only $count files (< 20) — the generator likely failed silently."
+            exit 1
+          fi
+
+      - name: Build paladin-server
+        run: cargo build --bin paladin-server --features web-server
+
+      # Boots the server, waits for /health, pip-installs + runs smoke.py, npm
+      # ci + tsc + node smoke.ts, then stops the server — see
+      # scripts/sdk-smoke/run.sh's own module docs for the full sequence. Both
+      # scripts assert a real 202 from POST /v1/runs followed by a terminal
+      # status, and a non-empty items array from GET /v1/assistants — never a
+      # bare exit-code pass-through.
+      - name: Run the SDK smoke (both clients against a live server)
+        run: scripts/sdk-smoke/run.sh
+
+  # PRD 06 acceptance criterion 1 (PLAT-06, gap 5 / 27-VERIFICATION.md): the
+  # full assistant -> run -> SSE -> AwaitingInput -> webhook -> resume ->
+  # complete -> history -> fork lifecycle. The binary carries
+  # `required-features = ["web-server"]` in Cargo.toml, which no other job
+  # supplies -- `test` runs `--lib --bins`, `integration-tests` does not imply
+  # `web-server`, and feature-flags.yml's `web-server` leg is `--lib` only --
+  # so this phase's flagship acceptance test was previously proven only
+  # locally, never by CI. No `needs:` edge: this job neither gates nor is
+  # gated by another job. The selected-count assertion below is what gives
+  # this job its meaning -- this workspace's own documented trap is that a
+  # filter selecting zero tests still exits 0, so a rename or feature-gate
+  # change could otherwise turn this into a silent no-op that reads green.
+  #
+  # This job ALSO carries the SHIP-02 backward-compat boot proof (D-09, as
+  # corrected in 29-05-PLAN.md): `v0_9_config_boot` (`tests/integration/
+  # v0_9_config_boot_test.rs`) needs the same `web-server` feature and is
+  # selected by no other job -- the `test` job's scope (see its own comment
+  # above) and `--doc` step do not reach it, and `web-server` is not a
+  # default feature, so `integration-tests`' sweep does not reach it either.
+  # D-09 asks for no new workflow job; this is the only existing job that can
+  # run it, so the boot proof rides here instead of a dedicated job of its
+  # own.
+  e2e-platform-api:
+    name: E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: e2e-platform-api
+
+      - name: Run the e2e_platform_api test binary
+        run: |
+          set -o pipefail
+          cargo test --features web-server --test e2e_platform_api \
+            2>&1 | tee /tmp/e2e-platform-api-test.log
+
+      - name: Fail if the run selected zero tests
+        run: |
+          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/e2e-platform-api-test.log | tail -1)
+          echo "Passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt 1 ]; then
+            echo "::error::e2e_platform_api selected zero tests -- a stale filter, a rename, or a feature-gate change would otherwise report green having run nothing."
+            exit 1
+          fi
+
+      - name: Run the v0_9_config_boot test binary (SHIP-02 backward-compat proof)
+        run: |
+          set -o pipefail
+          cargo test --features web-server --test v0_9_config_boot \
+            2>&1 | tee /tmp/v0-9-config-boot-test.log
+
+      - name: Fail if the v0_9_config_boot run selected fewer than the full test set
+        run: |
+          # Wrap the grep in a group tolerating exit 1 (no match) while still
+          # failing on exit 2 (a real error) -- same idiom the §9.2/allowlist
+          # set-equality step above uses. Without it, `pipefail` + the
+          # default `-e` GitHub Actions runs `run:` steps under makes a
+          # zero-match grep abort the script at this assignment, before the
+          # `::error::` diagnostic below ever prints (the job still fails,
+          # but silently, defeating the diagnostic this step exists for).
+          ACTUAL=$({ grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/v0-9-config-boot-test.log || test $? -eq 1; } | tail -1)
+          echo "Passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt 9 ]; then
+            echo "::error::v0_9_config_boot selected fewer than 9 tests -- a stale filter, a rename, or a feature-gate change would otherwise report green having run less than the full SHIP-02 boot proof."
+            exit 1
+          fi
 
   # Coverage measurement (PIPE-02) — MEASURE-ONLY as of this commit: no minimum-
   # threshold flag. D-04 requires the figure to be measured before the floor
@@ -913,7 +1355,15 @@ jobs:
           --health-retries 5
 
       minio:
-        image: minio/minio:latest
+        # Pinned rather than floating: Docker Hub deleted the community MinIO
+        # repositories on 2026-09-12 and MinIO no longer publishes
+        # community-edition images. quay.io still serves this last
+        # known-good community release and no newer community tag will ever
+        # appear. Server manifest digest:
+        # sha256:cf3dadcfa1fb0324f43958bad1abba986d53c4ecc04d4d50b46c7dcda28bd3cd
+        # Long-term replacement tracked in
+        # .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
         ports:
           - 9010:9000
           - 9011:9001
@@ -951,11 +1401,22 @@ jobs:
         with:
           cache-on-failure: true
 
+      # MinIO retired its community binary downloads; its former community download host
+      # answered HTTP 410 Gone for the mc binary on 2026-09-13. The binary is now fetched
+      # from the archived github.com/minio/mc repository's release assets (assets on
+      # archived repositories remain downloadable), pinned to the same release the quay.io
+      # client image from quick task 260913-15w already carries. The checksum is the one
+      # published as that release's own .sha256sum asset. Long-term replacement tracked in .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
       - name: Install MinIO Client
         run: |
-          wget https://dl.min.io/client/mc/release/linux-amd64/mc
+          set -euo pipefail
+          MC_RELEASE="RELEASE.2025-08-13T08-35-41Z"
+          MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
+          curl -fsSL -o mc \
+            "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}"
+          echo "${MC_SHA256}  mc" | sha256sum -c -
           chmod +x mc
-          sudo mv mc /usr/local/bin/
+          sudo mv mc /usr/local/bin/mc
 
       - name: Setup MinIO buckets
         run: |

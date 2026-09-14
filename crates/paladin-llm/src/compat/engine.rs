@@ -28,11 +28,14 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
-    TokenUsage,
+    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
+    StreamingResponse, TokenUsage,
 };
 
-use super::types::{CompatMessage, CompatModelsResponse, CompatRequest, CompatResponse};
+use super::types::{
+    CompatMessage, CompatModelsResponse, CompatRequest, CompatResponse, CompatResponseFormat,
+};
+use crate::http_status::map_http_status;
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
 
 /// Capabilities a preset declares for its own request path.
@@ -231,11 +234,15 @@ enum FetchFailureClass {
 /// change is exactly what keeps D-05's shared-engine boundary intact: the
 /// engine still learns nothing about which vendor is on the other end.
 ///
-/// Exhaustive over every `LlmError` variant — **deliberately no wildcard
-/// arm**. A variant added to `paladin-ports::LlmError` later is a compile
-/// error here until a person decides which side of the split it falls on,
-/// rather than silently landing in a catch-all and being absorbed into the
-/// quiet path unnoticed.
+/// Exhaustive over every known `LlmError` variant, each with its own
+/// deliberate arm below. `LlmError` is `#[non_exhaustive]` (X-10.2, D-04) as
+/// of Phase 25, so a wildcard arm is now REQUIRED for this to compile as a
+/// downstream crate — it exists solely to satisfy that compiler requirement,
+/// classifying a genuinely unknown future variant the same as the generic
+/// non-success catch-all (`FetchFailureClass::Supported`) rather than
+/// panicking. A variant added to `paladin-ports::LlmError` should still get
+/// its own explicit arm above the wildcard so a person decides which side of
+/// the split it falls on, rather than leaning on the wildcard by default.
 fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
     match error {
         // The one case this plan closes: a rejected credential (mapped from
@@ -275,14 +282,22 @@ fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
         // A malformed prompt cannot reach a model-list fetch at all — this
         // arm exists only so the match stays exhaustive.
         LlmError::InvalidPrompt(_) => FetchFailureClass::Supported,
-        // Covers the generic non-success-status catch-all AND the
-        // refused-redirect message (`map_error`'s `300..=399` arm, WR-04). A
-        // refused redirect is arguably a misconfiguration too, but it is
-        // left quiet deliberately: that message already names the exact
-        // setting to check on its own, so raising it again here would only
-        // duplicate an already-actionable message rather than surface a
-        // silent one.
+        // Body-read / parse failures on an otherwise-2xx model-list response.
         LlmError::ProcessingError(_) => FetchFailureClass::Supported,
+        // Every non-2xx status without a dedicated variant (Phase 25 D-03,
+        // via `map_http_status`) AND the refused-redirect message
+        // (`map_error`'s `300..=399` arm, WR-04). A refused redirect is
+        // arguably a misconfiguration too, but it is left quiet
+        // deliberately: that message already names the exact setting to
+        // check on its own, so raising it again here would only duplicate an
+        // already-actionable message rather than surface a silent one. An
+        // exhausted fallback chain is classified the same way.
+        LlmError::ProviderError { .. } => FetchFailureClass::Supported,
+        LlmError::AllProvidersFailed { .. } => FetchFailureClass::Supported,
+        // X-10.2 (D-04): `LlmError` is `#[non_exhaustive]`; required by the
+        // compiler, not reachable by any variant known today. See the
+        // rustdoc above for why this stays `Supported` rather than a panic.
+        _ => FetchFailureClass::Supported,
     }
 }
 
@@ -348,7 +363,17 @@ pub struct CompatEngine {
     client: Client,
     config: CompatEngineConfig,
     models_cache: OnceCell<Vec<String>>,
+    /// The name stamped on every [`LlmError::ProviderError`] this engine
+    /// emits (Phase 25 D-03). Set by the preset through
+    /// [`CompatEngine::with_provider_name`]; defaults to
+    /// [`DEFAULT_PROVIDER_NAME`] so an engine built without a preset still
+    /// carries a truthful, if generic, name.
+    provider_name: &'static str,
 }
+
+/// The provider name a [`CompatEngine`] reports until a preset names it via
+/// [`CompatEngine::with_provider_name`].
+pub const DEFAULT_PROVIDER_NAME: &str = "openai-compatible";
 
 impl CompatEngine {
     /// Construct a new engine from preset-supplied configuration.
@@ -382,7 +407,24 @@ impl CompatEngine {
             client,
             config,
             models_cache: OnceCell::new(),
+            provider_name: DEFAULT_PROVIDER_NAME,
         })
+    }
+
+    /// Name the preset this engine serves, so every
+    /// [`LlmError::ProviderError`] it emits carries that name in its
+    /// `provider` field (Phase 25 D-03) rather than the generic
+    /// [`DEFAULT_PROVIDER_NAME`]. Each thin preset calls this with the same
+    /// literal its `LlmPort::get_provider_name` returns.
+    #[must_use]
+    pub fn with_provider_name(mut self, provider_name: &'static str) -> Self {
+        self.provider_name = provider_name;
+        self
+    }
+
+    /// The name this engine stamps on its [`LlmError::ProviderError`]s.
+    pub fn provider_name(&self) -> &'static str {
+        self.provider_name
     }
 
     /// The preset's declared capabilities, converted to the port's type.
@@ -401,6 +443,11 @@ impl CompatEngine {
     /// `self.config.request_parameters`, never the provider name or base
     /// URL, so the same mechanism serves the next vendor without editing
     /// this method.
+    ///
+    /// This method backs **five presets** sharing this one engine: Kimi,
+    /// Qwen, Grok, Ollama and the generic OpenAI-compatible preset — a
+    /// change here (e.g. the `response_format` mapping below, D-28) is
+    /// shared by all five, not per-vendor.
     fn build_request(&self, request: &LlmRequest) -> Result<CompatRequest, LlmError> {
         let messages = Self::convert_prompt_to_messages(&request.prompt)?;
         let params = &request.prompt.node.node.parameters;
@@ -438,6 +485,21 @@ impl CompatEngine {
             );
         }
 
+        // D-28: every `ResponseFormat` variant degrades to this engine's
+        // plain JSON-object form — these five presets speak the de-facto
+        // chat-completions dialect without OpenAI's schema-carrying
+        // extension. The field is present whenever the caller asked for
+        // JSON (never omitted, EDGE(RT-05/wire shape)); correctness never
+        // depends on it because the caller also appends the
+        // schema-conformance instruction block (D-27).
+        let response_format =
+            request
+                .response_format
+                .as_ref()
+                .map(|_: &ResponseFormat| CompatResponseFormat {
+                    kind: "json_object",
+                });
+
         Ok(CompatRequest {
             model: request.model.clone(),
             messages,
@@ -447,6 +509,7 @@ impl CompatEngine {
             frequency_penalty,
             presence_penalty,
             stream: request.stream,
+            response_format,
         })
     }
 
@@ -551,47 +614,53 @@ impl CompatEngine {
         redact_and_bound(body, &self.config.api_key)
     }
 
-    /// Map an HTTP status + message to [`LlmError`].
+    /// Map a non-2xx HTTP status + RAW response body to [`LlmError`].
     ///
-    /// Checks the preset's `error_override` first so a preset-specific
-    /// status (e.g. DeepSeek's 402) can be added without editing this
-    /// engine.
-    fn map_error(&self, status: u16, message: &str) -> LlmError {
+    /// Checks the preset's `error_override` first (handed the redacted,
+    /// bounded excerpt, as before) so a preset-specific status can be added
+    /// without editing this engine. Everything else is the crate-wide
+    /// [`map_http_status`] (Phase 25 D-03, FT-FR-01): it redacts `body`
+    /// before bounding it and emits a typed `ProviderError { status }` for
+    /// every status without a dedicated variant — which is why callers pass
+    /// the raw body here rather than a pre-built excerpt (bounding twice
+    /// would truncate the first elision marker).
+    fn map_error(&self, status: u16, body: &str) -> LlmError {
         if let Some(override_fn) = self.config.error_override
-            && let Some(err) = override_fn(status, message)
+            && let Some(err) = override_fn(status, &self.diagnostic_excerpt(body))
         {
             return err;
         }
 
         match status {
-            401 => LlmError::AuthenticationError(format!("Invalid API key. Error: {}", message)),
-            429 => LlmError::RateLimitExceeded,
-            404 => LlmError::ModelNotAvailable(message.to_string()),
-            400 => LlmError::InvalidPrompt(message.to_string()),
-            // WR-04 (`17-REVIEW.md`, T-17-52): every preset now builds its
+            // WR-04 (`17-REVIEW.md`, T-17-52): every preset builds its
             // client with `redirect_policy: Some(Policy::none())`, so a
             // `3xx` response is never followed — it arrives here as an
             // ordinary non-success status instead. Named explicitly rather
-            // than falling into the catch-all below, so the operator whose
+            // than left to the helper's generic arm, so the operator whose
             // previously-working endpoint now fails gets an actionable
-            // message: which setting to check, not an opaque "API error".
+            // message: which setting to check, not an opaque status.
             //
-            // `LlmError::ProcessingError` is this engine's retryable set
-            // (see `call_api_with_retry`), so a redirecting host is retried
-            // up to `max_retries` before this surfaces — deliberate: adding
-            // a new `LlmError` variant would breach PROV-02's "errors map
-            // into the existing variants, not a new parallel error type"
-            // rule, and no existing non-retryable variant means "refused
-            // redirect". A few extra requests to a host already answering
-            // `3xx` is the accepted cost (T-17-54, `17-REVIEW.md`).
-            300..=399 => LlmError::ProcessingError(format!(
-                "API error ({status}): the configured base URL responded with a redirect \
-                 (HTTP {status}), which this client refuses to follow because doing so would \
-                 forward the credential header to a different, potentially attacker-influenced \
-                 host. Correct the configured base-URL setting to point directly at the \
-                 intended endpoint. Response excerpt: {message}"
-            )),
-            _ => LlmError::ProcessingError(format!("API error ({}): {}", status, message)),
+            // The VARIANT is the same one the helper would choose for a
+            // `3xx` (`ProviderError`, classified Permanent by value —
+            // FT-FR-01); only the message is enriched. This engine's retry
+            // loop (`call_api_with_retry`) still retries it up to
+            // `max_retries` before it surfaces, the accepted cost recorded
+            // as T-17-54; the "no new variant" rationale that once forced
+            // this onto `ProcessingError` is superseded by plan 25-02's
+            // `ProviderError`.
+            300..=399 => LlmError::ProviderError {
+                provider: self.provider_name.to_string(),
+                status,
+                message: format!(
+                    "the configured base URL responded with a redirect (HTTP {status}), which \
+                     this client refuses to follow because doing so would forward the \
+                     credential header to a different, potentially attacker-influenced host. \
+                     Correct the configured base-URL setting to point directly at the intended \
+                     endpoint. Response excerpt: {}",
+                    self.diagnostic_excerpt(body)
+                ),
+            },
+            _ => map_http_status(self.provider_name, status, body, &self.config.api_key),
         }
     }
 
@@ -674,7 +743,7 @@ impl CompatEngine {
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status.as_u16(), &self.diagnostic_excerpt(&error_text)));
+                return Err(self.map_error(status.as_u16(), &error_text));
             }
 
             // Read the body to text FIRST, then deserialize it separately —
@@ -802,7 +871,7 @@ impl CompatEngine {
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status.as_u16(), &self.diagnostic_excerpt(&error_text)));
+                return Err(self.map_error(status.as_u16(), &error_text));
             }
 
             Ok(response)
@@ -896,7 +965,7 @@ impl CompatEngine {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(self.map_error(status.as_u16(), &self.diagnostic_excerpt(&error_text)));
+            return Err(self.map_error(status.as_u16(), &error_text));
         }
 
         let body = response
@@ -1092,30 +1161,62 @@ mod tests {
             engine.map_error(400, "bad prompt"),
             LlmError::InvalidPrompt(_)
         ));
-        assert!(matches!(
-            engine.map_error(500, "server error"),
-            LlmError::ProcessingError(_)
-        ));
+        // Phase 25 (FT-FR-01, D-03): a status with no dedicated variant
+        // carries its code as a typed field, never as text to parse.
+        match engine.map_error(500, "server error") {
+            LlmError::ProviderError {
+                provider, status, ..
+            } => {
+                assert_eq!(provider, DEFAULT_PROVIDER_NAME);
+                assert_eq!(status, 500);
+            }
+            other => panic!("expected ProviderError {{ status: 500 }}, got {other:?}"),
+        }
     }
 
     #[test]
-    fn map_error_maps_a_redirect_status_to_an_actionable_processing_error() {
+    fn map_error_maps_a_redirect_status_to_an_actionable_provider_error() {
         let engine = CompatEngine::new(test_config()).unwrap();
 
-        for status in [302u16, 307u16] {
-            match engine.map_error(status, "moved") {
-                LlmError::ProcessingError(msg) => {
+        for expected in [302u16, 307u16] {
+            match engine.map_error(expected, "moved") {
+                LlmError::ProviderError {
+                    status, message, ..
+                } => {
+                    assert_eq!(status, expected, "typed status field must carry the code");
                     assert!(
-                        msg.contains("redirect"),
-                        "status {status}: message must name the refused redirect, got: {msg}"
-                    );
-                    assert!(
-                        msg.contains(&status.to_string()),
-                        "status {status}: message must carry the numeric status, got: {msg}"
+                        message.contains("redirect"),
+                        "status {expected}: message must name the refused redirect, got: {message}"
                     );
                 }
-                other => panic!("status {status}: expected ProcessingError, got {other:?}"),
+                other => panic!("status {expected}: expected ProviderError, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn map_error_stamps_the_preset_provider_name_on_provider_error() {
+        let engine = CompatEngine::new(test_config())
+            .unwrap()
+            .with_provider_name("test-preset");
+        assert_eq!(engine.provider_name(), "test-preset");
+        match engine.map_error(503, "overloaded") {
+            LlmError::ProviderError { provider, .. } => assert_eq!(provider, "test-preset"),
+            other => panic!("expected ProviderError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_error_redacts_the_raw_body_before_bounding_it() {
+        // Callers now hand `map_error` the RAW body; the helper must still
+        // scrub the configured key (test_config's key is "test-key").
+        let engine = CompatEngine::new(test_config()).unwrap();
+        let body = r#"{"error":"echo","authorization":"Bearer test-key"}"#;
+        match engine.map_error(500, body) {
+            LlmError::ProviderError { message, .. } => {
+                assert!(!message.contains("test-key"), "key leaked: {message}");
+            }
+            other => panic!("expected ProviderError, got {other:?}"),
         }
     }
 
@@ -1221,10 +1322,13 @@ mod tests {
     //      attempts on a retryable error — the `+1` semantics this file's
     //      own `call_api_with_retry_retries_network_error_up_to_max_retries_plus_one`
     //      test already pins.
-    //   2. HTTP 500 is retryable: it falls through every named arm in
-    //      `map_error` (401, 429, 404, 400, 300..=399) into the catch-all
-    //      at compat/engine.rs:335, which returns the retryable
-    //      `LlmError::ProcessingError`.
+    //   2. HTTP 500 is retryable: it falls through `map_error`'s only
+    //      engine-local arm (300..=399) into the crate-wide
+    //      `map_http_status`, which returns `LlmError::ProviderError
+    //      { status: 500 }` — outside `call_api_with_retry`'s
+    //      non-retryable set, so it is retried (Phase 25 D-03; this
+    //      comment previously named the pre-25-05 `ProcessingError`
+    //      catch-all).
     //   3. These tests exercise `CompatEngine` directly (not through the
     //      `KimiAdapter` preset) — Kimi already has `generate_stream` mock
     //      -transport scaffolding (`kimi/adapter.rs`
@@ -1248,18 +1352,14 @@ mod tests {
     }
 
     fn build_request(model: &str) -> LlmRequest {
-        LlmRequest {
-            id: Uuid::new_v4(),
-            model: model.to_string(),
-            prompt: PromptItem::new(PromptType::User(UserPrompt {
+        LlmRequest::new(
+            model,
+            PromptItem::new(PromptType::User(UserPrompt {
                 query: "Hello".to_string(),
                 context: None,
             }))
             .unwrap(),
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        }
+        )
     }
 
     // Not `start_paused = true`: this test exercises real network round
@@ -1872,5 +1972,58 @@ mod tests {
         let models = engine.available_models().await;
 
         assert_eq!(models, vec!["fallback-model".to_string()]);
+    }
+
+    // ── Phase 26 (RT-05, D-28): response_format reaches the wire ──────────
+    //
+    // These three tests cover all five presets that share this engine
+    // (Kimi, Qwen, Grok, Ollama, the generic OpenAI-compatible preset) with
+    // one set of cases, per the plan's Test 4/Test 5 split.
+
+    #[tokio::test]
+    async fn compat_engine_request_carries_response_format() {
+        let config = test_config_at("https://example.invalid/v1");
+        let request = build_request("test-model").with_response_format(ResponseFormat::JsonObject);
+
+        let (body, _) = generate_and_capture_body(config, request).await;
+
+        assert_eq!(
+            body.get("response_format"),
+            Some(&json!({"type": "json_object"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_engine_json_schema_degrades_to_json_object() {
+        let config = test_config_at("https://example.invalid/v1");
+        let request =
+            build_request("test-model").with_response_format(ResponseFormat::JsonSchema {
+                name: "answer".to_string(),
+                schema: json!({"type": "object"}),
+                strict: true,
+            });
+
+        let (body, _) = generate_and_capture_body(config, request).await;
+
+        assert_eq!(
+            body.get("response_format"),
+            Some(&json!({"type": "json_object"})),
+            "the compat engine degrades every ResponseFormat variant to the \
+             plain JSON-object form (D-28) -- never to an omitted field"
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_engine_request_without_response_format_is_byte_identical_to_today() {
+        let config = test_config_at("https://example.invalid/v1");
+        let request = build_request("test-model");
+
+        let (body, _) = generate_and_capture_body(config, request).await;
+        let obj = body.as_object().expect("body must be a JSON object");
+
+        assert!(
+            !obj.contains_key("response_format"),
+            "absent response_format must not appear on the wire, got: {obj:?}"
+        );
     }
 }

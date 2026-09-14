@@ -196,12 +196,12 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 
 - [x] **Phase 22: Battlefield State & Superstep Engine** - Typed shared state, cyclic superstep execution, and automatic per-superstep checkpointing that resumes with zero re-execution after a crash (completed 2026-09-02)
 - [x] **Phase 22.1: Engine readiness defect and MSRV follow-up (INSERTED)** - Fix the BUG-03 cycle-bootstrap starvation and BUG-04 resume-frontier defects, complete the graph fingerprint, raise the MSRV floor to a measured 1.88, and seal G-22-1 on whole-run CI evidence (completed 2026-09-03)
-- [ ] **Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs** - Directive-based routing, Muster dynamic fan-out, nested Battalion subgraphs, LLM-evaluated routing, and the BUG-01 fail-closed fix
-- [ ] **Phase 24: Pause/Resume, History & Graceful Shutdown** - Indefinite Parley pauses, typed resume validation, an inspectable/forkable Chronicle, graceful shutdown, and Thread endpoints over HTTP
-- [ ] **Phase 25: Node-Level Fault Tolerance** - Typed error transience, per-node Aegis retry, wall/idle timeouts, typed compensation handlers, provider fallback, and node result caching
-- [ ] **Phase 26: Agent Runtime Enhancements** - Execution middleware chain, context-window management, cross-session Vault memory, structured output, provider conformance close-out, and a one-line reasoning agent
-- [ ] **Phase 27: Platform API** - Durable background runs on a worker pool, Parley/streaming integration, versioned assistants, and API-managed schedules/webhooks
-- [ ] **Phase 28: Observability & Tooling** - Machine-consumable trace stream, OTel/log/SSE consumers, graph/run visualization, and the paladin-eval regression harness
+- [x] **Phase 23: Control Flow — Dynamic Routing, Fan-Out & Subgraphs** - Directive-based routing, Muster dynamic fan-out, nested Battalion subgraphs, LLM-evaluated routing, and the BUG-01 fail-closed fix (completed 2026-09-04)
+- [x] **Phase 24: Pause/Resume, History & Graceful Shutdown** - Indefinite Parley pauses, typed resume validation, an inspectable/forkable Chronicle, graceful shutdown, and Thread endpoints over HTTP (completed 2026-09-05)
+- [x] **Phase 25: Node-Level Fault Tolerance** - Typed error transience, per-node Aegis retry, wall/idle timeouts, typed compensation handlers, provider fallback, and node result caching (completed 2026-09-06)
+- [x] **Phase 26: Agent Runtime Enhancements** - Execution middleware chain, context-window management, cross-session Vault memory, structured output, provider conformance close-out, and a one-line reasoning agent (completed 2026-09-07)
+- [x] **Phase 27: Platform API** - Durable background runs on a worker pool, Parley/streaming integration, versioned assistants, and API-managed schedules/webhooks (completed 2026-09-08)
+- [x] **Phase 28: Observability & Tooling** - Machine-consumable trace stream, OTel/log/SSE consumers, graph/run visualization, and the paladin-eval regression harness (completed 2026-09-09)
 - [ ] **Phase 29: Program Gates & Release** - Complete MIGRATION.md, proven backward compatibility, the program acceptance audit, and a releasable v0.10.0
 
 ## Phase Details
@@ -384,7 +384,58 @@ Plans:
   4. Graceful shutdown finishes the in-flight superstep within `shutdown_grace` (default 30s), records over-grace nodes `Skipped` and re-lists them in the vanguard, `resume` continues a `Halted` thread, and SIGTERM/SIGINT are wired to all in-flight runs with `k8s/` manifests and docs updated and a documented disable switch (HITL-04)
   5. `GET /threads/{id}/state`, `POST /threads/{id}/resume` (with 409/400/404 semantics), and `GET /threads/{id}/history` (paginated) are reachable over HTTP following existing utoipa + error-envelope conventions, with `openapi.json` regenerated (HITL-05)
 
-**Plans**: TBD
+**Plans**: 14 plans (12 executed + 2 gap closure)
+
+Plans:
+**Wave 1**
+
+- [x] 24-01-PLAN.md — Parley value types and the suspension/resume spine (tracer)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 24-02-PLAN.md — `Gate` node, graph validation, edge routing, fingerprint `v4`
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 24-03-PLAN.md — Directive parley envelope and the `parley.` InputMapping namespace
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 24-04-PLAN.md — `resume_with` validation matrix, partial answers, expiry
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 24-05-PLAN.md — E2E-2, multi-parley, cross-process and 10-thread stress tests
+- [x] 24-06-PLAN.md — `fork_of` lineage, `child_on_branch`, three-backend contract cases
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 24-07-PLAN.md — `replay`/`fork`, `ChronicleService`, immutability and subgraph-fork
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 24-08-PLAN.md — Shutdown grace race, `ShutdownCoordinator`, `EngineConfig` fields
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 24-09-PLAN.md — Process wiring, k8s manifests, deployment docs, M-B-02 example
+- [x] 24-10-PLAN.md — `ParleyPort`, facade adapter, `GraphRegistry`, `WaypointStoreConfig`
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [x] 24-11-PLAN.md — Thread routes, DTOs, `openapi.json`, server composition
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [x] 24-12-PLAN.md — mdBook page, MIGRATION/CHANGELOG/traceability, gate evidence
+
+**Wave 11** *(gap closure — 24-VERIFICATION.md, blocked on Wave 10 completion)*
+
+- [x] 24-13-PLAN.md — Doc drift after CR-01: MIGRATION §9.6 `403`, CHANGELOG, mdBook posture callout
+
+**Wave 12** *(gap closure — blocked on Wave 11 completion)*
+
+- [x] 24-14-PLAN.md — Blocking human diff read of the CR-02 mid-Muster shutdown-abort fix
 
 ### Phase 25: Node-Level Fault Tolerance
 
@@ -399,7 +450,49 @@ Plans:
   4. Program scenario E2E-3 passes together with CF-03: a `Route`/`Absorb`/registered-`Custom` typed error handler compensates a transiently-failing Muster worker without failing the run, unregistered `Custom` names fail closed, and handler loops are bounded by `max_node_visits` (FT-04)
   5. `FallbackLlmAdapter` fails over across a provider chain on Transient/Unknown errors only (short-circuiting on Permanent) without silently switching providers mid-stream, and a `CachePolicy`-keyed node hits its `NodeCachePort` cache with `cache_hit: true` and no re-execution while failures are never cached (FT-05, FT-06)
 
-**Plans**: TBD
+**Plans**: 14 plans
+
+Plans:
+**Wave 1**
+
+- [x] 25-01-PLAN.md — Tracer: core Transience/NodeError/Aegis value types, WarGraph aegis sidecar, superstep retry loop, backoff and predicate tests
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 25-02-PLAN.md — X-10 error taxonomy gate: transience() on both enums, LlmFailure/ProviderError/AllProvidersFailed/BattalionError::Node, three enums non-exhaustive, §9.2 rows
+- [x] 25-03-PLAN.md — Aegis validation: EngineRegistries, fail-closed predicate/handler registries, node-kind matrix, fingerprint v4 → v5
+- [x] 25-04-PLAN.md — Node cache port, CachedDelta, InMemory + Redis adapters under one contract suite, redis-cache feature, NodeCacheConfig
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 25-05-PLAN.md — One shared map_http_status helper (redact-then-bound) applied to all nine LLM provider adapters
+- [x] 25-06-PLAN.md — LlmError → PaladinError::LlmFailure conversion helper and the eight erasure sites
+- [x] 25-07-PLAN.md — Retry expansion: AttemptRecord history, per-attempt trace fields, structured failure path, per-task Muster retry
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 25-08-PLAN.md — FallbackLlmAdapter chain with streaming first-chunk rule, FallbackHop trace, PaladinResult.served_by
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 25-09-PLAN.md — Timeouts: HeartbeatHandle, defaulted PaladinPort::execute_observed, run/idle/EngineRun nesting, RunTimeoutExceeded
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 25-10-PLAN.md — Typed error handlers: Route/Absorb/Custom validation and dispatch, max_node_visits loop bound
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 25-11-PLAN.md — Handler composition: Muster delta-only rule, Parley from a handler, compensation-chain and loop-bound E2E
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 25-12-PLAN.md — E2E-3 seam replaced by real per-task retry, X-05 stress, kill-during-backoff, run-timeout E2E
+- [x] 25-13-PLAN.md — Cache engine integration: key composition, hit/miss path, FieldSpec cache marker, correctness guardrails
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [x] 25-14-PLAN.md — Fault-tolerance guide, MIGRATION §9.1-§9.7 close-out, traceability anchors, semver/MSRV/security/coverage gate evidence
 
 ### Phase 26: Agent Runtime Enhancements
 
@@ -414,13 +507,78 @@ Plans:
   4. A `VaultPort` (InMemory/SQLite/semantic) confines `vault_get`/`vault_put` Armaments to a host-granted namespace subtree (rejecting traversal), and `execute_structured<T>` returns schema-validated output through a bounded, typed repair loop that preserves raw output on exhaustion (RT-04, RT-05)
   5. The shipped v0.8.0 OpenAI-compatible/Gemini/Ollama paths pass a shared conformance suite with FT-01-correct 429/5xx transience mapping, and `reasoning_agent(llm, tools, opts)` runs as a ≤15-line doc-tested one-liner with tool failures fed back to the model by default (RT-06, RT-07)
 
-**Plans**: TBD
+**Plans**: 21 plans
+
+Plans:
+**Wave 1**
+
+- [x] 26-01-PLAN.md — Tracer: the `ExecutionMiddleware` chain end-to-end (RT-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 26-02-PLAN.md — `AgentRuntimeConfig`: twelve X-09 sub-structs, inert by default (RT-02)
+- [x] 26-03-PLAN.md — `LlmRequest` builder + `ResponseFormat` + 37-site migration (RT-05)
+- [x] 26-04-PLAN.md — Vault core types, `VaultPort`, `InMemoryVault`, contract suite (RT-04)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 26-05-PLAN.md — `StopReason` X-10 treatment + the three limit middlewares (RT-02)
+- [x] 26-06-PLAN.md — Native `response_format` in OpenAI / compat / Gemini / DeepSeek (RT-05)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 26-07-PLAN.md — `GarrisonEntry.is_summary` + one embedded migrator + `002` (RT-03)
+- [x] 26-08-PLAN.md — `Guardrail` middleware + `PaladinError::GuardrailTripped` (RT-02)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 26-09-PLAN.md — `SqliteVault` + `003` + `SemanticVault` under the contract suite (RT-04)
+- [x] 26-10-PLAN.md — Retry/fallback port-shaping middleware + `RetryPredicate::admits` (RT-02)
+- [x] 26-12-PLAN.md — Structured core/ports machinery + the `extract_json` lift (RT-05)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 26-11-PLAN.md — `TokenCounterPort`, its adapters, and `HistoryTrimmer` (RT-03)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 26-13-PLAN.md — `ConfinedVault`, `RunScope`, `execute_scoped`, engine vault wiring (RT-04)
+- [x] 26-14-PLAN.md — Shared conformance suite, measurement first, Ollama recipe (RT-06)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 26-15-PLAN.md — `SummarizationMiddleware` + `VaultRecallMiddleware` (RT-03, RT-04)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [x] 26-16-PLAN.md — `InProcessArsenal`, composite, `VaultTools`, confinement attack test (RT-04)
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [x] 26-17-PLAN.md — `StructuredExecutorPort` impl + `StructuredExecutorExt` (RT-05)
+
+**Wave 11** *(blocked on Wave 10 completion)*
+
+- [x] 26-18-PLAN.md — Engine `output_schema`, schema registry, fingerprint `v6` (RT-05)
+
+**Wave 12** *(blocked on Wave 11 completion)*
+
+- [x] 26-19-PLAN.md — Tool-call protocol, tool-error policy, corrected M-B-03 (RT-07)
+
+**Wave 13** *(blocked on Wave 12 completion)*
+
+- [x] 26-20-PLAN.md — `reasoning_agent` preset, `build_chain`, the ≤15-line example (RT-07, RT-02)
+
+**Wave 14** *(blocked on Wave 13 completion)*
+
+- [x] 26-21-PLAN.md — Guide, `MIGRATION.md` sweep, api-surface regen, gate evidence (all)
 
 ### Phase 27: Platform API
 
 **Goal**: Runs execute durably in the background on a worker pool, integrate with Parley pauses and live streaming, and are managed through versioned assistants, cron schedules and webhooks — all reachable over a production-shaped HTTP API.
 **Depends on**: Phase 22, Phase 24
 **Requirements**: PLAT-01, PLAT-02, PLAT-03, PLAT-04, PLAT-05, PLAT-06
+**UI hint**: no
 **Success Criteria** (what must be TRUE):
 
   1. `POST /runs` returns 202 within 250ms p99 (enqueue only), a `RunRepositoryPort` persists every status transition, and the status machine is monotonic with typed illegal-transition errors (PLAT-01)
@@ -429,7 +587,74 @@ Plans:
   4. Assistants are append-only immutable versions (no PUT, ever) with `latest` frozen at submit time, and `WarGraphDoc` compiles through a registry-resolving `compile()` with a restart-stable fingerprint round-trip (PLAT-04)
   5. Cron schedules survive restart without duplicate or missed-then-double firing; HMAC-signed webhook delivery retries bounded on 5xx/timeout with an SSRF guard rejecting non-http(s)/loopback/link-local/private/metadata targets; and every new endpoint carries existing auth, rate limiting, scopes and pagination, with `openapi.json` regenerated and Python/TypeScript clients generated and smoke-tested in CI (PLAT-05, PLAT-06)
 
-**Plans**: TBD
+**Plans:** 26/26 plans complete
+
+Plans:
+
+**Wave 1**
+
+- [x] 27-01-PLAN.md — Tracer: core `Run`/status machine (D-01 checkpoint), ports, InMemory adapters, submission + worker, `POST /runs` → `Completed` end-to-end (PLAT-01, PLAT-02)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 27-02-PLAN.md — `runs` migrations, run-repository contract suite, SQLite + Postgres adapters, partial unique index (PLAT-01, PLAT-02)
+- [x] 27-03-PLAN.md — `RunQueuePort` contract suite, Redis ZSET+Lua lease adapter, `redis-queue` CI job, generalised Postgres job (PLAT-02)
+- [x] 27-04-PLAN.md — Worker pool hardening: heartbeat, resume-not-restart dispatch, drain, kill-mid-run twin of acceptance 2 (PLAT-02, PLAT-03)
+- [x] 27-05-PLAN.md — `WarGraphDoc` + `compile()`, schemars golden schema, fixture corpus, two-process fingerprint proof (PLAT-04)
+- [x] 27-06-PLAN.md — Seven X-09 config structs, all off/today by default (PLAT-01…05)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 27-07-PLAN.md — `CancellationProbe` engine seam, debounced DB probe, persisted-flag-first cancel, cross-instance test (PLAT-02)
+- [x] 27-08-PLAN.md — Resume re-enqueues the same `run_id`; `ResumeAccepted`/`ResumeAcceptedResponse.run_id`; §9.2/§9.6 (PLAT-03)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 27-09-PLAN.md — Assistant storage: core types (D-28/D-29 checkpoint), update-less port, migrations, three adapters, freeze-at-submit (PLAT-04)
+- [x] 27-10-PLAN.md — Run streaming: `RunEventBus`, TraceSink adapter, degraded mode, SSE route with 15 s keep-alive (PLAT-03)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 27-11-PLAN.md — Schedules storage + `ScheduleService`: croner/chrono-tz, conditional tick claim, restart/race proofs under a paused clock (PLAT-05)
+- [x] 27-12-PLAN.md — Assistant service: compile-is-validation, stored resolver, `DocGraphRegistry`, assistant routes with synthetic code entries (PLAT-04)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 27-13-PLAN.md — Webhooks: delivery table/adapters, SSRF guard (write + send), HMAC over exact bytes, no-redirect client, bounded-retry drain (PLAT-05)
+- [x] 27-14-PLAN.md — `ScheduleAdminPort` + `/v1/schedules` routes (PLAT-05, PLAT-06)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 27-15-PLAN.md — HTTP surface completion: runs list/cancel/deliveries, threads list/get/fork/delete, scopes, pagination, 429 proof, ten-concurrent-submits (PLAT-06, PLAT-02)
+- [x] 27-16-PLAN.md — mdBook platform-api page, queue/worker + k8s worker-replica example, parley page links (PLAT-05, PLAT-06)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 27-17-PLAN.md — `paladin-server` wiring from config, fail-closed feature gates, services registered with the coordinator, §9.5 (all)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [x] 27-18-PLAN.md — Acceptance-1 E2E test, `sdk-clients` CI job, phase-wide OpenAPI review, §9.6, CI evidence checkpoint (all)
+
+**Gap closure — Wave 1** *(from 27-VERIFICATION.md's 5 CI-evidenced gaps + 27-REVIEW.md CR-01/WR-01…04; parallel, disjoint files)*
+
+- [x] 27-19-PLAN.md — Redis claim/nack scripts increment `attempt` only on a reclaim; Tier-1 marker guards (PLAT-02)
+- [x] 27-20-PLAN.md — Postgres run-timestamp microsecond precision contract; contract fixtures at storage resolution (PLAT-01)
+- [x] 27-21-PLAN.md — Hermetic `sdk-clients` smoke: loopback LLM stub, committed lockfile, exact `completed` assertion (PLAT-06)
+- [x] 27-22-PLAN.md — Webhook hardening: bounded response-body read (CR-01), no send on signing-key load failure (WR-01) (PLAT-05)
+- [x] 27-23-PLAN.md — Heartbeat zero-lease guard (WR-04); `Agent`-kind delivery carve-out and unscoped-read model documented, tested, ledgered (WR-02, WR-03) (PLAT-02, PLAT-03, PLAT-05, PLAT-06)
+
+**Gap closure — Wave 2** *(blocked on Wave 1: the public-API baseline is taken after every code change)*
+
+- [x] 27-24-PLAN.md — Toolchain-order-independent API-surface extraction + regenerated baseline; `e2e-platform-api` CI job (PLAT-06)
+
+**Gap closure — Wave 2.5** *(added 2026-09-08 from CI run 34238527001 at the Wave-2 SHA: the one remaining red cause once 27-19 made later `run_all` clauses reachable)*
+
+- [x] 27-26-PLAN.md — `contract_tests::run_all` provisions a fresh queue per clause (factory), exercised on both backends; unblocks `redis-queue`, `coverage`, `integration-tests` (PLAT-02)
+
+**Gap closure — Wave 3** *(blocked on Wave 2)*
+
+- [x] 27-25-PLAN.md — CI evidence checkpoint: live-run proof for every closed gap, recorded in 27-CI-EVIDENCE.md (all)
 
 ### Phase 28: Observability & Tooling
 
@@ -443,7 +668,50 @@ Plans:
   3. Golden-tested `WarGraphDoc → Mermaid/DOT` exporters and an execution-overlay export let a human answer "which branch fired and why did node X run 3 times" via `paladin-cli graph export`/`run export` and a minimal auth-gated `dev-ui` inspector page (OBS-03)
   4. The new `paladin-eval` crate runs scripted mock-LLM scenario files through a `cargo test`-integrable runner macro and `paladin-cli eval run --repeat`/`--bless`, with the three program E2E fixtures dogfooded as eval scenarios (OBS-04)
 
-**Plans**: TBD
+**Plans:** 17/17 plans complete
+
+Plans:
+**Wave 1**
+
+- [x] 28-01-PLAN.md — Core trace types, `TraceRecord` envelope, `TraceEmitter`, `CompositeSink`, dispatcher stamping, panic isolation, drop accounting, ordering + X-05 stress tests (OBS-01)
+- [x] 28-02-PLAN.md — `TraceConfig`/`OtelConfig` config structs, `web_server.dev_ui.mermaid_url`, both YAML files (OBS-01, OBS-02)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 28-03-PLAN.md — Engine producers: `EdgeEvaluated`, `ParleyRaised`, rate-limited heartbeats, populated `RunFinished`, `WarEngine::trace_emitter()` (OBS-01)
+- [x] 28-04-PLAN.md — `RunTracePort`, three storage adapters, `run_traces` migrations, contract suite, retention join (OBS-02)
+- [x] 28-05-PLAN.md — `paladin-eval` crate, scenario file format, `ScenarioLlm`, golden JSON Schema (OBS-04)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 28-06-PLAN.md — Log sink, facade telemetry module, per-run composition, below-engine producers, bench + overhead evidence (OBS-02)
+- [x] 28-07-PLAN.md — `GraphShape`, Mermaid/DOT exporters, five golden fixtures, `make bless-golden` (OBS-03)
+- [x] 28-08-PLAN.md — Eval assertion library (twelve kinds) with snapshot-frozen failure rendering (OBS-04)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 28-09-PLAN.md — OTel sink: `otel` feature, span-per-attempt model, in-memory shape test, axum OTLP stub (OBS-02)
+- [x] 28-10-PLAN.md — `ExecutionOverlay`, observed-only fallback, overlay Mermaid goldens (OBS-03)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 28-11-PLAN.md — SSE collapse to one producer, `trace_seq`, `RunStreamMode::Replay`, `PersistingTraceSink` (OBS-02)
+- [x] 28-12-PLAN.md — Eval runner (`libtest-mimic` harness), `paladin-cli eval run` with repeat/bless/gated live mode (OBS-04)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 28-13-PLAN.md — CLI `graph export` and `run export` with snapshot tests (OBS-03)
+- [x] 28-14-PLAN.md — `RunInspectorPort` and the facade inspector service (OBS-03)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 28-15-PLAN.md — `dev-ui` inspector page: first `paladin-web` feature, route, template, oneshot smoke test (OBS-03)
+- [x] 28-16-PLAN.md — E2E fixture extraction and the three dogfood eval scenarios (OBS-04)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 28-17-PLAN.md — Docs, ADR-0048, `MIGRATION.md` rows, crate-list registration, close-out gates + CI evidence (all)
+
 **UI hint**: yes
 
 ### Phase 29: Program Gates & Release
@@ -451,6 +719,7 @@ Plans:
 **Goal**: v0.10.0 is releasable — the migration record is complete, backward compatibility is proven rather than asserted, the program acceptance audit passes, and every crate publishes.
 **Depends on**: Phase 22, Phase 23, Phase 24, Phase 25, Phase 26, Phase 27, Phase 28 (all)
 **Requirements**: SHIP-01, SHIP-02, SHIP-03, SHIP-04
+**UI hint**: no
 **Success Criteria** (what must be TRUE):
 
   1. `MIGRATION.md` has every §9 section filled with no "TBD" — M-B-01…03 resolved with chosen defaults and worked examples, the §9.2 register matching the `cargo semver-checks` allowlist exactly — and is linked from the README and the mdBook "Upgrading" page (SHIP-01)
@@ -458,7 +727,33 @@ Plans:
   3. E2E-1/2/3 pass green as integration tests in `tests/`, the doc-08 verification protocol confirms every FR has a passing test with no orphan behavior and ubiquitous-language names conform, and BUG-01's old warn-and-default-true path is grep-absent with the fix's failing-then-passing test order visible in history (SHIP-03)
   4. All workspace crates are at `0.10.0` with changelogs updated, `cargo publish --dry-run` is green for every publishable crate in dependency order, mdBook + rustdoc are updated with no new broken intra-doc links, and the semver and MSRV CI jobs are green on the release commit (SHIP-04)
 
-**Plans**: TBD
+**Plans**: 9 plans
+
+Plans:
+
+**Wave 1** *(no dependencies — parallel)*
+
+- [x] 29-01-PLAN.md — SHIP-02: frozen v0.9 config fixtures and the `v0_9_config_boot` proof (config resolution + 501 route table)
+- [x] 29-02-PLAN.md — SHIP-02: path-restricted `$ref`-closure OpenAPI golden diff against the frozen v0.9.0 baseline
+- [x] 29-03-PLAN.md — SHIP-01/SHIP-04: row-level allowlist ↔ §9.2 CI gate, and `publish-dry-run` + release-checklist corrections
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [x] 29-04-PLAN.md — SHIP-03: acceptance-audit skeleton, per-FR evidence table, E2E/BUG evidence, orphan-behavior and language findings
+- [x] 29-05-PLAN.md — SHIP-01/SHIP-02: close MIGRATION.md §9.5-§9.8 and the header, add the placeholder CI gate and the boot-test CI step
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [x] 29-06-PLAN.md — SHIP-01: the mdBook Upgrading page, SUMMARY entry, migration-guide pointer, overview §4 errata
+- [x] 29-07-PLAN.md — SHIP-03: audit steps 6-9, the accepted tracing-overhead deviation, the maintainer sign-off checklist
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [x] 29-08-PLAN.md — SHIP-03: WINDOWS.md triage — 25 open rows dispositioned with citations, plus the overhead-deviation row
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [x] 29-09-PLAN.md — SHIP-04: the 0.10.0 bump, changelogs, dry-run publish, CI evidence, audit step 10
 
 ## Progress
 
@@ -482,13 +777,13 @@ Plans:
 | 18-21 | v0.9.0 | 25/25 | ✅ Shipped | 2026-09-01 |
 | 22. Battlefield State & Superstep Engine | v0.10.0 | 17/17 | Complete    | 2026-09-02 |
 | 22.1 Engine readiness defect and MSRV follow-up (INSERTED) | v0.10.0 | 7/7 | Complete    | 2026-09-03 |
-| 23. Control Flow — Dynamic Routing, Fan-Out & Subgraphs | v0.10.0 | 0/0 | Not started | - |
-| 24. Pause/Resume, History & Graceful Shutdown | v0.10.0 | 0/0 | Not started | - |
-| 25. Node-Level Fault Tolerance | v0.10.0 | 0/0 | Not started | - |
-| 26. Agent Runtime Enhancements | v0.10.0 | 0/0 | Not started | - |
-| 27. Platform API | v0.10.0 | 0/0 | Not started | - |
-| 28. Observability & Tooling | v0.10.0 | 0/0 | Not started | - |
-| 29. Program Gates & Release | v0.10.0 | 0/0 | Not started | - |
+| 23. Control Flow — Dynamic Routing, Fan-Out & Subgraphs | v0.10.0 | 12/12 | Complete    | 2026-09-04 |
+| 24. Pause/Resume, History & Graceful Shutdown | v0.10.0 | 14/14 | Complete    | 2026-09-05 |
+| 25. Node-Level Fault Tolerance | v0.10.0 | 14/14 | Complete    | 2026-09-06 |
+| 26. Agent Runtime Enhancements | v0.10.0 | 21/21 | Complete    | 2026-09-07 |
+| 27. Platform API | v0.10.0 | 26/26 | Complete    | 2026-09-08 |
+| 28. Observability & Tooling | v0.10.0 | 17/17 | Complete    | 2026-09-09 |
+| 29. Program Gates & Release | v0.10.0 | 0/9 | Planned | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

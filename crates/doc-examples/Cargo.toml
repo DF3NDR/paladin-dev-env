@@ -1,6 +1,6 @@
 [package]
 name = "paladin-doc-examples"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 publish = false
 description = "Compile-verified documentation examples for the Paladin book (not published)"
@@ -12,15 +12,15 @@ doctest = false
 # The root umbrella crate (lib name `paladin`) — for the README quick example
 # (`paladin::prelude`) and, via `web-server`, the shipped HTTP agent API used by the
 # HTTP-service-host deployment-topology example.
-paladin-ai = { version = "0.9.0", path = "../..", features = ["web-server"] }
-paladin-core = { package = "paladin-ai-core", version = "0.9.0", path = "../paladin-core" }
-paladin-ports = { version = "0.9.0", path = "../paladin-ports" }
-paladin-battalion = { version = "0.9.0", path = "../paladin-battalion" }
-paladin-llm = { version = "0.9.0", path = "../paladin-llm", features = ["openai", "mock"] }
-paladin-content = { version = "0.9.0", path = "../paladin-content", features = ["llm", "news-api"] }
+paladin-ai = { version = "0.10.0", path = "../..", features = ["web-server"] }
+paladin-core = { package = "paladin-ai-core", version = "0.10.0", path = "../paladin-core" }
+paladin-ports = { version = "0.10.0", path = "../paladin-ports" }
+paladin-battalion = { version = "0.10.0", path = "../paladin-battalion" }
+paladin-llm = { version = "0.10.0", path = "../paladin-llm", features = ["openai", "mock"] }
+paladin-content = { version = "0.10.0", path = "../paladin-content", features = ["llm", "news-api"] }
 # Storage adapters — the `redis-queue` feature exposes `RedisQueueAdapter` for the
 # queue/worker deployment-topology example (Epic 6).
-paladin-storage = { version = "0.9.0", path = "../paladin-storage", features = ["redis-queue"] }
+paladin-storage = { version = "0.10.0", path = "../paladin-storage", features = ["redis-queue"] }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -57,8 +57,10 @@ use paladin_ports::output::scheduler_port::{
 };
 
 /// The number of whitespace-separated fields a `tokio-cron-scheduler` cron
-/// expression must have: `sec min hour day month weekday`.
-const CRON_FIELD_COUNT: usize = 6;
+/// expression must have: `sec min hour day month weekday`. Re-exported (as
+/// [`crate::cron::CRON_FIELD_COUNT`]) so this module and `cron.rs` share one
+/// named constant rather than two independently-defined literals.
+const CRON_FIELD_COUNT: usize = crate::cron::CRON_FIELD_COUNT;
 
 /// Pre-validates that a cron string has the six fields
 /// (`sec min hour day month weekday`) `tokio-cron-scheduler` requires, mapping
@@ -76,10 +78,16 @@ const CRON_FIELD_COUNT: usize = 6;
 /// `InvalidCronExpression`, though with the engine's own (less specific)
 /// message.
 ///
+/// The field-COUNTING primitive is shared with `crate::cron::cron_field_count`
+/// (D-38) — this adapter's own six-field ACCEPTANCE requirement is unchanged
+/// (X-03): `cron.rs`'s run-schedule parser accepts 5 OR 6 fields, but this
+/// function still requires exactly 6, so every existing caller of this
+/// adapter keeps its current behavior verbatim.
+///
 /// Extracted as a free function so it is unit-testable without constructing
 /// the adapter or the engine.
 fn validate_cron_field_count(schedule: &str) -> Result<(), SchedulerError> {
-    let field_count = schedule.split_whitespace().count();
+    let field_count = crate::cron::cron_field_count(schedule);
     if field_count == CRON_FIELD_COUNT {
         Ok(())
     } else {

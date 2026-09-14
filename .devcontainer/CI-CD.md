@@ -83,7 +83,7 @@ jobs:
           --health-retries 5
 
       minio:
-        image: minio/minio:latest
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
         ports:
           - 9000:9000
         env:
@@ -229,7 +229,7 @@ test:
   stage: test
   services:
     - redis:7-alpine
-    - minio/minio:latest
+    - quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
     - mysql:8.0
   variables:
     REDIS_URL: "redis://redis:6379"
@@ -324,7 +324,7 @@ jobs:
     docker:
       - image: rust:1.93-slim-bullseye
       - image: redis:7-alpine
-      - image: minio/minio:latest
+      - image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
         command: server /data
         environment:
           MINIO_ROOT_USER: minioadmin
@@ -505,7 +505,7 @@ jobs:
       redis:
         image: redis:7-alpine
       minio:
-        image: minio/minio:latest
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
       mysql:
         image: mysql:8.0
         env:

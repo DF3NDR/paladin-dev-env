@@ -351,6 +351,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn is_summary_round_trips_through_in_memory() {
+        let config = GarrisonConfig::default();
+        let garrison = InMemoryGarrison::new(config);
+
+        garrison
+            .remember(GarrisonEntry::summary("condensed".to_string()))
+            .await
+            .unwrap();
+        garrison
+            .remember(GarrisonEntry::new(
+                ConversationRole::User,
+                "raw".to_string(),
+            ))
+            .await
+            .unwrap();
+
+        let entries = garrison.recall_recent(10).await.unwrap();
+
+        let summary_entry = entries.iter().find(|e| e.content == "condensed").unwrap();
+        assert!(summary_entry.is_summary);
+
+        let raw_entry = entries.iter().find(|e| e.content == "raw").unwrap();
+        assert!(!raw_entry.is_summary);
+    }
+
+    #[tokio::test]
     async fn test_importance_based_eviction() {
         let config = GarrisonConfig::new(3, None)
             .with_eviction_strategy(EvictionStrategy::ImportanceBased)

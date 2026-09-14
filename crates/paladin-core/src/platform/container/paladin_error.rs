@@ -3,6 +3,7 @@
 //! This module defines error types for Paladin execution operations.
 use crate::platform::container::arsenal::ArsenalError;
 use crate::platform::container::garrison_error::GarrisonError;
+use crate::platform::container::transience::Transience;
 use thiserror::Error;
 
 /// Errors that can occur during Paladin operations.
@@ -15,7 +16,16 @@ use thiserror::Error;
 /// let error = PaladinError::ConfigurationError("Invalid temperature".to_string());
 /// assert_eq!(error.to_string(), "Configuration error: Invalid temperature");
 /// ```
+///
+/// # Non-exhaustive (X-10.2, D-04)
+///
+/// Marked `#[non_exhaustive]` so a future variant can be added without a
+/// semver-major bump. Registered as deliberate-breaking in `MIGRATION.md`
+/// §9.2 and `.cargo/semver-checks-allowlist.toml` (the `enum_marked_non_exhaustive`
+/// lint) in the same commit that added this attribute. Every downstream
+/// exhaustive match gained a wildcard arm at that commit.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum PaladinError {
     /// Configuration validation failed
     #[error("Configuration error: {0}")]
@@ -25,9 +35,39 @@ pub enum PaladinError {
     #[error("Execution error: {0}")]
     ExecutionError(String),
 
-    /// Error from the LLM provider
+    /// Error from the LLM provider.
+    ///
+    /// **Legacy / retained for compatibility (D-02, X-06):** this stringly
+    /// variant classifies [`Transience::Unknown`] via [`PaladinError::transience`]
+    /// and, as of this phase, is constructed by no first-party code — every
+    /// call site that used to build this variant now builds
+    /// [`PaladinError::LlmFailure`] instead, which carries the same message
+    /// (byte-identical `Display`) plus a typed `transience`/`status`/`provider`.
+    /// The variant is not removed (X-03: no pre-existing public variant is
+    /// removed or reshaped) so any external caller still matching on it keeps
+    /// compiling.
     #[error("LLM error: {0}")]
     LlmError(String),
+
+    /// A structured LLM-provider failure crossing the `paladin-core` boundary
+    /// by value (D-02). Rendered identically to the legacy
+    /// [`PaladinError::LlmError`] arm (`"LLM error: {message}"`) so
+    /// `src/infrastructure/resilience/circuit_breaker.rs`'s message-based
+    /// callers observe no change; [`PaladinError::is_retryable`] returns
+    /// `true` for this variant, the same legacy answer `LlmError(_)` gave.
+    #[error("LLM error: {message}")]
+    LlmFailure {
+        /// Whether this failure is worth retrying, classified by the
+        /// originating [`crate::platform::container::transience::Transience`]-aware
+        /// adapter (typically `paladin-ports`' `LlmError::transience()`).
+        transience: Transience,
+        /// The HTTP status code, if the failure came from an HTTP response.
+        status: Option<u16>,
+        /// The LLM provider name, if known.
+        provider: Option<String>,
+        /// A redacted, human-readable summary of the failure.
+        message: String,
+    },
 
     /// Execution exceeded the configured timeout
     #[error("Timeout after {0} seconds")]
@@ -56,18 +96,108 @@ pub enum PaladinError {
     /// Error from the Arsenal tool system
     #[error("Arsenal error: {0}")]
     ArsenalError(#[from] ArsenalError),
+
+    /// A `Guardrail` rule's `Fail` action tripped (D-09, RT-FR-07, T-26-04).
+    ///
+    /// Free under the pre-existing `#[non_exhaustive]` attribute -- no new
+    /// `MIGRATION.md` §9.2 row is created for this variant; the existing
+    /// `PaladinError` row's Change cell is extended instead (D-09, X-06).
+    ///
+    /// `target` names the side that was actually being screened when the
+    /// rule matched -- `"prompt"` or `"response"` (a rule configured for
+    /// `GuardrailTarget::Both` still reports the side that tripped, not the
+    /// literal configuration). `rule` is the operator-configured rule name
+    /// -- not secret material, and the only useful identifier for
+    /// diagnosing a trip; no matched *content* is carried in this variant
+    /// (T-26-31).
+    #[error("Guardrail rule `{rule}` tripped on {target}")]
+    GuardrailTripped {
+        /// The name of the rule that tripped.
+        rule: String,
+        /// Which side of the interaction tripped: `"prompt"` or
+        /// `"response"`.
+        target: String,
+    },
+
+    /// The bounded structured-output repair loop
+    /// (`paladin_ports::output::structured_executor_port::run_structured`,
+    /// built on [`crate::platform::container::structured`]'s pure machinery
+    /// — RT-FR-18, D-26) exhausted its attempts without producing output
+    /// that both parses as JSON and passes `shape_check` against the
+    /// caller's schema.
+    ///
+    /// Free under the pre-existing `#[non_exhaustive]` attribute (X-06) --
+    /// no new `MIGRATION.md` §9.2 row is created for this variant; the
+    /// existing `PaladinError` row's Change cell is extended instead (D-26,
+    /// D-37).
+    ///
+    /// `raw_output` preserves the model's LAST verbatim response -- the
+    /// whole point of a typed exhaustion error is that a caller can see what
+    /// the model actually said, not just that it failed (RT-FR-18).
+    #[error("structured output invalid after {attempts} attempt(s): {last_error}")]
+    StructuredOutputInvalid {
+        /// Total number of calls made to the underlying executor (the first
+        /// attempt plus every repair re-prompt).
+        attempts: u32,
+        /// The parse-or-shape-check failure from the LAST attempt.
+        last_error: String,
+        /// The model's raw output from the LAST attempt, verbatim.
+        raw_output: String,
+    },
+
+    /// A tool (Armament or handoff) call failed and the effective
+    /// tool-error policy for that tool is `FailRun` (D-33, D-34, configured
+    /// via the facade's `ToolErrorConfig`/`ToolErrorMode`, which
+    /// `paladin-core` does not depend on) -- fails the run with a
+    /// structured error rather than feeding the failure back into the
+    /// model's context. The default policy, `FeedToModel` (matching v0.9's
+    /// unnamed behavior), never constructs this variant.
+    ///
+    /// Free under the pre-existing `#[non_exhaustive]` attribute (X-06) --
+    /// no new `MIGRATION.md` §9.2 row is created for this variant; the
+    /// existing `PaladinError` row's Change cell is extended instead (D-33,
+    /// D-34, D-37).
+    ///
+    /// `reason` is a redacted, human-readable summary of the failure -- the
+    /// same sanitized text `ToolResultFormatter::format_error` would have
+    /// fed back to the model under `FeedToModel`, never raw provider or
+    /// tool output.
+    ///
+    /// Named `reason`, not `source` -- a field literally named `source`
+    /// triggers `thiserror`'s implicit `Error::source()` derivation, which
+    /// requires the field's own type to implement `std::error::Error`; a
+    /// plain sanitized `String` summary does not, and should not need to.
+    #[error("tool `{tool}` failed: {reason}")]
+    ArmamentFailed {
+        /// The name of the tool (Armament or handoff) that failed.
+        tool: String,
+        /// A redacted, human-readable summary of the failure.
+        reason: String,
+    },
 }
 
 impl PaladinError {
     /// Check if this error is retryable.
+    ///
+    /// **Legacy predicate, superseded by [`PaladinError::transience`] (D-05).**
+    /// Every answer this gives today is unchanged by this phase and is never
+    /// re-tuned: [`PaladinError::LlmFailure`] returns `true`, the same
+    /// blanket answer the legacy [`PaladinError::LlmError`] arm always gave,
+    /// so `src/infrastructure/resilience/circuit_breaker.rs`'s behaviour does
+    /// not shift under the new variant.
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            PaladinError::LlmError(_) | PaladinError::ExecutionError(_)
+            PaladinError::LlmError(_)
+                | PaladinError::LlmFailure { .. }
+                | PaladinError::ExecutionError(_)
         )
     }
 
     /// Check if this error represents a terminal state.
+    ///
+    /// **Legacy predicate, superseded by [`PaladinError::transience`] (D-05).**
+    /// Every answer this gives today is unchanged by this phase.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
@@ -77,6 +207,99 @@ impl PaladinError {
                 | PaladinError::MaxRetriesExceeded(_)
                 | PaladinError::GarrisonRequired
         )
+    }
+
+    /// Classify whether this error is worth retrying (Doc 04 FT-FR-01, D-05).
+    ///
+    /// Every arm reads a typed field or a variant identity only -- never a
+    /// rendered `Display` string, a substring or a parsed status code out of
+    /// message text. `GarrisonError`/`ArsenalError` delegate to a
+    /// per-inner-variant match rather than a blanket [`Transience::Unknown`],
+    /// each row documented inline with its reasoning.
+    pub fn transience(&self) -> Transience {
+        match self {
+            // Obviously transient: a timeout or an open circuit breaker both
+            // describe conditions that clear with time, not a fault in the
+            // request itself.
+            PaladinError::Timeout(_) => Transience::Transient,
+            PaladinError::CircuitBreakerOpen => Transience::Transient,
+
+            // Obviously permanent: retrying the exact same request reproduces
+            // the exact same failure.
+            PaladinError::ConfigurationError(_) => Transience::Permanent,
+            PaladinError::StopWordDetected(_) => Transience::Permanent,
+            PaladinError::GarrisonRequired => Transience::Permanent,
+            PaladinError::MaxRetriesExceeded(_) => Transience::Permanent,
+            // A guardrail trip is a deliberate content-based rejection --
+            // retrying the exact same request reproduces the exact same
+            // match.
+            PaladinError::GuardrailTripped { .. } => Transience::Permanent,
+
+            // The bounded repair loop already retried internally
+            // (`max_repair_attempts`) before giving up -- retrying the
+            // identical prompt against the identical model and schema
+            // reproduces the identical exhaustion; only a different prompt,
+            // schema, or model changes the outcome.
+            PaladinError::StructuredOutputInvalid { .. } => Transience::Permanent,
+
+            // A tool failure under `FailRun` could be either -- a
+            // transient network blip on the tool's side or a permanent
+            // argument/configuration mistake -- and no typed field
+            // distinguishes them (the `reason` string is a sanitized
+            // summary, not a classification), so this is Unknown per D-05's
+            // default rather than a guess in either direction.
+            PaladinError::ArmamentFailed { .. } => Transience::Unknown,
+
+            // Unresolvable from a bare string: no typed field distinguishes
+            // a transient cause from a permanent one.
+            PaladinError::ExecutionError(_) => Transience::Unknown,
+            PaladinError::LlmError(_) => Transience::Unknown,
+
+            // The structured variant carries its own classification, set by
+            // the adapter that produced it (typically `LlmError::transience()`).
+            PaladinError::LlmFailure { transience, .. } => *transience,
+
+            // Delegate to the inner Garrison error's own per-variant reasoning.
+            PaladinError::GarrisonError(inner) => match inner {
+                // Storage/tokenization failures may be a transient
+                // network/database/service blip (the type's own rustdoc
+                // documents both as "Retryable: Yes").
+                GarrisonError::StorageError(_) => Transience::Transient,
+                GarrisonError::TokenizationError(_) => Transience::Transient,
+                // Serialization/not-found/configuration failures reproduce
+                // identically on retry (the type's own rustdoc documents all
+                // three as "Retryable: No").
+                GarrisonError::SerializationError(_) => Transience::Permanent,
+                GarrisonError::NotFound(_) => Transience::Permanent,
+                GarrisonError::ConfigurationError(_) => Transience::Permanent,
+                // Generic message with implementation-specific retryability
+                // (the type's own rustdoc says exactly that) -- unresolvable
+                // without inspecting the message, which classification must
+                // never do.
+                GarrisonError::Custom(_) => Transience::Unknown,
+            },
+
+            // Delegate to the inner Arsenal error's own per-variant reasoning.
+            PaladinError::ArsenalError(inner) => match inner {
+                // A registry lookup failure or a validation failure
+                // reproduces identically on retry.
+                ArsenalError::ToolNotFound(_) => Transience::Permanent,
+                ArsenalError::InvalidArguments(_) => Transience::Permanent,
+                // A tool call that timed out, or a transport-layer fault
+                // (connection reset, DNS, socket errors), both describe
+                // conditions that may clear on retry.
+                ArsenalError::Timeout(_) => Transience::Transient,
+                ArsenalError::TransportError(_) => Transience::Transient,
+                // Credentials rejected by the remote MCP server reproduce
+                // identically on retry without an operator fixing the
+                // credential.
+                ArsenalError::AuthFailed(_) => Transience::Permanent,
+                // A protocol-level mismatch could be either a transient
+                // framing hiccup or a genuine incompatibility -- not
+                // obviously one or the other, so Unknown per D-05's default.
+                ArsenalError::ProtocolError(_) => Transience::Unknown,
+            },
+        }
     }
 }
 
@@ -117,5 +340,178 @@ mod tests {
         let garrison_error = GarrisonError::StorageError("test".to_string());
         let paladin_error: PaladinError = garrison_error.into();
         assert!(matches!(paladin_error, PaladinError::GarrisonError(_)));
+    }
+
+    /// One row per `PaladinError` variant (D-05), including every
+    /// `GarrisonError`/`ArsenalError` inner variant as its own row, so a
+    /// variant added later cannot silently inherit a neighbour's
+    /// classification.
+    #[test]
+    fn paladin_error_transience_table() {
+        use Transience::*;
+        let cases: Vec<(PaladinError, Transience)> = vec![
+            (PaladinError::Timeout(30), Transient),
+            (PaladinError::CircuitBreakerOpen, Transient),
+            (PaladinError::ConfigurationError("x".into()), Permanent),
+            (PaladinError::StopWordDetected("x".into()), Permanent),
+            (PaladinError::GarrisonRequired, Permanent),
+            (PaladinError::MaxRetriesExceeded(3), Permanent),
+            (PaladinError::ExecutionError("x".into()), Unknown),
+            (PaladinError::LlmError("x".into()), Unknown),
+            (
+                PaladinError::GuardrailTripped {
+                    rule: "x".into(),
+                    target: "prompt".into(),
+                },
+                Permanent,
+            ),
+            (
+                PaladinError::StructuredOutputInvalid {
+                    attempts: 2,
+                    last_error: "x".into(),
+                    raw_output: "y".into(),
+                },
+                Permanent,
+            ),
+            (
+                PaladinError::ArmamentFailed {
+                    tool: "fetch_report".into(),
+                    reason: "upstream gateway rejected the request".into(),
+                },
+                Unknown,
+            ),
+            (
+                PaladinError::LlmFailure {
+                    transience: Transient,
+                    status: Some(503),
+                    provider: Some("openai".into()),
+                    message: "x".into(),
+                },
+                Transient,
+            ),
+            (
+                PaladinError::LlmFailure {
+                    transience: Permanent,
+                    status: Some(401),
+                    provider: Some("openai".into()),
+                    message: "x".into(),
+                },
+                Permanent,
+            ),
+            (
+                PaladinError::LlmFailure {
+                    transience: Unknown,
+                    status: None,
+                    provider: None,
+                    message: "x".into(),
+                },
+                Unknown,
+            ),
+            (
+                PaladinError::GarrisonError(GarrisonError::StorageError("x".into())),
+                Transient,
+            ),
+            (
+                PaladinError::GarrisonError(GarrisonError::TokenizationError("x".into())),
+                Transient,
+            ),
+            (
+                PaladinError::GarrisonError(GarrisonError::SerializationError("x".into())),
+                Permanent,
+            ),
+            (
+                PaladinError::GarrisonError(GarrisonError::NotFound("x".into())),
+                Permanent,
+            ),
+            (
+                PaladinError::GarrisonError(GarrisonError::ConfigurationError("x".into())),
+                Permanent,
+            ),
+            (
+                PaladinError::GarrisonError(GarrisonError::Custom("x".into())),
+                Unknown,
+            ),
+            (
+                PaladinError::ArsenalError(ArsenalError::ToolNotFound("x".into())),
+                Permanent,
+            ),
+            (
+                PaladinError::ArsenalError(ArsenalError::InvalidArguments("x".into())),
+                Permanent,
+            ),
+            (
+                PaladinError::ArsenalError(ArsenalError::Timeout(5)),
+                Transient,
+            ),
+            (
+                PaladinError::ArsenalError(ArsenalError::ProtocolError("x".into())),
+                Unknown,
+            ),
+            (
+                PaladinError::ArsenalError(ArsenalError::TransportError("x".into())),
+                Transient,
+            ),
+            (
+                PaladinError::ArsenalError(ArsenalError::AuthFailed("x".into())),
+                Permanent,
+            ),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(
+                err.transience(),
+                expected,
+                "variant {err:?} classified as {:?}, expected {expected:?}",
+                err.transience()
+            );
+        }
+    }
+
+    /// Every `is_retryable()`/`is_terminal()` answer is unchanged by this
+    /// phase (X-03) -- including `true` for the new `LlmFailure` variant,
+    /// the same blanket answer the legacy `LlmError(_)` arm always gave.
+    #[test]
+    fn legacy_retryability_predicates_are_unchanged() {
+        assert!(PaladinError::LlmError("temp".to_string()).is_retryable());
+        assert!(PaladinError::ExecutionError("temp".to_string()).is_retryable());
+        assert!(!PaladinError::ConfigurationError("temp".to_string()).is_retryable());
+        assert!(!PaladinError::Timeout(100).is_retryable());
+        assert!(
+            PaladinError::LlmFailure {
+                transience: Transience::Unknown,
+                status: None,
+                provider: None,
+                message: "temp".to_string(),
+            }
+            .is_retryable()
+        );
+
+        assert!(PaladinError::Timeout(100).is_terminal());
+        assert!(PaladinError::CircuitBreakerOpen.is_terminal());
+        assert!(PaladinError::GarrisonRequired.is_terminal());
+        assert!(!PaladinError::LlmError("temp".to_string()).is_terminal());
+        assert!(
+            !PaladinError::LlmFailure {
+                transience: Transience::Unknown,
+                status: None,
+                provider: None,
+                message: "temp".to_string(),
+            }
+            .is_terminal()
+        );
+    }
+
+    /// `LlmFailure`'s rendered `Display` is byte-identical to the legacy
+    /// stringly `LlmError(String)` arm for the same message (D-02, X-03).
+    #[test]
+    fn llm_failure_display_matches_the_legacy_stringly_variant() {
+        let message = "connection reset".to_string();
+        let legacy = PaladinError::LlmError(message.clone());
+        let structured = PaladinError::LlmFailure {
+            transience: Transience::Transient,
+            status: Some(503),
+            provider: Some("openai".to_string()),
+            message,
+        };
+        assert_eq!(legacy.to_string(), structured.to_string());
     }
 }

@@ -1,0 +1,29 @@
+schema_version: "1"
+# .project/v0.10.0/00-program-overview.md §6, E2E-2: a Parley node requesting
+# approval of a destructive action; approval routes to the action node,
+# denial routes to the cancellation node. Graph:
+# tests/helpers/e2e_fixtures.rs::build_approval_gate_graph -- the SAME
+# builder tests/integration/e2e_approval_gate_test.rs uses (plan 28-16, D-34).
+# No Paladin nodes in this graph (`approve` is a Gate, `act`/`cancel` are
+# Function nodes), so no `llm` script is needed.
+target:
+  registered: "e2e-2-approval-gate"
+cases:
+  - name: approve
+    parley_responses:
+      - kind: "approval"
+        value: true
+    assertions:
+      - route_taken: ["approve", "act"]
+      - node_not_executed:
+          node: "cancel"
+      - run_status: completed
+  - name: deny
+    parley_responses:
+      - kind: "approval"
+        value: false
+    assertions:
+      - route_taken: ["approve", "cancel"]
+      - node_not_executed:
+          node: "act"
+      - run_status: completed

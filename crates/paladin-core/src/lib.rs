@@ -20,3 +20,25 @@ pub mod base;
 /// Core platform domain entities and containers.
 #[allow(missing_docs)]
 pub mod platform;
+
+// --- Crate prelude (D-09): re-exports only `Aegis` and `Transience`, never
+// the retry-policy type from either family -- the pre-existing v0.9
+// legacy battalion policy struct (see `platform::container::battalion`)
+// stays reachable only by its own path, so no glob import of this crate's
+// root can silently bind the wrong one (RESEARCH.md Pitfall 5). Do not
+// re-export it here, under any name, from this module.
+pub use platform::container::aegis::Aegis;
+pub use platform::container::transience::Transience;
+// `Page` is deliberately NOT re-exported here (D-09): the name is too
+// generic to glob-import safely, unlike `Namespace`/`VaultRecord`/
+// `VaultError`, which carry no ambiguity with any other type in this crate.
+pub use platform::container::vault::{Namespace, VaultError, VaultRecord};
+// D-21: `RunScope` carries no ambiguity with any other type in this crate,
+// the same reasoning as the `Namespace`/`VaultRecord`/`VaultError` re-export
+// immediately above.
+pub use platform::container::run_scope::RunScope;
+// D-26: `Structured<T>`, `StructuredOptions` and `SchemaRef` are re-exported
+// through the crate prelude; `extract_json`/`shape_check`/
+// `render_instruction_block` stay reachable only via their full module path
+// (generic-sounding names, unlike the types above).
+pub use platform::container::structured::{SchemaRef, Structured, StructuredOptions};

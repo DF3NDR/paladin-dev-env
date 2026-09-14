@@ -1,0 +1,7 @@
+---
+source: crates/paladin-eval/tests/assertion_snapshots.rs
+expression: failure.render_failure()
+---
+assertion failed: final_state_field_matches { field: "status", pattern: "^done$" }
+  expected: value matching /^done$/
+  observed: in_progress

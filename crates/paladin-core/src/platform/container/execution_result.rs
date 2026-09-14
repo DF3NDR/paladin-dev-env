@@ -27,13 +27,23 @@ use crate::platform::container::planning::TaskPlan;
 ///     execution_time_ms: 1250,
 ///     loop_count: 1,
 ///     stop_reason: StopReason::Completed,
-///     plan: None,
-///     handoff_history: Vec::new(),
+///     ..Default::default()
 /// };
 ///
 /// assert_eq!(result.loop_count, 1);
 /// assert!(result.stop_reason.is_successful());
+/// assert!(result.served_by.is_none());
 /// ```
+///
+/// # Constructing across crates
+///
+/// The struct is deliberately **constructible** and **not** `#[non_exhaustive]`
+/// (Doc 04 D-26, X-10.3 option (b)): functional-update syntax
+/// (`..Default::default()`) is disallowed cross-crate on a `#[non_exhaustive]`
+/// struct, so marking it would break every downstream construction site and
+/// contradict FT-FR-17's own "`Default` still works" intent. The cost is that
+/// a full struct literal breaks when a field is added — prefer
+/// `..Default::default()` for any field you do not set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaladinResult {
     /// The generated output text
@@ -66,13 +76,60 @@ pub struct PaladinResult {
     /// which agent handled what task and at what depth in the delegation chain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handoff_history: Vec<HandoffRecord>,
+
+    /// `get_provider_name()` of the provider that actually served this
+    /// result when the Paladin's `LlmPort` was a fallback chain
+    /// (Doc 04 FT-FR-17, D-26).
+    ///
+    /// `None` for every result produced by a plain single-provider adapter,
+    /// and absent from the serialised JSON in that case — so a payload
+    /// written before this field existed is byte-identical to one written
+    /// today. Set only by copying the `paladin.served_by` metadata key the
+    /// `FallbackLlmAdapter` stamps on its `LlmResponse`.
+    ///
+    /// This is an **observability** field stamped in-process by the adapter,
+    /// not an authenticated attestation of provenance (T-25-38): no
+    /// security decision should read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub served_by: Option<String>,
 }
 
 /// Reason why Paladin execution stopped
 ///
 /// Indicates whether the Paladin completed successfully or was terminated
 /// by a limit or external factor.
+///
+/// # Variants added in this release (v0.10.0, Doc 05 RT-02)
+///
+/// [`StopReason::CallLimit`] and [`StopReason::TokenBudget`] are new in
+/// v0.10.0 -- a run that hits either a `ModelCallLimit` or a `TokenBudget`
+/// built-in middleware finishes gracefully with the accumulated output
+/// intact, rather than failing.
+///
+/// # `#[non_exhaustive]`, and why the X-10.2 exception is declined
+///
+/// This enum is `#[non_exhaustive]`: every downstream `match` must carry a
+/// wildcard arm, so a future variant can be added without a semver-major
+/// bump. The overview's X-10.2 section names `StopReason` as the
+/// *example* of a type where exhaustive matching might be legitimate (a
+/// caller may want the compiler to force it to handle every stop reason).
+/// That exception is deliberately **not** taken here: nothing in this tree
+/// or in `examples/` relies on exhaustive matching over `StopReason` today,
+/// and one mechanism across `PaladinError`, `LlmError`, `BattalionError`
+/// and `StopReason` is simpler to reason about than a bespoke exception for
+/// this one enum (D-07).
+///
+/// # The `is_successful()` asymmetry
+///
+/// [`StopReason::MaxLoops`] and [`StopReason::Timeout`] are **not**
+/// successful -- the run may have stopped mid-thought, with no guarantee
+/// the last response is a complete answer. [`StopReason::CallLimit`] and
+/// [`StopReason::TokenBudget`] **are** successful -- a budget stopped the
+/// run, but the model's last response is intact and stands as the answer,
+/// with a truncation notice appended so the caller knows a budget, not the
+/// model, ended the run (D-08).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum StopReason {
     /// Maximum loop iterations reached
     MaxLoops,
@@ -85,17 +142,37 @@ pub enum StopReason {
 
     /// Execution exceeded timeout
     Timeout,
+
+    /// A `ModelCallLimit` middleware stopped the run after its configured
+    /// number of model calls (new in v0.10.0, RT-FR-04).
+    CallLimit,
+
+    /// A `TokenBudget` middleware stopped the run after its configured
+    /// accumulated token budget was crossed (new in v0.10.0, RT-FR-06).
+    TokenBudget,
 }
 
 impl StopReason {
     /// Check if this represents successful completion
     pub fn is_successful(&self) -> bool {
-        matches!(self, StopReason::Completed | StopReason::StopWord(_))
+        matches!(
+            self,
+            StopReason::Completed
+                | StopReason::StopWord(_)
+                | StopReason::CallLimit
+                | StopReason::TokenBudget
+        )
     }
 
     /// Check if this represents a limit being reached
     pub fn is_limit(&self) -> bool {
-        matches!(self, StopReason::MaxLoops | StopReason::Timeout)
+        matches!(
+            self,
+            StopReason::MaxLoops
+                | StopReason::Timeout
+                | StopReason::CallLimit
+                | StopReason::TokenBudget
+        )
     }
 }
 
@@ -112,6 +189,7 @@ impl Default for PaladinResult {
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
+            served_by: None,
         }
     }
 }
@@ -147,6 +225,7 @@ impl PaladinResult {
             stop_reason,
             plan: None,
             handoff_history: Vec::new(),
+            served_by: None,
         }
     }
 
@@ -163,5 +242,138 @@ impl PaladinResult {
     /// Returns the number of handoffs in the history
     pub fn handoff_count(&self) -> usize {
         self.handoff_history.len()
+    }
+
+    /// Checks whether this result records the provider that served it
+    /// (only a fallback-chain-served result does — see [`Self::served_by`]).
+    pub fn was_served_by_fallback(&self) -> bool {
+        self.served_by.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// D-26: `served_by: None` leaves the serialised JSON byte-identical to
+    /// what the same value produced before the field existed.
+    #[test]
+    fn served_by_is_absent_from_legacy_json() {
+        let result = PaladinResult {
+            output: "answer".to_string(),
+            token_count: 3,
+            execution_time_ms: 7,
+            loop_count: 1,
+            stop_reason: StopReason::Completed,
+            plan: None,
+            handoff_history: Vec::new(),
+            served_by: None,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+
+        assert!(!json.contains("served_by"), "{json}");
+        assert_eq!(
+            json,
+            r#"{"output":"answer","token_count":3,"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#
+        );
+    }
+
+    /// D-26: a payload written before the field existed deserialises with
+    /// `served_by: None`.
+    #[test]
+    fn legacy_json_deserialises_with_served_by_none() {
+        let legacy = r#"{"output":"answer","token_count":3,"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#;
+
+        let result: PaladinResult = serde_json::from_str(legacy).unwrap();
+
+        assert_eq!(result.output, "answer");
+        assert!(result.served_by.is_none());
+    }
+
+    /// A fallback-served result round-trips its serving provider.
+    #[test]
+    fn served_by_round_trips_when_present() {
+        let result = PaladinResult {
+            served_by: Some("anthropic".to_string()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains(r#""served_by":"anthropic""#), "{json}");
+        let back: PaladinResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.served_by.as_deref(), Some("anthropic"));
+    }
+
+    /// FT-FR-17: `Default` and `new()` both still work and leave `served_by`
+    /// unset.
+    #[test]
+    fn default_still_constructs() {
+        let by_default = PaladinResult::default();
+        let by_new = PaladinResult::new("text".to_string(), 10, 20, 1, StopReason::Completed);
+
+        assert!(by_default.served_by.is_none());
+        assert!(by_new.served_by.is_none());
+        assert_eq!(by_new.output, "text");
+        assert_eq!(by_new.token_count, 10);
+    }
+
+    /// D-07/D-08 Test 1: both new variants are successful and are limits.
+    #[test]
+    fn new_stop_reasons_are_successful_and_limited() {
+        assert!(StopReason::CallLimit.is_successful());
+        assert!(StopReason::TokenBudget.is_successful());
+        assert!(StopReason::CallLimit.is_limit());
+        assert!(StopReason::TokenBudget.is_limit());
+    }
+
+    /// D-07/D-08 Test 2: the four pre-existing variants' `is_successful()`
+    /// / `is_limit()` answers are unchanged by adding the two new variants
+    /// (X-03) -- every one of the eight booleans is asserted explicitly.
+    #[test]
+    fn existing_stop_reason_answers_are_unchanged() {
+        assert!(!StopReason::MaxLoops.is_successful());
+        assert!(StopReason::MaxLoops.is_limit());
+
+        assert!(!StopReason::Timeout.is_successful());
+        assert!(StopReason::Timeout.is_limit());
+
+        assert!(StopReason::Completed.is_successful());
+        assert!(!StopReason::Completed.is_limit());
+
+        assert!(StopReason::StopWord("x".to_string()).is_successful());
+        assert!(!StopReason::StopWord("x".to_string()).is_limit());
+    }
+
+    /// D-07 Test 3: a `_`-arm match handles `CallLimit` (and, by
+    /// construction, every other variant) -- the positive half of "the
+    /// enum requires a wildcard arm" (the compile-fail half is structural:
+    /// `#[non_exhaustive]` makes an exhaustive match without a `_` arm a
+    /// compile error across crate boundaries, which this crate itself is
+    /// exempt from, but every downstream crate is not -- see
+    /// `src/application/cli/formatters/output.rs` and
+    /// `crates/paladin-web/src/agent_controller.rs` for the enforced
+    /// cross-crate matchers).
+    #[test]
+    fn stop_reason_requires_a_wildcard_arm() {
+        fn label(reason: &StopReason) -> &'static str {
+            match reason {
+                StopReason::Completed => "completed",
+                StopReason::CallLimit => "call_limit",
+                _ => "other",
+            }
+        }
+        assert_eq!(label(&StopReason::CallLimit), "call_limit");
+        assert_eq!(label(&StopReason::Timeout), "other");
+    }
+
+    /// D-07 Test 6: both new variants round-trip through serde.
+    #[test]
+    fn stop_reason_round_trips_through_serde_with_the_new_variants() {
+        for reason in [StopReason::CallLimit, StopReason::TokenBudget] {
+            let json = serde_json::to_string(&reason).unwrap();
+            let back: StopReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(reason, back);
+        }
     }
 }

@@ -18,6 +18,10 @@ use crate::platform::container::battlefield::{
     BATTLEFIELD_SCHEMA_VERSION, Battlefield, StateDelta,
 };
 use crate::platform::container::directive::MusterTask;
+use crate::platform::container::node_error::{AttemptRecord, NodeError};
+pub use crate::platform::container::parley::{
+    OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
+};
 
 /// Maximum length, in bytes, of a [`ThreadId`].
 ///
@@ -151,6 +155,89 @@ impl ThreadId {
         );
         Self::new(encoded)
     }
+
+    /// Derive a branch-scoped child `ThreadId` (HITL-03, D-18): the durable
+    /// identity under which a `NodeSpec::Battalion` node's embedded child run
+    /// addresses its own Waypoints when the PARENT run is on a fork, so a
+    /// branch's subgraph child never resolves the mainline child's history
+    /// and the mainline child's own Waypoints stay untouched by the branch.
+    ///
+    /// Mainline runs keep calling [`ThreadId::child`] unchanged -- this
+    /// method exists only for the branch case, where `parent`, `branch_root`
+    /// and `node` together must derive an id that can never collide with
+    /// `ThreadId::child(parent, node)`'s own result (Test 2,
+    /// `child_on_branch_differs_from_child`), nor with any other
+    /// `(parent, branch_root, node)` triple (Test 1,
+    /// `child_on_branch_is_injective`).
+    ///
+    /// # Injectivity
+    ///
+    /// Identical mechanism to [`ThreadId::child`], extended from two
+    /// components to three: each of `parent`, `branch_root` and `node` is
+    /// encoded as a FIXED-WIDTH (16 lowercase-hex-digit, i.e. 64-bit),
+    /// length-prefixed segment immediately followed by that component's own
+    /// bytes --
+    /// `format!("{:016x}{parent}{:016x}{branch_root}{:016x}{node}", ...)`.
+    /// Because every prefix width is FIXED (never variable-width or
+    /// delimiter-terminated), the byte offset at which each component starts
+    /// and ends is always fully determined by the three length values alone
+    /// -- no byte sequence occurring INSIDE any component (including one
+    /// that happens to look like a length prefix) can ever be reinterpreted
+    /// as a different split between the three segments. This deliberately
+    /// reuses [`ThreadId::child`]'s fix for the exact collision class Phase
+    /// 22.1's CR-01 found and fixed once already in
+    /// `WarGraph::fingerprint()`'s canonical byte encoding
+    /// (`paladin-battalion/src/engine/graph.rs`) -- a bare delimiter join
+    /// (`format!("{parent}/{branch_root}/{node}")`-style) would reopen that
+    /// same hazard, since neither `ThreadId::new` nor `NodeId::new` rejects
+    /// every delimiter character a caller might choose.
+    ///
+    /// `branch_root`'s own `Display` (a plain UUID string, no ambiguous
+    /// characters) is used as its encoded bytes rather than any raw byte
+    /// representation, keeping every encoded component valid UTF-8 the
+    /// resulting `String` can safely wrap.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same [`ThreadIdError`] [`ThreadId::child`] would, for the
+    /// identical reasons: `Empty` is unreachable (the encoded result always
+    /// contains at least the three 16-character length prefixes);
+    /// `ContainsWhitespace` is reachable if `node`'s own bytes contain
+    /// whitespace; `TooLong` is reachable for a sufficiently long
+    /// `parent`/`branch_root`/`node` combination. The derivation FAILS TYPED
+    /// in every such case rather than silently truncating the encoded
+    /// result.
+    ///
+    /// ```
+    /// # use paladin_core::platform::container::waypoint::{NodeId, ThreadId, WaypointId};
+    /// let parent = ThreadId::new("run-1").unwrap();
+    /// let branch_root = WaypointId::new();
+    /// let node = NodeId::new("subgraph");
+    ///
+    /// let mainline_child = ThreadId::child(&parent, &node).unwrap();
+    /// let branch_child = ThreadId::child_on_branch(&parent, &branch_root, &node).unwrap();
+    ///
+    /// // A branch's subgraph child never resolves the mainline child's
+    /// // history -- the two ids are always distinct.
+    /// assert_ne!(branch_child.as_str(), mainline_child.as_str());
+    /// ```
+    pub fn child_on_branch(
+        parent: &ThreadId,
+        branch_root: &WaypointId,
+        node: &NodeId,
+    ) -> Result<Self, ThreadIdError> {
+        let branch_root_str = branch_root.to_string();
+        let encoded = format!(
+            "{:016x}{}{:016x}{}{:016x}{}",
+            parent.as_str().len(),
+            parent.as_str(),
+            branch_root_str.len(),
+            branch_root_str,
+            node.as_str().len(),
+            node.as_str(),
+        );
+        Self::new(encoded)
+    }
 }
 
 impl std::fmt::Display for ThreadId {
@@ -253,14 +340,52 @@ impl std::fmt::Display for NodeId {
 /// helper `v2` established, never a delimiter join. Every `v2`-tagged
 /// fingerprint is now recognised as stale on `resume` rather than silently
 /// reinterpreted under the new layout.
+///
+/// Bumped to `v4` (Phase 24, D-09): one new `;gates:` section was added to
+/// `WarGraph::fingerprint`'s hashed bytes for the new `NodeSpec::Gate` node
+/// (HITL-01) -- `kind`, `output_field`, `choices` and the `on_expire`
+/// DISCRIMINANT kind (never its `ResumeWithDefault` payload value), sorted
+/// by node id and written through the same length-prefixed `push_field`
+/// helper. `prompt_template`, `payload_template` and `expires_in` are
+/// excluded, matching how a Paladin's prompt and `InputMapping` templates
+/// are already excluded (ENG-FR-14). Every `v3`-tagged fingerprint is now
+/// recognised as stale on `resume` rather than silently reinterpreted under
+/// the new layout.
+///
+/// Bumped to `v5` (Phase 25, D-11): one new `;aegis:` section was added to
+/// `WarGraph::fingerprint`'s hashed bytes for each node's resolved `Aegis`
+/// (plan 25-03) -- ONLY the routing- and merge-affecting parts, `on_error`
+/// and `cache`, sorted by node id and written through the same
+/// length-prefixed `push_field` helper, plus a separate length-prefixed
+/// sub-section for the graph's own `default_aegis`. `retry` and `timeout`
+/// are tuning, like every `EngineLimits` field (Phase 23 D-18), and
+/// contribute NOT ONE BYTE: raising a retry budget or tightening a timeout
+/// to let a resumed run continue must never trip `GraphMismatch`. Every
+/// `v4`-tagged fingerprint is now recognised as stale on `resume` rather
+/// than silently reinterpreted under the new layout.
+///
+/// Bumped to `v6` (Phase 26, D-29): one new `;output_schemas:` section was
+/// added to `WarGraph::fingerprint`'s hashed bytes for each
+/// `NodeSpec::Paladin` node's `output_schema` (RT-FR-19, plan 26-18) --
+/// the canonical JSON of an `Inline` schema, or the registered name for a
+/// `Registered` one, sorted by node id and written through the same
+/// length-prefixed `push_field` helper. A node's `output_schema` genuinely
+/// changes what it produces and therefore what downstream state contains --
+/// unlike `EngineLimits`, which stays excluded as tuning (Phase 23 D-18) --
+/// so two graphs differing only in this field must never fingerprint
+/// identically. Every `v5`-tagged fingerprint is now recognised as stale on
+/// `resume` rather than silently reinterpreted under the new layout.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct GraphFingerprint(String);
 
 /// Fingerprint algorithm/encoding version tag (Task 1 decision, option-b;
 /// bumped to `v2` by Phase 22.1 CR-01 / D-17's collision-free re-encoding;
-/// bumped to `v3` by Phase 23 D-18's three new hashed sections).
-pub const GRAPH_FINGERPRINT_VERSION: &str = "v3";
+/// bumped to `v3` by Phase 23 D-18's three new hashed sections; bumped to
+/// `v4` by Phase 24 D-09's `;gates:` section; bumped to `v5` by Phase 25
+/// D-11's `;aegis:` section; bumped to `v6` by Phase 26 D-29's
+/// `;output_schemas:` section).
+pub const GRAPH_FINGERPRINT_VERSION: &str = "v6";
 
 impl GraphFingerprint {
     /// Compute a `GraphFingerprint` over a caller-supplied canonical byte
@@ -271,7 +396,7 @@ impl GraphFingerprint {
         Self(format!("{GRAPH_FINGERPRINT_VERSION}:{}", hash.to_hex()))
     }
 
-    /// Borrow the encoded fingerprint string (`"v3:{hex}"`).
+    /// Borrow the encoded fingerprint string (`"v6:{hex}"`).
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -421,6 +546,14 @@ pub enum NodeOutcomeKind {
     /// persisted `Waypoint`'s `completed` records without re-running the
     /// graph (D-09).
     Ended,
+    /// The node ran and its `Directive.next` was `NextStep::Parley`
+    /// (HITL-01, D-03): its own `StateDelta` merged normally (it emitted
+    /// it), and its return also suspended the run after this superstep.
+    /// Distinguishes the parleying node from an ordinary `Succeeded` node
+    /// so which node(s) raised the pause is observable from a persisted
+    /// `Waypoint`'s `completed` records without re-running the graph,
+    /// mirroring `Ended`'s precedent.
+    Parleyed,
 }
 
 /// A record of one node's execution within the superstep that produced a
@@ -439,19 +572,29 @@ pub struct NodeExecutionRecord {
     pub token_count: u64,
     /// The node's outcome.
     pub outcome: NodeOutcomeKind,
-    /// Attempt number for this node this run. Populated meaningfully once
-    /// per-node retry lands (Doc 04); `1` until then.
+    /// The 1-indexed attempt number that produced this record's `outcome`
+    /// (Doc 04 FT-FR-03, D-16): the SUCCEEDING attempt for a `Succeeded`/
+    /// `Ended`/`Parleyed` record, the EXHAUSTED (last) attempt for a
+    /// `Failed` one, and `1` for a node with no Aegis retry policy -- exactly
+    /// what it always was before per-node retry existed. Never counts the
+    /// attempts of an earlier run of the same node: a resume re-executes an
+    /// interrupted node from attempt `1` (FT-FR-07).
     pub attempt: u32,
-}
-
-/// Stub type for a paused run's outstanding input request.
-///
-/// Fully defined by Doc 03 (parley/resume-with-payload); this phase only
-/// lands the stub so `WaypointStatus::AwaitingInput` has somewhere to point.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
-pub struct ParleyRequest {
-    /// Free-form prompt describing what input is being awaited.
-    pub prompt: String,
+    /// Every FAILED attempt of this node this superstep, ordered by attempt
+    /// number ascending (D-16, FT-FR-03). A node that succeeds on attempt
+    /// `1` has an empty list; the succeeding attempt itself is never in it
+    /// -- `attempt` above records that one. Additive, `#[serde(default)]`,
+    /// following `visit_counts`/`frontier`/`fork_of`'s precedent, so a
+    /// `Waypoint` written before Phase 25 deserialises with an empty
+    /// history and `BATTLEFIELD_SCHEMA_VERSION` is unchanged.
+    #[serde(default)]
+    pub attempts: Vec<AttemptRecord>,
+    /// Whether this record's outcome was served from the node cache
+    /// (FT-06) rather than by executing the node. `false` at every
+    /// engine construction site until plan 25-13 wires the cache lookup;
+    /// additive and `#[serde(default)]` like `attempts`.
+    #[serde(default)]
+    pub cache_hit: bool,
 }
 
 /// The status of a run as of a given `Waypoint`.
@@ -464,15 +607,38 @@ pub enum WaypointStatus {
     Completed,
     /// The run failed.
     Failed {
-        /// A human-readable description of the failure.
+        /// A human-readable description of the failure (unchanged by D-08).
         error: String,
         /// The node whose execution caused the failure.
         failed_node: NodeId,
+        /// The structured failure (Doc 04 D-08, FT-FR-02), `Some` only when
+        /// an Aegis-governed node's execution failed (its retries exhausted,
+        /// or its error was not retry-eligible). `None` for a node with no
+        /// Aegis (byte-identical pre-Phase-25 behaviour, D-09), for every
+        /// engine-limit failure (`NodeVisitLimitExceeded`,
+        /// `RecursionLimitExceeded`, starvation, ...) and for every `Failed`
+        /// payload written before this field existed -- so a reader can
+        /// tell a policy-driven node failure from a limit breach without
+        /// inspecting `error`. Additive and `#[serde(default)]`, following
+        /// the `visit_counts`/`frontier`/`fork_of` precedent; no reshape.
+        #[serde(default)]
+        node_error: Option<NodeError>,
     },
-    /// The run is paused awaiting external input (Doc 03).
+    /// The run is paused awaiting external input (HITL-01, D-02): every
+    /// `ParleyRequest` raised in the suspending superstep, plus every
+    /// `ParleyResponse` accepted so far -- so "partially answered" is a
+    /// property of this persisted `Waypoint`, not of process memory
+    /// (HITL-FR-02's survive-termination rule applies to partial answers
+    /// too). Never persisted with an empty `parleys` list.
     AwaitingInput {
-        /// The outstanding input request.
-        parley: ParleyRequest,
+        /// Every parley request raised in the suspending superstep, ordered
+        /// by `node_id` (mirrors `completed`'s own `node_id` sort).
+        parleys: Vec<ParleyRequest>,
+        /// The accepted subset of responses so far -- empty on the initial
+        /// suspension, growing as partial answers are accepted (a later
+        /// plan; this phase's `resume_with` only accepts a response set
+        /// that answers the happy path).
+        responses: Vec<ParleyResponse>,
     },
     /// The run was gracefully halted (Doc 03 cancellation).
     Halted,
@@ -566,6 +732,34 @@ pub struct Waypoint {
     /// than failing to deserialize.
     #[serde(default)]
     pub checkpoint_ns: Option<String>,
+    /// The ROOT `WaypointId` of the branch this `Waypoint` belongs to
+    /// (HITL-03, D-14) -- `None` for every mainline `Waypoint`.
+    ///
+    /// Marks the branch ROOT and is INHERITED by every subsequent `Waypoint`
+    /// on that branch: the fork's first `Waypoint` carries
+    /// `parent_waypoint_id = Some(from)` and `fork_of = Some(from)`, and
+    /// every later `Waypoint` this run writes also carries
+    /// `fork_of = Some(from)` -- the same value, propagated verbatim, never
+    /// re-derived per `Waypoint`. A fork of a fork carries the NEWER root:
+    /// forking again from a `Waypoint` whose own `fork_of` is `Some(a)`
+    /// yields `Some(b)` where `b` is the new branch point, not `Some(a)`.
+    ///
+    /// This makes a branch a queryable ATTRIBUTE rather than something that
+    /// must be re-derived by walking `parent_waypoint_id` back to a root on
+    /// every read: `latest_on_branch(thread, branch_root)` is a plain filter
+    /// over `history`, and the whole branch tree is reconstructible from a
+    /// `WaypointSummary` list alone (`paladin-ports`, which carries this
+    /// same field), without loading a single full `Waypoint`.
+    ///
+    /// `#[serde(default)]`, matching `visit_counts`'/`frontier`'s/
+    /// `muster_progress`'s/`checkpoint_ns`'s precedent: a `Waypoint` payload
+    /// written before this field existed still loads, with `None` -- a
+    /// resume over such a payload behaves exactly as it did before this
+    /// field existed, rather than failing to deserialize. No SQL migration:
+    /// both SQL backends store the whole `Waypoint` as a JSON payload
+    /// column, so an additive field here needs no schema change.
+    #[serde(default)]
+    pub fork_of: Option<WaypointId>,
 }
 
 impl Waypoint {
@@ -615,6 +809,7 @@ impl Waypoint {
             frontier,
             muster_progress: None,
             checkpoint_ns: None,
+            fork_of: None,
         }
     }
 
@@ -655,6 +850,7 @@ impl Waypoint {
             frontier,
             muster_progress: None,
             checkpoint_ns: None,
+            fork_of: None,
         }
     }
 }
@@ -824,6 +1020,90 @@ mod tests {
         );
     }
 
+    // --- HITL-03 / D-18: ThreadId::child_on_branch ---------------------
+
+    /// Test 1: distinct `(parent, branch_root, node)` triples yield distinct
+    /// thread ids, including the adversarial CR-01 shape (a bare delimiter
+    /// join of `parent`/`node` would collide) held fixed against a shared
+    /// `branch_root`, and the case where only `branch_root` itself differs.
+    #[test]
+    fn child_on_branch_is_injective() {
+        let root = WaypointId::new();
+
+        // The same CR-01 regression shape `child_thread_derivation_is_injective_under_adversarial_names`
+        // proves for `ThreadId::child`, extended with a fixed `branch_root`
+        // in the middle position: a bare delimiter join would produce the
+        // identical string for both triples below.
+        let pair_a =
+            ThreadId::child_on_branch(&ThreadId::new("t").unwrap(), &root, &NodeId::new("a/b"))
+                .unwrap();
+        let pair_b =
+            ThreadId::child_on_branch(&ThreadId::new("t/a").unwrap(), &root, &NodeId::new("b"))
+                .unwrap();
+        assert_ne!(
+            pair_a, pair_b,
+            "length-prefixed derivation must not collide on the CR-01 shape"
+        );
+
+        // Distinct branch_root alone, same parent/node, must also differ --
+        // a fork of a fork carrying two different roots must not collide.
+        let root_a = WaypointId::new();
+        let root_b = WaypointId::new();
+        let parent = ThreadId::new("run-1").unwrap();
+        let node = NodeId::new("subgraph");
+        let a = ThreadId::child_on_branch(&parent, &root_a, &node).unwrap();
+        let b = ThreadId::child_on_branch(&parent, &root_b, &node).unwrap();
+        assert_ne!(a, b);
+    }
+
+    /// Test 2: `child_on_branch(parent, root, node)` never equals
+    /// `child(parent, node)`, so a branch's subgraph child never resolves
+    /// the mainline child's history.
+    #[test]
+    fn child_on_branch_differs_from_child() {
+        let parent = ThreadId::new("run-1").unwrap();
+        let root = WaypointId::new();
+        let node = NodeId::new("subgraph");
+
+        let mainline = ThreadId::child(&parent, &node).unwrap();
+        let branch = ThreadId::child_on_branch(&parent, &root, &node).unwrap();
+        assert_ne!(mainline, branch);
+    }
+
+    /// Test 3: the same triple yields the same id across calls.
+    #[test]
+    fn child_on_branch_is_deterministic() {
+        let parent = ThreadId::new("run-1").unwrap();
+        let root = WaypointId::new();
+        let node = NodeId::new("subgraph");
+
+        let a = ThreadId::child_on_branch(&parent, &root, &node).unwrap();
+        let b = ThreadId::child_on_branch(&parent, &root, &node).unwrap();
+        assert_eq!(a, b);
+    }
+
+    /// Test 4: the same `ThreadIdError` conditions `ThreadId::child` already
+    /// enforces apply identically here.
+    #[test]
+    fn child_on_branch_rejects_invalid_inputs() {
+        let parent = ThreadId::new("run-1").unwrap();
+        let root = WaypointId::new();
+
+        let node_with_whitespace = NodeId::new("has space");
+        assert_eq!(
+            ThreadId::child_on_branch(&parent, &root, &node_with_whitespace),
+            Err(ThreadIdError::ContainsWhitespace)
+        );
+
+        let over_long_parent = ThreadId::new("a".repeat(200)).unwrap();
+        let over_long_node = NodeId::new("b".repeat(200));
+        let result = ThreadId::child_on_branch(&over_long_parent, &root, &over_long_node);
+        assert!(
+            matches!(result, Err(ThreadIdError::TooLong { .. })),
+            "an over-long derivation must fail typed, not silently truncate: {result:?}"
+        );
+    }
+
     #[test]
     fn waypoint_id_is_time_ordered() {
         let a = WaypointId::new();
@@ -844,7 +1124,7 @@ mod tests {
         let a = GraphFingerprint::from_canonical_bytes(b"node:a|edge:none|schema:result");
         let b = GraphFingerprint::from_canonical_bytes(b"node:a|edge:none|schema:result");
         assert_eq!(a, b);
-        assert!(a.as_str().starts_with("v3:"));
+        assert!(a.as_str().starts_with("v6:"));
     }
 
     #[test]
@@ -878,6 +1158,7 @@ mod tests {
             frontier: FrontierSnapshot::default(),
             muster_progress: None,
             checkpoint_ns: None,
+            fork_of: None,
         };
 
         let json = serde_json::to_string(&waypoint).unwrap();
@@ -937,11 +1218,63 @@ mod tests {
     #[test]
     fn parley_request_round_trips() {
         let parley = ParleyRequest {
+            parley_id: ParleyId::new(),
+            node_id: NodeId::new("asker"),
+            kind: ParleyKind::FreeText,
             prompt: "please confirm".to_string(),
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
         };
         let json = serde_json::to_string(&parley).unwrap();
         let restored: ParleyRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parley, restored);
+    }
+
+    /// Test 5 (Phase 24 Plan 01): the reshaped `AwaitingInput` status --
+    /// `{ parleys: Vec<ParleyRequest>, responses: Vec<ParleyResponse> }`
+    /// (D-02) -- serialises and deserialises with both fields preserved,
+    /// including a non-empty `responses` list (a partially-answered
+    /// suspension).
+    #[test]
+    fn awaiting_input_status_round_trips_through_serde() {
+        let request = ParleyRequest {
+            parley_id: ParleyId::new(),
+            node_id: NodeId::new("asker"),
+            kind: ParleyKind::Approval,
+            prompt: "proceed?".to_string(),
+            payload: serde_json::json!({"amount": 42}),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
+        };
+        let response = ParleyResponse {
+            parley_id: request.parley_id,
+            kind: request.kind.clone(),
+            prompt: request.prompt.clone(),
+            value: serde_json::json!(true),
+            responded_by: Some("alice".to_string()),
+            responded_at: Utc::now(),
+            defaulted: false,
+        };
+        let status = WaypointStatus::AwaitingInput {
+            parleys: vec![request.clone()],
+            responses: vec![response.clone()],
+        };
+
+        let json = serde_json::to_string(&status).unwrap();
+        let restored: WaypointStatus = serde_json::from_str(&json).unwrap();
+
+        match restored {
+            WaypointStatus::AwaitingInput { parleys, responses } => {
+                assert_eq!(parleys, vec![request]);
+                assert_eq!(responses, vec![response]);
+            }
+            other => panic!("expected AwaitingInput, got {other:?}"),
+        }
     }
 
     // --- BUG-04 / ENG-FR-12a: FrontierSnapshot ------------------------------
@@ -979,6 +1312,7 @@ mod tests {
             },
             muster_progress: None,
             checkpoint_ns: None,
+            fork_of: None,
         };
 
         // Simulate a pre-BUG-04 payload: serialize, then strip the
@@ -1101,6 +1435,7 @@ mod tests {
                 completed: BTreeMap::new(),
             }),
             checkpoint_ns: None,
+            fork_of: None,
         };
 
         // Simulate a pre-CF-FR-12 payload: serialize, then strip the
@@ -1212,6 +1547,7 @@ mod tests {
             frontier: FrontierSnapshot::default(),
             muster_progress: None,
             checkpoint_ns: Some("outer/inner/".to_string()),
+            fork_of: None,
         };
 
         // Simulate a pre-CF-FR-15 payload: serialize, then strip the
@@ -1253,6 +1589,7 @@ mod tests {
             frontier: FrontierSnapshot::default(),
             muster_progress: None,
             checkpoint_ns: Some("outer_node/inner_node/".to_string()),
+            fork_of: None,
         };
 
         let json = serde_json::to_string(&waypoint).unwrap();
@@ -1262,5 +1599,185 @@ mod tests {
             restored.checkpoint_ns,
             Some("outer_node/inner_node/".to_string())
         );
+    }
+
+    // --- HITL-03 / D-14: fork_of ---------------------------------------------
+
+    /// Test 1 (Phase 24 Plan 06): a serialised `Waypoint` with the `fork_of`
+    /// key removed entirely deserialises with `fork_of: None` -- the
+    /// strip-key test, not a round-trip of a value that was already present,
+    /// exactly mirroring `waypoint_payload_without_checkpoint_ns_deserializes_as_none`.
+    #[test]
+    fn waypoint_payload_without_fork_of_deserializes_as_none() {
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            FieldName::new("result").unwrap(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let waypoint = Waypoint {
+            thread_id: ThreadId::new("thread-1").unwrap(),
+            waypoint_id: WaypointId::new(),
+            parent_waypoint_id: Some(WaypointId::new()),
+            superstep: 5,
+            graph_fingerprint: GraphFingerprint::from_canonical_bytes(b"fixture"),
+            battlefield: Battlefield::new(schema),
+            vanguard: vec![],
+            completed: vec![],
+            status: WaypointStatus::Running,
+            created_at: Utc::now(),
+            schema_version: Waypoint::current_schema_version(),
+            visit_counts: BTreeMap::new(),
+            frontier: FrontierSnapshot::default(),
+            muster_progress: None,
+            checkpoint_ns: None,
+            fork_of: Some(WaypointId::new()),
+        };
+
+        // Simulate a pre-D-14 payload: serialize, then strip the `fork_of`
+        // key entirely before deserializing back, rather than merely
+        // round-tripping the value already present.
+        let mut value = serde_json::to_value(&waypoint).unwrap();
+        value
+            .as_object_mut()
+            .expect("Waypoint serializes to a JSON object")
+            .remove("fork_of");
+        assert!(
+            !value.to_string().contains("fork_of"),
+            "the fork_of key must be genuinely absent from the fixture payload"
+        );
+
+        let restored: Waypoint = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.fork_of, None);
+        // Every other field is untouched by the missing key.
+        assert_eq!(restored.thread_id, waypoint.thread_id);
+        assert_eq!(restored.superstep, waypoint.superstep);
+    }
+
+    #[test]
+    fn fork_of_round_trips_through_serde_json() {
+        let schema = BattlefieldSchema::new(vec![]);
+        let root = WaypointId::new();
+        let waypoint = Waypoint {
+            thread_id: ThreadId::new("thread-1").unwrap(),
+            waypoint_id: WaypointId::new(),
+            parent_waypoint_id: Some(root),
+            superstep: 1,
+            graph_fingerprint: GraphFingerprint::from_canonical_bytes(b"fixture"),
+            battlefield: Battlefield::new(schema),
+            vanguard: vec![],
+            completed: vec![],
+            status: WaypointStatus::Running,
+            created_at: Utc::now(),
+            schema_version: Waypoint::current_schema_version(),
+            visit_counts: BTreeMap::new(),
+            frontier: FrontierSnapshot::default(),
+            muster_progress: None,
+            checkpoint_ns: None,
+            fork_of: Some(root),
+        };
+
+        let json = serde_json::to_string(&waypoint).unwrap();
+        let restored: Waypoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(waypoint, restored);
+        assert_eq!(restored.fork_of, Some(root));
+    }
+
+    // --- FT-FR-03 / D-16: attempt history and cache_hit on the record ------
+
+    /// A record fixture with `failed_attempts` failed attempts numbered
+    /// `1..=failed_attempts`, whose succeeding attempt is the next number.
+    fn record_with_attempt_history(failed_attempts: u32) -> NodeExecutionRecord {
+        use crate::platform::container::node_error::{NodeError, NodeErrorSource};
+        use crate::platform::container::transience::Transience;
+
+        let node_id = NodeId::new("flaky");
+        let attempts = (1..=failed_attempts)
+            .map(|attempt| AttemptRecord {
+                attempt,
+                started_at: Utc::now(),
+                duration_ms: u64::from(attempt) * 10,
+                error: NodeError {
+                    node_id: node_id.clone(),
+                    attempt,
+                    transience: Transience::Transient,
+                    source: NodeErrorSource::Function {
+                        message: format!("attempt {attempt} failed"),
+                    },
+                },
+            })
+            .collect();
+        NodeExecutionRecord {
+            node_id,
+            paladin_id: None,
+            started_at: Utc::now(),
+            duration_ms: 5,
+            token_count: 0,
+            outcome: NodeOutcomeKind::Succeeded,
+            attempt: failed_attempts + 1,
+            attempts,
+            cache_hit: false,
+        }
+    }
+
+    #[test]
+    fn failed_attempts_are_recorded_in_order() {
+        let record = record_with_attempt_history(2);
+        assert_eq!(record.attempt, 3, "the succeeding attempt is attempt 3");
+        assert_eq!(record.attempts.len(), 2, "exactly the two FAILED attempts");
+        let numbers: Vec<u32> = record.attempts.iter().map(|a| a.attempt).collect();
+        assert_eq!(numbers, vec![1, 2], "ascending by attempt number");
+        for attempt in &record.attempts {
+            assert_eq!(attempt.error.attempt, attempt.attempt);
+            assert_eq!(attempt.error.node_id, record.node_id);
+        }
+
+        // The order survives serde: a Vec is a JSON array, never re-sorted.
+        let json = serde_json::to_string(&record).unwrap();
+        let restored: NodeExecutionRecord = serde_json::from_str(&json).unwrap();
+        let restored_numbers: Vec<u32> = restored.attempts.iter().map(|a| a.attempt).collect();
+        assert_eq!(restored_numbers, vec![1, 2]);
+        assert_eq!(restored, record);
+    }
+
+    #[test]
+    fn record_round_trips_with_the_new_fields_and_without_them() {
+        // With the fields: byte-for-byte round trip.
+        let record = record_with_attempt_history(1);
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains("\"attempts\""));
+        assert!(json.contains("\"cache_hit\""));
+        let restored: NodeExecutionRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, record);
+
+        // Without them: a pre-Phase-25 payload with BOTH keys genuinely
+        // stripped deserialises with an empty history and `cache_hit: false`
+        // (the `visit_counts`/`frontier`/`fork_of` strip-key precedent).
+        let mut value = serde_json::to_value(&record).unwrap();
+        let object = value
+            .as_object_mut()
+            .expect("NodeExecutionRecord serializes to a JSON object");
+        object.remove("attempts");
+        object.remove("cache_hit");
+        let stripped = value.to_string();
+        assert!(!stripped.contains("attempts") && !stripped.contains("cache_hit"));
+
+        let legacy: NodeExecutionRecord = serde_json::from_value(value).unwrap();
+        assert!(legacy.attempts.is_empty());
+        assert!(!legacy.cache_hit);
+        assert_eq!(
+            legacy.attempt, record.attempt,
+            "every other field is untouched"
+        );
+        assert_eq!(legacy.node_id, record.node_id);
+    }
+
+    #[test]
+    fn battlefield_schema_version_is_unchanged() {
+        // Every Phase 25 Waypoint addition is `#[serde(default)]`, so the
+        // schema version pinned on `main` before this phase must still hold
+        // (X-04 does not require a bump for a purely additive change).
+        assert_eq!(BATTLEFIELD_SCHEMA_VERSION, "1.0.0");
+        assert_eq!(Waypoint::current_schema_version(), "1.0.0");
     }
 }

@@ -1,0 +1,980 @@
+{
+  "$defs": {
+    "AegisDoc": {
+      "additionalProperties": false,
+      "description": "Mirrors [`Aegis`]: every field independently optional.",
+      "properties": {
+        "cache": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CachePolicyDoc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Cache policy, if this node's result may be served from a cache."
+        },
+        "on_error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorHandlerSpecDoc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Typed error handler, if a failure should be compensated instead of\nfailing the run."
+        },
+        "retry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RetryPolicyDoc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Retry policy, if this node retries a failed attempt."
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeoutPolicyDoc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Timeout policy, if this node is time-bounded."
+        }
+      },
+      "type": "object"
+    },
+    "CacheKeySpecDoc": {
+      "description": "Mirrors [`CacheKeySpec`].",
+      "oneOf": [
+        {
+          "description": "The engine's own default key composition.",
+          "properties": {
+            "type": {
+              "const": "default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Key on only these declared fields' values.",
+          "properties": {
+            "fields": {
+              "description": "The field names to key on.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "fields",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "fields"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CachePolicyDoc": {
+      "additionalProperties": false,
+      "description": "Mirrors [`CachePolicy`].",
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/CacheKeySpecDoc",
+          "default": {
+            "type": "default"
+          },
+          "description": "How the cache key is composed."
+        },
+        "ttl_secs": {
+          "description": "How long a cached result stays valid, in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ttl_secs"
+      ],
+      "type": "object"
+    },
+    "EdgeConditionDoc": {
+      "description": "Mirrors [`EdgeCondition`].",
+      "oneOf": [
+        {
+          "description": "Always traverse this edge.",
+          "properties": {
+            "type": {
+              "const": "always",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Traverse if the output contains this string.",
+          "properties": {
+            "type": {
+              "const": "contains",
+              "type": "string"
+            },
+            "value": {
+              "description": "The substring to search for.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Traverse if the output matches this regex.",
+          "properties": {
+            "pattern": {
+              "description": "The regex pattern.",
+              "type": "string"
+            },
+            "type": {
+              "const": "regex",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "pattern"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Traverse according to a registered evaluator named here; an\nunregistered name is [`CompileError::UnregisteredEdgeEvaluator`].",
+          "properties": {
+            "name": {
+              "description": "The registered evaluator name.",
+              "type": "string"
+            },
+            "type": {
+              "const": "custom",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EdgeDoc": {
+      "additionalProperties": false,
+      "description": "One declared edge in a [`WarGraphDoc`].",
+      "properties": {
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EdgeConditionDoc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The edge's traversal condition; `None` behaves like `Always`."
+        },
+        "from": {
+          "description": "The source node id.",
+          "type": "string"
+        },
+        "to": {
+          "description": "The target node id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "ErrorHandlerSpecDoc": {
+      "description": "Mirrors [`ErrorHandlerSpec`].",
+      "oneOf": [
+        {
+          "description": "Route the error to another node.",
+          "properties": {
+            "error_field": {
+              "description": "The field the error is written into.",
+              "type": "string"
+            },
+            "to": {
+              "description": "The node to route to.",
+              "type": "string"
+            },
+            "type": {
+              "const": "route",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "to",
+            "error_field"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Absorb the error by merging a fallback delta.",
+          "properties": {
+            "fallback_delta": {
+              "additionalProperties": true,
+              "description": "The delta merged in place of the failed node's own delta,\nkeyed by field name.",
+              "type": "object"
+            },
+            "type": {
+              "const": "absorb",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "fallback_delta"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Handle according to a registered handler named here; an\nunregistered name is [`CompileError::UnregisteredErrorHandler`].",
+          "properties": {
+            "name": {
+              "description": "The registered handler name.",
+              "type": "string"
+            },
+            "type": {
+              "const": "custom",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "FieldDoc": {
+      "additionalProperties": false,
+      "description": "One field of a [`WarGraphDoc`]'s Battlefield schema.",
+      "properties": {
+        "default": {
+          "description": "Default value used when the field is absent."
+        },
+        "kind": {
+          "$ref": "#/$defs/FieldKindDoc",
+          "description": "The field's expected JSON value shape -- informational only this\nphase: `compile` does not cross-check it against `reducer` or\n`default`."
+        },
+        "name": {
+          "description": "The field's name.",
+          "type": "string"
+        },
+        "reducer": {
+          "$ref": "#/$defs/ReducerDoc",
+          "description": "The merge strategy applied to deltas targeting this field."
+        },
+        "required": {
+          "default": false,
+          "description": "Whether the engine must refuse to start a run that cannot resolve\nthis field.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "reducer"
+      ],
+      "type": "object"
+    },
+    "FieldKindDoc": {
+      "description": "The declared JSON value shape of a [`FieldDoc`] -- documentation only\n(see [`FieldDoc::kind`]'s own rustdoc).",
+      "oneOf": [
+        {
+          "const": "string",
+          "description": "A JSON string.",
+          "type": "string"
+        },
+        {
+          "const": "number",
+          "description": "A JSON number.",
+          "type": "string"
+        },
+        {
+          "const": "boolean",
+          "description": "A JSON boolean.",
+          "type": "string"
+        },
+        {
+          "const": "array",
+          "description": "A JSON array.",
+          "type": "string"
+        },
+        {
+          "const": "object",
+          "description": "A JSON object.",
+          "type": "string"
+        },
+        {
+          "const": "any",
+          "description": "Any JSON value.",
+          "type": "string"
+        }
+      ]
+    },
+    "GateNodeDoc": {
+      "additionalProperties": false,
+      "description": "A `kind: \"gate\"` node's document form, compiling to [`NodeSpec::Gate`].",
+      "properties": {
+        "choices": {
+          "description": "Valid choices, for [`ParleyKindDoc::Choice`].",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "expires_in_secs": {
+          "description": "How long after raising this request expires, if ever.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "on_expire": {
+          "$ref": "#/$defs/OnExpireDoc",
+          "default": {
+            "type": "fail_run"
+          },
+          "description": "What happens if this request expires unanswered."
+        },
+        "output_field": {
+          "description": "The field the delivered value is written to; required for every\n[`ParleyKindDoc`] except `StateEdit`, which must leave this `None`\n(`WarGraph::validate` enforces the pairing, D-05).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parley": {
+          "$ref": "#/$defs/ParleyKindDoc",
+          "description": "The shape of input this Gate awaits."
+        },
+        "payload_template": {
+          "description": "Renders the raised request's payload from the Battlefield, if\ndeclared.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt_template": {
+          "description": "Renders the raised request's prompt from the Battlefield.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "parley",
+        "prompt_template"
+      ],
+      "type": "object"
+    },
+    "LimitsDoc": {
+      "additionalProperties": false,
+      "description": "Mirrors [`EngineLimits`]. Every field falls back to\n[`EngineLimits::default`]'s value when absent, via this type's own\n`Default` impl and `#[serde(default)]` on [`WarGraphDoc::limits`].",
+      "properties": {
+        "max_muster_tasks": {
+          "default": 100,
+          "description": "Maximum number of tasks a single Muster directive may request.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_node_visits": {
+          "default": 25,
+          "description": "Maximum number of times any single node may execute within one run.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_supersteps": {
+          "default": 50,
+          "description": "Maximum number of supersteps before the run fails.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_timeout_secs": {
+          "default": null,
+          "description": "Optional wall-clock budget for the whole run, in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "NodeDoc": {
+      "additionalProperties": false,
+      "description": "One node in a [`WarGraphDoc`] (D-33). `kind` names which of `paladin`,\n`gate`, or `workflow` is populated; deliberately NOT a\n`#[serde(tag = \"kind\")]`-dispatched enum sharing the `kind` key, because\nthat combination cannot both (a) accept and round-trip an unrecognised\n`kind` string for [`CompileError::UnsupportedNodeKind`] to report, and\n(b) combine with `#[serde(flatten)]` and `#[serde(deny_unknown_fields)]`\non the SAME struct (a serde restriction, not a choice) -- so this shape\nkeeps `kind` as its own always-present field and gates on it explicitly\nin [`NodeDoc::kind_doc`], the one place a `\"function\"` (or any other\nunrecognised) kind is turned into a typed, string-preserving error\nrather than a raw `serde_json` deserialize failure.",
+      "properties": {
+        "aegis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AegisDoc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "This node's own `Aegis` override, if any."
+        },
+        "defer": {
+          "default": false,
+          "description": "Whether this node is registered deferred (`WarGraph::add_deferred_node`).",
+          "type": "boolean"
+        },
+        "gate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GateNodeDoc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Populated when `kind == \"gate\"`."
+        },
+        "id": {
+          "description": "This node's id, unique within the document.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Which of `paladin` / `gate` / `workflow` this node is; any other\nvalue fails [`WarGraphDoc::compile`] with\n[`CompileError::UnsupportedNodeKind`].",
+          "type": "string"
+        },
+        "paladin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PaladinNodeDoc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Populated when `kind == \"paladin\"`."
+        },
+        "workflow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowNodeDoc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Populated when `kind == \"workflow\"`."
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "OnExpireDoc": {
+      "description": "Mirrors [`OnExpire`].",
+      "oneOf": [
+        {
+          "description": "Fail the run with a structured reason naming the parley (default).",
+          "properties": {
+            "type": {
+              "const": "fail_run",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Substitute this value as the response.",
+          "properties": {
+            "type": {
+              "const": "resume_with_default",
+              "type": "string"
+            },
+            "value": {
+              "description": "The substituted value."
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PaladinNodeDoc": {
+      "additionalProperties": false,
+      "description": "A `kind: \"paladin\"` node's document form, compiling to\n[`NodeSpec::Paladin`].",
+      "properties": {
+        "input_template": {
+          "description": "Renders the Paladin's string input from the Battlefield.",
+          "type": "string"
+        },
+        "max_loops": {
+          "description": "Maximum reasoning loops (`MaxLoops::Fixed`); defaults to `3` when\nabsent.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "The LLM model identifier.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The Paladin's display name.",
+          "type": "string"
+        },
+        "output_field": {
+          "description": "The field this node's output is written to.",
+          "type": "string"
+        },
+        "output_schema": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SchemaRefDoc"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When `Some`, this node dispatches through the structured executor\nand the parsed JSON value is written to `output_field` (RT-05)."
+        },
+        "stop_words": {
+          "default": [],
+          "description": "Tokens that signal the Paladin should stop.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "system_prompt": {
+          "description": "The Paladin's system prompt.",
+          "type": "string"
+        },
+        "temperature": {
+          "description": "Response randomness; defaults to `0.7` when absent. `f64` rather\nthan `PaladinData.temperature`'s own `f32` (cast down in `compile`):\na JSON literal like `0.7` round-trips exactly through `serde_json`'s\n`f64`-only number representation, but the SAME literal narrowed to\n`f32` first and then widened back for serialisation prints as\n`0.699999988079071` -- breaking the fixture corpus's byte-for-byte\nround-trip guarantee for no benefit (the narrowing to `PaladinData`'s\n`f32` still happens, just once, at `compile` time).",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "model",
+        "system_prompt",
+        "input_template",
+        "output_field"
+      ],
+      "type": "object"
+    },
+    "ParleyKindDoc": {
+      "description": "Mirrors [`ParleyKind`].",
+      "oneOf": [
+        {
+          "const": "approval",
+          "description": "A yes/no decision.",
+          "type": "string"
+        },
+        {
+          "const": "choice",
+          "description": "A choice among `choices`.",
+          "type": "string"
+        },
+        {
+          "const": "free_text",
+          "description": "Free-form text input.",
+          "type": "string"
+        },
+        {
+          "const": "state_edit",
+          "description": "A structured state edit.",
+          "type": "string"
+        }
+      ]
+    },
+    "ReducerDoc": {
+      "description": "Mirrors [`DispatchRule`] -- excludes `DispatchRule::Custom`: a document\nhas no way to name a `Battlefield`-level custom dispatch resolver\n(`WarGraphDoc::compile` always validates against an empty\n`CustomDispatchResolver`), so declaring one here would always fail\n`WarGraph::validate` and never resolve.",
+      "oneOf": [
+        {
+          "const": "last_write",
+          "description": "Last write wins.",
+          "type": "string"
+        },
+        {
+          "const": "append",
+          "description": "Value must be a JSON array; deltas append.",
+          "type": "string"
+        },
+        {
+          "const": "merge_object",
+          "description": "Value must be a JSON object; deltas shallow-merge keys.",
+          "type": "string"
+        },
+        {
+          "const": "sum",
+          "description": "Numeric accumulation.",
+          "type": "string"
+        }
+      ]
+    },
+    "RetryPolicyDoc": {
+      "additionalProperties": false,
+      "description": "Mirrors [`RetryPolicy`]. Every field falls back to\n[`RetryPolicy::default`]'s value when absent (the same defaults, via\n`#[serde(default)]` at the container level backed by this type's own\n`Default` impl below).",
+      "properties": {
+        "backoff_factor": {
+          "default": 2.0,
+          "description": "The multiplier applied per additional attempt.",
+          "format": "double",
+          "type": "number"
+        },
+        "initial_interval_ms": {
+          "default": 500,
+          "description": "The delay, in milliseconds, before attempt 2.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "jitter": {
+          "default": true,
+          "description": "Whether to add random jitter to the computed delay.",
+          "type": "boolean"
+        },
+        "max_attempts": {
+          "default": 3,
+          "description": "Maximum number of attempts, including the first. `0` is invalid.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_interval_ms": {
+          "default": 60000,
+          "description": "The ceiling every computed delay is capped at, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retry_on": {
+          "$ref": "#/$defs/RetryPredicateDoc",
+          "default": {
+            "type": "transient_only"
+          },
+          "description": "Which classified errors this policy retries."
+        }
+      },
+      "type": "object"
+    },
+    "RetryPredicateDoc": {
+      "description": "Mirrors [`RetryPredicate`].",
+      "oneOf": [
+        {
+          "description": "Retry only transient errors (the default).",
+          "properties": {
+            "type": {
+              "const": "transient_only",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Retry transient and unknown errors.",
+          "properties": {
+            "type": {
+              "const": "transient_and_unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Retry according to a registered predicate evaluator named here; an\nunregistered name is [`CompileError::UnregisteredRetryPredicate`].",
+          "properties": {
+            "name": {
+              "description": "The registered predicate name.",
+              "type": "string"
+            },
+            "type": {
+              "const": "custom",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SchemaDoc": {
+      "additionalProperties": false,
+      "description": "A [`WarGraphDoc`]'s Battlefield schema.",
+      "properties": {
+        "fields": {
+          "default": [],
+          "description": "This schema's declared fields.",
+          "items": {
+            "$ref": "#/$defs/FieldDoc"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "SchemaRefDoc": {
+      "description": "A reference to a JSON Schema, either carried inline or resolved by name\nthrough [`EngineRegistries::output_schemas`]. Mirrors\n[`SchemaRef`].",
+      "oneOf": [
+        {
+          "description": "A JSON Schema value carried inline.",
+          "properties": {
+            "schema": {
+              "description": "The inline schema value."
+            },
+            "type": {
+              "const": "inline",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "schema"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The name of a schema registered elsewhere; an unregistered name is\n[`CompileError::UnregisteredOutputSchema`].",
+          "properties": {
+            "name": {
+              "description": "The registered schema name.",
+              "type": "string"
+            },
+            "type": {
+              "const": "registered",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StateMapDoc": {
+      "additionalProperties": false,
+      "description": "Mirrors [`crate::engine::graph::StateMap`]: `(parent, child)` input pairs\nand `(child, parent)` output pairs.",
+      "properties": {
+        "inputs": {
+          "default": [],
+          "description": "`(parent field, child field)` pairs.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "outputs": {
+          "default": [],
+          "description": "`(child field, parent field)` pairs.",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "TimeoutPolicyDoc": {
+      "additionalProperties": false,
+      "description": "Mirrors [`TimeoutPolicy`], in whole seconds (sub-second per-attempt\ntimeouts are not a documented use case this phase).",
+      "properties": {
+        "idle_timeout_secs": {
+          "description": "The longest an attempt may go without progress, in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_timeout_secs": {
+          "description": "A hard wall-clock cap on each attempt, in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "WorkflowNodeDoc": {
+      "additionalProperties": false,
+      "description": "A `kind: \"workflow\"` node's document form, compiling recursively to\n[`NodeSpec::Battalion`].",
+      "properties": {
+        "graph": {
+          "$ref": "#",
+          "description": "The nested document, compiled with the SAME [`EngineRegistries`]\nbundle the parent uses (Phase 23 D-21)."
+        },
+        "restart_on_resume": {
+          "default": false,
+          "description": "Whether a resumed run restarts this child from scratch.",
+          "type": "boolean"
+        },
+        "state_map": {
+          "$ref": "#/$defs/StateMapDoc",
+          "default": {
+            "inputs": [],
+            "outputs": []
+          },
+          "description": "The declared parent/child state channel (CF-FR-14)."
+        }
+      },
+      "required": [
+        "graph"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The serde/schemars document form of a [`WarGraph`] (D-33, D-34): every\nfield here is either a plain, `schemars`-describable scalar or another\ndoc type in this module -- never a `NodeSpec`, `Aegis`, or other\n`paladin-core`/`paladin-battalion` runtime type directly, so this type\nalone carries the `JsonSchema` derive `paladin-core` may not take\n(ADR-0015).",
+  "properties": {
+    "default_aegis": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AegisDoc"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The graph-wide fallback [`Aegis`], if any."
+    },
+    "edges": {
+      "description": "Every static edge this graph declares.",
+      "items": {
+        "$ref": "#/$defs/EdgeDoc"
+      },
+      "type": "array"
+    },
+    "entry": {
+      "description": "The graph's entry-point node ids (order-preserving).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "limits": {
+      "$ref": "#/$defs/LimitsDoc",
+      "default": {
+        "max_muster_tasks": 100,
+        "max_node_visits": 25,
+        "max_supersteps": 50,
+        "run_timeout_secs": null
+      },
+      "description": "Run bounds; absent fields fall back to [`EngineLimits::default`]'s\nvalues via [`LimitsDoc::default`]."
+    },
+    "nodes": {
+      "description": "Every node this graph declares, in document order (compiled\ndeterministically in this same order).",
+      "items": {
+        "$ref": "#/$defs/NodeDoc"
+      },
+      "type": "array"
+    },
+    "schema": {
+      "$ref": "#/$defs/SchemaDoc",
+      "description": "The graph's Battlefield schema."
+    },
+    "schema_version": {
+      "description": "Must equal [`WARGRAPH_DOC_SCHEMA_VERSION`] (X-04).",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "entry",
+    "nodes",
+    "edges",
+    "schema"
+  ],
+  "title": "WarGraphDoc",
+  "type": "object"
+}

@@ -1,0 +1,16 @@
+flowchart TD
+n0["planner «function»"]
+n1["worker «worker»"]
+n2["aggregator «function»"]
+n1 --> n2
+classDef paladinKind fill:#eef2ff,stroke:#4338ca,color:#1e1b4b;
+classDef functionKind fill:#ecfeff,stroke:#0891b2,color:#164e63;
+classDef gateKind fill:#fefce8,stroke:#ca8a04,color:#713f12;
+classDef workflowKind fill:#fdf4ff,stroke:#a21caf,color:#4a044e;
+classDef workerKind fill:#f0fdf4,stroke:#15803d,color:#052e16;
+classDef dashed stroke-dasharray: 5 5;
+class n0 functionKind
+class n1 workerKind
+class n1 dashed
+class n2 functionKind
+class n2 dashed

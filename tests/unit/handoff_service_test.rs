@@ -410,6 +410,7 @@ impl PaladinExecutorPort for SuccessExecutor {
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
+            served_by: None,
         })
     }
 }
@@ -472,6 +473,7 @@ impl PaladinExecutorPort for TransientThenSuccessExecutor {
                 stop_reason: StopReason::Completed,
                 plan: None,
                 handoff_history: Vec::new(),
+                served_by: None,
             })
         }
     }

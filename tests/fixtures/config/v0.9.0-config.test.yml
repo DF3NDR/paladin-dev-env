@@ -1,0 +1,137 @@
+llm_type: "openai"
+llm_url: "https://api.openai.com/v1/engines/davinci-codex/completions"
+llm_api_key: ""       # Empty for tests; real keys come from env vars
+max_file_size: 10485760  # 10 MB
+# Legacy api_key field - Set via OPENAI_API_KEY environment variable for tests
+
+# LLM Provider Configuration for testing
+#
+# NOTE: These test API keys are placeholders for unit tests with mock adapters.
+# For integration tests with live APIs, set real keys via environment variables:
+#   - OPENAI_API_KEY
+#   - DEEPSEEK_API_KEY
+#   - ANTHROPIC_API_KEY
+llm:
+  default_provider: "openai"
+  openai:
+    api_key: ""  # Set via OPENAI_API_KEY env var; empty for unit tests
+    base_url: "https://api.openai.com/v1"
+    default_model: "gpt-4"
+    default_temperature: 0.7
+    timeout_seconds: 60
+    max_retries: 2
+  deepseek:
+    api_key: ""  # Set via DEEPSEEK_API_KEY env var; empty for unit tests
+    base_url: "https://api.deepseek.com/v1"
+    default_model: "deepseek-chat"
+    default_temperature: 0.7
+    timeout_seconds: 60
+    max_retries: 2
+  anthropic:
+    api_key: ""  # Set via ANTHROPIC_API_KEY env var; empty for unit tests
+    base_url: "https://api.anthropic.com/v1"
+    default_model: "claude-3-5-sonnet-20241022"
+    default_temperature: 0.7
+    timeout_seconds: 60
+    max_retries: 2
+  xai:
+    api_key: ""  # Set via XAI_API_KEY env var; empty for unit tests
+    base_url: ""
+    default_model: ""
+    default_temperature: 0.7
+    timeout_seconds: 60
+    max_retries: 2
+  gemini:
+    api_key: ""  # Set via GEMINI_API_KEY env var; empty for unit tests
+    base_url: ""
+    default_model: ""
+    default_temperature: 0.7
+    timeout_seconds: 60
+    max_retries: 2
+
+server:
+  host: "127.0.0.1"
+  port: 8080
+sources:
+  - name: "Caitlin Long Blog"
+    source_type: "rss"
+    url: "https://caitlin-long.com/feed/"
+    prompt: "Does this have any relevance someone interested in Blockchain and AI"
+    tags: ["blockchain","investment","AI"]
+  - name: "Newsapi.org: Bitcoin"
+    source_type: "api"
+    url: "https://newsapi.org/v2/everything?q=bitcoin&apiKey=PLACEHOLDER_KEY_FOR_TESTS"
+    prompt: "Does this have any relevance to someone in Austin, Texas interested in the local blockchain or Web3 developer's community?"
+    tags: ["blockchain", "bitcoin", "austin", "Web3"]
+user_preferences:
+  theme: "dark"
+  notifications_enabled: true
+  summary_format: "bullets"
+# Garrison memory system configuration
+garrison:
+  garrison_type: "in_memory"  # or "sqlite" for persistent storage
+  # path: "./garrison.db"     # Only required for SQLite type
+  max_entries: 50              # Maximum conversation entries (for testing)
+  max_tokens: 2000             # Token limit for context window
+  tokenizer: "gpt-4"           # Tokenizer model for token counting
+  eviction_strategy: "importance_based"  # "importance_based", "fifo", or "sliding_window"
+  preserve_recent_count: 5     # Minimum recent entries to preserve during eviction
+
+# Sanctum long-term memory configuration for testing
+sanctum:
+  enabled: false               # Disabled by default for tests
+  adapter_type: "in_memory"    # Use in-memory adapter for tests
+  qdrant:                      # Qdrant config for integration tests
+    url: "http://localhost:6334"
+    collection_name: "test_paladin_memories"
+    vector_dimension: 384      # Small model for tests (all-MiniLM-L6-v2)
+
+# RAG configuration for testing
+rag:
+  top_k: 3                     # Fewer results for tests
+  min_similarity: 0.6          # Lower threshold for tests
+  max_tokens: 1000             # Smaller context for tests
+  timeout_seconds: 3           # Shorter timeout for tests
+  retrieval_trigger: "Always"  # Always retrieve for tests
+
+# Memory extraction configuration for testing
+memory_extraction:
+  enabled: true                # Enabled for RAG tests
+  strategy: "on_completion"    # Test with default strategy
+
+# Arsenal tool system configuration for testing
+arsenal:
+  default_timeout_seconds: 10  # Shorter timeout for tests
+  max_concurrent_tools: 2      # Lower concurrency for tests
+  mcp_servers: []              # Empty by default, tests will add servers as needed
+
+# Citadel state persistence configuration for testing
+citadel:
+  enabled: false                # Disabled by default for tests
+  state_dir: "./test-states"    # Test directory for state files
+  autosave_enabled: false       # Disabled by default for tests
+  cleanup_enabled: false        # Disabled for tests
+  max_state_age_days: 7         # Shorter retention for tests
+
+# Herald output formatting configuration for testing
+herald:
+  default_formatter: "json"     # Default to JSON for programmatic consumption
+  json:
+    pretty: false               # Compact JSON for tests
+    include_metadata: true      # Include metadata for test validation
+  markdown:
+    include_colors: false       # Disable colors for test consistency
+    heading_level: 2            # Standard heading level
+  table:
+    max_column_width: 40        # Narrower columns for test output
+    border_style: "ascii"       # ASCII style for cross-platform tests
+# Vision API configuration for testing
+vision:
+  retry:
+    max_retries: 2              # Fewer retries for faster test failure
+    initial_backoff_ms: 500     # Shorter initial backoff for tests
+    backoff_multiplier: 2.0     # Standard multiplier
+  openai:
+    max_tokens: 1024            # Smaller token limit for tests
+  anthropic:
+    max_tokens: 1024            # Smaller token limit for tests

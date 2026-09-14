@@ -7,19 +7,43 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use futures::stream;
+use paladin_core::platform::container::prompt::PromptType;
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
-    StreamingResponse, TokenUsage,
+    FinishReason, FunctionCall, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
+    ResponseFormat, StreamingResponse, TokenUsage,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
 
-/// A single mocked response entry — either a success string or an error.
+/// A single mocked response entry — a success string, a tool-call request, or
+/// an error.
 #[derive(Debug, Clone)]
 enum MockEntry {
     Success(String),
+    ToolCall { name: String, arguments: String },
+    Error(LlmError),
+}
+
+/// One scripted entry for [`MockLlmAdapter::with_script`] (Phase 26 D-01/D-02:
+/// the `ExecutionMiddleware` chain's `around_tool`/handoff tests need a mock
+/// that can emit a [`FunctionCall`], which [`MockLlmAdapter::with_responses`]
+/// cannot express).
+#[derive(Debug, Clone)]
+pub enum MockScriptEntry {
+    /// A plain text success response.
+    Text(String),
+    /// A success response carrying a [`FunctionCall`] (`finish_reason` is
+    /// [`FinishReason::FunctionCall`]).
+    ToolCall {
+        /// The tool/function name the mocked model "calls".
+        name: String,
+        /// The JSON-encoded arguments string, exactly as a real provider
+        /// would return it in [`FunctionCall::arguments`].
+        arguments: String,
+    },
+    /// An error response.
     Error(LlmError),
 }
 
@@ -33,6 +57,13 @@ struct MockState {
     finish_reason: FinishReason,
     available_models: Vec<String>,
     call_count: usize,
+    provider_name: &'static str,
+    stream_script: Option<Vec<Result<String, LlmError>>>,
+    model_query_error: Option<LlmError>,
+    /// Every request `generate`/`generate_stream` has received, in call
+    /// order (Phase 26 D-02: the golden equivalence test inspects the exact
+    /// rendered prompt bytes a real run produced).
+    requests: Vec<LlmRequest>,
 }
 
 impl Default for MockState {
@@ -49,6 +80,10 @@ impl Default for MockState {
             finish_reason: FinishReason::Stop,
             available_models: vec!["mock-model".to_string()],
             call_count: 0,
+            provider_name: "MockLLM",
+            stream_script: None,
+            model_query_error: None,
+            requests: Vec::new(),
         }
     }
 }
@@ -155,7 +190,113 @@ impl MockLlmAdapter {
         self
     }
 
-    /// Return the number of times [`LlmPort::generate`] has been called.
+    /// Set the name [`LlmPort::get_provider_name`] reports (default `"MockLLM"`).
+    ///
+    /// Lets a test compose several distinguishable mocks into one chain —
+    /// the `FallbackLlmAdapter` (FT-05) identifies providers by this name.
+    pub fn with_provider_name(self, name: &'static str) -> Self {
+        self.state.lock().unwrap().provider_name = name;
+        self
+    }
+
+    /// Script exactly what [`LlmPort::generate_stream`] yields, item by item.
+    ///
+    /// Each `Ok(text)` becomes one `StreamingResponse` chunk carrying `text`
+    /// as its delta and no finish reason; each `Err(e)` is yielded as-is,
+    /// in place. The scripted stream counts as one call in
+    /// [`call_count`](Self::call_count) and does not consult the
+    /// `generate` response queue, so a test can put an error FIRST (before
+    /// any chunk) or AFTER a chunk to drive the fallback chain's
+    /// first-chunk rule (D-25).
+    pub fn with_stream_items(self, items: Vec<Result<String, LlmError>>) -> Self {
+        self.state.lock().unwrap().stream_script = Some(items);
+        self
+    }
+
+    /// Make [`LlmPort::validate_model`] and [`LlmPort::get_available_models`]
+    /// answer `Err(error)` instead of consulting the configured model list.
+    pub fn with_model_query_error(self, error: LlmError) -> Self {
+        self.state.lock().unwrap().model_query_error = Some(error);
+        self
+    }
+
+    /// Script a sequence of [`MockScriptEntry`] values, returned in order
+    /// (cycling when exhausted, same as [`MockLlmAdapter::with_responses`]).
+    ///
+    /// Unlike `with_responses`, a script can include [`MockScriptEntry::ToolCall`]
+    /// entries so a test can drive the [`FunctionCall`]-triggered branches of a
+    /// consumer's reasoning loop (handoff detection, Arsenal invocation).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
+    ///
+    /// let adapter = MockLlmAdapter::new().with_script(vec![
+    ///     MockScriptEntry::ToolCall {
+    ///         name: "web_search".to_string(),
+    ///         arguments: r#"{"query":"rust"}"#.to_string(),
+    ///     },
+    ///     MockScriptEntry::Text("done".to_string()),
+    /// ]);
+    /// ```
+    pub fn with_script(self, entries: Vec<MockScriptEntry>) -> Self {
+        let mut state = self.state.lock().unwrap();
+        state.responses = entries
+            .into_iter()
+            .map(|entry| match entry {
+                MockScriptEntry::Text(text) => MockEntry::Success(text),
+                MockScriptEntry::ToolCall { name, arguments } => {
+                    MockEntry::ToolCall { name, arguments }
+                }
+                MockScriptEntry::Error(error) => MockEntry::Error(error),
+            })
+            .collect();
+        state.response_index = 0;
+        drop(state);
+        self
+    }
+
+    /// Every request [`LlmPort::generate`] or [`LlmPort::generate_stream`]
+    /// has received so far, in call order.
+    pub fn requests(&self) -> Vec<LlmRequest> {
+        self.state.lock().unwrap().requests.clone()
+    }
+
+    /// The most recent request received, if any.
+    pub fn last_request(&self) -> Option<LlmRequest> {
+        self.state.lock().unwrap().requests.last().cloned()
+    }
+
+    /// The rendered prompt text of the most recent request, extracted from
+    /// its [`PromptType`] (`User.query` or `System.instructions`; any other
+    /// variant yields an empty string).
+    pub fn last_prompt(&self) -> Option<String> {
+        self.last_request()
+            .map(|request| match request.prompt.prompt_type() {
+                PromptType::User(user) => user.query.clone(),
+                PromptType::System(system) => system.instructions.clone(),
+                _ => String::new(),
+            })
+    }
+
+    /// The `response_format` of the most recent request, if any (RT-05,
+    /// D-28).
+    ///
+    /// The narrowest possible accessor over [`last_request`](Self::last_request)'s
+    /// already-recorded [`LlmRequest`] (Phase 26 D-02 added full-request
+    /// recording; this reads one field off it) — nothing else about the
+    /// mock's recording, scripting or `call_count` behaviour changes. Plan
+    /// 26-17's structured-output tests use this to assert
+    /// `PaladinExecutionService` sets `response_format` for every model
+    /// call of a structured run.
+    pub fn last_response_format(&self) -> Option<ResponseFormat> {
+        self.last_request()
+            .and_then(|request| request.response_format)
+    }
+
+    /// Return the number of times [`LlmPort::generate`] or a scripted
+    /// [`LlmPort::generate_stream`] has been called.
     pub fn call_count(&self) -> usize {
         self.state.lock().unwrap().call_count
     }
@@ -165,11 +306,12 @@ impl MockLlmAdapter {
         self.call_count()
     }
 
-    /// Reset the call counter and response index to zero.
+    /// Reset the call counter, response index and recorded requests.
     pub fn reset(&self) {
         let mut state = self.state.lock().unwrap();
         state.call_count = 0;
         state.response_index = 0;
+        state.requests.clear();
     }
 
     /// Return `true` if the adapter was called at least once.
@@ -190,6 +332,7 @@ impl LlmPort for MockLlmAdapter {
         let (response_entry, delay, token_usage, finish_reason) = {
             let mut state = self.state.lock().unwrap();
             state.call_count += 1;
+            state.requests.push(request.clone());
             let index = state.response_index;
             let entry = state
                 .responses
@@ -223,6 +366,17 @@ impl LlmPort for MockLlmAdapter {
                 metadata: HashMap::new(),
                 function_call: None,
             }),
+            MockEntry::ToolCall { name, arguments } => Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model.clone(),
+                content: format!("Calling tool: {}", name),
+                finish_reason: FinishReason::FunctionCall,
+                usage: token_usage,
+                created_at: Utc::now(),
+                metadata: HashMap::new(),
+                function_call: Some(FunctionCall { name, arguments }),
+            }),
         }
     }
 
@@ -231,6 +385,29 @@ impl LlmPort for MockLlmAdapter {
         request: LlmRequest,
     ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
     {
+        let scripted = {
+            let mut state = self.state.lock().unwrap();
+            let script = state.stream_script.clone();
+            if script.is_some() {
+                state.call_count += 1;
+                state.requests.push(request.clone());
+            }
+            script
+        };
+        if let Some(items) = scripted {
+            let chunks: Vec<Result<StreamingResponse, LlmError>> = items
+                .into_iter()
+                .map(|item| {
+                    item.map(|delta| StreamingResponse {
+                        id: Uuid::new_v4(),
+                        delta,
+                        finish_reason: None,
+                    })
+                })
+                .collect();
+            return Ok(Box::new(stream::iter(chunks)));
+        }
+
         let response = self.generate(request).await?;
         // Emit the full response as a single streaming chunk, then stop.
         let chunks = vec![
@@ -250,15 +427,22 @@ impl LlmPort for MockLlmAdapter {
 
     async fn validate_model(&self, model: &str) -> Result<bool, LlmError> {
         let state = self.state.lock().unwrap();
-        Ok(state.available_models.contains(&model.to_string()))
+        if let Some(error) = &state.model_query_error {
+            return Err(error.clone());
+        }
+        Ok(state.available_models.iter().any(|m| m == model))
     }
 
     async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
-        Ok(self.state.lock().unwrap().available_models.clone())
+        let state = self.state.lock().unwrap();
+        if let Some(error) = &state.model_query_error {
+            return Err(error.clone());
+        }
+        Ok(state.available_models.clone())
     }
 
     fn get_provider_name(&self) -> &'static str {
-        "MockLLM"
+        self.state.lock().unwrap().provider_name
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
@@ -392,7 +576,6 @@ mod tests {
     use super::*;
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
     use paladin_ports::output::llm_port::LlmPort;
-    use uuid::Uuid;
 
     fn make_request() -> LlmRequest {
         let prompt = PromptItem::new(PromptType::User(UserPrompt {
@@ -400,14 +583,7 @@ mod tests {
             context: None,
         }))
         .unwrap();
-        LlmRequest {
-            id: Uuid::new_v4(),
-            model: "mock-model".to_string(),
-            prompt,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        }
+        LlmRequest::new("mock-model", prompt)
     }
 
     #[tokio::test]
@@ -466,5 +642,68 @@ mod tests {
         assert_eq!(adapter.call_count(), 0);
         adapter.generate(make_request()).await.unwrap();
         assert_eq!(adapter.call_count(), 1);
+    }
+
+    // ── Phase 26 (RT-05, D-28): the mock records response_format ──────────
+
+    #[tokio::test]
+    async fn mock_records_the_response_format_it_received() {
+        let adapter = MockLlmAdapter::new();
+        assert_eq!(adapter.last_response_format(), None);
+
+        let request = make_request().with_response_format(ResponseFormat::JsonObject);
+        adapter.generate(request).await.unwrap();
+
+        assert_eq!(
+            adapter.last_response_format(),
+            Some(ResponseFormat::JsonObject)
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_behaviour_is_otherwise_unchanged() {
+        // Pins that the response_format accessor is strictly additive:
+        // with_responses, with_error, with_error_then_response,
+        // with_stream_items and call_count all behave exactly as before
+        // (D-28: "unchanged except recording response_format").
+        let cycling =
+            MockLlmAdapter::new().with_responses(vec!["First".to_string(), "Second".to_string()]);
+        assert_eq!(
+            cycling.generate(make_request()).await.unwrap().content,
+            "First"
+        );
+        assert_eq!(
+            cycling.generate(make_request()).await.unwrap().content,
+            "Second"
+        );
+        assert_eq!(
+            cycling.generate(make_request()).await.unwrap().content,
+            "First"
+        );
+        assert_eq!(cycling.call_count(), 3);
+
+        let erroring = MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded);
+        assert!(matches!(
+            erroring.generate(make_request()).await,
+            Err(LlmError::RateLimitExceeded)
+        ));
+
+        let recovering =
+            MockLlmAdapter::new().with_error_then_response(LlmError::RateLimitExceeded, "ok");
+        assert!(recovering.generate(make_request()).await.is_err());
+        assert_eq!(
+            recovering.generate(make_request()).await.unwrap().content,
+            "ok"
+        );
+
+        let streaming =
+            MockLlmAdapter::new().with_stream_items(vec![Ok("a".to_string()), Ok("b".to_string())]);
+        let mut stream = Box::into_pin(streaming.generate_stream(make_request()).await.unwrap());
+        let mut deltas = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            deltas.push(item.unwrap().delta);
+        }
+        assert_eq!(deltas, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(streaming.call_count(), 1);
     }
 }

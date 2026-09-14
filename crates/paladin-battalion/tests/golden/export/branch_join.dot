@@ -1,0 +1,10 @@
+digraph WarGraph {
+  "n0" [label="split «paladin»"];
+  "n1" [label="branch_a «paladin»"];
+  "n2" [label="branch_b «paladin»"];
+  "n3" [label="join «paladin»"];
+  "n0" -> "n1" [label="contains(\"a\")"];
+  "n0" -> "n2" [label="contains(\"b\")"];
+  "n1" -> "n3";
+  "n2" -> "n3";
+}

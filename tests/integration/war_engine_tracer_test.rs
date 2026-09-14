@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 
 use paladin_battalion::engine::{
-    EngineError, EngineLimits, NodeContext, NodeError, NodeSpec, RunOutcome, StateNode, WarEngine,
-    WarGraph,
+    EngineError, EngineLimits, NodeContext, NodeSpec, RunOutcome, StateNode, StateNodeError,
+    WarEngine, WarGraph,
 };
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
@@ -63,12 +63,16 @@ struct CountingNode {
 
 #[async_trait]
 impl StateNode for CountingNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         self.run_count.fetch_add(1, Ordering::SeqCst);
         let mut delta = StateDelta::new();
         delta
             .set(self.field.clone(), "checkpointed")
-            .map_err(|e| NodeError(e.to_string()))?;
+            .map_err(|e| StateNodeError(e.to_string()))?;
         Ok(delta.into())
     }
 }

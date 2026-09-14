@@ -1,6 +1,6 @@
 [package]
 name = "paladin-ai-core"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -38,3 +38,30 @@ futures = "0.3.31"
 # runtime; `rand` is already a vetted workspace dependency used elsewhere
 # (paladin-battalion, paladin-llm).
 rand = { workspace = true }
+
+# X-10.6 deliberate-breaking suppression (D-04, MIGRATION.md §9.2, FT-01, Phase 25).
+# `BattalionError` gained the `Node(NodeError)` variant (FT-FR-02, D-06) and
+# `PaladinError` gained the structured `LlmFailure` variant and a new
+# `transience()` method (D-02); both enums are marked `#[non_exhaustive]` so
+# this typed-classification error taxonomy can grow without a semver-major
+# bump. Register/remove this suppression only in the same commit as the
+# matching MIGRATION.md §9.2 rows and `.cargo/semver-checks-allowlist.toml`
+# entries (kept set-equal by CI's `semver` job).
+#
+# FT-05 / FT-FR-17 (D-26, Phase 25 plan 25-08): `PaladinResult` gained the
+# additive `served_by: Option<String>` field and deliberately stays a
+# constructible, NOT-`#[non_exhaustive]` struct -- cross-crate
+# functional-update syntax is disallowed on `#[non_exhaustive]` structs, so
+# marking it would break every `..Default::default()` construction site
+# downstream. Only full struct literals break; the in-tree ones were migrated
+# in the same commit that added the field.
+#
+# RT-03 / RT-FR-12 (D-17, Phase 26 plan 26-07): `GarrisonEntry` gained the
+# persisted `is_summary: bool` field (`#[serde(default)]`) and is marked
+# `#[non_exhaustive]` -- it has no `Default`, so there is no functional-update
+# site to preserve, and construction goes through `new`/`with_metadata`/
+# `with_token_count`/`summary` rather than a struct literal.
+[package.metadata.cargo-semver-checks.lints]
+enum_marked_non_exhaustive = "allow"
+constructible_struct_adds_field = "allow"
+struct_marked_non_exhaustive = "allow"

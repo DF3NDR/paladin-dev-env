@@ -58,6 +58,7 @@ pub mod llm_live_api_tests;
 pub mod mcp_stdio_test;
 pub mod mcp_streamable_http_live_test;
 pub mod mcp_streamable_http_test;
+pub mod middleware_under_engine_test;
 pub mod notification_system_integration_test;
 #[cfg(feature = "llm-openai")]
 pub mod openai_content_analysis_integration_test;
@@ -66,6 +67,8 @@ pub mod openai_embedding_tests;
 #[cfg(feature = "llm-openai")]
 pub mod openai_provider_test;
 pub mod orchestrator_workflow_lifecycle_test;
+#[cfg(feature = "otel")]
+pub mod otel_transport_test;
 pub mod paladin_garrison_integration_test;
 pub mod paladin_integration_test;
 pub mod provider_switching_test;
@@ -73,11 +76,14 @@ pub mod provider_switching_test;
 pub mod qdrant_sanctum_tests;
 #[cfg(feature = "qdrant")]
 pub mod rag_integration_tests;
+pub mod reasoning_agent_test;
 #[cfg(feature = "redis-queue")]
 pub mod redis_queue_integration_test;
 pub mod scheduler_integration_test;
 pub mod sqlite_garrison_integration_test;
+pub mod structured_engine_node_test;
 pub mod system_log_integration_test;
+pub mod vault_confinement_test;
 #[cfg(all(feature = "vision", feature = "llm-openai", feature = "llm-anthropic"))]
 pub mod vision_integration_test;
 

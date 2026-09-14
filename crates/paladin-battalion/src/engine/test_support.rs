@@ -11,19 +11,27 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
-use paladin_core::platform::container::directive::Directive;
+use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
+use paladin_core::platform::container::directive::{Directive, NextStep};
+use paladin_core::platform::container::node_cache::CachedDelta;
+use paladin_core::platform::container::node_error::NodeError;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::parley::ParleyRequest;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
+use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
-use paladin_ports::output::trace_sink_port::{TraceEvent, TraceSink, TraceSinkError};
+use paladin_ports::output::trace_sink_port::{TraceRecord, TraceSink, TraceSinkError};
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+use tokio_util::sync::CancellationToken;
 
-use crate::engine::node::{NodeContext, NodeError, StateNode};
+use crate::engine::heartbeat::HeartbeatHandle;
+use crate::engine::hooks::{InterceptDecision, NodeInterceptor};
+use crate::engine::node::{NodeContext, StateNode, StateNodeError};
+use crate::error_handler::ErrorHandler;
 
 /// A [`WaypointPort`] test double wrapping an [`InMemoryWaypointStore`],
 /// additionally recording every `save` call and able to fail its NEXT save
@@ -247,7 +255,11 @@ impl CountingFunctionNode {
 
 #[async_trait]
 impl StateNode for CountingFunctionNode {
-    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let run_index = self.run_count.fetch_add(1, Ordering::SeqCst);
         self.observed_ptrs
             .lock()
@@ -291,12 +303,95 @@ impl ConcurrencyTrackingNode {
 
 #[async_trait]
 impl StateNode for ConcurrencyTrackingNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let now_in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_seen.fetch_max(now_in_flight, Ordering::SeqCst);
         tokio::time::sleep(self.hold).await;
         self.in_flight.fetch_sub(1, Ordering::SeqCst);
 
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), self.value.clone());
+        Ok(delta.into())
+    }
+}
+
+/// A [`StateNode`] test double for the shutdown-grace race (Phase 24 Plan
+/// 08, HITL-04, D-19): increments a shared run counter, THEN sleeps for
+/// `hold` before returning a fixed delta. Incrementing before the `.await`
+/// point means aborting the task mid-sleep (as the mid-superstep grace
+/// race's deadline branch does via `JoinHandle::abort`) still leaves
+/// `run_count` incremented for that attempt -- a test can assert an EXACT
+/// run count across an aborted-then-resumed scenario (D-19 acceptance 5:
+/// `run_count == 2`, one aborted, one completed).
+pub struct SlowFunctionNode {
+    field: paladin_core::platform::container::battlefield::FieldName,
+    value: serde_json::Value,
+    hold: std::time::Duration,
+    run_count: Arc<AtomicUsize>,
+    /// `Some` deterministically places a mid-superstep cancellation exactly
+    /// at the moment this node starts (before its own `.await` point),
+    /// mirroring `engine::mod`'s own `four_node_chain_graph_with_cancel_at`
+    /// convention (a node cancelling ITS OWN token synchronously) rather
+    /// than racing a background poller against a real-time sleep.
+    cancel_on_start: Option<tokio_util::sync::CancellationToken>,
+}
+
+impl SlowFunctionNode {
+    /// Construct a node that increments `run_count`, sleeps for `hold`,
+    /// then writes `value` to `field`. Never cancels any token itself.
+    pub fn new(
+        field: paladin_core::platform::container::battlefield::FieldName,
+        value: serde_json::Value,
+        hold: std::time::Duration,
+        run_count: Arc<AtomicUsize>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            value,
+            hold,
+            run_count,
+            cancel_on_start: None,
+        })
+    }
+
+    /// As [`SlowFunctionNode::new`], but also cancels `token` the instant
+    /// this node starts executing (before incrementing `run_count` or
+    /// sleeping) -- deterministically placing a mid-superstep cancellation
+    /// without any real-time race against sibling nodes in the same
+    /// dispatch batch.
+    pub fn cancelling(
+        field: paladin_core::platform::container::battlefield::FieldName,
+        value: serde_json::Value,
+        hold: std::time::Duration,
+        run_count: Arc<AtomicUsize>,
+        token: tokio_util::sync::CancellationToken,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            value,
+            hold,
+            run_count,
+            cancel_on_start: Some(token),
+        })
+    }
+}
+
+#[async_trait]
+impl StateNode for SlowFunctionNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        if let Some(token) = &self.cancel_on_start {
+            token.cancel();
+        }
+        self.run_count.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(self.hold).await;
         let mut delta = StateDelta::new();
         delta.set_raw(self.field.clone(), self.value.clone());
         Ok(delta.into())
@@ -310,7 +405,7 @@ pub struct FailingFunctionNode {
 }
 
 impl FailingFunctionNode {
-    /// Construct a node that always returns `NodeError(message)`.
+    /// Construct a node that always returns `StateNodeError(message)`.
     pub fn new(message: impl Into<String>) -> Arc<Self> {
         Arc::new(Self {
             message: message.into(),
@@ -320,8 +415,12 @@ impl FailingFunctionNode {
 
 #[async_trait]
 impl StateNode for FailingFunctionNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
-        Err(NodeError(self.message.clone()))
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        Err(StateNodeError(self.message.clone()))
     }
 }
 
@@ -347,7 +446,11 @@ impl YieldingNode {
 
 #[async_trait]
 impl StateNode for YieldingNode {
-    async fn run(&self, state: &Battlefield, ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         for _ in 0..self.yields {
             tokio::task::yield_now().await;
         }
@@ -449,6 +552,7 @@ impl PaladinPort for RecordingPaladinPort {
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
+            served_by: None,
         })
     }
 
@@ -465,13 +569,64 @@ impl PaladinPort for RecordingPaladinPort {
     }
 }
 
+/// A [`PaladinPort`] test double whose `execute` always fails with the
+/// `PaladinError` a caller-supplied factory produces (a factory rather than
+/// a stored error, following `llm_failure`'s test-double precedent: the
+/// double stays `Send + Sync` without a `Mutex` and every call's error is
+/// fresh), counting its calls, for exercising the engine's Paladin-node
+/// failure path (Doc 04 D-07: `NodeFailure::Paladin` ->
+/// `NodeErrorSource::Paladin`/`Llm`).
+pub struct FailingPaladinPort {
+    factory: fn() -> PaladinError,
+    calls: AtomicUsize,
+}
+
+impl FailingPaladinPort {
+    /// Construct a port whose every `execute` fails with `factory()`.
+    pub fn new(factory: fn() -> PaladinError) -> Arc<Self> {
+        Arc::new(Self {
+            factory,
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    /// How many times `execute` has been called.
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl PaladinPort for FailingPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err((self.factory)())
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("FailingPaladinPort only supports execute()")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
 // --- Phase 22 Plan 09: TraceSink test doubles -----------------------------
 
-/// A [`TraceSink`] test double recording every event it receives, in the
+/// A [`TraceSink`] test double recording every record it receives, in the
 /// exact order it received them.
 #[derive(Default)]
 pub struct RecordingTraceSink {
-    events: tokio::sync::Mutex<Vec<TraceEvent>>,
+    events: tokio::sync::Mutex<Vec<TraceRecord>>,
 }
 
 impl RecordingTraceSink {
@@ -480,16 +635,16 @@ impl RecordingTraceSink {
         Arc::new(Self::default())
     }
 
-    /// The events recorded so far, in receipt order.
-    pub async fn events(&self) -> Vec<TraceEvent> {
+    /// The records recorded so far, in receipt order.
+    pub async fn events(&self) -> Vec<TraceRecord> {
         self.events.lock().await.clone()
     }
 }
 
 #[async_trait]
 impl TraceSink for RecordingTraceSink {
-    async fn on_event(&self, event: TraceEvent) -> Result<(), TraceSinkError> {
-        self.events.lock().await.push(event);
+    async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+        self.events.lock().await.push(record);
         Ok(())
     }
 }
@@ -514,7 +669,7 @@ impl BlockingTraceSink {
 
 #[async_trait]
 impl TraceSink for BlockingTraceSink {
-    async fn on_event(&self, _event: TraceEvent) -> Result<(), TraceSinkError> {
+    async fn on_event(&self, _record: TraceRecord) -> Result<(), TraceSinkError> {
         self.entered.store(true, Ordering::SeqCst);
         std::future::pending::<()>().await;
         unreachable!("std::future::pending() never resolves")
@@ -542,7 +697,7 @@ impl AlwaysErroringTraceSink {
 
 #[async_trait]
 impl TraceSink for AlwaysErroringTraceSink {
-    async fn on_event(&self, _event: TraceEvent) -> Result<(), TraceSinkError> {
+    async fn on_event(&self, _record: TraceRecord) -> Result<(), TraceSinkError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Err(TraceSinkError::Failed("simulated failure".to_string()))
     }
@@ -556,7 +711,7 @@ impl TraceSink for AlwaysErroringTraceSink {
 /// -- proving drop-OLDEST (not drop-newest) precisely (T-22-31), rather than
 /// only proving the drop counter incremented.
 pub struct GatedTraceSink {
-    events: tokio::sync::Mutex<Vec<TraceEvent>>,
+    events: tokio::sync::Mutex<Vec<TraceRecord>>,
     gate: Arc<tokio::sync::Notify>,
     gated_once: AtomicBool,
 }
@@ -572,20 +727,1047 @@ impl GatedTraceSink {
         })
     }
 
-    /// The events recorded so far (including the gated first one, once
+    /// The records recorded so far (including the gated first one, once
     /// released), in receipt order.
-    pub async fn events(&self) -> Vec<TraceEvent> {
+    pub async fn events(&self) -> Vec<TraceRecord> {
         self.events.lock().await.clone()
     }
 }
 
 #[async_trait]
 impl TraceSink for GatedTraceSink {
-    async fn on_event(&self, event: TraceEvent) -> Result<(), TraceSinkError> {
+    async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
         if !self.gated_once.swap(true, Ordering::SeqCst) {
             self.gate.notified().await;
         }
-        self.events.lock().await.push(event);
+        self.events.lock().await.push(record);
         Ok(())
+    }
+}
+
+/// A [`TraceSink`] test double that PANICS on its `panic_on_nth`-th call
+/// (1-indexed) and records every call it actually reaches (D-08): proves a
+/// panicking sink is caught by `TraceDispatcher`'s `catch_unwind`, counted in
+/// `sink_panics`, and never kills the consumer task -- records after the
+/// panic still arrive.
+pub struct PanickingTraceSink {
+    panic_on_nth: usize,
+    calls: AtomicUsize,
+    events: tokio::sync::Mutex<Vec<TraceRecord>>,
+}
+
+impl PanickingTraceSink {
+    /// Construct a sink that panics on its `panic_on_nth`-th call
+    /// (1-indexed); every other call records normally.
+    pub fn new(panic_on_nth: usize) -> Arc<Self> {
+        Arc::new(Self {
+            panic_on_nth,
+            calls: AtomicUsize::new(0),
+            events: tokio::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The records this sink actually recorded (excludes the panicking
+    /// call), in receipt order.
+    pub async fn events(&self) -> Vec<TraceRecord> {
+        self.events.lock().await.clone()
+    }
+}
+
+#[async_trait]
+impl TraceSink for PanickingTraceSink {
+    async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if call == self.panic_on_nth {
+            panic!("PanickingTraceSink: simulated panic on call {call}");
+        }
+        self.events.lock().await.push(record);
+        Ok(())
+    }
+}
+
+// --- Plan 25-01: Aegis retry loop test doubles ---------------------------
+
+/// A [`StateNode`] test double that fails with a fixed message on its first
+/// `fail_until_attempt - 1` runs, then succeeds on and after
+/// `fail_until_attempt` (1-indexed), for exercising the Aegis retry loop's
+/// "fails once, retries in place, run completes" path
+/// (`transient_function_node_failure_is_retried_and_run_completes`). Records
+/// the run count and each run's Battlefield snapshot pointer, mirroring
+/// [`CountingFunctionNode`]'s own snapshot-identity assertions.
+pub struct FailThenSucceedNode {
+    fail_until_attempt: usize,
+    message: String,
+    field: paladin_core::platform::container::battlefield::FieldName,
+    success_value: serde_json::Value,
+    run_count: Arc<AtomicUsize>,
+    observed_snapshots: Arc<Mutex<Vec<Battlefield>>>,
+}
+
+impl FailThenSucceedNode {
+    /// Construct a node that fails (with `message`) on every run before its
+    /// `fail_until_attempt`-th (1-indexed), then succeeds by writing
+    /// `success_value` to `field`. A failing run's `StateNode::run` returns
+    /// `Err` with no `Directive` at all -- so no delta from a failing
+    /// attempt can ever reach the merge on any code path
+    /// (`failed_attempt_delta_never_reaches_the_battlefield` proves this
+    /// end-to-end: the merged Battlefield after the run contains only the
+    /// succeeding attempt's `success_value`, never any earlier attempt's
+    /// state).
+    pub fn new(
+        fail_until_attempt: usize,
+        message: impl Into<String>,
+        field: paladin_core::platform::container::battlefield::FieldName,
+        success_value: serde_json::Value,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            fail_until_attempt,
+            message: message.into(),
+            field,
+            success_value,
+            run_count: Arc::new(AtomicUsize::new(0)),
+            observed_snapshots: Arc::new(Mutex::new(Vec::new())),
+        })
+    }
+
+    /// How many times this node has run so far (across every attempt).
+    pub fn run_count(&self) -> usize {
+        self.run_count.load(Ordering::SeqCst)
+    }
+
+    /// The Battlefield snapshot observed on each run, in run order --
+    /// `each_attempt_reads_an_identical_battlefield_snapshot` compares
+    /// these for equality (never identity: each attempt clones the same
+    /// underlying data out of the shared `Arc<Battlefield>`, D-14).
+    pub fn observed_snapshots(&self) -> Vec<Battlefield> {
+        self.observed_snapshots.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for FailThenSucceedNode {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        let run_index = self.run_count.fetch_add(1, Ordering::SeqCst) + 1;
+        self.observed_snapshots.lock().unwrap().push(state.clone());
+        if run_index < self.fail_until_attempt {
+            return Err(StateNodeError(self.message.clone()));
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), self.success_value.clone());
+        Ok(delta.into())
+    }
+}
+
+/// A [`NodeInterceptor`] test double recording every `before`/`after` call,
+/// in receipt order, for
+/// `interceptors_run_once_per_attempt_not_once_per_node` to assert the exact
+/// `before, after, before, after, ...` sequence a 2-attempt retry produces.
+/// Always decides `Proceed`.
+#[derive(Default)]
+pub struct RecordingInterceptor {
+    calls: Mutex<Vec<&'static str>>,
+}
+
+impl RecordingInterceptor {
+    /// Construct a recorder with no calls yet.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// The ordered call log: `"before"`/`"after"` per hook invocation.
+    pub fn calls(&self) -> Vec<&'static str> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl NodeInterceptor for RecordingInterceptor {
+    async fn before(&self, _ctx: &NodeContext, _state: &Battlefield) -> InterceptDecision {
+        self.calls.lock().unwrap().push("before");
+        InterceptDecision::Proceed
+    }
+
+    async fn after(&self, _ctx: &NodeContext, _delta: &mut StateDelta) {
+        self.calls.lock().unwrap().push("after");
+    }
+}
+
+/// A [`NodeInterceptor`] test double whose `before` always returns a fixed
+/// decision, for `interceptor_fail_decision_is_not_retried`'s
+/// `InterceptDecision::Fail`/`Skip` cases. Records how many times `before`
+/// was called, so a test can assert the decision was reached exactly once
+/// (never retried).
+pub struct FixedDecisionInterceptor {
+    decision_fn: Arc<dyn Fn() -> InterceptDecision + Send + Sync>,
+    before_calls: Arc<AtomicUsize>,
+}
+
+impl FixedDecisionInterceptor {
+    /// Construct an interceptor whose `before` always returns
+    /// `decision_fn()`'s result.
+    pub fn new(decision_fn: impl Fn() -> InterceptDecision + Send + Sync + 'static) -> Arc<Self> {
+        Arc::new(Self {
+            decision_fn: Arc::new(decision_fn),
+            before_calls: Arc::new(AtomicUsize::new(0)),
+        })
+    }
+
+    /// How many times `before` has been called.
+    pub fn before_call_count(&self) -> usize {
+        self.before_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl NodeInterceptor for FixedDecisionInterceptor {
+    async fn before(&self, _ctx: &NodeContext, _state: &Battlefield) -> InterceptDecision {
+        self.before_calls.fetch_add(1, Ordering::SeqCst);
+        (self.decision_fn)()
+    }
+
+    async fn after(&self, _ctx: &NodeContext, _delta: &mut StateDelta) {}
+}
+
+// --- Phase 25 Plan 07: per-task Muster retry doubles (D-17) ---------------
+
+/// One observed call of a [`MusterFailThenSucceedWorker`]: the task's
+/// `task_key`, when (on the tokio clock) the call started, and how many
+/// `save`s the observed [`RecordingWaypointStore`] had received by then.
+#[derive(Debug, Clone)]
+pub struct WorkerCall {
+    /// The `ctx.task_key()` the call ran under.
+    pub task_key: String,
+    /// The tokio-clock instant the call started (paused-clock friendly).
+    pub at: tokio::time::Instant,
+    /// `RecordingWaypointStore::save_call_count()` at call start, or `0`
+    /// with no observed store.
+    pub saves_seen: usize,
+}
+
+/// A Muster worker-template [`StateNode`] test double keyed by
+/// `ctx.task_key()`: each task fails (with `StateNodeError("transient")`)
+/// on its first `failures[task_key]` runs and succeeds afterwards by
+/// appending its own key to `field`; every other key succeeds at once.
+/// Records a per-key run count and an ordered log of every call, so a test
+/// can assert that one task's retries never re-ran or delayed a sibling
+/// (FT-FR-06) and that no Waypoint was written between attempts (FT-FR-07).
+pub struct MusterFailThenSucceedWorker {
+    field: FieldName,
+    failures: HashMap<String, usize>,
+    counts: Mutex<HashMap<String, usize>>,
+    calls: Mutex<Vec<WorkerCall>>,
+    observed_store: Option<Arc<RecordingWaypointStore>>,
+}
+
+impl MusterFailThenSucceedWorker {
+    /// Construct a worker whose tasks named in `failures` fail that many
+    /// times before succeeding, optionally observing `store`'s save count
+    /// at every call.
+    pub fn new(
+        field: FieldName,
+        failures: impl IntoIterator<Item = (&'static str, usize)>,
+        observed_store: Option<Arc<RecordingWaypointStore>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            failures: failures
+                .into_iter()
+                .map(|(k, n)| (k.to_string(), n))
+                .collect(),
+            counts: Mutex::new(HashMap::new()),
+            calls: Mutex::new(Vec::new()),
+            observed_store,
+        })
+    }
+
+    /// How many times the task keyed `task_key` has run so far.
+    pub fn run_count(&self, task_key: &str) -> usize {
+        self.counts
+            .lock()
+            .unwrap()
+            .get(task_key)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Every call so far, in call order.
+    pub fn calls(&self) -> Vec<WorkerCall> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for MusterFailThenSucceedWorker {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        let key = ctx.task_key().unwrap_or_default().to_string();
+        let run_index = {
+            let mut counts = self.counts.lock().unwrap();
+            let count = counts.entry(key.clone()).or_insert(0);
+            *count += 1;
+            *count
+        };
+        self.calls.lock().unwrap().push(WorkerCall {
+            task_key: key.clone(),
+            at: tokio::time::Instant::now(),
+            saves_seen: self
+                .observed_store
+                .as_ref()
+                .map(|s| s.save_call_count())
+                .unwrap_or(0),
+        });
+        if run_index <= self.failures.get(&key).copied().unwrap_or(0) {
+            return Err(StateNodeError("transient".to_string()));
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), serde_json::json!(key));
+        Ok(delta.into())
+    }
+}
+
+/// A vanguard [`StateNode`] test double that fails on every run before its
+/// `fail_until_attempt`-th (1-indexed), records the observed
+/// [`RecordingWaypointStore`] save count at the start of EVERY run (so a
+/// test can assert no Waypoint was written between two attempts,
+/// FT-FR-07), and can cancel a run's `CancellationToken` from inside its
+/// first failing run (so a test can interrupt a run mid-backoff
+/// deterministically and prove a resume re-executes it from attempt 1).
+pub struct AttemptObservingNode {
+    fail_until_attempt: usize,
+    field: FieldName,
+    run_count: AtomicUsize,
+    saves_seen: Mutex<Vec<usize>>,
+    observed_store: Arc<RecordingWaypointStore>,
+    cancel_on_first_failure: Option<CancellationToken>,
+}
+
+impl AttemptObservingNode {
+    /// Construct a node that fails before its `fail_until_attempt`-th run,
+    /// observing `store`'s save count on every run, and cancelling
+    /// `cancel_on_first_failure` (if given) from inside its first failing
+    /// run.
+    pub fn new(
+        fail_until_attempt: usize,
+        field: FieldName,
+        observed_store: Arc<RecordingWaypointStore>,
+        cancel_on_first_failure: Option<CancellationToken>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            fail_until_attempt,
+            field,
+            run_count: AtomicUsize::new(0),
+            saves_seen: Mutex::new(Vec::new()),
+            observed_store,
+            cancel_on_first_failure,
+        })
+    }
+
+    /// How many times this node has run so far, across every attempt and
+    /// every run of the thread.
+    pub fn run_count(&self) -> usize {
+        self.run_count.load(Ordering::SeqCst)
+    }
+
+    /// The observed store's `save_call_count()` at the start of each run,
+    /// in run order.
+    pub fn saves_seen(&self) -> Vec<usize> {
+        self.saves_seen.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for AttemptObservingNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        let run_index = self.run_count.fetch_add(1, Ordering::SeqCst) + 1;
+        self.saves_seen
+            .lock()
+            .unwrap()
+            .push(self.observed_store.save_call_count());
+        if run_index < self.fail_until_attempt {
+            if run_index == 1
+                && let Some(token) = &self.cancel_on_first_failure
+            {
+                token.cancel();
+            }
+            return Err(StateNodeError("transient".to_string()));
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), serde_json::json!("recovered"));
+        Ok(delta.into())
+    }
+}
+
+// --- Phase 25 Plan 09: heartbeat / execute_observed test doubles ------------
+
+/// A [`StateNode`] test double for plan 25-09 (D-18): on every run it
+/// records the `ctx.attempt` it observed, beats `ctx.heartbeat()`
+/// `beats_per_run` times, and fails with a `StateNodeError` until its
+/// `fail_until_attempt`-th run -- so a test can prove both that
+/// `heartbeat()` on a node with no `idle_timeout` is a harmless no-op, and
+/// that `NodeContext.attempt` really is the 1-indexed attempt number the
+/// retry loop is on.
+pub struct HeartbeatingNode {
+    fail_until_attempt: u32,
+    beats_per_run: usize,
+    field: FieldName,
+    observed_attempts: Mutex<Vec<u32>>,
+}
+
+impl HeartbeatingNode {
+    /// Construct a node that beats `beats_per_run` times per run and fails
+    /// before its `fail_until_attempt`-th run (`1` never fails).
+    pub fn new(fail_until_attempt: u32, beats_per_run: usize, field: FieldName) -> Arc<Self> {
+        Arc::new(Self {
+            fail_until_attempt,
+            beats_per_run,
+            field,
+            observed_attempts: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Every `ctx.attempt` value this node observed, in run order.
+    pub fn observed_attempts(&self) -> Vec<u32> {
+        self.observed_attempts.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for HeartbeatingNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        self.observed_attempts.lock().unwrap().push(ctx.attempt);
+        for _ in 0..self.beats_per_run {
+            ctx.heartbeat();
+        }
+        if ctx.attempt < self.fail_until_attempt {
+            return Err(StateNodeError("transient".to_string()));
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), serde_json::json!("done"));
+        Ok(delta.into())
+    }
+}
+
+/// A [`PaladinPort`] test double for plan 25-09 (D-19) that overrides
+/// `execute_observed` and counts, separately, how many times the engine
+/// invoked `execute_observed` versus `execute` directly -- the double the
+/// engine-always-calls-`execute_observed` test asserts against. Beats the
+/// supplied handle once per `execute_observed` call so a test can also see
+/// the beat reach the engine's timer.
+#[derive(Default)]
+pub struct ObservedCallRecordingPort {
+    observed_calls: AtomicUsize,
+    direct_calls: AtomicUsize,
+}
+
+impl ObservedCallRecordingPort {
+    /// Construct a port with both counters at zero.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// How many times `execute_observed` was called.
+    pub fn observed_calls(&self) -> usize {
+        self.observed_calls.load(Ordering::SeqCst)
+    }
+
+    /// How many times `execute` was called directly (never through the
+    /// `execute_observed` default body, which this double overrides).
+    pub fn direct_calls(&self) -> usize {
+        self.direct_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl PaladinPort for ObservedCallRecordingPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.direct_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(PaladinResult {
+            output: "direct".to_string(),
+            ..Default::default()
+        })
+    }
+
+    async fn execute_observed(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+        heartbeat: &HeartbeatHandle,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.observed_calls.fetch_add(1, Ordering::SeqCst);
+        heartbeat.beat();
+        Ok(PaladinResult {
+            output: "observed".to_string(),
+            ..Default::default()
+        })
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("ObservedCallRecordingPort only supports execute_observed()")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+// --- Phase 25 Plan 09 Task 2: paused-clock-friendly timeout doubles ---------
+
+/// A scriptable [`PaladinPort`] for plan 25-09's idle-vs-run tests
+/// (FT-FR-09, D-19): on every `execute_observed` call it sleeps
+/// `beat_every`, beats the handle, repeats that `beats` times, then sleeps
+/// `then_stall` WITHOUT beating, and finally returns `output`. Every sleep
+/// is a `tokio::time::sleep`, so under `#[tokio::test(start_paused = true)]`
+/// the whole schedule is driven by the virtual clock -- "beats every 100 ms
+/// for 2 s" and "beats then stalls 300 ms" are both exact, never racy.
+pub struct BeatingPaladinPort {
+    beat_every: std::time::Duration,
+    beats: usize,
+    then_stall: std::time::Duration,
+    output: String,
+    calls: AtomicUsize,
+}
+
+impl BeatingPaladinPort {
+    /// Construct a port that beats every `beat_every` for `beats` beats,
+    /// then stalls `then_stall` silently, then returns `output`.
+    pub fn new(
+        beat_every: std::time::Duration,
+        beats: usize,
+        then_stall: std::time::Duration,
+        output: impl Into<String>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            beat_every,
+            beats,
+            then_stall,
+            output: output.into(),
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    /// How many times `execute_observed` (or `execute`) has been called --
+    /// i.e. how many attempts the engine made.
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+
+    async fn play(&self, heartbeat: Option<&HeartbeatHandle>) -> PaladinResult {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        for _ in 0..self.beats {
+            tokio::time::sleep(self.beat_every).await;
+            if let Some(heartbeat) = heartbeat {
+                heartbeat.beat();
+            }
+        }
+        tokio::time::sleep(self.then_stall).await;
+        PaladinResult {
+            output: self.output.clone(),
+            ..Default::default()
+        }
+    }
+}
+
+#[async_trait]
+impl PaladinPort for BeatingPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        Ok(self.play(None).await)
+    }
+
+    async fn execute_observed(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+        heartbeat: &HeartbeatHandle,
+    ) -> Result<PaladinResult, PaladinError> {
+        Ok(self.play(Some(heartbeat)).await)
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("BeatingPaladinPort only supports execute_observed()")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// A scriptable [`StateNode`] for plan 25-09's per-attempt timeout tests:
+/// attempt `n` holds for `attempts[n - 1].0` (the LAST entry repeats for
+/// any later attempt), optionally beating `ctx.heartbeat()` every
+/// `beat_every` while it holds, then writes `attempts[n - 1].1` to `field`.
+/// A timed-out attempt is cancelled mid-hold and never reaches its write,
+/// which is exactly what "partial work is discarded" tests observe. Every
+/// wait is a `tokio::time::sleep`, so the paused clock drives it.
+pub struct TimedFunctionNode {
+    field: FieldName,
+    attempts: Vec<(std::time::Duration, serde_json::Value)>,
+    beat_every: Option<std::time::Duration>,
+    observed_attempts: Mutex<Vec<u32>>,
+}
+
+impl TimedFunctionNode {
+    /// Construct a node scripted per attempt. `attempts` must be non-empty.
+    pub fn new(
+        field: FieldName,
+        attempts: Vec<(std::time::Duration, serde_json::Value)>,
+        beat_every: Option<std::time::Duration>,
+    ) -> Arc<Self> {
+        assert!(
+            !attempts.is_empty(),
+            "TimedFunctionNode needs at least one attempt script"
+        );
+        Arc::new(Self {
+            field,
+            attempts,
+            beat_every,
+            observed_attempts: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Every `ctx.attempt` this node observed, in run order.
+    pub fn observed_attempts(&self) -> Vec<u32> {
+        self.observed_attempts.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for TimedFunctionNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        self.observed_attempts.lock().unwrap().push(ctx.attempt);
+        let index = (ctx.attempt.max(1) as usize - 1).min(self.attempts.len() - 1);
+        let (hold, value) = &self.attempts[index];
+        match self.beat_every {
+            Some(beat_every) if !beat_every.is_zero() => {
+                let mut elapsed = std::time::Duration::ZERO;
+                while elapsed < *hold {
+                    let slice = beat_every.min(*hold - elapsed);
+                    tokio::time::sleep(slice).await;
+                    elapsed += slice;
+                    ctx.heartbeat();
+                }
+            }
+            _ => tokio::time::sleep(*hold).await,
+        }
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), value.clone());
+        Ok(delta.into())
+    }
+}
+
+// --- Phase 25 Plan 10: error-handler test doubles (D-21, D-13) -------------
+
+/// A [`StateNode`] test double that always fails with a fixed message
+/// (like [`FailingFunctionNode`]) but ALSO counts its runs, so a test can
+/// assert exactly how many attempts ran before an `on_error` handler was
+/// entered (FT-FR-05: a handler runs only after retries exhaust, never
+/// while attempts remain).
+pub struct PermanentlyFailingNode {
+    message: String,
+    runs: AtomicUsize,
+}
+
+impl PermanentlyFailingNode {
+    /// Construct a node that always returns `StateNodeError(message)`.
+    pub fn new(message: impl Into<String>) -> Arc<Self> {
+        Arc::new(Self {
+            message: message.into(),
+            runs: AtomicUsize::new(0),
+        })
+    }
+
+    /// How many times this node has run (every attempt counts).
+    pub fn run_count(&self) -> usize {
+        self.runs.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl StateNode for PermanentlyFailingNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        Err(StateNodeError(self.message.clone()))
+    }
+}
+
+/// A recovery-node [`StateNode`] test double for the `Route` handler tests:
+/// records whether (and how often) it ran, the Battlefield snapshot it
+/// observed on each run (cloned, so a test can assert the routed error was
+/// visible to it), and writes `value` to `field` on every run.
+pub struct RecoveryNode {
+    field: FieldName,
+    value: serde_json::Value,
+    runs: AtomicUsize,
+    observed: Mutex<Vec<Battlefield>>,
+}
+
+impl RecoveryNode {
+    /// Construct a recovery node writing `value` to `field` when it runs.
+    pub fn new(field: FieldName, value: serde_json::Value) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            value,
+            runs: AtomicUsize::new(0),
+            observed: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Whether this node has run at least once.
+    pub fn ran(&self) -> bool {
+        self.run_count() > 0
+    }
+
+    /// How many times this node has run.
+    pub fn run_count(&self) -> usize {
+        self.runs.load(Ordering::SeqCst)
+    }
+
+    /// The Battlefield snapshot observed on each run, in run order.
+    pub fn observed(&self) -> Vec<Battlefield> {
+        self.observed.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl StateNode for RecoveryNode {
+    async fn run(
+        &self,
+        state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        self.observed.lock().unwrap().push(state.clone());
+        let mut delta = StateDelta::new();
+        delta.set_raw(self.field.clone(), self.value.clone());
+        Ok(delta.into())
+    }
+}
+
+/// The reply a [`RecordingErrorHandler`] gives on every invocation.
+pub type HandlerReply =
+    dyn Fn(&NodeError, &Battlefield) -> Result<Directive, NodeError> + Send + Sync;
+
+/// An [`ErrorHandler`] test double for `ErrorHandlerSpec::Custom` (D-13):
+/// counts its invocations, records every `NodeError` it was handed and a
+/// clone of the `Battlefield` it observed alongside it, and replies with
+/// whatever the caller-supplied closure returns -- one double serves every
+/// `NextStep` arm (`Edges`/`Goto`/`End`/`Parley`/`Muster`) and the
+/// always-erroring case alike.
+pub struct RecordingErrorHandler {
+    invocations: AtomicUsize,
+    seen: Mutex<Vec<(NodeError, Battlefield)>>,
+    reply: Box<HandlerReply>,
+}
+
+impl RecordingErrorHandler {
+    /// Construct a handler replying with `reply(err, state)` on every
+    /// invocation.
+    pub fn new(
+        reply: impl Fn(&NodeError, &Battlefield) -> Result<Directive, NodeError> + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            invocations: AtomicUsize::new(0),
+            seen: Mutex::new(Vec::new()),
+            reply: Box::new(reply),
+        })
+    }
+
+    /// Convenience: a handler that always replies with the same
+    /// `Directive`.
+    pub fn replying(directive: Directive) -> Arc<Self> {
+        Self::new(move |_err, _state| Ok(directive.clone()))
+    }
+
+    /// Convenience: a handler that always fails with `error`.
+    pub fn erroring(error: NodeError) -> Arc<Self> {
+        Self::new(move |_err, _state| Err(error.clone()))
+    }
+
+    /// How many times `handle` has been called.
+    pub fn invocation_count(&self) -> usize {
+        self.invocations.load(Ordering::SeqCst)
+    }
+
+    /// Every `(NodeError, Battlefield)` pair observed, in invocation order.
+    pub fn seen(&self) -> Vec<(NodeError, Battlefield)> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl ErrorHandler for RecordingErrorHandler {
+    async fn handle(&self, err: &NodeError, state: &Battlefield) -> Result<Directive, NodeError> {
+        self.invocations.fetch_add(1, Ordering::SeqCst);
+        self.seen.lock().unwrap().push((err.clone(), state.clone()));
+        (self.reply)(err, state)
+    }
+}
+
+// --- Phase 25 Plan 11: handler-raised Parley doubles (D-23) ---------------
+
+impl RecordingErrorHandler {
+    /// Convenience: a handler that always asks a human -- replies
+    /// `NextStep::Parley(request)` with an empty delta, the scripted
+    /// `ParleyRequest` cloned verbatim on every invocation (the engine
+    /// re-stamps `node_id` from the failed node regardless, HITL-01).
+    pub fn parleying(request: ParleyRequest) -> Arc<Self> {
+        Self::new(move |_err, _state| {
+            Ok(Directive {
+                delta: StateDelta::new(),
+                next: NextStep::Parley(request.clone()),
+            })
+        })
+    }
+}
+
+/// A [`StateNode`] test double for the handler-raised Parley tests (D-23):
+/// fails with `StateNodeError(message)` on every run whose
+/// `ctx.parley_response()` is `None` -- the raising visit and every retry
+/// attempt of it -- and, unless constructed `always_failing`, succeeds on
+/// the post-resume visit by writing the delivered response value to
+/// `field`. Records `(ctx.attempt, parley_response value)` for EVERY run,
+/// so a test can assert the post-resume re-run is a fresh attempt 1 with
+/// the answer in scope (Phase 24 D-07/D-08) and that a suspension spent no
+/// retry budget (FT-FR-05).
+pub struct ParleyObservingNode {
+    field: FieldName,
+    message: String,
+    always_failing: bool,
+    runs: Mutex<Vec<(u32, Option<serde_json::Value>)>>,
+}
+
+impl ParleyObservingNode {
+    /// Construct a node that fails until answered, then writes the answer
+    /// to `field`.
+    pub fn new(field: FieldName, message: impl Into<String>) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            message: message.into(),
+            always_failing: false,
+            runs: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Construct a node that fails on EVERY run, answered or not -- so a
+    /// post-resume re-run exhausts its retry budget again and reaches its
+    /// handler a second time.
+    pub fn always_failing(field: FieldName, message: impl Into<String>) -> Arc<Self> {
+        Arc::new(Self {
+            field,
+            message: message.into(),
+            always_failing: true,
+            runs: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Every run so far as `(attempt, parley_response value)`, in run
+    /// order.
+    pub fn runs(&self) -> Vec<(u32, Option<serde_json::Value>)> {
+        self.runs.lock().unwrap().clone()
+    }
+
+    /// The `ctx.attempt` of every run so far, in run order.
+    pub fn observed_attempts(&self) -> Vec<u32> {
+        self.runs()
+            .into_iter()
+            .map(|(attempt, _)| attempt)
+            .collect()
+    }
+}
+
+#[async_trait]
+impl StateNode for ParleyObservingNode {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        let answer = ctx.parley_response().map(|r| r.value.clone());
+        self.runs
+            .lock()
+            .unwrap()
+            .push((ctx.attempt, answer.clone()));
+        match answer {
+            Some(value) if !self.always_failing => {
+                let mut delta = StateDelta::new();
+                delta.set_raw(self.field.clone(), value);
+                Ok(delta.into())
+            }
+            _ => Err(StateNodeError(self.message.clone())),
+        }
+    }
+}
+
+// --- Phase 25 Plan 13: the node-cache test double -------------------------
+
+/// One [`RecordingNodeCache`] entry: the [`CachedDelta`] a `get` returns,
+/// plus the paused-clock-driven expiry the double itself enforces.
+struct RecordedEntry {
+    cached: CachedDelta,
+    /// Expiry on tokio's clock (`tokio::time::Instant`), so a
+    /// `#[tokio::test(start_paused = true)]` test can elapse a TTL with
+    /// `tokio::time::advance` instead of a wall-clock sleep -- the same
+    /// paused-clock idiom `engine::retry`'s tests established.
+    expires: tokio::time::Instant,
+}
+
+/// An in-crate [`NodeCachePort`] test double (plan 25-13, RESEARCH.md's
+/// discretion note: a `HashMap`-backed recording mock rather than a
+/// `paladin-storage` dev-dependency): records every `get`/`put`, can be
+/// pre-populated, can fail every `get` or every `put` on demand, and can
+/// move an entry's `expires_at` so the engine's own closed-boundary check
+/// is exercised independently of the backend's.
+#[derive(Default)]
+pub struct RecordingNodeCache {
+    entries: Mutex<HashMap<NodeCacheKey, RecordedEntry>>,
+    puts: Mutex<Vec<(NodeCacheKey, StateDelta, std::time::Duration)>>,
+    gets: AtomicUsize,
+    fail_gets: AtomicBool,
+    fail_puts: AtomicBool,
+}
+
+impl RecordingNodeCache {
+    /// Construct an empty cache.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Make every subsequent `get` return `NodeCacheError::Backend`.
+    pub fn fail_gets(&self) {
+        self.fail_gets.store(true, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent `put` return `NodeCacheError::Backend`.
+    pub fn fail_puts(&self) {
+        self.fail_puts.store(true, Ordering::SeqCst);
+    }
+
+    /// How many `get` calls have been made (hits, misses and failures).
+    pub fn get_count(&self) -> usize {
+        self.gets.load(Ordering::SeqCst)
+    }
+
+    /// How many `put` calls have been made (including failed ones).
+    pub fn put_count(&self) -> usize {
+        self.puts.lock().unwrap().len()
+    }
+
+    /// Every `put` call so far, in order: `(key, delta, ttl)`.
+    pub fn puts(&self) -> Vec<(NodeCacheKey, StateDelta, std::time::Duration)> {
+        self.puts.lock().unwrap().clone()
+    }
+
+    /// Every key currently stored, sorted.
+    pub fn keys(&self) -> Vec<NodeCacheKey> {
+        let mut keys: Vec<NodeCacheKey> = self.entries.lock().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    /// Rewrite EVERY stored entry's `expires_at` to `expires_at`, leaving
+    /// the double's own paused-clock expiry untouched -- so the backend
+    /// still serves the entry and ONLY the engine's `is_expired_at` check
+    /// decides (the engine-side counterpart of plan 25-04's closed-boundary
+    /// contract case).
+    pub fn set_expires_at_for_all(&self, expires_at: DateTime<Utc>) {
+        for entry in self.entries.lock().unwrap().values_mut() {
+            entry.cached.expires_at = expires_at;
+        }
+    }
+}
+
+#[async_trait]
+impl NodeCachePort for RecordingNodeCache {
+    async fn get(&self, key: &NodeCacheKey) -> Result<Option<CachedDelta>, NodeCacheError> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+        if self.fail_gets.load(Ordering::SeqCst) {
+            return Err(NodeCacheError::Backend {
+                source: Box::<dyn std::error::Error + Send + Sync>::from(
+                    "simulated get failure (RecordingNodeCache::fail_gets)",
+                ),
+            });
+        }
+        let entries = self.entries.lock().unwrap();
+        Ok(entries
+            .get(key)
+            // Closed boundary on the double's own clock, mirroring the
+            // real backends: at or past `expires` is a miss.
+            .filter(|entry| tokio::time::Instant::now() < entry.expires)
+            .map(|entry| entry.cached.clone()))
+    }
+
+    async fn put(
+        &self,
+        key: &NodeCacheKey,
+        delta: &StateDelta,
+        ttl: std::time::Duration,
+    ) -> Result<(), NodeCacheError> {
+        self.puts
+            .lock()
+            .unwrap()
+            .push((key.clone(), delta.clone(), ttl));
+        if self.fail_puts.load(Ordering::SeqCst) {
+            return Err(NodeCacheError::Backend {
+                source: Box::<dyn std::error::Error + Send + Sync>::from(
+                    "simulated put failure (RecordingNodeCache::fail_puts)",
+                ),
+            });
+        }
+        let stored_at = Utc::now();
+        let expires_at = stored_at
+            + chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::days(36_500));
+        self.entries.lock().unwrap().insert(
+            key.clone(),
+            RecordedEntry {
+                cached: CachedDelta::new(delta.clone(), stored_at, expires_at),
+                expires: tokio::time::Instant::now() + ttl,
+            },
+        );
+        Ok(())
+    }
+
+    async fn invalidate(&self, prefix: &str) -> Result<u64, NodeCacheError> {
+        let mut entries = self.entries.lock().unwrap();
+        let before = entries.len();
+        entries.retain(|key, _| !key.starts_with(prefix));
+        Ok((before - entries.len()) as u64)
     }
 }

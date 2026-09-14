@@ -33,9 +33,7 @@ use crate::core::platform::container::prompt::{PromptItem, PromptType, UserPromp
 use log::info;
 use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use uuid::Uuid;
 
 /// Service for LLM-based autonomous task planning and execution
 ///
@@ -126,14 +124,7 @@ impl PlanningService {
         let prompt_item = PromptItem::new(PromptType::User(user_prompt))
             .map_err(|e| PlanningError::GenerationFailed(e.to_string()))?;
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: model.to_string(),
-            prompt: prompt_item,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new(model.to_string(), prompt_item);
 
         let response = self
             .llm_port
@@ -307,14 +298,7 @@ impl PlanningService {
             stop_sequences: None,
         });
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: model.to_string(),
-            prompt: prompt_item,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new(model.to_string(), prompt_item);
 
         let response = self
             .llm_port
@@ -547,14 +531,7 @@ Execute this subtask and provide the result. Be concise and focused on the expec
             stop_sequences: None,
         });
 
-        let request = LlmRequest {
-            id: Uuid::new_v4(),
-            model: model.to_string(),
-            prompt: prompt_item,
-            attachments: vec![],
-            stream: false,
-            metadata: HashMap::new(),
-        };
+        let request = LlmRequest::new(model.to_string(), prompt_item);
 
         let response = self
             .llm_port
@@ -574,6 +551,8 @@ mod tests {
     use paladin_ports::output::llm_port::{
         FinishReason, LlmError, LlmResponse, ProviderCapabilities, TokenUsage,
     };
+    use std::collections::HashMap;
+    use uuid::Uuid;
 
     /// Mock LLM port for testing
     struct MockLlmPort {

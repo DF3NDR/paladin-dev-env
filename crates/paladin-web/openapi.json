@@ -11,7 +11,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.9.0"
+    "version": "0.10.0"
   },
   "paths": {
     "/v1/agents": {
@@ -646,6 +646,2270 @@
           }
         ]
       }
+    },
+    "/v1/assistants": {
+      "get": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`GET /assistants` -- paginated list, merged with synthetic code-registry entries\n(D-32). Authenticated, any role.",
+        "description": "Returns `200 OK` with [`AssistantListResponse`] on success, or `501 Not Implemented`\nif no assistant admin backend is configured.",
+        "operationId": "list_assistants",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return (at most 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of assistants, merged with synthetic code-registry entries when expose_code_registry is on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "limit exceeds 100",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`POST /assistants` -- create a brand-new assistant (admin).",
+        "description": "Returns:\n- `201 Created` with [`AssistantVersionResponse`] on success;\n- `400 Bad Request` for an invalid `assistant_id`, an unknown `kind`, or a definition\n  that fails validation (D-31) -- `error.details.violations` is a non-empty,\n  machine-readable list; nothing is persisted;\n- `401`/`403` per the module-level authorization docs;\n- `409 Conflict` (`already_exists`, or `code_registered_immutable` if `assistant_id`\n  is code-registered);\n- `501 Not Implemented` if no assistant admin backend is configured.",
+        "operationId": "create_assistant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAssistantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Assistant created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantVersionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assistant id, unknown kind, or a definition that fails validation -- violations in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_exists, or code_registered_immutable if the id is code-registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/assistants/{assistant_id}": {
+      "get": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`GET /assistants/{id}` -- one assistant, falling back to a synthetic code-registry\nentry (D-32) when not found in the stored repository. Authenticated, any role.",
+        "description": "Returns:\n- `200 OK` with [`AssistantResponse`] on success;\n- `400 Bad Request` for an invalid id;\n- `404 Not Found` if `id` is neither stored nor code-registered;\n- `501 Not Implemented` if no assistant admin backend is configured.",
+        "operationId": "get_assistant",
+        "parameters": [
+          {
+            "name": "assistant_id",
+            "in": "path",
+            "description": "Assistant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assistant id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`DELETE /assistants/{id}` -- soft-delete (admin).",
+        "description": "Returns:\n- `204 No Content` on success;\n- `400 Bad Request` for an invalid id;\n- `401`/`403` per the module-level authorization docs;\n- `404 Not Found` if `id` does not exist;\n- `409 Conflict` (`code_registered_immutable`) if `id` is code-registered;\n- `501 Not Implemented` if no assistant admin backend is configured.",
+        "operationId": "delete_assistant",
+        "parameters": [
+          {
+            "name": "assistant_id",
+            "in": "path",
+            "description": "Assistant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "Invalid assistant id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "code_registered_immutable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/assistants/{assistant_id}/versions": {
+      "get": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`GET /assistants/{id}/versions` -- paginated version history, ascending by `version`\n(PLAT-FR-10 changelog). Authenticated, any role.",
+        "operationId": "list_versions",
+        "parameters": [
+          {
+            "name": "assistant_id",
+            "in": "path",
+            "description": "Assistant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return (at most 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of versions, ascending by version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantVersionListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assistant id, or limit exceeds 100",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`POST /assistants/{id}/versions` -- publish a new version (admin).",
+        "description": "Returns:\n- `201 Created` with [`AssistantVersionResponse`] on success;\n- `400 Bad Request` for an invalid id or a definition that fails validation (D-31);\n- `401`/`403` per the module-level authorization docs;\n- `404 Not Found` if `assistant_id` does not exist;\n- `409 Conflict` (`code_registered_immutable`, or `version_conflict` if the\n  repository's own retry budget for a concurrent-publish race is exhausted);\n- `501 Not Implemented` if no assistant admin backend is configured.",
+        "operationId": "create_version",
+        "parameters": [
+          {
+            "name": "assistant_id",
+            "in": "path",
+            "description": "Assistant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Version published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantVersionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assistant id or a definition that fails validation -- violations in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "code_registered_immutable, or version_conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/assistants/{assistant_id}/versions/{version}": {
+      "get": {
+        "tags": [
+          "assistants"
+        ],
+        "summary": "`GET /assistants/{id}/versions/{version}` -- one version, falling back to a synthetic\nversion-1 response (D-32) for a code-registered id when `version == 1`. Authenticated,\nany role.",
+        "description": "Returns:\n- `200 OK` with [`AssistantVersionResponse`] on success;\n- `400 Bad Request` for an invalid id;\n- `404 Not Found` for `version == 0`, `version` above `latest`, or an unknown\n  assistant (D-29: versions are 1-based and monotonically increasing -- the router\n  itself cannot express a `PUT`, so this is the only way a client ever \"misses\");\n- `501 Not Implemented` if no assistant admin backend is configured.",
+        "operationId": "get_version",
+        "parameters": [
+          {
+            "name": "assistant_id",
+            "in": "path",
+            "description": "Assistant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "description": "1-based version number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantVersionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid assistant id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "version 0, version above latest, or unknown assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No assistant admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/runs": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`GET /runs` -- paginated list, filterable by `thread_id`/`assistant_id`/\n`status` (D-47). Authenticated, any role.",
+        "description": "Ordered `(submitted_at DESC, run_id DESC)`; a cursor walk gives a stable\nordering for rows that already existed when the first page was fetched,\nbut is NOT a point-in-time snapshot -- a row inserted after the first\npage was read may be omitted from the walk (D-47 backstop). An empty\nresult set is `200 { items: [], next_cursor: null }`, never `404`.\n\nReturns:\n- `200 OK` with [`RunListResponse`] on success;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, an unparseable\n  `cursor`, an invalid `thread_id`, or an unknown `status`;\n- `501 Not Implemented` if no run store backend is configured.",
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "query",
+            "description": "Restrict to a single thread",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "assistant_id",
+            "in": "query",
+            "description": "Restrict to a single assistant",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Restrict to a single status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return, 1..=100 (default 20)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: rows inserted after the first page was fetched may be omitted",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of runs; { items: [], next_cursor: null } when empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit, cursor, thread_id, or status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run store backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`POST /runs` -- submit a run for execution.",
+        "description": "Returns:\n- `202 Accepted` with [`SubmitRunResponse`] on success;\n- `400 Bad Request` for an invalid `thread_id`;\n- `404 Not Found` for an unknown assistant or version;\n- `409 Conflict` (`code = \"thread_busy\"`) if the target thread already\n  has an active run;\n- `501 Not Implemented` if no run submission backend is configured.",
+        "operationId": "submit_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Run accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id, or webhook_url_rejected (write-time SSRF guard, D-42)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not permitted for this assistant (allowed_roles, D-46)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown assistant or version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Thread busy -- the remedy is POST /threads/{id}/resume",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run submission backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`GET /runs/{run_id}` -- the run's current status.",
+        "description": "Reads [`RunRepositoryPort`] directly (no submission port, no engine and\nno queue type named here -- ADR-0031, D-12).\n\nReturns:\n- `200 OK` with [`RunResponse`] on success;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` if no run exists with that id;\n- `501 Not Implemented` if no run store is configured.",
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid run id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run store backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/cancel": {
+      "post": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`POST /runs/{run_id}/cancel` -- idempotently request cancellation\n(D-16, D-46).",
+        "description": "Invocation-shaped: any authenticated principal, subject to the run's\nown assistant `allowed_roles`, checked inside\n[`RunSubmissionPort::cancel`] (`paladin-web` has no visibility into\n`allowed_roles` itself, ADR-0031).\n\nReturns:\n- `202 Accepted` with [`CancelRunResponse`] on a non-terminal run\n  (idempotent -- a second call also answers `202`);\n- `400 Bad Request` for a malformed run id;\n- `403 Forbidden` if the principal's role is not permitted;\n- `404 Not Found` for an unknown run;\n- `409 Conflict` if the run is already terminal;\n- `501 Not Implemented` if no run submission backend is configured.",
+        "operationId": "cancel_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancel accepted (idempotent on a non-terminal run)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid run id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not permitted for this run's assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run is already terminal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run submission backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/stream": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`GET /runs/{run_id}/stream` -- Server-Sent Events stream of a run's\nprogress (PLAT-FR-07, D-24..D-27).",
+        "description": "Returns:\n- `200 OK` `text/event-stream` on success, framing the seven wire events\n  this module's own docs table lists;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` if no run exists with that id;\n- `501 Not Implemented` if no run event stream backend is configured.",
+        "operationId": "stream_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events stream of the seven frozen wire events (D-25): `superstep` `{ superstep }`, `node_started` `{ superstep, node_id }`, `node_finished` `{ superstep, node_id, outcome }`, `state_delta` `{ superstep, fields, bytes }` (changed field NAMES and a byte-size count only -- never a value), `parley` `{ waypoint_id, parleys }`, `done` `{ status, waypoint_id }` and `error` `{ status, message, waypoint_id }`. Every event also carries `seq`, `at`, `mode` (`live` or `degraded`) and `dropped`. The degraded path (the run executes on another instance, or is already terminal) gives no ordering guarantee relative to the live path and may coalesce supersteps; `done`/`error` are always eventually delivered on both paths. A 15s heartbeat comment line defeats idle proxy timeouts on both paths.",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "400": {
+            "description": "Invalid run id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run event stream backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/webhook-deliveries": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "`GET /runs/{run_id}/webhook-deliveries` -- paginated delivery attempts,\nnewest-first (D-40, PLAT-FR-14). Authenticated, any role.",
+        "description": "Returns:\n- `200 OK` with [`WebhookDeliveryListResponse`] on success;\n- `400 Bad Request` for an invalid run id, `limit`, or `cursor`;\n- `501 Not Implemented` if no webhook delivery backend is configured.",
+        "operationId": "list_webhook_deliveries",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Run id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return, 1..=100 (default 20)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: deliveries recorded after the first page was fetched may be omitted",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of delivery attempts, newest-first; { items: [], next_cursor: null } when empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDeliveryListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid run id, limit, or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No webhook delivery backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/schedules": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "`GET /schedules` -- paginated list (D-47). Authenticated, any role.",
+        "description": "Returns `200 OK` with [`ScheduleListResponse`] on success, or `501 Not Implemented` if no\nschedule admin backend is configured.",
+        "operationId": "list_schedules",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return (at most 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of schedules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "limit exceeds 100",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No schedule admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "`POST /schedules` -- create a brand-new schedule (admin).",
+        "description": "Returns:\n- `201 Created` with [`ScheduleResponse`] on success;\n- `400 Bad Request` for an invalid cron, timezone, assistant reference, webhook URL\n  (write-time SSRF guard, D-42) or thread strategy -- `error.details.violations` is a\n  non-empty, machine-readable list; nothing is persisted;\n- `401`/`403` per the module-level authorization docs;\n- `501 Not Implemented` if no schedule admin backend is configured.",
+        "operationId": "create_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Schedule created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cron, timezone, assistant reference, webhook URL, or thread strategy -- violations in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No schedule admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/schedules/{schedule_id}": {
+      "get": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "`GET /schedules/{id}` -- one schedule, including `last_tick`/`next_tick`/`skipped_ticks`\n(D-39). Authenticated, any role.",
+        "description": "Returns:\n- `200 OK` with [`ScheduleResponse`] on success;\n- `400 Bad Request` for an invalid id;\n- `404 Not Found` if `id` does not exist;\n- `501 Not Implemented` if no schedule admin backend is configured.",
+        "operationId": "get_schedule",
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "description": "Schedule id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid schedule id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No schedule admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "`DELETE /schedules/{id}` -- delete (admin).",
+        "description": "Returns:\n- `204 No Content` on success;\n- `400 Bad Request` for an invalid id;\n- `401`/`403` per the module-level authorization docs;\n- `404 Not Found` if `id` does not exist;\n- `501 Not Implemented` if no schedule admin backend is configured.",
+        "operationId": "delete_schedule",
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "description": "Schedule id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "Invalid schedule id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No schedule admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "schedules"
+        ],
+        "summary": "`PATCH /schedules/{id}` -- partial update (admin). A `cron`/`timezone` change\nrecomputes `next_tick`; `enabled: false` leaves `next_tick` in place (D-39); a `webhook`\nchange re-runs the write-time SSRF guard (D-42).",
+        "description": "Returns:\n- `200 OK` with [`ScheduleResponse`] on success;\n- `400 Bad Request` for an invalid id, cron, timezone, webhook URL or thread strategy --\n  `error.details.violations` is a non-empty, machine-readable list; nothing is persisted;\n- `401`/`403` per the module-level authorization docs;\n- `404 Not Found` if `id` does not exist;\n- `501 Not Implemented` if no schedule admin backend is configured.",
+        "operationId": "patch_schedule",
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "description": "Schedule id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Schedule updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid schedule id, cron, timezone, webhook URL, or thread strategy -- violations in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown schedule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No schedule admin backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/threads": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`GET /threads` -- paginated thread list, newest-activity-first (D-45,\nD-47). Authenticated, any role.",
+        "description": "A cursor walk gives a stable ordering for threads that already existed\nwhen the first page was fetched, but is NOT a point-in-time snapshot: a\nthread whose latest waypoint was written after the first page was read\nmay be omitted from the walk (D-47 backstop).\n\nReturns:\n- `200 OK` with [`ThreadListResponse`] on success; `{ items: [],\n  next_cursor: null }` when empty;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, or an unparseable\n  `cursor`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "operationId": "list_threads",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return, 1..=100 (default 20)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: threads updated after the first page was fetched may be omitted",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of threads; { items: [], next_cursor: null } when empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid limit or cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/threads/{id}": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`GET /threads/{id}` -- one thread's summary (D-45). Authenticated, any\nrole.",
+        "description": "Returns:\n- `200 OK` with [`ThreadResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` if no Waypoint exists for `id`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "operationId": "get_thread",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thread summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`DELETE /threads/{id}` -- delete a thread's whole Waypoint history\n(admin, D-45).",
+        "description": "Returns:\n- `204 No Content` on success;\n- `400 Bad Request` for an invalid thread id;\n- `403 Forbidden` for a non-admin principal;\n- `404 Not Found` if nothing was deleted;\n- `409 Conflict` (`thread_busy`) while a run is active on the thread;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "operationId": "delete_thread",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Thread deleted"
+          },
+          "400": {
+            "description": "Invalid thread id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Nothing was deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Thread busy -- a run is active on this thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/threads/{id}/fork": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`POST /threads/{id}/fork` -- submit a NEW run that continues the thread\nfrom a specific Waypoint, optionally editing state at the fork point\n(D-45, D-46).",
+        "description": "Invocation-shaped: any authenticated principal, subject to the target\nassistant's own `allowed_roles` (checked inside\n[`RunSubmissionPort::fork`] -- `paladin-web` has no visibility into\n`allowed_roles` itself, ADR-0031).\n\nReturns:\n- `202 Accepted` with [`ForkThreadResponse`] on success;\n- `400 Bad Request` for an invalid thread id or `webhook_url_rejected`\n  (write-time SSRF guard, D-42);\n- `403 Forbidden` if the principal's role is not permitted;\n- `404 Not Found` for an unknown thread or an unknown `from_waypoint_id`;\n- `409 Conflict` (`thread_busy`) while a run is already active on the\n  thread;\n- `501 Not Implemented` if no run submission backend is configured.",
+        "operationId": "fork_thread",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForkThreadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Fork accepted; a new run continues the thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForkThreadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id, or webhook_url_rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role not permitted for this assistant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown thread or waypoint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Thread busy -- a run is already active on this thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No run submission backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/threads/{id}/history": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`GET /threads/{id}/history` -- paginated Chronicle history.",
+        "description": "Authenticated, any role (D-24) -- see [`get_thread_state`]'s docs on why\nreads are not admin-gated the way [`resume_thread`] is.\n\n`limit` (at most [`MAX_HISTORY_LIMIT`]) and an opaque `cursor` whose\ncontent is the last returned item's `waypoint_id` (D-27). Returns\n`400 Bad Request` for `limit > 100` or an unparseable `cursor`.",
+        "operationId": "get_thread_history",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max items to return (at most 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor from a previous page's next_cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of waypoint summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "limit exceeds 100, or cursor is not a valid waypoint id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/threads/{id}/resume": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`POST /threads/{id}/resume` -- deliver parley responses.",
+        "description": "Requires an admin principal ([`require_admin`]) -- see the module-level\n\"Authorization\" docs: this narrows D-24's \"any role\" default for the one\n*mutating* thread route (CR-01, 24-REVIEW.md), pending PLAT-06's real\nper-thread ownership scoping.\n\nValidates synchronously through [`ParleyPort::resume_with`] and returns\n`202 Accepted` immediately; the run itself continues on a background task\n(D-25) -- a client polls `GET .../state` to observe the outcome. Maps\n[`ParleyError`] per [`map_parley_error`].",
+        "operationId": "resume_thread",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Resume accepted; poll GET /threads/{id}/state for the outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeAcceptedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "One of unknown_parley_id / parley_already_answered / response_shape_invalid / parley_expired; the offending parley_id is in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Same HTTP status, two distinct envelope codes: `thread_not_awaiting_input` (the thread is not suspended) or `graph_not_registered` (the thread's graph fingerprint has no registered WarGraph in this process)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
+    },
+    "/v1/threads/{id}/state": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "`GET /threads/{id}/state` -- the thread's latest status, plus outstanding\nparleys/responses when suspended.",
+        "description": "Authenticated, any role (D-24) -- reads carry lower blast radius than\n`resume_thread`; per-thread ownership scoping is PLAT-06 (Phase 27). The\n`Principal` is extracted (unused today) so this handler's signature is\nalready shaped for that scoping to land as a body-only change.\n\nReturns:\n- `200 OK` with [`ThreadStateResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` if no Waypoint exists for `id`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "operationId": "get_thread_state",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Thread id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thread state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadStateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid thread id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "No waypoint backend configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          },
+          {
+            "bearer_token": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -776,6 +3040,289 @@
           }
         }
       },
+      "AssistantListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /assistants`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantResponse"
+            },
+            "description": "The page of assistants, in the documented order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, `None` on the last page."
+          }
+        }
+      },
+      "AssistantResponse": {
+        "type": "object",
+        "description": "Response body for `GET /assistants/{id}` and one item of `GET /assistants`.",
+        "required": [
+          "assistant_id",
+          "latest",
+          "source",
+          "created_at"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The assistant's identity."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this assistant was first created."
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this assistant was soft-deleted, if it has been."
+          },
+          "latest": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The most recently published version number.",
+            "minimum": 0
+          },
+          "source": {
+            "type": "string",
+            "description": "`\"stored\"` or `\"code\"` (D-32)."
+          }
+        }
+      },
+      "AssistantVersionListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /assistants/{id}/versions`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantVersionResponse"
+            },
+            "description": "The page of versions, ascending by `version`."
+          },
+          "next_cursor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Opaque cursor for the next page, `None` on the last page.",
+            "minimum": 0
+          }
+        }
+      },
+      "AssistantVersionResponse": {
+        "type": "object",
+        "description": "Response body for `GET/POST` on a single version.",
+        "required": [
+          "assistant_id",
+          "version",
+          "definition",
+          "created_at"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The assistant this version belongs to."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this version was created."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who published this version, if known."
+          },
+          "definition": {
+            "type": "object",
+            "description": "The definition this version carries."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An optional publish-time note."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "This version's 1-based sequence number.",
+            "minimum": 0
+          }
+        }
+      },
+      "CancelRunResponse": {
+        "type": "object",
+        "description": "Response body for a successful `POST /runs/{run_id}/cancel`.",
+        "required": [
+          "run_id",
+          "status",
+          "was_local"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "description": "The cancelled run's identity."
+          },
+          "status": {
+            "type": "string",
+            "description": "The run's status immediately after the durable cancel flag was\nwritten -- always a non-terminal status."
+          },
+          "was_local": {
+            "type": "boolean",
+            "description": "Whether THIS process instance held an in-process cancellation\nsignal for the run and fired it directly (a same-instance fast\npath)."
+          }
+        }
+      },
+      "CreateAssistantRequest": {
+        "type": "object",
+        "description": "Request body for `POST /assistants`.",
+        "required": [
+          "assistant_id",
+          "definition"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The new assistant's id (a `[a-z0-9][a-z0-9_-]{0,63}` slug)."
+          },
+          "definition": {
+            "$ref": "#/components/schemas/DefinitionDto",
+            "description": "The first version's definition."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An optional publish-time note."
+          }
+        }
+      },
+      "CreateScheduleRequest": {
+        "type": "object",
+        "description": "Request body for `POST /schedules`.",
+        "required": [
+          "assistant_id",
+          "cron",
+          "enabled"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The assistant this schedule submits runs against."
+          },
+          "cron": {
+            "type": "string",
+            "description": "The cron expression (5- or 6-field -- D-38)."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this schedule starts out active."
+          },
+          "input": {
+            "type": "object",
+            "description": "The input every tick's submitted run receives."
+          },
+          "on_missed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"skip\"` or `\"run_once\"`; omitted for the default (`\"skip\"`)."
+          },
+          "thread_strategy": {
+            "type": "object",
+            "description": "`\"new_thread_per_tick\"` or `{ \"fixed_thread\": \"<thread id>\" }` (mirrors\n`RunSchedule::thread_strategy`'s own wire shape); omitted for the default\n(`new_thread_per_tick`)."
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA timezone the cron expression is evaluated in, or omitted for `\"UTC\"`."
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A specific version, or omitted to resolve `latest` at each tick.",
+            "minimum": 0
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebhookRequestDto",
+                "description": "An optional webhook delivery target, validated by the write-time SSRF guard (D-42)."
+              }
+            ]
+          }
+        }
+      },
+      "CreateVersionRequest": {
+        "type": "object",
+        "description": "Request body for `POST /assistants/{id}/versions`.",
+        "required": [
+          "definition"
+        ],
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/DefinitionDto",
+            "description": "The new version's definition."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An optional publish-time note."
+          }
+        }
+      },
+      "DefinitionDto": {
+        "type": "object",
+        "description": "The wire shape of an assistant definition: `{ kind: \"agent\" | \"workflow\", body }`.",
+        "required": [
+          "kind",
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "object",
+            "description": "The opaque, kind-specific definition payload."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`\"agent\"` or `\"workflow\"`."
+          }
+        }
+      },
       "ExecuteRequest": {
         "type": "object",
         "description": "Request body for `POST /agents/{id}/execute`.\n\nOnly `input` is required today; later epics may add optional fields (streaming\nflags, per-call overrides) without breaking this contract.",
@@ -837,6 +3384,75 @@
           }
         }
       },
+      "ForkThreadRequest": {
+        "type": "object",
+        "description": "Request body for `POST /threads/{id}/fork`.",
+        "required": [
+          "from_waypoint_id"
+        ],
+        "properties": {
+          "edit": {
+            "type": "object",
+            "description": "An optional state edit merged at the fork point."
+          },
+          "from_waypoint_id": {
+            "type": "string",
+            "description": "The Waypoint to fork from."
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunWebhookRequestDto",
+                "description": "An optional webhook delivery target for the forked run's lifecycle\nevents."
+              }
+            ]
+          }
+        }
+      },
+      "ForkThreadResponse": {
+        "type": "object",
+        "description": "Response body for a successful `POST /threads/{id}/fork` (`202 Accepted`).",
+        "required": [
+          "run_id",
+          "thread_id"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "description": "The newly created forked run's identity."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread the fork continues on."
+          }
+        }
+      },
+      "HistoryResponse": {
+        "type": "object",
+        "description": "Response body for `GET /threads/{id}/history`.\n\n`next_cursor` is `None` on the last page; otherwise it is the last\nreturned item's `waypoint_id`, opaque to clients (D-27) -- its internal\nstructure may change (PLAT-06) without this being a breaking change.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaypointSummaryDto"
+            },
+            "description": "The page of waypoint summaries, newest-first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, or `None` on the last page."
+          }
+        }
+      },
       "JobRecord": {
         "type": "object",
         "description": "A stored job: its status plus, when finished, a result or error.\n\n`result` is the serialized success payload (an `ExecuteResponse` as JSON), kept as a\n[`Value`] so the store stays decoupled from the controller's wire types.",
@@ -873,6 +3489,907 @@
           "failed",
           "timed_out"
         ]
+      },
+      "ParleyRequestDto": {
+        "type": "object",
+        "description": "Wire projection of a [`ParleyRequest`] (a `paladin-core` type) into a\n`utoipa::ToSchema` type this crate owns (ADR-0038).",
+        "required": [
+          "parley_id",
+          "node_id",
+          "kind",
+          "prompt",
+          "payload",
+          "created_at"
+        ],
+        "properties": {
+          "choices": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Valid choices, populated for `\"choice\"`; `None` otherwise."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this parley was raised."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this parley expires, if ever."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The shape of input awaited (`\"approval\"`, `\"choice\"`, `\"free_text\"`, `\"state_edit\"`)."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "The node that raised this parley."
+          },
+          "parley_id": {
+            "type": "string",
+            "description": "The outstanding parley's identity."
+          },
+          "payload": {
+            "type": "object",
+            "description": "Author-supplied context rendered alongside `prompt`."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Free-form prompt describing what input is being awaited."
+          }
+        }
+      },
+      "ParleyResponseDto": {
+        "type": "object",
+        "description": "Wire projection of a [`ParleyResponse`].",
+        "required": [
+          "parley_id",
+          "kind",
+          "prompt",
+          "value",
+          "responded_at",
+          "defaulted"
+        ],
+        "properties": {
+          "defaulted": {
+            "type": "boolean",
+            "description": "Whether this response was substituted by an `on_expire` default\nrather than submitted by a caller."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The originating parley's `kind`."
+          },
+          "parley_id": {
+            "type": "string",
+            "description": "The parley this response answers."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The originating parley's `prompt`."
+          },
+          "responded_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this response was recorded."
+          },
+          "responded_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who submitted this response, if known."
+          },
+          "value": {
+            "type": "object",
+            "description": "The submitted value."
+          }
+        }
+      },
+      "ParleyResponseInput": {
+        "type": "object",
+        "description": "One submitted answer inside a [`ResumeRequest`].\n\n`kind`/`prompt` are intentionally absent: `WarEngine::resume_with`\nstamps both onto the persisted response from the matching request's own\nfields, regardless of what a caller supplies (D-07) -- so this DTO never\nasks a client to know or repeat them.",
+        "required": [
+          "parley_id",
+          "value"
+        ],
+        "properties": {
+          "parley_id": {
+            "type": "string",
+            "description": "The parley this response answers."
+          },
+          "responded_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who is submitting this response, if the caller wants it recorded."
+          },
+          "value": {
+            "type": "object",
+            "description": "The submitted value, validated per the parley's own `kind`."
+          }
+        }
+      },
+      "PatchScheduleRequest": {
+        "type": "object",
+        "description": "Request body for `PATCH /schedules/{id}` -- every field optional; only fields present\nchange (D-39's \"`enabled: false` leaves `next_tick` in place\" applies at the port layer).",
+        "properties": {
+          "cron": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new cron expression, if changing it."
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "A new enabled flag, if changing it."
+          },
+          "input": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A new input, if changing it."
+          },
+          "on_missed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new missed-tick policy (`\"skip\"` or `\"run_once\"`), if changing it."
+          },
+          "thread_strategy": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A new thread strategy, if changing it -- same wire shape as\n[`CreateScheduleRequest::thread_strategy`]."
+          },
+          "timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new timezone, if changing it."
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebhookRequestDto",
+                "description": "A new webhook target, if changing it -- re-validated by the write-time SSRF guard."
+              }
+            ]
+          }
+        }
+      },
+      "ResumeAcceptedResponse": {
+        "type": "object",
+        "description": "Response body for a successful `POST /threads/{id}/resume` (`202 Accepted`).\n\n`#[non_exhaustive]` (D-21, PLAT-03): `run_id` was added after this type\nshipped in Phase 24, mirroring\n[`ResumeAccepted`](paladin_ports::input::parley_port::ResumeAccepted)'s\nown field of the same name and meaning one level down the stack.\nConstruction stays possible only through [`Self::new`] (X-10.3), so the\nnext field stays free without a semver-major bump.",
+        "required": [
+          "thread_id",
+          "state_url"
+        ],
+        "properties": {
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The run this resume re-enqueued, if the durable run-server path\nhandled it (`None` for Phase 24's in-process-spawn fallback, X-03)."
+          },
+          "state_url": {
+            "type": "string",
+            "description": "The URL a client polls (`GET .../state`) to observe the outcome."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread whose resume was accepted."
+          }
+        }
+      },
+      "ResumeRequest": {
+        "type": "object",
+        "description": "Request body for `POST /threads/{id}/resume`.",
+        "properties": {
+          "responses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParleyResponseInput"
+            },
+            "description": "Every response to submit in this call."
+          }
+        }
+      },
+      "RunListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /runs`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunResponse"
+            },
+            "description": "The page of runs, ordered `(submitted_at DESC, run_id DESC)`. A\ncursor walk gives a stable ordering for rows that already existed\nwhen the first page was fetched, but is NOT a point-in-time\nsnapshot: a row inserted after the first page may be omitted from\nthe walk (D-47 backstop)."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, `None` on the last page."
+          }
+        }
+      },
+      "RunResponse": {
+        "type": "object",
+        "description": "Response body for `GET /runs/{run_id}`.",
+        "required": [
+          "run_id",
+          "thread_id",
+          "assistant_id",
+          "version",
+          "status",
+          "submitted_at",
+          "pending_responses"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The resolved assistant id."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The engine's error, if this run is `Failed`."
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this run reached a terminal status, if it has."
+          },
+          "pending_responses": {
+            "type": "integer",
+            "description": "How many responses are currently parked on this run awaiting worker\nconsumption -- the COUNT only, never the response values themselves.",
+            "minimum": 0
+          },
+          "run_id": {
+            "type": "string",
+            "description": "The run's identity."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When this run entered `Running`, if it has."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable, lowercase status label (the same strings `RunStatus::as_str`\nreturns)."
+          },
+          "submitted_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this run was submitted."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread this run executes against."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The resolved, frozen assistant version.",
+            "minimum": 0
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunWebhookDto",
+                "description": "The webhook delivery target, if any -- `secret` redacted to `\"***\"`\n(mirrors `schedule_controller::WebhookResponseDto`'s identical\nprecedent; the raw signing secret is never echoed back)."
+              }
+            ]
+          }
+        }
+      },
+      "RunWebhookDto": {
+        "type": "object",
+        "description": "Wire shape of a webhook delivery target on read -- the SAME shape as\n[`RunWebhookRequestDto`], except `secret` is redacted (T-27-15-04).",
+        "required": [
+          "url",
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The lifecycle events this webhook subscribes to."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"***\"` when a secret is set on the run, `null` otherwise -- the raw\nsecret is never echoed back."
+          },
+          "url": {
+            "type": "string",
+            "description": "The delivery URL."
+          }
+        }
+      },
+      "RunWebhookRequestDto": {
+        "type": "object",
+        "description": "Wire shape of a webhook delivery target on write (`POST /runs`, `POST\n/threads/{id}/fork`), mirroring `schedule_controller::WebhookRequestDto`.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The lifecycle events this webhook subscribes to (`\"awaiting_input\"`,\n`\"completed\"`, `\"failed\"`, `\"halted\"`, `\"cancelled\"`)."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The HMAC signing secret, if any."
+          },
+          "url": {
+            "type": "string",
+            "description": "The delivery URL -- validated by the write-time SSRF guard (D-42)\nbefore the run is ever persisted."
+          }
+        }
+      },
+      "ScheduleListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /schedules`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScheduleResponse"
+            },
+            "description": "The page of schedules, in the documented order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, `None` on the last page."
+          }
+        }
+      },
+      "ScheduleResponse": {
+        "type": "object",
+        "description": "Response body for `GET /schedules/{id}` and one item of `GET /schedules` -- every\n[`RunSchedule`] field, including `last_tick`/`next_tick`/`skipped_ticks` so \"why did\nnothing run\" is answerable without a log dive (D-39).",
+        "required": [
+          "schedule_id",
+          "assistant_id",
+          "cron",
+          "timezone",
+          "input",
+          "enabled",
+          "thread_strategy",
+          "on_missed",
+          "skipped_ticks",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The assistant this schedule submits runs against."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this schedule was created."
+          },
+          "cron": {
+            "type": "string",
+            "description": "The cron expression."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this schedule is currently active."
+          },
+          "input": {
+            "type": "object",
+            "description": "The input every tick's submitted run receives."
+          },
+          "last_tick": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The last tick this schedule fired (or was claimed) at, if any."
+          },
+          "next_tick": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The next tick this schedule is due at, if scheduled."
+          },
+          "on_missed": {
+            "type": "string",
+            "description": "`\"skip\"` or `\"run_once\"`."
+          },
+          "schedule_id": {
+            "type": "string",
+            "description": "This schedule's identity."
+          },
+          "skipped_ticks": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many ticks have been skipped (D-39's counted metric).",
+            "minimum": 0
+          },
+          "thread_strategy": {
+            "type": "object",
+            "description": "`\"new_thread_per_tick\"` or `{ \"fixed_thread\": \"<thread id>\" }`."
+          },
+          "timezone": {
+            "type": "string",
+            "description": "The IANA timezone the cron expression is evaluated in."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this schedule was last updated."
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A specific version, or `null` to resolve `latest` at each tick.",
+            "minimum": 0
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WebhookResponseDto",
+                "description": "The webhook delivery target, if any -- `secret` redacted to `\"***\"` (T-27-14-03)."
+              }
+            ]
+          }
+        }
+      },
+      "SubmitRunRequest": {
+        "type": "object",
+        "description": "Request body for `POST /runs`.\n\n`input` defaults to an empty object: submit-time validation checks only\nthe assistant reference and this body's shape, never `input`'s own\nschema -- a schema violation surfaces later as a `Failed` run.",
+        "required": [
+          "assistant_id"
+        ],
+        "properties": {
+          "assistant_id": {
+            "type": "string",
+            "description": "The assistant to run."
+          },
+          "input": {
+            "type": "object",
+            "description": "The caller-supplied input."
+          },
+          "thread_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An existing thread to run against, or omitted to start a fresh one."
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "A specific version, or omitted to resolve `latest` at submit time.",
+            "minimum": 0
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunWebhookRequestDto",
+                "description": "An optional webhook delivery target for this run's lifecycle events\n(D-40) -- validated by the write-time SSRF guard (D-42) before the\nrun is ever persisted."
+              }
+            ]
+          }
+        }
+      },
+      "SubmitRunResponse": {
+        "type": "object",
+        "description": "Response body for a successful `POST /runs` (`202 Accepted`).",
+        "required": [
+          "run_id",
+          "thread_id",
+          "state_url"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "description": "The newly created run's identity."
+          },
+          "state_url": {
+            "type": "string",
+            "description": "The URL a client polls (`GET /runs/{run_id}`) to observe status."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread the run executes against."
+          }
+        }
+      },
+      "ThreadListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /threads`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadSummaryDto"
+            },
+            "description": "The page of thread summaries, newest-activity-first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, `None` on the last page."
+          }
+        }
+      },
+      "ThreadResponse": {
+        "type": "object",
+        "description": "Response body for `GET /threads/{id}`.",
+        "required": [
+          "thread_id",
+          "latest_status",
+          "latest_waypoint_id",
+          "updated_at"
+        ],
+        "properties": {
+          "active_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thread's currently active run id, if [`ThreadApiState::runs`] is\nwired and one exists."
+          },
+          "latest_status": {
+            "type": "string",
+            "description": "Stable, lowercase status label of the thread's latest waypoint."
+          },
+          "latest_waypoint_id": {
+            "type": "string",
+            "description": "The thread's latest waypoint id."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread's identity."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the latest waypoint was created."
+          }
+        }
+      },
+      "ThreadStateResponse": {
+        "type": "object",
+        "description": "Response body for `GET /threads/{id}/state`.\n\n`parleys`/`responses` are always present, empty unless `status` is\n`\"awaiting_input\"` (Test 2: a running/completed thread carries the\nsummary fields with no outstanding parleys, not an omitted key).",
+        "required": [
+          "thread_id",
+          "status",
+          "superstep",
+          "waypoint_id",
+          "parleys",
+          "responses"
+        ],
+        "properties": {
+          "fork_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ROOT `WaypointId` of the branch this Waypoint belongs to;\n`None` for a mainline Waypoint (HITL-03, D-14)."
+          },
+          "parleys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParleyRequestDto"
+            },
+            "description": "Every parley raised in the suspending superstep, when `status` is\n`\"awaiting_input\"`; empty otherwise."
+          },
+          "responses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParleyResponseDto"
+            },
+            "description": "The accepted subset of responses so far, when `status` is\n`\"awaiting_input\"`; empty otherwise."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable, lowercase status label."
+          },
+          "superstep": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The superstep index of the returned Waypoint.",
+            "minimum": 0
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread's identity."
+          },
+          "waypoint_id": {
+            "type": "string",
+            "description": "The returned Waypoint's own identity."
+          }
+        }
+      },
+      "ThreadSummaryDto": {
+        "type": "object",
+        "description": "Wire projection of a [`paladin_ports::output::waypoint_port::ThreadSummary`]\nfor `GET /threads`.\n\n**Known limitation:** `ThreadSummary` (the port this list is built from)\ncarries no `waypoint_id` field -- only [`ThreadResponse`] (`GET\n/threads/{id}`, built from a full [`Waypoint`]) can report one. Adding a\n`waypoint_id` to `ThreadSummary`/`WaypointPort::list_threads` would touch\nevery backend adapter in `paladin-storage`, outside this plan's declared\nfile scope -- documented here rather than silently omitted without\nexplanation.",
+        "required": [
+          "thread_id",
+          "latest_status",
+          "updated_at"
+        ],
+        "properties": {
+          "active_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The thread's currently active run id, if [`ThreadApiState::runs`] is\nwired and one exists."
+          },
+          "latest_status": {
+            "type": "string",
+            "description": "Stable, lowercase status label of the thread's latest waypoint."
+          },
+          "thread_id": {
+            "type": "string",
+            "description": "The thread's identity."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the thread's latest waypoint was created."
+          }
+        }
+      },
+      "WaypointSummaryDto": {
+        "type": "object",
+        "description": "Wire projection of a [`WaypointSummary`].",
+        "required": [
+          "waypoint_id",
+          "superstep",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this waypoint was created."
+          },
+          "fork_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ROOT `WaypointId` of the branch this waypoint belongs to;\n`None` for a mainline waypoint."
+          },
+          "parent_waypoint_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The waypoint this one was checkpointed from."
+          },
+          "status": {
+            "type": "string",
+            "description": "Stable, lowercase status label."
+          },
+          "superstep": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The superstep index that produced this waypoint.",
+            "minimum": 0
+          },
+          "waypoint_id": {
+            "type": "string",
+            "description": "The summarized waypoint's identity."
+          }
+        }
+      },
+      "WebhookDeliveryDto": {
+        "type": "object",
+        "description": "Wire projection of one attempt of a\n[`paladin_core::platform::container::webhook::WebhookDelivery`].",
+        "required": [
+          "delivery_id",
+          "event",
+          "attempt",
+          "status",
+          "next_attempt_at",
+          "created_at"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many attempts have been made so far.",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this delivery was enqueued."
+          },
+          "delivery_id": {
+            "type": "string",
+            "description": "This delivery's identity."
+          },
+          "event": {
+            "type": "string",
+            "description": "Which lifecycle event this delivery carries."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A redacted, bounded diagnostic of the most recent attempt's\nfailure, if any -- never the payload or a signing secret."
+          },
+          "last_response_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The HTTP status the most recent attempt observed, if any.",
+            "minimum": 0
+          },
+          "next_attempt_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this delivery is next eligible to be claimed, if not yet\nterminal."
+          },
+          "status": {
+            "type": "string",
+            "description": "This delivery's current status (`\"pending\"`, `\"in_flight\"`,\n`\"delivered\"`, `\"retrying\"`, `\"dead\"`)."
+          }
+        }
+      },
+      "WebhookDeliveryListResponse": {
+        "type": "object",
+        "description": "Response body for `GET /runs/{run_id}/webhook-deliveries`.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookDeliveryDto"
+            },
+            "description": "The page of delivery attempts, newest-first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor for the next page, `None` on the last page."
+          }
+        }
+      },
+      "WebhookRequestDto": {
+        "type": "object",
+        "description": "Wire shape of a webhook delivery target on write (`POST`/`PATCH`).",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The lifecycle events this webhook subscribes to (`\"awaiting_input\"`, `\"completed\"`,\n`\"failed\"`, `\"halted\"`, `\"cancelled\"`)."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The HMAC signing secret, if any."
+          },
+          "url": {
+            "type": "string",
+            "description": "The delivery URL -- validated by the write-time SSRF guard (D-42) before the\nschedule is ever persisted."
+          }
+        }
+      },
+      "WebhookResponseDto": {
+        "type": "object",
+        "description": "Wire shape of a webhook delivery target on read -- the SAME shape as\n[`WebhookRequestDto`], except `secret` is redacted (T-27-14-03).",
+        "required": [
+          "url",
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The lifecycle events this webhook subscribes to."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`\"***\"` when a secret is set on the stored schedule, `null` otherwise -- the raw\nsecret is never echoed back."
+          },
+          "url": {
+            "type": "string",
+            "description": "The delivery URL."
+          }
+        }
       }
     },
     "securitySchemes": {

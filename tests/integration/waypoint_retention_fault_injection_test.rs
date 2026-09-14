@@ -29,8 +29,8 @@ use paladin::application::services::waypoint_retention::WaypointRetentionService
 use paladin::config::WaypointRetentionConfig;
 
 use paladin_battalion::engine::{
-    EdgeSpec, EngineLimits, NodeContext, NodeError, NodeSpec, RunOutcome, StateNode, WarEngine,
-    WarGraph,
+    EdgeSpec, EngineLimits, NodeContext, NodeSpec, RunOutcome, StateNode, StateNodeError,
+    WarEngine, WarGraph,
 };
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
@@ -39,7 +39,8 @@ use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::waypoint::{
-    NodeId, ParleyRequest, ThreadId, Waypoint, WaypointId, WaypointStatus,
+    NodeId, OnExpire, ParleyId, ParleyKind, ParleyRequest, ThreadId, Waypoint, WaypointId,
+    WaypointStatus,
 };
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
 use paladin_ports::output::waypoint_port::{
@@ -192,9 +193,18 @@ async fn seed_mixed_thread(store: &dyn WaypointPort, thread: &ThreadId) -> (Wayp
 
     let mut awaiting = sample_waypoint_at(thread, 0, now - Duration::days(365));
     awaiting.status = WaypointStatus::AwaitingInput {
-        parley: ParleyRequest {
+        parleys: vec![ParleyRequest {
+            parley_id: ParleyId::new(),
+            node_id: NodeId::new("asker"),
+            kind: ParleyKind::FreeText,
             prompt: "confirm?".to_string(),
-        },
+            payload: serde_json::json!({}),
+            choices: None,
+            expires_at: None,
+            created_at: Utc::now(),
+            on_expire: OnExpire::FailRun,
+        }],
+        responses: Vec::new(),
     };
     store.save(&awaiting).await.expect("seed awaiting waypoint");
 
@@ -365,11 +375,15 @@ struct SetFieldNode {
 
 #[async_trait]
 impl StateNode for SetFieldNode {
-    async fn run(&self, _state: &Battlefield, _ctx: &NodeContext) -> Result<Directive, NodeError> {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
         let mut delta = StateDelta::new();
         delta
             .set(self.field.clone(), self.value.clone())
-            .map_err(|e| NodeError(e.to_string()))?;
+            .map_err(|e| StateNodeError(e.to_string()))?;
         Ok(delta.into())
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "paladin-llm"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -31,8 +31,8 @@ vision = ["openai", "dep:base64"]
 openai-embeddings = ["openai"]
 
 [dependencies]
-paladin-core = { package = "paladin-ai-core", version = "0.9.0", path = "../paladin-core" }
-paladin-ports = { version = "0.9.0", path = "../paladin-ports" }
+paladin-core = { package = "paladin-ai-core", version = "0.10.0", path = "../paladin-core" }
+paladin-ports = { version = "0.10.0", path = "../paladin-ports" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -76,7 +76,7 @@ jobs:
 
       - name: Download and run actionlint
         run: |
-          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.12
+          bash <(curl -sSfL --retry 5 --retry-delay 5 --retry-all-errors https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) 1.7.12
           ./actionlint .github/workflows/*.yml
 
   # Security audit with controlled RustSec exceptions
@@ -694,7 +694,8 @@ jobs:
           set -euo pipefail
           MC_RELEASE="RELEASE.2025-08-13T08-35-41Z"
           MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
-          curl -fsSL -o mc \
+          # Retry transient CDN/5xx errors (a 504 here killed a whole run on 2026-09-14).
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o mc \
             "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}"
           echo "${MC_SHA256}  mc" | sha256sum -c -
           chmod +x mc
@@ -1412,7 +1413,8 @@ jobs:
           set -euo pipefail
           MC_RELEASE="RELEASE.2025-08-13T08-35-41Z"
           MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
-          curl -fsSL -o mc \
+          # Retry transient CDN/5xx errors (a 504 here killed a whole run on 2026-09-14).
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o mc \
             "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}"
           echo "${MC_SHA256}  mc" | sha256sum -c -
           chmod +x mc

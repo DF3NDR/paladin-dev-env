@@ -670,7 +670,7 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
 - [x] **PLAT-01 … PLAT-06** (✓ Phase 27, 2026-09-08) — Background runs, worker pool + queue, parley/streaming integration,
   versioned assistants, schedules + webhooks, API cross-cutting + generated-client gate (Doc 06)
 - [x] **OBS-01 … OBS-04** (✓ Phase 28, 2026-09-09) — Trace event model + sinks, visualization export, eval harness (Doc 07)
-- [ ] **SHIP-01 … SHIP-04** — `MIGRATION.md` complete, compat proofs (v0.9-config boot test,
+- [x] **SHIP-01 … SHIP-04** (✓ Phase 29, 2026-09-10) — `MIGRATION.md` complete, compat proofs (v0.9-config boot test,
   `openapi.json` golden diff), program acceptance audit, v0.10.0 release readiness (overview §5, §9)
 
 *(The long-form forward-scope listing that previously lived here — the 90 ingest-derived
@@ -1644,3 +1644,11 @@ observability & tooling).*
 ---
 *Last updated: 2026-09-09 after Phase 28 completion (v0.10.0 milestone; OBS-01…04 validated;
 next: Phase 29 program gates & release — SHIP-01…04, the milestone's final phase).*
+
+---
+*Last updated: 2026-09-10 after Phase 29 completion (v0.10.0 milestone; SHIP-01…04 validated —
+`MIGRATION.md` §9 complete with a CI "no TBD" gate, v0.9-config boot test and OpenAPI golden diff
+proving backward compatibility, program acceptance audit `.project/v0.10.0/09-program-acceptance-audit.md`
+passed with the D-16 tracing-overhead deviation accepted and reaffirmed at UAT, all thirteen manifests
+at `0.10.0` with dated changelogs, 12/12 dry-run publish, WINDOWS.md `open_count: 0`, no tag cut.
+**All 9 phases of v0.10.0 complete (137/137 plans)** — next: `/gsd-complete-milestone v0.10.0`.)*

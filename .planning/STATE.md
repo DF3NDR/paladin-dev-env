@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 30
-status: ready_to_plan
-stopped_at: Phases 30-33 added to the roadmap; Phase 30 not yet planned
-last_updated: "2026-09-14T00:00:00.000Z"
+status: ready_to_execute
+stopped_at: Phase 30 planned (3 plans, 3 waves) — not yet executed
+last_updated: "2026-09-14T16:00:00.000Z"
 last_activity: 2026-09-14
-last_activity_desc: Phases 30-33 (Token Economy) added to v0.10.0 from .project/Milestone_13-Token-Economy
+last_activity_desc: Phase 30 planned — 3 plans / 3 waves, VOCAB-01..07 covered, plan-checker passed
 progress:
   total_phases: 13
   completed_phases: 9
-  total_plans: 137
+  total_plans: 140
   completed_plans: 137
 current_phase_name: Token-Economy Vocabulary & Commissary Anchoring
 ---
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-09-10 after Phase 29)
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
 **Current focus:** v0.10.0 extended 2026-09-14 with Phases 30-33 "Token Economy" before the
-`0.10.0` tag is cut (Phases 22-29 complete). Next: `/gsd-plan-phase 30` (docs-only vocabulary +
-Commissary anchoring). `/gsd-complete-milestone v0.10.0` moves to after Phase 33's release
+`0.10.0` tag is cut (Phases 22-29 complete). Phase 30 is planned (3 plans, 3 waves). Next:
+`/gsd-execute-phase 30` (docs-only vocabulary + Commissary anchoring). `/gsd-complete-milestone v0.10.0` moves to after Phase 33's release
 re-seal (COMM-04).
 
 **Progress:** [██████████████░░░░░░] v0.10.0 — 9 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29); Phases 30-33 added 2026-09-14, not yet planned; 137/137 plans of the original nine (100%)
@@ -54,9 +54,9 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 30
-Plan: Not started
-Status: Ready to plan — Phases 30-33 added to the roadmap 2026-09-14 (Token Economy, still v0.10.0)
-Last activity: 2026-09-14 — Merged `origin/feature/v0.10.0-Commisary-Treasurer-plan` (`.project/Milestone_13-Token-Economy/`, `.project/Milestone_14-Treasurer/`) and added Phases 30-33 with VOCAB/ACCT/PRIM/COMM requirements
+Plan: 0/3 (30-01 → 30-02 → 30-03, three waves)
+Status: Ready to execute — Phase 30 planned 2026-09-14 (PRD express path context, research, pattern map, 3 plans, plan-checker passed)
+Last activity: 2026-09-14 — Planned Phase 30; earlier the same day merged `origin/feature/v0.10.0-Commisary-Treasurer-plan` (`.project/Milestone_13-Token-Economy/`, `.project/Milestone_14-Treasurer/`) and added Phases 30-33 with VOCAB/ACCT/PRIM/COMM requirements
 Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics

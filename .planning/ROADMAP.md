@@ -781,9 +781,16 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 30-01-PLAN.md — Anchor `Commissary`: ADR-0049 (design, rename rationale, nine rejected names), the vocabulary rule in all three ubiquitous-language lists, and the new `docs/src/architecture/commissary.md` page linked from the architecture nav (VOCAB-01, VOCAB-02, VOCAB-03) — wave 1
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 30-02-PLAN.md — ADR-0050 (`Treasurer` reservation + downstream guardrail) and ADR-0051 (clean breaks inside the untagged v0.10.0, superseding X-03 for Phases 31-33), plus the PROMOTION.md index and PROJECT.md Key Decisions bookkeeping (VOCAB-04, VOCAB-07) — wave 2
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 30-03-PLAN.md — The four meanings of `max_tokens` as one table, the `cost_estimate` rustdoc reservation at five doc sites, and the last two `Quartermaster` prose references retired from `crates`/`src` (VOCAB-05, VOCAB-06) — wave 3
 
 ### Phase 31: Lossless Token Accounting

@@ -25,21 +25,21 @@ land alone and first; Phases 31-33 build on it.
 ## Implementation Decisions
 
 ### Vocabulary rule (D-1 → VOCAB-01)
-- The rule is: **units/measures and technical ports keep plain industry names; domain roles,
+- **D-01:** The rule is: **units/measures and technical ports keep plain industry names; domain roles,
   places and events get Medieval-Military names.** Plain: `TokenUsage`, `max_tokens`,
   `max_context_tokens`, `TokenBudget`, `TokenCounterPort`, `LlmPort`, `EmbeddingPort`,
   `token_budget.*`. Medieval: Paladin, Battalion, Garrison, Arsenal, Citadel, Herald, Quest,
   Commissary, Treasurer (reserved).
-- Write the rule into `.planning/PROJECT.md` (the ubiquitous-language material) AND
+- **D-02:** Write the rule into `.planning/PROJECT.md` (the ubiquitous-language material) AND
   `docs/src/architecture/domain-model.md`. The `CLAUDE.md` / `.github/copilot-instructions.md`
   ubiquitous-language table is the developer-facing list — add `Commissary` there too so the
   three lists agree (planner's discretion on exact placement; the lists must not disagree).
-- `Commissary` is framed everywhere as the **input-side, per-call window-rationing officer** —
+- **D-03:** `Commissary` is framed everywhere as the **input-side, per-call window-rationing officer** —
   "what fits in this sortie's pack": `verify_fits` guard + `dispense` allocator over a
   `Consignment` → `Stockpile` + `ShedItem`s, fail-loud / never-silent.
 
 ### Commissary anchoring (D-2 → VOCAB-02, VOCAB-03)
-- One numbered ADR in `.planning/decisions/` (next free number; follow `PROMOTION.md`'s numbering
+- **D-04:** One numbered ADR in `.planning/decisions/` (next free number; follow `PROMOTION.md`'s numbering
   scheme and the heading shape of `0048-paladin-eval-composition-crate.md`) recording: the
   `Commissary` design (`verify_fits` guard + `dispense` allocator, fail-loud / never-silent —
   the ADR-0010 refusal semantics), the Quartermaster→Commissary rename rationale, and the
@@ -49,41 +49,41 @@ land alone and first; Phases 31-33 build on it.
   (`feat(paladin-llm): port v0.10.0-native prompt-budgeting Commissary service`) and `35fd8390`.
   Cite ADR-0010 by its abandoned-branch path; do not copy it wholesale as a live ADR — the new
   ADR is the on-branch record.
-- One mdBook page for `Commissary` under `docs/src/` (planner picks the path — the natural home
+- **D-05:** One mdBook page for `Commissary` under `docs/src/` (planner picks the path — the natural home
   is the architecture section or a concepts page next to the domain model): concept, the
   `Consignment` / `ConsignmentItem` / `DispensedItem` / `Stockpile` / `ShedItem` /
   `CommissaryPlan` / `CommissaryError` model, and a usage sketch. Link it from
   `docs/src/SUMMARY.md` so it is reachable from the architecture nav. The docs CI
   (`.github/workflows/docs.yml`: mdbook 0.4.40, mdbook-mermaid 0.13.0, mdbook-linkcheck 0.7.7,
   `warning-policy = "error"`) must stay green — every intra-book link must resolve.
-- The usage sketch must be a real, compiling shape (a doc test or an `ignore`-marked block that
+- **D-06:** The usage sketch must be a real, compiling shape (a doc test or an `ignore`-marked block that
   mirrors an existing unit test in `commissary.rs`), never invented API.
 
 ### Treasurer reservation (D-3 → VOCAB-04)
-- One one-page **reservation** ADR (separate from the Commissary ADR). It states: `Treasurer` is
+- **D-07:** One one-page **reservation** ADR (separate from the Commissary ADR). It states: `Treasurer` is
   reserved (0/0 in-tree, verified by `grep -rn Treasurer crates src docs` at authoring time); it
   will own cross-run / per-tenant / per-API-key **allowances**, per-model currency **pricing**,
   `cost_estimate` production, and rate **pacing**; it **installs** a per-run `TokenBudget`
   (the existing `src/application/services/paladin/middleware/limits.rs` mechanism) rather than
   replacing it; it is **built in Milestone 14** (`.project/Milestone_14-Treasurer/`, deferred,
   hard-depends on Phase 31), not this cycle.
-- The **downstream guardrail** is part of the ADR text: `Treasurer` is a framework-only word; in
+- **D-08:** The **downstream guardrail** is part of the ADR text: `Treasurer` is a framework-only word; in
   the downstream Web3 Security Paladin app it collides with a benchmark fixture
   (`GarrisonTreasury`, an audit-*target* domain term), so the framework term must never be used
   as an audit-target or fixture domain term, and vice versa.
-- Record the rejected alternatives: `Paymaster` (rejected — a paymaster pays the troops; tokens
+- **D-09:** Record the rejected alternatives: `Paymaster` (rejected — a paymaster pays the troops; tokens
   are spent on the provider), `Comptroller` (collision-free alternative; operator chose
   `Treasurer` and accepted the guardrail). The two-officer model (Commissary = input-side
   per-call rationing; Treasurer = output-side cross-run spend governance) is **operator-confirmed
   2026-09-14** and locked.
 
 ### `max_tokens` disambiguation and `cost_estimate` reservation (D-8, D-9 → VOCAB-05)
-- Add ONE table to `docs/src/getting-started/configuration.md` naming the four `max_tokens`
+- **D-10:** Add ONE table to `docs/src/getting-started/configuration.md` naming the four `max_tokens`
   meanings: (1) Garrison store cap, (2) RAG injection cap (`rag.max_tokens`), (3) per-request
   completion cap, (4) run-level `token_budget` cap — each row naming the config key / type that
   owns it (planner: verify each against the tree, e.g. `grep -rn max_tokens crates src docs`).
   State that any future Treasurer-level cap uses a distinct key (`allowance`), never `max_tokens`.
-- Update the rustdoc on `ExecutionMetadata.cost_estimate`
+- **D-11:** Update the rustdoc on `ExecutionMetadata.cost_estimate`
   (`crates/paladin-core/src/platform/container/herald.rs`, field ~line 521, builder ~line 607,
   doc ~line 387 and the example ~line 471 that says "$0.045 based on GPT-4 pricing") to say the
   field is **reserved for the Treasurer (Milestone 14 / FUT-08); no in-tree producer yet.** Do
@@ -91,19 +91,19 @@ land alone and first; Phases 31-33 build on it.
   `MIGRATION.md` §9.2 entry, no semver-checks allowlist change.
 
 ### Quartermaster purge (VOCAB-06)
-- `src/lib.rs:195` provenance comment (`// v0.10.0-native re-port of the removed
+- **D-12:** `src/lib.rs:195` provenance comment (`// v0.10.0-native re-port of the removed
   Quartermaster/Convoy/apportion capability`) — reword to describe the Commissary port without
   the retired term, or drop it.
-- `.project/project-management/paladin-project-plan-final.md` `name: "SirQuartermaster"` example
+- **D-13:** `.project/project-management/paladin-project-plan-final.md` `name: "SirQuartermaster"` example
   — annotate as historical (a one-line note; do not rewrite the document).
-- Exit check: `grep -rniE '\bQuartermaster\b' crates src` returns nothing. `.planning/` phase
+- **D-14:** Exit check: `grep -rniE '\bQuartermaster\b' crates src` returns nothing. `.planning/` phase
   history (Phase 26 plans that record the Quartermaster→Commissary port) is **untouched** —
   overview §5.4 forbids rewriting planning history. The Milestone 13 overview/PRDs under
   `.project/Milestone_13-Token-Economy/` legitimately mention the retired term and are out of the
   grep's scope.
 
 ### Versioning decision ADR (VOCAB-07 — roadmap-time addition, not in the PRD)
-- One ADR recording that **Phases 31-33 land as clean breaks inside the untagged v0.10.0**:
+- **D-15:** One ADR recording that **Phases 31-33 land as clean breaks inside the untagged v0.10.0**:
   the v0.10.0 corpus rule X-03 (`.project/v0.10.0/00-program-overview.md:44` — "Deprecations are
   allowed with `#[deprecated]` but removals are not") is **superseded for Phases 31-33 only** by
   the Milestone 13 overview §5.1 clean-break policy, on the operator's 2026-09-14 decision
@@ -112,17 +112,17 @@ land alone and first; Phases 31-33 build on it.
   `cargo semver-checks` allowlist row (Phase 29 D-04 row-level gate) **as documentation for the
   downstream refactor, never as a compatibility shim**; the `0.10.0` tag is cut only after
   Phase 33 re-seals the Phase 29 release gates (COMM-04).
-- Add a matching row to `.planning/PROJECT.md` **Key Decisions** linking the ADR (the table
+- **D-16:** Add a matching row to `.planning/PROJECT.md` **Key Decisions** linking the ADR (the table
   links ADRs rather than restating them).
 
 ### Locked by the milestone overview §0 (do not revisit)
-- `Commissary` — keep, do not rename. `TokenBudget`, `TokenCounterPort`, `TokenUsage`,
+- **D-17:** `Commissary` — keep, do not rename. `TokenBudget`, `TokenCounterPort`, `TokenUsage`,
   `max_tokens`, `token_budget.*` — do not rename. `Quartermaster` — stays retired, never
   reintroduced. `Paymaster` — rejected. `Treasurer` — the reserved term.
-- Version identity: this work ships in **v0.10.0** (the PRD's "v0.11.0" target is superseded by
+- **D-18:** Version identity: this work ships in **v0.10.0** (the PRD's "v0.11.0" target is superseded by
   the operator's instruction; `0.10.0` is bumped on the feature branch with no tag — Phase 29
   D-18/D-21). Write "v0.10.0" in every new doc, never "v0.11.0".
-- Rustdoc references to the Treasurer point at **Milestone 14**, not "Epic 5" (the PRD's R7
+- **D-19:** Rustdoc references to the Treasurer point at **Milestone 14**, not "Epic 5" (the PRD's R7
   wording predates the Milestone 14 split).
 
 ### Claude's Discretion

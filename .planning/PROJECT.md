@@ -109,6 +109,20 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 30 complete (2026-09-14)** — token-economy-vocabulary-commissary-anchoring, the first of the
+four Token Economy phases (VOCAB-01…07, docs only): the units-plain / roles-medieval vocabulary rule is
+written into this file, `docs/src/architecture/domain-model.md` and `.github/copilot-instructions.md`;
+`Commissary` is anchored by ADR-0049 (design, Quartermaster→Commissary rename rationale, nine rejected
+names) and a new `docs/src/architecture/commissary.md` page in the mdBook nav; `Treasurer` is reserved
+by ADR-0050 (0/0 in-tree as a code symbol, installs-not-replaces `TokenBudget`, Milestone 14, downstream
+guardrail); ADR-0051 records the Phases 31-33 clean-break supersession of X-03; the four meanings of
+`max_tokens` are one table in the configuration guide; `ExecutionMetadata.cost_estimate` rustdoc is
+marked reserved at five sites with signatures untouched; `grep -rniE '\bQuartermaster\b' crates src`
+returns nothing. 3 plans in 3 waves; verification `passed` 7/7; code review 0 critical / 1 advisory
+warning (WR-01: the terminology table names `llm.anthropic.max_tokens`, which is not a settable YAML
+key — only `ANTHROPIC_MAX_TOKENS` is read; open, fix via `/gsd-code-review 30 --fix`). Only two `.rs`
+files changed, both comment-only; no migration-register or semver-allowlist rows.
+
 **Phase 28 complete (2026-09-09)** — observability-tooling, the v0.10.0 milestone's seventh planned
 phase (OBS-01…04): the authoritative `TraceRecord`/`TraceEvent` stream with a per-run gapless `seq`,
 panic-isolated `CompositeSink` fan-out and a default-on structured-log sink; an `otel`-gated OTLP
@@ -331,7 +345,7 @@ Security Paladin repo's token-economy systems analysis, findings F1-F8 / decisio
 - Phase 30 — vocabulary rule (units/ports plain, roles medieval), `Commissary` anchored (ADR +
   mdBook), `Treasurer` reserved (ADR + downstream guardrail), `max_tokens` disambiguated,
   `Quartermaster` orphans purged, and the clean-break versioning decision recorded as an ADR
-  (`VOCAB-01…07`, docs only)
+  (`VOCAB-01…07`, docs only) — **complete 2026-09-14**: ADR-0049/0050/0051 landed, verification 7/7
 - Phase 31 — lossless token accounting: full `TokenUsage` (plus optional cache/reasoning fields)
   carried from the LLM port to `RunFinished` and a herald; streaming parity (`ACCT-01…05`,
   keystone, breaking)
@@ -352,7 +366,8 @@ Security Paladin repo's token-economy systems analysis, findings F1-F8 / decisio
 the overview's clean-break policy (§5.1) — pre-1.0, one coordinated downstream consumer that pins
 its submodule pointer and adopts the whole milestone at once. Every break still gets a
 `MIGRATION.md` §9.2 row and a semver-checks allowlist row as refactor documentation, never as a
-shim. Phase 30's VOCAB-07 turns this paragraph into an ADR and a Key Decisions row.
+shim. Recorded as ADR-0051 (`.planning/decisions/0051-token-economy-versioning-x03-supersession.md`, Phase 30
+VOCAB-07, 2026-09-14) and linked from Key Decisions.
 
 Carried-in open items (unchanged from the v0.9.0 close; tracked, not this milestone's scope
 unless a phase adopts them):
@@ -704,6 +719,9 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
 - [x] **OBS-01 … OBS-04** (✓ Phase 28, 2026-09-09) — Trace event model + sinks, visualization export, eval harness (Doc 07)
 - [x] **SHIP-01 … SHIP-04** (✓ Phase 29, 2026-09-10) — `MIGRATION.md` complete, compat proofs (v0.9-config boot test,
   `openapi.json` golden diff), program acceptance audit, v0.10.0 release readiness (overview §5, §9)
+- [x] **VOCAB-01 … VOCAB-07** (✓ Phase 30, 2026-09-14) — Vocabulary rule in all three lists, `Commissary`
+  ADR-0049 + mdBook page, `Treasurer` reservation ADR-0050 + downstream guardrail, `max_tokens` terminology
+  table, `cost_estimate` rustdoc reservation, `Quartermaster` purge, X-03 supersession ADR-0051 (Milestone 13 Epic 1)
 
 *(The long-form forward-scope listing that previously lived here — the 90 ingest-derived
 requirements across Phases 5-16 plus Phase 17's `PROV-*` additions — shipped with v0.8.0 and is
@@ -1693,3 +1711,8 @@ proving backward compatibility, program acceptance audit `.project/v0.10.0/09-pr
 passed with the D-16 tracing-overhead deviation accepted and reaffirmed at UAT, all thirteen manifests
 at `0.10.0` with dated changelogs, 12/12 dry-run publish, WINDOWS.md `open_count: 0`, no tag cut.
 **All 9 phases of v0.10.0 complete (137/137 plans)** — next: `/gsd-complete-milestone v0.10.0`.)*
+
+*Last updated: 2026-09-14 after Phase 30 completion (v0.10.0 milestone extended with Token Economy
+Phases 30-33; VOCAB-01…07 validated — ADR-0049 Commissary, ADR-0050 Treasurer reservation, ADR-0051 X-03
+supersession, `commissary.md` page, `max_tokens` terminology table, Quartermaster purge; 10 of 13 phases,
+140/140 plans; next: `/gsd-discuss-phase 31` Lossless Token Accounting).*

@@ -403,6 +403,19 @@ herald:
 **Env vars:** `APP_HERALD_DEFAULT_FORMATTER`, `APP_HERALD_JSON_PRETTY`,
 `APP_HERALD_MARKDOWN_INCLUDE_COLORS`, `APP_HERALD_TABLE_BORDER_STYLE`
 
+## Token Budget Terminology
+
+Paladin uses `max_tokens` in four independent, non-overlapping senses:
+
+| Meaning | Config key / type | Owner |
+| --- | --- | --- |
+| Garrison store cap | `garrison.max_tokens` | `src/config/` (Garrison config) |
+| RAG injection cap | `rag.max_tokens` | `src/config/` (RAG config) |
+| Per-request completion cap | `LlmRequest` metadata `"max_tokens"` (OpenAI/DeepSeek fallback-override); `llm.anthropic.max_tokens` / `ANTHROPIC_MAX_TOKENS` (Anthropic, required) | provider adapters (`crates/paladin-llm/src/openai/adapter.rs`, `crates/paladin-llm/src/anthropic/adapter.rs`) |
+| Run-level budget cap | `agent_runtime.token_budget.max_tokens` | `src/application/services/paladin/middleware/limits.rs` |
+
+Any future spend-governance cap uses a distinct key, `allowance`, never `max_tokens`.
+
 ## Autonomous Features
 
 All autonomous features are opt-in (disabled by default). Uncomment sections in

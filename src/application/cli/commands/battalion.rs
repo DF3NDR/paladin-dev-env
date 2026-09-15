@@ -379,11 +379,13 @@ async fn execute_formation(
             println!("{} Individual Paladin Outputs:", "→".cyan().bold());
             for (idx, paladin_result) in result.paladin_results.iter().enumerate() {
                 println!(
-                    "\n  {}. Paladin {} ({} loops, {} tokens):",
+                    "\n  {}. Paladin {} ({} loops, {}):",
                     idx + 1,
                     idx + 1,
                     paladin_result.loop_count,
-                    paladin_result.usage.total_tokens
+                    crate::application::cli::formatters::output::format_token_usage_summary(
+                        &paladin_result.usage
+                    )
                 );
                 println!(
                     "     {}",
@@ -535,8 +537,11 @@ async fn execute_phalanx(
                 idx + 1
             );
             println!(
-                "   Loops: {}, Tokens: {}",
-                paladin_result.loop_count, paladin_result.usage.total_tokens
+                "   Loops: {}, {}",
+                paladin_result.loop_count,
+                crate::application::cli::formatters::output::format_token_usage_summary(
+                    &paladin_result.usage
+                )
             );
             println!("   {}\n", "─".repeat(76));
             println!("   {}", paladin_result.output);
@@ -722,11 +727,13 @@ async fn execute_conclave(
             println!("{} Individual Expert Outputs:", "→".cyan().bold());
             for (expert_name, expert_result) in result.expert_outputs.iter() {
                 println!(
-                    "\n  {} {} ({} loops, {} tokens):",
+                    "\n  {} {} ({} loops, {}):",
                     "→".cyan(),
                     expert_name,
                     expert_result.loop_count,
-                    expert_result.usage.total_tokens
+                    crate::application::cli::formatters::output::format_token_usage_summary(
+                        &expert_result.usage
+                    )
                 );
                 println!("   {}", "─".repeat(76));
                 // Print first few lines

@@ -5,10 +5,10 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 32
 current_phase_name: Unified Token Primitives
 status: planning
-stopped_at: "Phase 31 complete (7/7 plans, verification passed 5/5, code review CR-01/WR-01 fixed) — next: /gsd-secure-phase 31, then /gsd-discuss-phase 32"
-last_updated: "2026-09-15T09:23:19.891Z"
+stopped_at: "Phase 31 closed — UAT 38/38 passed (36 coverage-auto, 2 human), verification passed 5/5, security threats_open 0, Nyquist validated — next: /gsd-discuss-phase 32"
+last_updated: "2026-09-15T12:46:35.113Z"
 last_activity: 2026-09-15
-last_activity_desc: Phase 31 complete, transitioned to Phase 32
+last_activity_desc: Phase 31 UAT complete (38/38), Phase 32 ready to plan
 progress:
   total_phases: 13
   completed_phases: 11
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-09-14 after Phase 30)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 31 — lossless-token-accounting
+**Current focus:** Phase 32 — Unified Token Primitives
 `0.10.0` tag is cut (Phases 22-29 complete). Phase 30 is planned (3 plans, 3 waves). Next:
 `/gsd-execute-phase 30` (docs-only vocabulary + Commissary anchoring). `/gsd-complete-milestone v0.10.0` moves to after Phase 33's release
 re-seal (COMM-04).
 
-**Progress:** [███████████████░░░░░] v0.10.0 — 10 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29, 30); Phases 31-33 remain (Token Economy, added 2026-09-14); 140/140 plans (100%)
+**Progress:** [█████████████████░░░] v0.10.0 — 11 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29, 30, 31); Phases 32-33 remain (Token Economy, added 2026-09-14); 147/147 plans (100%)
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -56,7 +56,7 @@ names. See MILESTONES.md.
 Phase: 32 — Unified Token Primitives
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-09-15 — Phase 31 complete, transitioned to Phase 32
+Last activity: 2026-09-15 — Phase 31 UAT complete (38/38 passed); Phase 32 ready to plan
 Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics
@@ -948,14 +948,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 31 complete (7/7 plans, verification passed 5/5, code review CR-01/WR-01 fixed) — next: /gsd-secure-phase 31, then /gsd-discuss-phase 32
+**Stopped at:** Phase 31 closed — UAT 38/38 passed (36 coverage-auto, 2 human), verification passed 5/5, security threats_open 0, Nyquist validated — next: /gsd-discuss-phase 32
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-15T09:23:19.799Z
-Resume file: .planning/phases/31-lossless-token-accounting/31-VERIFICATION.md
+Last session: 2026-09-15T12:46:35.113Z
+Resume file: None
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

@@ -521,19 +521,17 @@ impl LlmPort for AnthropicAdapter {
                                         if let Some(delta) = event.delta
                                             && let Some(text) = delta.text
                                         {
-                                            return Ok(StreamingResponse {
-                                                id: Uuid::new_v4(),
-                                                delta: text,
-                                                finish_reason: None,
-                                            });
+                                            return Ok(StreamingResponse::delta(text));
                                         }
                                     }
                                     "message_stop" => {
-                                        return Ok(StreamingResponse {
-                                            id: Uuid::new_v4(),
-                                            delta: String::new(),
-                                            finish_reason: Some(FinishReason::Stop),
-                                        });
+                                        // Mechanical migration only (Task 1,
+                                        // plan 31-03): real usage
+                                        // accumulation across
+                                        // `message_start`/`message_delta`
+                                        // and attachment to this terminal
+                                        // chunk lands in plan 31-04 (D-15).
+                                        return Ok(StreamingResponse::terminal(FinishReason::Stop));
                                     }
                                     _ => {}
                                 }
@@ -541,11 +539,7 @@ impl LlmPort for AnthropicAdapter {
                         }
                     }
 
-                    Ok(StreamingResponse {
-                        id: Uuid::new_v4(),
-                        delta: String::new(),
-                        finish_reason: None,
-                    })
+                    Ok(StreamingResponse::delta(String::new()))
                 }
                 Err(e) => Err(LlmError::ProcessingError(format!("Stream error: {}", e))),
             });

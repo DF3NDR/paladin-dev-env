@@ -321,16 +321,8 @@ impl LlmPort for ScenarioLlm {
     {
         let response = self.generate(request).await?;
         let chunks = vec![
-            Ok(StreamingResponse {
-                id: Uuid::new_v4(),
-                delta: response.content.clone(),
-                finish_reason: None,
-            }),
-            Ok(StreamingResponse {
-                id: Uuid::new_v4(),
-                delta: String::new(),
-                finish_reason: Some(response.finish_reason),
-            }),
+            Ok(StreamingResponse::delta(response.content.clone())),
+            Ok(StreamingResponse::terminal(response.finish_reason).with_usage(response.usage)),
         ];
         Ok(Box::new(stream::iter(chunks)))
     }

@@ -385,6 +385,7 @@ use paladin_core::platform::container::heartbeat::HeartbeatHandle;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::run_scope::RunScope;
+use paladin_core::platform::container::token_usage::TokenUsage;
 
 // Re-export pure domain result types from core
 pub use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
@@ -405,13 +406,94 @@ pub struct PaladinStreamChunk {
 }
 
 /// Metadata for a streaming chunk
+///
+/// As of v0.10.0 this struct is `#[non_exhaustive]` and gained the additive
+/// `usage` field (D-18), mirroring [`crate::output::llm_port::StreamingResponse`]
+/// (D-13): `#[non_exhaustive]` blocks full struct-literal AND
+/// functional-update (`..Default::default()`) construction alike from
+/// another crate, so construct it through [`ChunkMetadata::new`] plus the
+/// chainable `with_*` builders -- the `Default` impl below exists only to
+/// satisfy `clippy::new_without_default`, not as a cross-crate escape hatch.
+/// This is a one-way decision: marking it now keeps the *next* field free.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ChunkMetadata {
     /// Tokens in this chunk
     pub tokens: Option<u32>,
 
     /// Current loop iteration
     pub loop_count: Option<u32>,
+
+    /// Token usage reported by the provider's terminal stream chunk (D-18),
+    /// populated only on the [`PaladinStreamChunk`] whose `is_final` is
+    /// `true`. `None` on every other chunk, and `None` on the final chunk
+    /// itself when the provider's stream ended without reporting usage
+    /// (D-17) -- never a locally-computed estimate.
+    #[serde(default)]
+    pub usage: Option<TokenUsage>,
+}
+
+impl ChunkMetadata {
+    /// Construct empty chunk metadata: no token hint, no loop count, no
+    /// usage. Chain the `with_*` builders to set any of them.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::paladin_port::ChunkMetadata;
+    ///
+    /// let metadata = ChunkMetadata::new();
+    /// assert!(metadata.tokens.is_none());
+    /// assert!(metadata.loop_count.is_none());
+    /// assert!(metadata.usage.is_none());
+    /// ```
+    pub fn new() -> Self {
+        Self {
+            tokens: None,
+            loop_count: None,
+            usage: None,
+        }
+    }
+
+    /// Chainable: set the per-chunk token-size hint.
+    pub fn with_tokens(mut self, tokens: u32) -> Self {
+        self.tokens = Some(tokens);
+        self
+    }
+
+    /// Chainable: set the current loop iteration.
+    pub fn with_loop_count(mut self, loop_count: u32) -> Self {
+        self.loop_count = Some(loop_count);
+        self
+    }
+
+    /// Chainable: attach the provider's terminal-chunk usage (D-18).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use paladin_ports::output::paladin_port::ChunkMetadata;
+    ///
+    /// let metadata = ChunkMetadata::new().with_usage(TokenUsage::new(11, 7));
+    /// assert_eq!(metadata.usage, Some(TokenUsage::new(11, 7)));
+    /// ```
+    pub fn with_usage(mut self, usage: TokenUsage) -> Self {
+        self.usage = Some(usage);
+        self
+    }
+}
+
+// `#[non_exhaustive]` blocks cross-crate struct-literal AND
+// functional-update (`..Default::default()`) construction alike, so this
+// `Default` impl is not the "escape hatch" X-10.3 option (a) exists to
+// avoid -- it exists only to satisfy `clippy::new_without_default` for a
+// zero-argument constructor. `ChunkMetadata::new()` remains the documented,
+// doc-tested way to build one.
+impl Default for ChunkMetadata {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Type alias for Paladin streaming receiver
@@ -595,10 +677,11 @@ pub type PaladinStream = mpsc::Receiver<Result<PaladinStreamChunk, PaladinError>
 ///                     let _ = tx.send(Ok(PaladinStreamChunk {
 ///                         text: chunk.content,
 ///                         is_final: false,
-///                         metadata: Some(ChunkMetadata {
-///                             tokens: Some(chunk.tokens),
-///                             loop_count: Some(current_loop),
-///                         }),
+///                         metadata: Some(
+///                             ChunkMetadata::new()
+///                                 .with_tokens(chunk.tokens)
+///                                 .with_loop_count(current_loop),
+///                         ),
 ///                     })).await;
 ///                 }
 ///
@@ -973,7 +1056,6 @@ pub trait PaladinPort: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paladin_core::platform::container::token_usage::TokenUsage;
 
     /// Plan 25-09, D-19 / X-10.4: `execute_observed` is a DEFAULTED method
     /// whose default body delegates to `execute` and beats nothing. A port
@@ -1156,10 +1238,7 @@ mod tests {
         let chunk = PaladinStreamChunk {
             text: "Hello ".to_string(),
             is_final: false,
-            metadata: Some(ChunkMetadata {
-                tokens: Some(2),
-                loop_count: Some(1),
-            }),
+            metadata: Some(ChunkMetadata::new().with_tokens(2).with_loop_count(1)),
         };
 
         assert_eq!(chunk.text, "Hello ");
@@ -1169,13 +1248,19 @@ mod tests {
 
     #[test]
     fn test_chunk_metadata() {
-        let metadata = ChunkMetadata {
-            tokens: Some(10),
-            loop_count: Some(3),
-        };
+        let metadata = ChunkMetadata::new().with_tokens(10).with_loop_count(3);
 
         assert_eq!(metadata.tokens, Some(10));
         assert_eq!(metadata.loop_count, Some(3));
+        assert!(metadata.usage.is_none());
+    }
+
+    #[test]
+    fn test_chunk_metadata_with_usage_carries_the_terminal_chunk_figure() {
+        let metadata = ChunkMetadata::new().with_usage(TokenUsage::new(11, 7));
+
+        assert_eq!(metadata.usage, Some(TokenUsage::new(11, 7)));
+        assert!(metadata.tokens.is_none());
     }
 
     #[test]

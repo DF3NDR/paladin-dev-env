@@ -103,6 +103,13 @@ pub mod redaction;
 /// priority-ordered allocator with explicit truncation markers).
 #[allow(missing_docs)]
 pub mod services;
+/// The shared context-window precedence resolver (PRIM-04, D-01/D-02): one
+/// pure function, [`window::resolve_context_window`], that every consumer of
+/// [`paladin_ports::output::llm_port::ProviderCapabilities`] calls through
+/// instead of writing its own config-table/capability/fallback walk. Not
+/// feature-gated — both [`services::commissary`] and the facade's
+/// `HistoryTrimmer` need it unconditionally.
+pub mod window;
 
 #[cfg(any(
     feature = "kimi",

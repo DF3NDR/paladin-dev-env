@@ -202,6 +202,15 @@ pub use paladin_llm::services::commissary::{
     ShedItem, Stockpile,
 };
 
+// Shared context-window resolution types (from paladin-llm crate) -- the
+// PRIM-04 precedence resolver (D-01/D-02) both Commissary and HistoryTrimmer
+// call through instead of each keeping its own config-table/capability/
+// fallback walk. Facade users see one surface for window resolution.
+pub use paladin_llm::window::{
+    ResolvedWindow, UnknownContextWindow, WindowFallbackPolicy, WindowSource,
+    resolve_context_window,
+};
+
 // Paladin (Agent) Types
 pub use core::platform::container::paladin::{Paladin, PaladinData, PaladinStatus};
 pub use core::platform::container::paladin_config::PaladinConfig;

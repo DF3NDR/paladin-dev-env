@@ -293,6 +293,18 @@ mod tests {
         GarrisonEntry::new(role, content.to_string())
     }
 
+    /// Builds one of the ten distinguishable, EXACTLY 2_468-character entries the D-13
+    /// equivalence snapshot below uses. 2_468 characters is exactly 617 tokens under the
+    /// heuristic counter's chars-divided-by-4-rounded-up rule (2_468 / 4 == 617 with no
+    /// remainder), so the resolved limits below divide evenly with no rounding to reason
+    /// about. Distinguishable by an index prefix so the kept set can be asserted by
+    /// content, not just length.
+    fn fixed_length_entry(index: usize) -> String {
+        let prefix = format!("entry-{index}-");
+        let filler = "x".repeat(2_468 - prefix.chars().count());
+        format!("{prefix}{filler}")
+    }
+
     /// Test 1: with `model_context_limits: {"gpt-4": 1000}` and a port
     /// reporting `max_context_tokens: 8000`, the resolved limit is 1000.
     #[test]
@@ -618,5 +630,103 @@ mod tests {
         trimmer.before_model(&mut cx).await.unwrap();
 
         assert!(cx.assembly.history.is_empty());
+    }
+
+    /// Equivalence snapshot (D-13): committed green against the PRE-RESOLVER
+    /// `HistoryTrimmer::resolve_limit` three-step walk. Plan 32-02 introduces
+    /// `paladin_llm::window::resolve_context_window` as the single shared precedence
+    /// walk, and plan 32-04 rewires `resolve_limit` to call it — these three cases and
+    /// their asserted resolved numbers and kept sets must stay byte-identical across
+    /// that rewire. The CONTINUITY, not just the numbers, is the proof (D-13): this
+    /// test is never edited to make a later refactor pass.
+    #[tokio::test]
+    async fn kept_set_equivalence_snapshot_pre_resolver() {
+        let history: Vec<GarrisonEntry> = (0..10)
+            .map(|i| entry(ConversationRole::User, &fixed_length_entry(i)))
+            .collect();
+        let paladin = make_paladin("gpt-4");
+
+        // Case 1: config table `{"gpt-4": 1_234}`, port reporting `Some(8_765)` --
+        // resolved 1_234, exactly the two newest entries survive.
+        {
+            let mut config = base_config();
+            config.reserve_for_response = 0;
+            config
+                .model_context_limits
+                .insert("gpt-4".to_string(), 1_234);
+            let trimmer = HistoryTrimmer::new(config, make_counter(), make_llm_port(Some(8_765)));
+            let (limit, _source) = trimmer.resolve_limit("gpt-4");
+            assert_eq!(limit, 1_234);
+
+            let assembly = PromptAssembly::new("", "", "", history.clone(), None);
+            let mut cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
+            trimmer.before_model(&mut cx).await.unwrap();
+
+            let kept: Vec<String> = cx
+                .assembly
+                .history
+                .iter()
+                .map(|e| e.content.clone())
+                .collect();
+            assert_eq!(
+                kept,
+                vec![fixed_length_entry(8), fixed_length_entry(9)],
+                "config-table case must keep exactly the two newest entries"
+            );
+        }
+
+        // Case 2: empty config table, port reporting `Some(8_765)` -- resolved 8_765,
+        // all ten survive.
+        {
+            let mut config = base_config();
+            config.reserve_for_response = 0;
+            let trimmer = HistoryTrimmer::new(config, make_counter(), make_llm_port(Some(8_765)));
+            let (limit, _source) = trimmer.resolve_limit("gpt-4");
+            assert_eq!(limit, 8_765);
+
+            let assembly = PromptAssembly::new("", "", "", history.clone(), None);
+            let mut cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
+            trimmer.before_model(&mut cx).await.unwrap();
+
+            let kept: Vec<String> = cx
+                .assembly
+                .history
+                .iter()
+                .map(|e| e.content.clone())
+                .collect();
+            let expected: Vec<String> = (0..10).map(fixed_length_entry).collect();
+            assert_eq!(
+                kept, expected,
+                "provider-capability case must keep all ten entries"
+            );
+        }
+
+        // Case 3: empty config table, port reporting `None`,
+        // `default_context_tokens: 4_321` -- resolved 4_321, exactly the seven newest
+        // entries survive.
+        {
+            let mut config = base_config();
+            config.reserve_for_response = 0;
+            config.default_context_tokens = 4_321;
+            let trimmer = HistoryTrimmer::new(config, make_counter(), make_llm_port(None));
+            let (limit, _source) = trimmer.resolve_limit("gpt-4");
+            assert_eq!(limit, 4_321);
+
+            let assembly = PromptAssembly::new("", "", "", history.clone(), None);
+            let mut cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
+            trimmer.before_model(&mut cx).await.unwrap();
+
+            let kept: Vec<String> = cx
+                .assembly
+                .history
+                .iter()
+                .map(|e| e.content.clone())
+                .collect();
+            let expected: Vec<String> = (3..10).map(fixed_length_entry).collect();
+            assert_eq!(
+                kept, expected,
+                "default-fallback case must keep exactly the seven newest entries"
+            );
+        }
     }
 }

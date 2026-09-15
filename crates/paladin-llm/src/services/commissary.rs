@@ -992,6 +992,62 @@ mod tests {
         assert!(!stockpile.exact_tally);
     }
 
+    /// Equivalence snapshot (D-13): committed green against the PRE-RESOLVER inline
+    /// `capabilities.max_context_tokens.or(config.fallback_context_tokens)` guard in
+    /// `Commissary::new`. Plan 32-02 introduces `paladin_llm::window::
+    /// resolve_context_window` as the single shared precedence walk, and plan 32-04
+    /// rewires `Commissary::new` to call it — these three rows and their asserted
+    /// allowances/error must stay byte-identical across that rewire. The CONTINUITY,
+    /// not just the numbers, is the proof (D-13): this test is never edited to make a
+    /// later refactor pass.
+    #[test]
+    fn window_and_allowance_equivalence_snapshot_pre_resolver() {
+        enum Expected {
+            Allotted(u32),
+            UndeclaredWindow,
+        }
+
+        let rows: [(Option<u32>, Option<u32>, Expected); 3] = [
+            (Some(8_765), Some(2_222), Expected::Allotted(8_444)),
+            (None, Some(2_222), Expected::Allotted(1_901)),
+            (None, None, Expected::UndeclaredWindow),
+        ];
+
+        for (max_context_tokens, fallback_context_tokens, expected) in rows {
+            let config = CommissaryPlan {
+                reserved_completion_tokens: 321,
+                fallback_context_tokens,
+                ..CommissaryPlan::default()
+            };
+            let result = Commissary::new(
+                "deepseek",
+                capabilities_with_window(max_context_tokens),
+                counter(),
+                config,
+            );
+
+            match expected {
+                Expected::Allotted(expected_allotted) => {
+                    let commissary = result.unwrap_or_else(|err| {
+                        panic!("expected construction to succeed, got {err}")
+                    });
+                    assert_eq!(commissary.allotted_tokens(), expected_allotted);
+                }
+                Expected::UndeclaredWindow => {
+                    let err = result.expect_err("expected UndeclaredContextWindow");
+                    assert!(
+                        matches!(err, CommissaryError::UndeclaredContextWindow { .. }),
+                        "expected UndeclaredContextWindow, got {err:?}"
+                    );
+                    assert!(
+                        err.to_string().contains("deepseek"),
+                        "error message must name the provider ('deepseek'): {err}"
+                    );
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "mock")]
     #[test]
     fn the_window_comes_from_the_ports_declared_capabilities() {

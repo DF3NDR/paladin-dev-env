@@ -2,13 +2,17 @@
 //! context window, without ever splitting an entry or failing the run
 //! (Doc 05 RT-FR-08/10/11/12, D-14, D-15).
 //!
-//! # Limit resolution is a fixed three-step order (D-14)
+//! # Limit resolution goes through the shared resolver (D-14)
 //!
-//! `config.model_context_limits.get(model)` -> the constructor's own
-//! `llm_port.get_capabilities().max_context_tokens` -> `config.default_context_tokens`.
-//! The resolved value AND which step produced it are logged at debug --
-//! naming the source is how an operator diagnoses "why did my history get
-//! trimmed at 8192" rather than guessing.
+//! `resolve_limit` is a thin call-through to
+//! [`paladin_llm::window::resolve_context_window`] -- the config table
+//! (`config.model_context_limits.get(model)`), then the constructor's own
+//! `llm_port.get_capabilities().max_context_tokens`, then
+//! `config.default_context_tokens` under the lenient
+//! [`paladin_llm::window::WindowFallbackPolicy::Default`] policy, which
+//! always resolves. The resolved value AND which step produced it are
+//! logged at debug -- naming the source is how an operator diagnoses "why
+//! did my history get trimmed at 8192" rather than guessing.
 //!
 //! `llm_port` here is the SERVICE's own configured port, read once per
 //! `before_model` call -- never a per-run override
@@ -52,35 +56,11 @@ use log::{debug, warn};
 use crate::application::services::paladin::error::PaladinError;
 use crate::config::agent_runtime::HistoryTrimmerConfig;
 use crate::core::platform::container::garrison::GarrisonEntry;
+use paladin_llm::window::{WindowFallbackPolicy, WindowSource, resolve_context_window};
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::token_counter_port::TokenCounterPort;
 
 use super::{ExecutionMiddleware, MiddlewareFlow, ModelCallContext};
-
-/// Which of D-14's three resolution steps produced a limit -- named so the
-/// debug log can say exactly which one, rather than just the number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LimitSource {
-    /// `config.model_context_limits.get(model)` had an entry.
-    ConfigTable,
-    /// The constructor's `llm_port.get_capabilities().max_context_tokens`
-    /// had a value.
-    ProviderCapabilities,
-    /// Neither of the above -- `config.default_context_tokens`.
-    Default,
-}
-
-impl LimitSource {
-    fn as_str(self) -> &'static str {
-        match self {
-            LimitSource::ConfigTable => "model_context_limits config table",
-            LimitSource::ProviderCapabilities => {
-                "provider capabilities (get_capabilities().max_context_tokens)"
-            }
-            LimitSource::Default => "default_context_tokens",
-        }
-    }
-}
 
 /// Keeps a run's conversation history within a model's context window
 /// (`KeepSystemAndRecent`, D-15), resolving the context-token limit through
@@ -110,16 +90,27 @@ impl HistoryTrimmer {
         }
     }
 
-    /// D-14's three-step resolution order, returning both the resolved
-    /// limit and which step produced it.
-    fn resolve_limit(&self, model: &str) -> (u32, LimitSource) {
-        if let Some(&limit) = self.config.model_context_limits.get(model) {
-            return (limit, LimitSource::ConfigTable);
+    /// D-14's resolution order, returning both the resolved limit and which
+    /// step produced it -- a thin call-through to the shared
+    /// [`resolve_context_window`] under the lenient
+    /// [`WindowFallbackPolicy::Default`] policy, which always resolves.
+    fn resolve_limit(&self, model: &str) -> (u32, WindowSource) {
+        let capabilities = self.llm_port.get_capabilities();
+        match resolve_context_window(
+            model,
+            Some(&self.config.model_context_limits),
+            &capabilities,
+            WindowFallbackPolicy::Default(self.config.default_context_tokens),
+        ) {
+            Ok(resolved) => (resolved.tokens, resolved.source),
+            Err(_unreachable) => {
+                // Unreachable under WindowFallbackPolicy::Default, which always
+                // resolves -- handled explicitly (never unwrapped, CLAUDE.md
+                // library-code rule) by falling back to this trimmer's own
+                // configured default, paired with the framework-default source.
+                (self.config.default_context_tokens, WindowSource::Default)
+            }
         }
-        if let Some(max_context_tokens) = self.llm_port.get_capabilities().max_context_tokens {
-            return (max_context_tokens, LimitSource::ProviderCapabilities);
-        }
-        (self.config.default_context_tokens, LimitSource::Default)
     }
 
     /// Sum of `counter.count(_, model)` over every fixed (non-history) part

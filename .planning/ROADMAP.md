@@ -851,11 +851,26 @@ Plans:
   4. A shared resolver in `paladin-llm` (e.g. `window::resolve_context_window`) owns the precedence config table → provider capabilities → default, with an explicit strict mode that errors rather than defaults when the window is unknown; both `HistoryTrimmer` (`src/application/services/paladin/middleware/history.rs`, today's `resolve_limit`) and `Commissary` consume it; precedence tests cover config-table hit, provider-capability hit, default fallback and strict refusal, and an equivalence snapshot proves `Commissary` resolves the same windows as before this phase and `HistoryTrimmer` produces the same trims (PRIM-04)
   5. The `Commissary::new` signature change and the legacy-counter removal each have a `MIGRATION.md` §9.2 row and a semver-checks allowlist row (row-level gate green), the `CHANGELOG.md` `[0.10.0]` section records them, and `make clean-code` plus the coverage floor are green (PRIM-05)
 
-**Plans**: TBD (run `/gsd-plan-phase 32` to break down)
+**Plans**: 5 plans
 
 Plans:
 
-- [ ] TBD
+**Wave 1**
+
+- [ ] 32-01-PLAN.md — `TokenCounterPort::is_exact` defaulted `false` with tiktoken `true` and heuristic inheriting it, `Commissary` dropping its caller-supplied exactness argument and reading the port, plus the consolidated one-way checkpoint for the phase (PRIM-01, PRIM-02)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 32-02-PLAN.md — the pre-resolver equivalence snapshot committed green, then `paladin_llm::window`: one precedence walk with an explicit fallback-policy enum, a labelled source enum and four precedence tests (PRIM-04)
+- [ ] 32-03-PLAN.md — legacy `garrison::TokenCounter`/`TokenCounterFactory` deleted outright, the tiktoken counting path inlined into the port impl, four re-export sites narrowed and the doc sweep with its exit grep (PRIM-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 32-04-PLAN.md — both consumers call the shared resolver: `Commissary::new` under the strict policy with an absent table, `HistoryTrimmer::resolve_limit` under the lenient policy, the facade's duplicate source enum deleted, equivalence fixtures green and unedited (PRIM-04)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 32-05-PLAN.md — empirical semver discovery with the mandatory `--release-type minor` and the feature-gated second pass, `MIGRATION.md` §9.2 rows with row-matched allowlist entries, `CHANGELOG.md` `[0.10.0]` bullets, the two migration pages, and the phase gate evidence (PRIM-05)
 
 ### Phase 33: Commissary In-Tree Adoption
 

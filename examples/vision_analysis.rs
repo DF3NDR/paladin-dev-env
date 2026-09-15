@@ -231,7 +231,7 @@ async fn analyze_image(
     println!("🤖 Paladin: {}", paladin.node.name);
     println!("⏱️  Execution Time: {:.2}s", duration.as_secs_f64());
     println!("🔄 Loops: {}", result.loop_count);
-    println!("🎫 Tokens: {}", result.token_count);
+    println!("🎫 Tokens: {}", result.usage.total_tokens);
     println!("🛑 Stop Reason: {:?}", result.stop_reason);
     println!("{}", "─".repeat(80));
     println!("📝 OUTPUT:\n");

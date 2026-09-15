@@ -119,7 +119,7 @@ impl JsonHerald {
     fn paladin_result_to_json(&self, result: &PaladinResult) -> Value {
         let mut json = json!({
             "output": result.output,
-            "token_count": result.token_count,
+            "token_count": result.usage.total_tokens,
             "execution_time_ms": result.execution_time_ms,
             "loop_count": result.loop_count,
             "stop_reason": format!("{:?}", result.stop_reason),
@@ -250,7 +250,7 @@ mod tests {
     fn create_test_paladin_result() -> PaladinResult {
         PaladinResult {
             output: "Test output content".to_string(),
-            token_count: 100,
+            usage: TokenUsage::new(100, 0),
             execution_time_ms: 1500,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -269,7 +269,7 @@ mod tests {
                 create_test_paladin_result(),
                 PaladinResult {
                     output: "Second output".to_string(),
-                    token_count: 150,
+                    usage: TokenUsage::new(150, 0),
                     execution_time_ms: 2000,
                     loop_count: 2,
                     stop_reason: StopReason::Completed,
@@ -388,8 +388,8 @@ mod tests {
         let herald = JsonHerald::new();
 
         let mut per_paladin_tokens = std::collections::HashMap::new();
-        per_paladin_tokens.insert("Scout".to_string(), TokenUsage::from_total(137));
-        per_paladin_tokens.insert("Sentinel".to_string(), TokenUsage::from_total(263));
+        per_paladin_tokens.insert("Scout".to_string(), TokenUsage::new(137, 0));
+        per_paladin_tokens.insert("Sentinel".to_string(), TokenUsage::new(263, 0));
 
         let result = BattalionResult {
             battalion_id: Uuid::new_v4(),
@@ -400,7 +400,7 @@ mod tests {
             paladin_results: vec![
                 PaladinResult {
                     output: "Scout output".to_string(),
-                    token_count: 137,
+                    usage: TokenUsage::new(137, 0),
                     execution_time_ms: 1500,
                     loop_count: 1,
                     stop_reason: StopReason::Completed,
@@ -408,7 +408,7 @@ mod tests {
                 },
                 PaladinResult {
                     output: "Sentinel output".to_string(),
-                    token_count: 263,
+                    usage: TokenUsage::new(263, 0),
                     execution_time_ms: 2000,
                     loop_count: 2,
                     stop_reason: StopReason::Completed,
@@ -594,7 +594,7 @@ mod tests {
         assert_eq!(parsed["output"].as_str().unwrap(), original.output);
         assert_eq!(
             parsed["token_count"].as_u64().unwrap(),
-            original.token_count as u64
+            u64::from(original.usage.total_tokens)
         );
         assert_eq!(
             parsed["execution_time_ms"].as_u64().unwrap(),

@@ -6,6 +6,7 @@ use paladin_battalion::formation_service::FormationExecutionService;
 use paladin_battalion::phalanx_service::PhalanxExecutionService;
 use paladin_core::base::entity::node::Node;
 use paladin_core::platform::container::battalion::BattalionConfig;
+use paladin_core::platform::container::battalion::TokenUsage;
 use paladin_core::platform::container::battalion::campaign::{
     Campaign, CampaignEdge, EdgeCondition,
 };
@@ -46,7 +47,7 @@ impl PaladinPort for MockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
         Ok(PaladinResult {
             output: format!("{}::{}", paladin.node.name, input),
-            token_count: 12,
+            usage: TokenUsage::new(12, 0),
             execution_time_ms: 1,
             loop_count: 1,
             stop_reason: StopReason::Completed,

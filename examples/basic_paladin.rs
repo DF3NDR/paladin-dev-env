@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📊 Execution Results:");
     println!("   Output: {}", result.output);
     println!("   Loops: {}", result.loop_count);
-    println!("   Tokens: {}", result.token_count);
+    println!("   Tokens: {}", result.usage.total_tokens);
     println!("   Time: {}ms", result.execution_time_ms);
     println!("   Stop Reason: {:?}", result.stop_reason);
     println!();

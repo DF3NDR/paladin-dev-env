@@ -292,7 +292,7 @@ fn build_supersteps(
                 // rather than a possibly-stale or possibly-zero number
                 // (28-UI-SPEC.md E2 "partial").
                 duration_ms: (!record.cache_hit).then_some(record.duration_ms),
-                token_count: (!record.cache_hit).then_some(record.token_count),
+                token_count: (!record.cache_hit).then_some(u64::from(record.usage.total_tokens)),
                 cache_hit: record.cache_hit,
             })
             .collect();
@@ -432,6 +432,7 @@ mod tests {
         BattlefieldSchema, CustomDispatchResolver, DispatchRule, FieldSpec, StateDelta,
     };
     use paladin_core::platform::container::run::{AssistantRef, Run, RunId};
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::waypoint::{
         FrontierSnapshot, GraphFingerprint, NodeExecutionRecord, NodeOutcomeKind, WaypointStatus,
     };
@@ -458,7 +459,7 @@ mod tests {
         attempt: u32,
         outcome: NodeOutcomeKind,
         duration_ms: u64,
-        token_count: u64,
+        token_count: u32,
         cache_hit: bool,
     ) -> NodeExecutionRecord {
         NodeExecutionRecord {
@@ -466,7 +467,7 @@ mod tests {
             paladin_id: None,
             started_at: chrono::Utc::now(),
             duration_ms,
-            token_count,
+            usage: paladin_core::platform::container::token_usage::TokenUsage::new(token_count, 0),
             outcome,
             attempt,
             attempts: Vec::new(),
@@ -836,7 +837,7 @@ mod tests {
                     attempt: 1,
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 10,
-                    token_count: 5,
+                    usage: TokenUsage::new(5, 0),
                     cache_hit: false,
                 },
             ),

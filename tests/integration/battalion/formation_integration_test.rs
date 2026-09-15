@@ -76,7 +76,7 @@ impl PaladinPort for IntegrationMockPaladinPort {
         // Successful execution
         Ok(PaladinResult {
             output: format!("[{}]: Processed: {}", paladin.node.name, input),
-            token_count: 50,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(50, 0),
             execution_time_ms: delay,
             loop_count: 1,
             stop_reason: StopReason::Completed,

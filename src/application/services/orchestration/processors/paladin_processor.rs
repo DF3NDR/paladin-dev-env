@@ -117,7 +117,7 @@ impl ContentProcessor for PaladinContentProcessor {
 
         let processing_time_ms = start.elapsed().as_millis() as u64;
         let output = result.output;
-        let mut metadata = self.base_metadata(&output, result.token_count);
+        let mut metadata = self.base_metadata(&output, result.usage.total_tokens);
 
         let (success, result_data, error) = match self.parsing {
             OutputParsing::RawText => (true, Some(json!({ "enrichment": output })), None),

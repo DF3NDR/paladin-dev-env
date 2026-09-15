@@ -45,6 +45,7 @@ use paladin_core::platform::container::battlefield::{
 };
 use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::trace::{TraceEvent, TraceRecord};
 use paladin_core::platform::container::waypoint::{
     FrontierSnapshot, GraphFingerprint, NodeExecutionRecord, NodeId, NodeOutcomeKind, ThreadId,
@@ -308,14 +309,14 @@ fn overlay_record(
     node_id: &str,
     outcome: NodeOutcomeKind,
     duration_ms: u64,
-    token_count: u64,
+    token_count: u32,
 ) -> NodeExecutionRecord {
     NodeExecutionRecord {
         node_id: NodeId::new(node_id),
         paladin_id: None,
         started_at: Utc::now(),
         duration_ms,
-        token_count,
+        usage: TokenUsage::new(token_count, 0),
         outcome,
         attempt: 1,
         attempts: Vec::new(),
@@ -364,7 +365,7 @@ fn branch_join_trace_records() -> Vec<TraceRecord> {
             attempt: 1,
             outcome: NodeOutcomeKind::Succeeded,
             duration_ms: 120,
-            token_count: 45,
+            usage: TokenUsage::new(45, 0),
             cache_hit: false,
         },
         TraceEvent::EdgeEvaluated {
@@ -385,7 +386,7 @@ fn branch_join_trace_records() -> Vec<TraceRecord> {
             attempt: 1,
             outcome: NodeOutcomeKind::Succeeded,
             duration_ms: 80,
-            token_count: 30,
+            usage: TokenUsage::new(30, 0),
             cache_hit: false,
         },
         TraceEvent::EdgeEvaluated {
@@ -400,7 +401,7 @@ fn branch_join_trace_records() -> Vec<TraceRecord> {
             attempt: 1,
             outcome: NodeOutcomeKind::Succeeded,
             duration_ms: 60,
-            token_count: 20,
+            usage: TokenUsage::new(20, 0),
             cache_hit: false,
         },
     ];

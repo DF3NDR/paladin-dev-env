@@ -137,7 +137,7 @@ impl From<PaladinResult> for ExecuteResponse {
     fn from(result: PaladinResult) -> Self {
         Self {
             output: result.output,
-            token_count: result.token_count,
+            token_count: result.usage.total_tokens,
             execution_time_ms: result.execution_time_ms,
             loop_count: result.loop_count,
             stop_reason: stop_reason_label(&result.stop_reason).to_string(),
@@ -755,6 +755,7 @@ mod tests {
     use axum::http::Request;
     use axum::routing::post;
     use paladin_core::platform::container::paladin::PaladinData;
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::user::UserRole;
     use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
     use tower::ServiceExt; // for `Router::oneshot`
@@ -793,7 +794,7 @@ mod tests {
             match self {
                 MockExecutor::Succeeds(output) => Ok(PaladinResult::new(
                     output.clone(),
-                    5,
+                    TokenUsage::new(5, 0),
                     10,
                     1,
                     StopReason::Completed,
@@ -803,7 +804,7 @@ mod tests {
                     tokio::time::sleep(Duration::from_secs(60)).await;
                     Ok(PaladinResult::new(
                         "late".to_string(),
-                        0,
+                        TokenUsage::default(),
                         0,
                         0,
                         StopReason::Completed,
@@ -1640,7 +1641,13 @@ mod tests {
 
     #[test]
     fn execute_response_from_paladin_result_maps_fields_and_label() {
-        let result = PaladinResult::new("hi".to_string(), 7, 42, 2, StopReason::MaxLoops);
+        let result = PaladinResult::new(
+            "hi".to_string(),
+            TokenUsage::new(7, 0),
+            42,
+            2,
+            StopReason::MaxLoops,
+        );
         let response = ExecuteResponse::from(result);
         assert_eq!(response.output, "hi");
         assert_eq!(response.token_count, 7);

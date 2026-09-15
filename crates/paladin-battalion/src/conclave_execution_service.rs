@@ -529,6 +529,7 @@ mod tests {
     use async_trait::async_trait;
     use paladin_core::base::entity::node::Node;
     use paladin_core::platform::container::battalion::BattalionConfig;
+    use paladin_core::platform::container::battalion::TokenUsage;
     use paladin_core::platform::container::battalion::conclave::ConclaveConfig;
     use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
     use paladin_ports::output::paladin_port::StopReason;
@@ -582,7 +583,7 @@ mod tests {
             // Success case
             Ok(PaladinResult {
                 output: format!("Analysis from {}: {}", expert_name, input),
-                token_count: 100,
+                usage: TokenUsage::new(100, 0),
                 execution_time_ms: 50,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,
@@ -818,7 +819,7 @@ mod tests {
             "Expert1".to_string(),
             PaladinResult {
                 output: "Analysis 1".to_string(),
-                token_count: 10,
+                usage: TokenUsage::new(10, 0),
                 execution_time_ms: 100,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,
@@ -829,7 +830,7 @@ mod tests {
             "Expert2".to_string(),
             PaladinResult {
                 output: "Analysis 2".to_string(),
-                token_count: 10,
+                usage: TokenUsage::new(10, 0),
                 execution_time_ms: 100,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,

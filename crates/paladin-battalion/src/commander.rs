@@ -1807,7 +1807,7 @@ mod tests {
     use async_trait::async_trait;
     use paladin_core::base::entity::node::Node;
     use paladin_core::platform::container::battalion::{
-        BattalionStatus, ErrorStrategy, RetryPolicy,
+        BattalionStatus, ErrorStrategy, RetryPolicy, TokenUsage,
     };
     use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
     use paladin_core::platform::container::paladin_error::PaladinError;
@@ -1827,7 +1827,7 @@ mod tests {
         ) -> Result<PaladinResult, PaladinError> {
             Ok(PaladinResult {
                 output: "test output".to_string(),
-                token_count: 100,
+                usage: TokenUsage::new(100, 0),
                 execution_time_ms: 100,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,
@@ -1869,7 +1869,7 @@ mod tests {
 
             Ok(PaladinResult {
                 output,
-                token_count: 100,
+                usage: TokenUsage::new(100, 0),
                 execution_time_ms: 100,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,
@@ -2596,7 +2596,7 @@ mod tests {
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 Ok(PaladinResult {
                     output: "slow output".to_string(),
-                    token_count: 100,
+                    usage: TokenUsage::new(100, 0),
                     execution_time_ms: 2000,
                     loop_count: 1,
                     stop_reason: StopReason::Completed,

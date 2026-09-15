@@ -12,6 +12,7 @@ use paladin::core::base::entity::node::Node;
 use paladin::core::platform::container::battalion::formation::Formation;
 use paladin::core::platform::container::battalion::{BattalionConfig, ErrorStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin::core::platform::container::token_usage::TokenUsage;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, StopReason};
 use std::sync::Arc;
 
@@ -49,7 +50,7 @@ impl PaladinPort for ExamplePaladinPort {
 
         Ok(PaladinResult {
             output,
-            token_count: 100,
+            usage: TokenUsage::new(100, 0),
             execution_time_ms: 500,
             loop_count: 1,
             stop_reason: StopReason::Completed,

@@ -18,6 +18,7 @@ use paladin_core::platform::container::battlefield::{
     StateDelta,
 };
 use paladin_core::platform::container::parley::{ParleyId, ParleyKind};
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent, TraceRecord};
 use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, ThreadId, WaypointId};
 use paladin_eval::scenario::{Assertion, RunStatusValue, Times};
@@ -93,7 +94,7 @@ fn fixture_records() -> Vec<TraceRecord> {
                 attempt: 1,
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
-                token_count: 10,
+                usage: TokenUsage::new(10, 0),
                 cache_hit: false,
             },
         ),
@@ -121,7 +122,7 @@ fn fixture_records() -> Vec<TraceRecord> {
                 attempt: 1,
                 outcome: NodeOutcomeKind::Failed,
                 duration_ms: 8,
-                token_count: 5,
+                usage: TokenUsage::new(5, 0),
                 cache_hit: false,
             },
         ),
@@ -142,7 +143,7 @@ fn fixture_records() -> Vec<TraceRecord> {
                 attempt: 2,
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 6,
-                token_count: 7,
+                usage: TokenUsage::new(7, 0),
                 cache_hit: false,
             },
         ),
@@ -159,7 +160,7 @@ fn fixture_records() -> Vec<TraceRecord> {
             TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 2,
-                total_tokens: 22,
+                usage: TokenUsage::new(22, 0),
                 duration_ms: 20,
                 trace_dropped_total: 0,
             },

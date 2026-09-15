@@ -123,6 +123,7 @@ mod tests {
     use paladin_core::platform::container::paladin::Paladin;
     use paladin_core::platform::container::paladin_error::PaladinError;
     use paladin_core::platform::container::run::RunId;
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::waypoint::{NodeId, ThreadId, WaypointId};
     use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
     use paladin_ports::output::run_trace_port::RunTraceError;
@@ -173,7 +174,7 @@ mod tests {
             TraceEvent::RunFinished {
                 status: paladin_ports::output::trace_sink_port::RunFinishStatus::Completed,
                 total_supersteps: 1,
-                total_tokens: 0,
+                usage: TokenUsage::default(),
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },

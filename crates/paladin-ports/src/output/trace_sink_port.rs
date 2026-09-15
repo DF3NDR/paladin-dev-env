@@ -321,6 +321,7 @@ impl TraceEmitter for StandaloneEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::waypoint::ThreadId;
     use tokio::sync::Mutex;
 
@@ -469,7 +470,7 @@ mod tests {
             event: TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 0,
-                total_tokens: 0,
+                usage: TokenUsage::default(),
                 duration_ms: 0,
                 trace_dropped_total: 0,
             },

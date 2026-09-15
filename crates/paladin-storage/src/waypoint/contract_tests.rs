@@ -21,6 +21,7 @@ use paladin_core::platform::container::node_error::{AttemptRecord, NodeError, No
 use paladin_core::platform::container::parley::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeExecutionRecord,
@@ -953,7 +954,7 @@ fn record_with_two_failed_attempts() -> NodeExecutionRecord {
         paladin_id: None,
         started_at,
         duration_ms: 7,
-        token_count: 0,
+        usage: TokenUsage::default(),
         outcome: NodeOutcomeKind::Succeeded,
         attempt: 3,
         attempts: vec![

@@ -29,6 +29,7 @@ use paladin_core::platform::container::parley::ParleyKind;
 use paladin_core::platform::container::run::{
     AssistantRef, Run, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
 };
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 use paladin_ports::input::run_event_stream_port::RunEventStreamPort;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
@@ -634,7 +635,7 @@ fn map_trace_event_covers_exactly_seven_of_twelve() {
                 attempt: 1,
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
-                token_count: 0,
+                usage: TokenUsage::default(),
                 cache_hit: false,
             },
             true,
@@ -686,7 +687,7 @@ fn map_trace_event_covers_exactly_seven_of_twelve() {
             TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
-                total_tokens: 0,
+                usage: TokenUsage::default(),
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },
@@ -697,7 +698,7 @@ fn map_trace_event_covers_exactly_seven_of_twelve() {
             TraceEvent::RunFinished {
                 status: RunFinishStatus::Failed,
                 total_supersteps: 1,
-                total_tokens: 0,
+                usage: TokenUsage::default(),
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },
@@ -1076,7 +1077,7 @@ async fn replay_paginates_through_the_port() {
         event: TraceEvent::RunFinished {
             status: paladin_ports::output::trace_sink_port::RunFinishStatus::Completed,
             total_supersteps: 5,
-            total_tokens: 0,
+            usage: TokenUsage::default(),
             duration_ms: 1,
             trace_dropped_total: 0,
         },

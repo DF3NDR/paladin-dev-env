@@ -768,7 +768,7 @@ impl PaladinPort for ScenarioPaladinPort {
 
         Ok(PaladinResult {
             output: response.content,
-            token_count: response.usage.total_tokens as u32,
+            usage: response.usage.clone(),
             execution_time_ms: 0,
             loop_count: 1,
             stop_reason: StopReason::Completed,

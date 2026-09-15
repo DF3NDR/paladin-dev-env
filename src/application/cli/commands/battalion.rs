@@ -383,7 +383,7 @@ async fn execute_formation(
                     idx + 1,
                     idx + 1,
                     paladin_result.loop_count,
-                    paladin_result.token_count
+                    paladin_result.usage.total_tokens
                 );
                 println!(
                     "     {}",
@@ -536,7 +536,7 @@ async fn execute_phalanx(
             );
             println!(
                 "   Loops: {}, Tokens: {}",
-                paladin_result.loop_count, paladin_result.token_count
+                paladin_result.loop_count, paladin_result.usage.total_tokens
             );
             println!("   {}\n", "─".repeat(76));
             println!("   {}", paladin_result.output);
@@ -726,7 +726,7 @@ async fn execute_conclave(
                     "→".cyan(),
                     expert_name,
                     expert_result.loop_count,
-                    expert_result.token_count
+                    expert_result.usage.total_tokens
                 );
                 println!("   {}", "─".repeat(76));
                 // Print first few lines

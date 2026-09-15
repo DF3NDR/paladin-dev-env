@@ -792,6 +792,7 @@ impl GroveExecutionService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_core::platform::container::battalion::TokenUsage;
     use paladin_core::platform::container::battalion::grove::{GroveBuilder, Tree, TreeAgent};
     use paladin_ports::output::embedding_port::Embedding;
 
@@ -979,7 +980,7 @@ mod tests {
             {
                 Ok(PaladinResult {
                     output: format!("[{}] Analyzed: {}", paladin.node.name, input),
-                    token_count: 100,
+                    usage: TokenUsage::new(100, 0),
                     execution_time_ms: 10,
                     loop_count: 1,
                     ..Default::default()

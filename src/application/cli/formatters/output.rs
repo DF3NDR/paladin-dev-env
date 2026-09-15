@@ -268,7 +268,7 @@ impl OutputFormatter {
         output.push_str(&format!(
             "  {} Tokens Used: {}\n",
             self.style("•", OutputStyle::Info),
-            result.token_count
+            result.usage.total_tokens
         ));
 
         // Status with color coding
@@ -347,7 +347,7 @@ impl OutputFormatter {
         json!({
             "output": result.output,
             "metadata": {
-                "token_count": result.token_count,
+                "token_count": result.usage.total_tokens,
                 "execution_time_ms": result.execution_time_ms,
                 "execution_time_seconds": result.execution_time_ms as f64 / 1000.0,
                 "loop_count": result.loop_count,
@@ -503,7 +503,7 @@ impl OutputFormatter {
                     idx + 1,
                     paladin_result.loop_count,
                     timing as f64 / 1000.0,
-                    paladin_result.token_count
+                    paladin_result.usage.total_tokens
                 ));
 
                 let (status_emoji, status_style) = match &paladin_result.stop_reason {
@@ -564,7 +564,7 @@ impl OutputFormatter {
                 json!({
                     "index": idx,
                     "output": r.output,
-                    "token_count": r.token_count,
+                    "token_count": r.usage.total_tokens,
                     "execution_time_ms": timing,
                     "loop_count": r.loop_count,
                     "stop_reason": format!("{:?}", r.stop_reason),

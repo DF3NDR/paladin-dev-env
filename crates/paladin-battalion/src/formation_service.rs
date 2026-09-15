@@ -226,11 +226,8 @@ impl FormationExecutionService {
                     // result is moved into paladin_results, mirroring
                     // PhalanxExecutionService::execute_internal.
                     per_paladin_times.insert(paladin.node.name.clone(), result.execution_time_ms);
-                    per_paladin_tokens.insert(
-                        paladin.node.name.clone(),
-                        TokenUsage::from_total(result.token_count),
-                    );
-                    total_tokens += u64::from(result.token_count);
+                    per_paladin_tokens.insert(paladin.node.name.clone(), result.usage.clone());
+                    total_tokens += u64::from(result.usage.total_tokens);
 
                     // Success: Update input for next Paladin
                     current_input = result.output.clone();
@@ -449,7 +446,7 @@ mod tests {
 
             Ok(PaladinResult {
                 output: format!("Processed: {} by {}", input, paladin.node.name),
-                token_count: 100,
+                usage: TokenUsage::new(100, 0),
                 execution_time_ms: 100,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,

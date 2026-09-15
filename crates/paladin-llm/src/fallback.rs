@@ -865,7 +865,7 @@ mod tests {
                     attempt: 1,
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 0,
-                    token_count: 0,
+                    usage: paladin_core::platform::container::token_usage::TokenUsage::default(),
                     cache_hit: false,
                 });
             })

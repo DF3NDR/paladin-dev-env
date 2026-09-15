@@ -521,7 +521,7 @@ impl HandoffService {
                     info!(
                         "Handoff succeeded: specialist={}, tokens={}, loops={}, time={}ms",
                         specialist_name,
-                        result.token_count,
+                        result.usage.total_tokens,
                         result.loop_count,
                         result.execution_time_ms
                     );

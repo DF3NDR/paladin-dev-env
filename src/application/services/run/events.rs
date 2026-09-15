@@ -848,6 +848,7 @@ mod tests {
 
     use paladin_core::platform::container::battlefield::FieldName;
     use paladin_core::platform::container::parley::{ParleyId, ParleyKind};
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, WaypointId};
     use paladin_ports::output::trace_sink_port::{FieldChange, MiddlewareAction, RunFinishStatus};
 
@@ -921,7 +922,7 @@ mod tests {
                     attempt: 1,
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 5,
-                    token_count: 0,
+                    usage: TokenUsage::new(0, 0),
                     cache_hit: false,
                 },
                 true,
@@ -973,7 +974,7 @@ mod tests {
                 TraceEvent::RunFinished {
                     status: RunFinishStatus::Completed,
                     total_supersteps: 1,
-                    total_tokens: 0,
+                    usage: TokenUsage::new(0, 0),
                     duration_ms: 5,
                     trace_dropped_total: 0,
                 },
@@ -984,7 +985,7 @@ mod tests {
                 TraceEvent::RunFinished {
                     status: RunFinishStatus::Failed,
                     total_supersteps: 1,
-                    total_tokens: 0,
+                    usage: TokenUsage::new(0, 0),
                     duration_ms: 5,
                     trace_dropped_total: 0,
                 },
@@ -1047,7 +1048,7 @@ mod tests {
                 TraceEvent::RunFinished {
                     status,
                     total_supersteps: 3,
-                    total_tokens: 10,
+                    usage: TokenUsage::new(10, 0),
                     duration_ms: 20,
                     trace_dropped_total: 0,
                 },
@@ -1102,7 +1103,7 @@ mod tests {
                 attempt: 1,
                 outcome: NodeOutcomeKind::Failed,
                 duration_ms: 5,
-                token_count: 0,
+                usage: TokenUsage::new(0, 0),
                 cache_hit: false,
             },
         );

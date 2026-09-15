@@ -53,7 +53,7 @@ impl Herald for XmlHerald {
     <stop_reason>{:?}</stop_reason>
 </paladin_result>"#,
             Self::xml_escape(&result.output),
-            result.token_count,
+            result.usage.total_tokens,
             result.execution_time_ms,
             result.loop_count,
             result.stop_reason,
@@ -81,7 +81,7 @@ impl Herald for XmlHerald {
             <token_count>{}</token_count>
         </paladin>"#,
                 Self::xml_escape(&paladin.output),
-                paladin.token_count,
+                paladin.usage.total_tokens,
             ));
         }
 
@@ -142,7 +142,7 @@ impl Herald for CsvHerald {
         csv.push_str(&format!(
             "{},{},{},{},{:?}\n",
             Self::csv_escape(&result.output),
-            result.token_count,
+            result.usage.total_tokens,
             result.execution_time_ms,
             result.loop_count,
             result.stop_reason,
@@ -159,7 +159,7 @@ impl Herald for CsvHerald {
                 result.battalion_id,
                 Self::csv_escape(&result.battalion_name),
                 Self::csv_escape(&paladin.output),
-                paladin.token_count,
+                paladin.usage.total_tokens,
             ));
         }
 

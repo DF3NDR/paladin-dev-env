@@ -41,7 +41,7 @@
 //! // Execute
 //! let result = service.execute(&paladin, "What is Rust?").await?;
 //! println!("Output: {}", result.output);
-//! println!("Loops: {}, Tokens: {}", result.loop_count, result.token_count);
+//! println!("Loops: {}, Tokens: {}", result.loop_count, result.usage.total_tokens);
 //! # Ok(())
 //! # }
 //! ```
@@ -1213,7 +1213,10 @@ impl PaladinExecutionService {
         Ok(PaladinResult {
             output: vision_result.content,
             loop_count: 1, // Vision is single-shot
-            token_count: vision_result.token_usage.total_tokens,
+            usage: paladin_core::platform::container::token_usage::TokenUsage::new(
+                vision_result.token_usage.prompt_tokens,
+                vision_result.token_usage.completion_tokens,
+            ),
             stop_reason: StopReason::Completed,
             execution_time_ms: 0, // Will be set by caller if needed
             ..Default::default()
@@ -1254,7 +1257,7 @@ impl PaladinExecutionService {
         confined_vault: Option<ConfinedVault>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
-        let mut total_tokens = 0u32;
+        let mut usage = paladin_core::platform::container::token_usage::TokenUsage::default();
         let mut accumulated_output = String::new();
         let mut _retrieval_latency_ms = 0u64;
         let mut _memories_retrieved_count = 0usize;
@@ -1465,7 +1468,7 @@ impl PaladinExecutionService {
 
                     return Ok(PaladinResult {
                         output: accumulated_output,
-                        token_count: total_tokens,
+                        usage: usage.clone(),
                         execution_time_ms: start_time.elapsed().as_millis() as u64,
                         loop_count: loop_num,
                         stop_reason: effective_result.stop_reason,
@@ -1497,9 +1500,12 @@ impl PaladinExecutionService {
 
             // Update accumulated token count -- BEFORE after_model, so a
             // built-in like TokenBudget reads the run's true running sum
-            // (D-08).
-            total_tokens += response.usage.total_tokens;
-            middleware_cx.cumulative_tokens = total_tokens;
+            // (D-08). Accumulates through TokenUsage::AddAssign (D-06,
+            // D-12) rather than a hand-rolled sum, so the three optional
+            // cache/reasoning sub-counts merge under the same saturating
+            // rule every other accumulator in the tree uses.
+            usage += response.usage.clone();
+            middleware_cx.cumulative_tokens = usage.total_tokens;
             if let Some(provider) = response.metadata.get(SERVED_BY_METADATA_KEY) {
                 served_by = Some(provider.clone());
             }
@@ -1530,7 +1536,7 @@ impl PaladinExecutionService {
 
                 return Ok(PaladinResult {
                     output: accumulated_output,
-                    token_count: total_tokens,
+                    usage: usage.clone(),
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     loop_count: loop_num,
                     stop_reason: final_result.stop_reason,
@@ -1811,7 +1817,7 @@ impl PaladinExecutionService {
                 // Return result with autonomous metadata (Phase 2 enhancement)
                 return Ok(PaladinResult {
                     output: accumulated_output,
-                    token_count: total_tokens,
+                    usage: usage.clone(),
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     loop_count: loop_num,
                     stop_reason: StopReason::MaxLoops,
@@ -1838,7 +1844,7 @@ impl PaladinExecutionService {
 
         Ok(PaladinResult {
             output: accumulated_output,
-            token_count: total_tokens,
+            usage: usage.clone(),
             execution_time_ms: start_time.elapsed().as_millis() as u64,
             loop_count: paladin.node.max_loops.as_u32(),
             stop_reason: StopReason::Completed,
@@ -3062,7 +3068,7 @@ impl PaladinExecutionService {
 
         Ok(PaladinResult {
             output: response.content,
-            token_count: response.usage.total_tokens,
+            usage: response.usage.clone(),
             loop_count: call_num,
             stop_reason: StopReason::Completed,
             ..Default::default()
@@ -5133,7 +5139,7 @@ mod tests {
         assert!(result.is_ok());
         let paladin_result = result.unwrap();
         assert_eq!(paladin_result.output, "Mock vision analysis result");
-        assert_eq!(paladin_result.token_count, 150);
+        assert_eq!(paladin_result.usage.total_tokens, 150);
         assert_eq!(paladin_result.loop_count, 1);
         assert_eq!(paladin_result.stop_reason, StopReason::Completed);
     }

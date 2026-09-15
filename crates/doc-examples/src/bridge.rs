@@ -61,7 +61,7 @@ pub async fn orchestration_invokes_agent(
     println!("agent said: {}", result.output);
     println!(
         "tokens: {}, stop reason: {:?}",
-        result.token_count, result.stop_reason
+        result.usage.total_tokens, result.stop_reason
     );
     Ok(())
 }

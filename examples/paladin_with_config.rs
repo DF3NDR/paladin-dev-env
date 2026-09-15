@@ -89,7 +89,7 @@ async fn multi_loop_example() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Output: {}", result.output);
     println!("Loops executed: {}/3", result.loop_count);
-    println!("Tokens used: {}", result.token_count);
+    println!("Tokens used: {}", result.usage.total_tokens);
 
     Ok(())
 }
@@ -205,7 +205,7 @@ async fn custom_config_example() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("Output: {}", result.output);
-    println!("Token count: {}", result.token_count);
+    println!("Token count: {}", result.usage.total_tokens);
 
     Ok(())
 }

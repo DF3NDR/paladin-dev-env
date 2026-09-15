@@ -271,6 +271,7 @@ mod tests {
     use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
     use paladin_core::platform::container::paladin::{Paladin, PaladinData};
     use paladin_core::platform::container::paladin_error::PaladinError;
+    use paladin_core::platform::container::token_usage::TokenUsage;
 
     /// Minimal in-test executor: returns a fixed output, never touches an LLM.
     struct StubExecutor {
@@ -286,7 +287,7 @@ mod tests {
         ) -> Result<PaladinResult, PaladinError> {
             Ok(PaladinResult::new(
                 self.output.clone(),
-                1,
+                TokenUsage::new(1, 0),
                 1,
                 1,
                 StopReason::Completed,

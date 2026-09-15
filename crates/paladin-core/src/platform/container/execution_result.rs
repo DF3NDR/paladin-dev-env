@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::platform::container::handoff::HandoffRecord;
 use crate::platform::container::planning::TaskPlan;
+use crate::platform::container::token_usage::TokenUsage;
 
 /// Result of a Paladin execution
 ///
@@ -20,10 +21,11 @@ use crate::platform::container::planning::TaskPlan;
 ///
 /// ```
 /// use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
+/// use paladin_core::platform::container::token_usage::TokenUsage;
 ///
 /// let result = PaladinResult {
 ///     output: "The answer is 42".to_string(),
-///     token_count: 150,
+///     usage: TokenUsage::new(150, 0),
 ///     execution_time_ms: 1250,
 ///     loop_count: 1,
 ///     stop_reason: StopReason::Completed,
@@ -49,8 +51,14 @@ pub struct PaladinResult {
     /// The generated output text
     pub output: String,
 
-    /// Total number of tokens used (prompt + completion)
-    pub token_count: u32,
+    /// Token usage for this execution -- prompt, completion, and (when the
+    /// provider reports them) cache/reasoning sub-counts (ACCT-02, D-07,
+    /// D-09). `#[serde(default)]` so a `PaladinResult` JSON document
+    /// persisted before this field existed (carrying the retired
+    /// `token_count` key) deserialises with `usage == TokenUsage::default()`
+    /// (D-25) -- no custom deserializer maps the retired key forward.
+    #[serde(default)]
+    pub usage: TokenUsage,
 
     /// Execution time in milliseconds
     pub execution_time_ms: u64,
@@ -183,7 +191,7 @@ impl Default for PaladinResult {
     fn default() -> Self {
         Self {
             output: String::new(),
-            token_count: 0,
+            usage: TokenUsage::default(),
             execution_time_ms: 0,
             loop_count: 0,
             stop_reason: StopReason::Completed,
@@ -201,10 +209,11 @@ impl PaladinResult {
     ///
     /// ```
     /// use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
     ///
     /// let result = PaladinResult::new(
     ///     "Response text".to_string(),
-    ///     100,
+    ///     TokenUsage::new(100, 0),
     ///     500,
     ///     1,
     ///     StopReason::Completed
@@ -212,14 +221,14 @@ impl PaladinResult {
     /// ```
     pub fn new(
         output: String,
-        token_count: u32,
+        usage: TokenUsage,
         execution_time_ms: u64,
         loop_count: u32,
         stop_reason: StopReason,
     ) -> Self {
         Self {
             output,
-            token_count,
+            usage,
             execution_time_ms,
             loop_count,
             stop_reason,
@@ -261,7 +270,7 @@ mod tests {
     fn served_by_is_absent_from_legacy_json() {
         let result = PaladinResult {
             output: "answer".to_string(),
-            token_count: 3,
+            usage: TokenUsage::new(3, 0),
             execution_time_ms: 7,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -275,12 +284,17 @@ mod tests {
         assert!(!json.contains("served_by"), "{json}");
         assert_eq!(
             json,
-            r#"{"output":"answer","token_count":3,"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#
+            r#"{"output":"answer","usage":{"prompt_tokens":3,"completion_tokens":0,"total_tokens":3,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#
         );
     }
 
-    /// D-26: a payload written before the field existed deserialises with
-    /// `served_by: None`.
+    /// D-25: a `PaladinResult` JSON document persisted before this field
+    /// existed -- carrying the now-retired `token_count` key and no `usage`
+    /// key at all -- deserialises with `usage == TokenUsage::default()`.
+    /// serde drops the unknown `token_count` key (no `deny_unknown_fields`
+    /// on this type) and `#[serde(default)]` supplies the default usage; no
+    /// custom `Deserialize` impl or untagged-enum fallback maps the retired
+    /// key into `usage.total_tokens`.
     #[test]
     fn legacy_json_deserialises_with_served_by_none() {
         let legacy = r#"{"output":"answer","token_count":3,"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#;
@@ -289,6 +303,31 @@ mod tests {
 
         assert_eq!(result.output, "answer");
         assert!(result.served_by.is_none());
+        assert_eq!(result.usage, TokenUsage::default());
+        assert_eq!(result.execution_time_ms, 7);
+        assert_eq!(result.loop_count, 1);
+        assert_eq!(result.stop_reason, StopReason::Completed);
+    }
+
+    /// Serialising a current `PaladinResult` emits a `usage` object with
+    /// all six `TokenUsage` keys (D-25).
+    #[test]
+    fn serialised_paladin_result_contains_full_usage_object() {
+        let result = PaladinResult {
+            usage: TokenUsage::new(10, 5)
+                .with_cache_read(2)
+                .with_cache_write(1)
+                .with_reasoning(3),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"prompt_tokens\""), "{json}");
+        assert!(json.contains("\"completion_tokens\""), "{json}");
+        assert!(json.contains("\"total_tokens\""), "{json}");
+        assert!(json.contains("\"cache_read_tokens\""), "{json}");
+        assert!(json.contains("\"cache_write_tokens\""), "{json}");
+        assert!(json.contains("\"reasoning_tokens\""), "{json}");
     }
 
     /// A fallback-served result round-trips its serving provider.
@@ -310,12 +349,18 @@ mod tests {
     #[test]
     fn default_still_constructs() {
         let by_default = PaladinResult::default();
-        let by_new = PaladinResult::new("text".to_string(), 10, 20, 1, StopReason::Completed);
+        let by_new = PaladinResult::new(
+            "text".to_string(),
+            TokenUsage::new(10, 0),
+            20,
+            1,
+            StopReason::Completed,
+        );
 
         assert!(by_default.served_by.is_none());
         assert!(by_new.served_by.is_none());
         assert_eq!(by_new.output, "text");
-        assert_eq!(by_new.token_count, 10);
+        assert_eq!(by_new.usage.total_tokens, 10);
     }
 
     /// D-07/D-08 Test 1: both new variants are successful and are limits.

@@ -35,12 +35,12 @@ variants:
 | `SuperstepStarted` | a superstep begins | `superstep`, `vanguard` |
 | `NodeStarted` | one node attempt begins | `superstep`, `node_id`, `attempt`, `muster_task_key?` |
 | `NodeProgress` | a liveness/progress update from a running node | `node_id`, `progress: Heartbeat \| StreamChunk{bytes} \| ToolCall{tool}` |
-| `NodeFinished` | one node attempt ends | `outcome`, `duration_ms`, `token_count`, `cache_hit` |
+| `NodeFinished` | one node attempt ends | `outcome`, `duration_ms`, `usage: TokenUsage`, `cache_hit` |
 | `EdgeEvaluated` | an outgoing edge is checked, whether or not it fires | `from`, `to`, `condition_kind`, `fired` |
 | `DeltaMerged` | a superstep's `StateDelta` merges into the `Battlefield` | `field_changes: Vec<FieldChange>` |
 | `WaypointSaved` | the superstep's Waypoint is persisted | `waypoint_id`, `superstep`, `status` |
 | `ParleyRaised` | the engine builds an `AwaitingInput` outcome | `parley_id`, `node_id`, `parley_kind` |
-| `RunFinished` | the run reaches a terminal outcome | `status`, `total_supersteps`, `total_tokens`, `duration_ms`, `trace_dropped_total` |
+| `RunFinished` | the run reaches a terminal outcome | `status`, `total_supersteps`, `usage: TokenUsage`, `duration_ms`, `trace_dropped_total` |
 | `FallbackHop` | `FallbackLlmAdapter` switches providers mid-call | `node_id?`, `from_provider`, `to_provider` |
 | `MiddlewareEvent` | a middleware chain member finishes/fails/denies/redacts/retries/falls back | `name`, `action` |
 

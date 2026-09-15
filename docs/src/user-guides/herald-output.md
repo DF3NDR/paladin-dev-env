@@ -52,7 +52,10 @@ let herald = JsonHerald::with_config(JsonHeraldConfig {
 });
 
 let json_str = herald.format_paladin_result(&result)?;
-// {"output": "...", "token_count": 150, "execution_time_ms": 1230, ...}
+// "usage" is the full TokenUsage split, serialized as a stable six-key object:
+// {"output": "...", "usage": {"prompt_tokens": 100, "completion_tokens": 50,
+//   "total_tokens": 150, "cache_read_tokens": null, "cache_write_tokens": null,
+//   "reasoning_tokens": null}, "execution_time_ms": 1230, ...}
 ```
 
 ### `MarkdownHerald`
@@ -169,7 +172,7 @@ impl Herald for CsvHerald {
         Ok(format!(
             "{},{},{},{:?}\n",
             result.output.replace(',', ";"),
-            result.token_count,
+            result.usage.total_tokens,
             result.execution_time_ms,
             result.stop_reason,
         ))

@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("{}", result.output);
-    println!("Tokens used: {}", result.token_count);
+    println!("Tokens used: {}", result.usage.total_tokens);
     println!("Stop reason: {:?}", result.stop_reason);
     Ok(())
 }
@@ -158,7 +158,7 @@ Returned by `execute()` and streamed by `execute_stream()`.
 | Field | Type | Description |
 |-------|------|-------------|
 | `output` | `String` | Final generated text |
-| `token_count` | `u32` | Total tokens used (prompt + completion) |
+| `usage` | `TokenUsage` | Prompt/completion split, plus cache/reasoning sub-counts when the provider reports them |
 | `execution_time_ms` | `u64` | Wall-clock execution time in milliseconds |
 | `loop_count` | `u32` | Number of reasoning iterations performed |
 | `stop_reason` | `StopReason` | Why execution terminated |

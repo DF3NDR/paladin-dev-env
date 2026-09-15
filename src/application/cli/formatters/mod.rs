@@ -7,6 +7,6 @@ pub mod output;
 pub mod progress;
 pub mod table;
 
-pub use output::{OutputFormatter, OutputStyle};
+pub use output::{OutputFormatter, OutputStyle, format_token_usage_summary};
 pub use progress::{ProgressIndicator, Spinner};
 pub use table::TableFormatter;

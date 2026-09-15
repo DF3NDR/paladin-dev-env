@@ -206,7 +206,7 @@ let result = commander.execute(input).await?;
 ```
 
 Each file records `battalion_id`, `strategy_used`, `duration_ms`, `total_tokens`,
-per-Paladin `paladin_results` (output, `execution_time_ms`, `token_count`, `stop_reason`),
+per-Paladin `paladin_results` (output, `execution_time_ms`, `usage: TokenUsage`, `stop_reason`),
 `per_paladin_times`, `per_paladin_tokens`, and `strategy_selection_reasoning`.
 
 ---

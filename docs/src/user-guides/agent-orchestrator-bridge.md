@@ -99,7 +99,7 @@ sequenceDiagram
 
     WF->>Exec: execute(&paladin, input_with_context)
     Exec->>Paladin: run agent loop
-    Paladin-->>Exec: PaladinResult { output, token_count, ... }
+    Paladin-->>Exec: PaladinResult { output, usage, ... }
     Exec-->>WF: Ok(PaladinResult)
     Note over WF: feed result.output into the next step
 ```
@@ -108,8 +108,8 @@ sequenceDiagram
 {{#include ../../../crates/doc-examples/src/bridge.rs:orchestration_invokes}}
 ```
 
-`PaladinResult` carries `output`, `token_count`, `execution_time_ms`, `loop_count`, and
-`stop_reason` — everything the workflow needs to decide what to do next. To invoke a whole
+`PaladinResult` carries `output`, `usage` (the full `TokenUsage` split), `execution_time_ms`,
+`loop_count`, and `stop_reason` — everything the workflow needs to decide what to do next. To invoke a whole
 Battalion instead of a single agent, use `BattalionPort::execute(battalion_id)` and read the
 `BattalionResult` (see [Orchestration → Configuration Reference](orchestration.md#configuration-reference)).
 

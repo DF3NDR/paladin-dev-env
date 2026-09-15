@@ -743,7 +743,8 @@ pub trait PaladinPort: Send + Sync {
     ///
     /// Returns a `PaladinResult` containing:
     /// - `output`: The generated text response
-    /// - `token_count`: Total tokens used (prompt + completion)
+    /// - `usage`: Full `TokenUsage` split (prompt, completion, and any
+    ///   cache/reasoning sub-counts the provider reported)
     /// - `execution_time_ms`: Total execution time in milliseconds
     /// - `loop_count`: Number of reasoning loops executed
     /// - `stop_reason`: Why execution terminated

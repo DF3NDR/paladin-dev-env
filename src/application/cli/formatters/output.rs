@@ -4,7 +4,34 @@
 //! environment variable and supports quiet/verbose modes.
 
 use colored::*;
+use paladin_ports::output::llm_port::TokenUsage;
 use std::env;
+
+/// Render a `TokenUsage` split as a compact human-readable summary: the
+/// total followed by its prompt/completion split, with cache and reasoning
+/// figures appended only when the provider reported them (D-23).
+///
+/// ```text
+/// 1801 tokens (prompt 1234, completion 567)
+/// 1801 tokens (prompt 1234, completion 567, cache read 100, cache write 50, reasoning 200)
+/// ```
+pub fn format_token_usage_summary(usage: &TokenUsage) -> String {
+    let mut summary = format!(
+        "{} tokens (prompt {}, completion {}",
+        usage.total_tokens, usage.prompt_tokens, usage.completion_tokens
+    );
+    if let Some(cache_read) = usage.cache_read_tokens {
+        summary.push_str(&format!(", cache read {}", cache_read));
+    }
+    if let Some(cache_write) = usage.cache_write_tokens {
+        summary.push_str(&format!(", cache write {}", cache_write));
+    }
+    if let Some(reasoning) = usage.reasoning_tokens {
+        summary.push_str(&format!(", reasoning {}", reasoning));
+    }
+    summary.push(')');
+    summary
+}
 
 /// Output styling options
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,7 +295,7 @@ impl OutputFormatter {
         output.push_str(&format!(
             "  {} Tokens Used: {}\n",
             self.style("•", OutputStyle::Info),
-            result.usage.total_tokens
+            format_token_usage_summary(&result.usage)
         ));
 
         // Status with color coding
@@ -347,7 +374,7 @@ impl OutputFormatter {
         json!({
             "output": result.output,
             "metadata": {
-                "token_count": result.usage.total_tokens,
+                "usage": result.usage,
                 "execution_time_ms": result.execution_time_ms,
                 "execution_time_seconds": result.execution_time_ms as f64 / 1000.0,
                 "loop_count": result.loop_count,
@@ -498,12 +525,12 @@ impl OutputFormatter {
                     .unwrap_or(paladin_result.execution_time_ms);
 
                 output.push_str(&format!(
-                    "\n{} Paladin {} - {} loops, {:.2}s, {} tokens\n",
+                    "\n{} Paladin {} - {} loops, {:.2}s, {}\n",
                     self.style(&format!("{}.", idx + 1), OutputStyle::Info),
                     idx + 1,
                     paladin_result.loop_count,
                     timing as f64 / 1000.0,
-                    paladin_result.usage.total_tokens
+                    format_token_usage_summary(&paladin_result.usage)
                 ));
 
                 let (status_emoji, status_style) = match &paladin_result.stop_reason {
@@ -564,7 +591,7 @@ impl OutputFormatter {
                 json!({
                     "index": idx,
                     "output": r.output,
-                    "token_count": r.usage.total_tokens,
+                    "usage": r.usage,
                     "execution_time_ms": timing,
                     "loop_count": r.loop_count,
                     "stop_reason": format!("{:?}", r.stop_reason),
@@ -584,5 +611,123 @@ impl OutputFormatter {
 impl Default for OutputFormatter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::platform::container::battalion::{
+        BattalionResult, BattalionStatus, BattalionStrategy,
+    };
+    use chrono::Utc;
+    use paladin_ports::output::paladin_port::{PaladinResult, StopReason};
+    use uuid::Uuid;
+
+    fn full_usage() -> TokenUsage {
+        TokenUsage::new(1_234, 567)
+            .with_cache_read(100)
+            .with_cache_write(50)
+            .with_reasoning(200)
+    }
+
+    fn test_paladin_result(usage: TokenUsage) -> PaladinResult {
+        PaladinResult {
+            output: "Test output".to_string(),
+            usage,
+            execution_time_ms: 1500,
+            loop_count: 1,
+            stop_reason: StopReason::Completed,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_format_token_usage_summary_includes_full_split() {
+        let summary = format_token_usage_summary(&full_usage());
+        assert!(summary.contains("1801 tokens"));
+        assert!(summary.contains("prompt 1234"));
+        assert!(summary.contains("completion 567"));
+        assert!(summary.contains("cache read 100"));
+        assert!(summary.contains("cache write 50"));
+        assert!(summary.contains("reasoning 200"));
+    }
+
+    #[test]
+    fn test_format_token_usage_summary_omits_unreported_optionals() {
+        let summary = format_token_usage_summary(&TokenUsage::new(10, 5));
+        assert!(summary.contains("15 tokens"));
+        assert!(summary.contains("prompt 10"));
+        assert!(summary.contains("completion 5"));
+        assert!(!summary.contains("cache read"));
+        assert!(!summary.contains("cache write"));
+        assert!(!summary.contains("reasoning"));
+    }
+
+    #[test]
+    fn test_format_paladin_result_human_output_shows_split() {
+        let formatter = OutputFormatter::new();
+        let result = test_paladin_result(full_usage());
+
+        let formatted = formatter.format_paladin_result(&result, false);
+
+        assert!(formatted.contains("Tokens Used:"));
+        assert!(formatted.contains("1801 tokens"));
+        assert!(formatted.contains("prompt 1234"));
+        assert!(formatted.contains("completion 567"));
+    }
+
+    #[test]
+    fn test_format_paladin_result_json_emits_usage_object_not_scalar() {
+        let result = test_paladin_result(full_usage());
+
+        let json = OutputFormatter::format_paladin_result_json(&result);
+
+        // The usage carrier is a JSON object, never a bare scalar.
+        assert!(json["metadata"]["usage"].is_object());
+        assert_eq!(json["metadata"]["usage"]["total_tokens"], 1801);
+        assert_eq!(json["metadata"]["usage"]["prompt_tokens"], 1234);
+        assert_eq!(json["metadata"]["usage"]["completion_tokens"], 567);
+        assert_eq!(json["metadata"]["usage"]["cache_read_tokens"], 100);
+        assert_eq!(json["metadata"]["usage"]["cache_write_tokens"], 50);
+        assert_eq!(json["metadata"]["usage"]["reasoning_tokens"], 200);
+        assert!(json["metadata"].get("token_count").is_none());
+    }
+
+    fn test_battalion_result(
+        per_paladin_tokens: std::collections::HashMap<String, TokenUsage>,
+    ) -> BattalionResult {
+        BattalionResult {
+            battalion_id: Uuid::new_v4(),
+            battalion_name: "TestBattalion".to_string(),
+            started_at: Utc::now(),
+            completed_at: Utc::now(),
+            final_output: "Combined output".to_string(),
+            paladin_results: vec![test_paladin_result(TokenUsage::new(321, 145))],
+            status: BattalionStatus::Completed,
+            strategy_used: BattalionStrategy::Formation,
+            strategy_selection_reasoning: None,
+            strategy_selection_time_ms: 0,
+            per_paladin_times: std::collections::HashMap::new(),
+            per_paladin_tokens,
+            total_tokens: 466,
+            paladin_success_count: 1,
+            paladin_failure_count: 0,
+            node_errors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_format_battalion_result_json_emits_usage_object_per_paladin() {
+        let result = test_battalion_result(std::collections::HashMap::new());
+
+        let json = OutputFormatter::format_battalion_result_json(&result);
+
+        let first_paladin = &json["paladin_results"][0];
+        assert!(first_paladin["usage"].is_object());
+        assert_eq!(first_paladin["usage"]["prompt_tokens"], 321);
+        assert_eq!(first_paladin["usage"]["completion_tokens"], 145);
+        assert_eq!(first_paladin["usage"]["total_tokens"], 466);
+        assert!(first_paladin.get("token_count").is_none());
     }
 }

@@ -309,8 +309,11 @@ let config = BattalionConfig {
 };
 ```
 
-`BattalionResult` fields: `output: String`, `paladin_results: Vec<PaladinResult>`,
-`status: BattalionStatus`, `execution_time_ms: u64`, `token_usage: TokenUsage`.
+`BattalionResult` fields: `final_output: String`, `paladin_results: Vec<PaladinResult>` (each
+entry carries its own `usage: TokenUsage`, D-07), `status: BattalionStatus`,
+`per_paladin_tokens: HashMap<String, TokenUsage>` (the per-Paladin split), and
+`total_tokens: u64` (the derived aggregate, D-08). There is no `execution_time_ms` or
+`token_usage` field on `BattalionResult` itself.
 
 ---
 

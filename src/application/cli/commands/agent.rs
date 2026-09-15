@@ -504,10 +504,10 @@ pub async fn handle_agent_run(args: AgentRunArgs) -> Result<(), CliError> {
             duration.as_secs_f64()
         );
         println!(
-            "{} Loops: {}, Tokens: {}",
+            "{} Loops: {}, {}",
             "→".cyan().bold(),
             result.loop_count,
-            result.usage.total_tokens
+            crate::application::cli::formatters::output::format_token_usage_summary(&result.usage)
         );
         println!(
             "{} Stop reason: {:?}",

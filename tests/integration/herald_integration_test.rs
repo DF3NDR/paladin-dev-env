@@ -144,8 +144,12 @@ async fn test_paladin_with_json_herald() {
         "JSON should contain 'output' field"
     );
     assert!(
-        parsed.get("token_count").is_some(),
-        "JSON should contain 'token_count' field"
+        parsed.get("usage").is_some(),
+        "JSON should contain 'usage' field"
+    );
+    assert!(
+        parsed["usage"].is_object(),
+        "'usage' should be the full TokenUsage object, not a bare scalar"
     );
     assert!(
         parsed.get("execution_time_ms").is_some(),
@@ -223,8 +227,8 @@ async fn test_paladin_with_markdown_herald() {
         "Markdown should contain 'Metadata' section"
     );
     assert!(
-        markdown_output.contains("Token Count"),
-        "Markdown should contain 'Token Count' field"
+        markdown_output.contains("Token Usage"),
+        "Markdown should contain 'Token Usage' block"
     );
 
     println!("Markdown Herald output:\n{}", markdown_output);

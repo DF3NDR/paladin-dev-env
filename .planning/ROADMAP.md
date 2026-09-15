@@ -829,8 +829,8 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 31-05-PLAN.md — JSON and Markdown herald breakdown, CLI split rendering, and the mdBook/rustdoc sweep (ACCT-04)
-- [ ] 31-06-PLAN.md — HTTP edge: `TokenUsageResponse`, `ExecuteResponse.usage`, inspector `CompletedRow.usage`, regenerated `openapi.json` (ACCT-02, ACCT-05)
+- [x] 31-05-PLAN.md — JSON and Markdown herald breakdown, CLI split rendering, and the mdBook/rustdoc sweep (ACCT-04)
+- [x] 31-06-PLAN.md — HTTP edge: `TokenUsageResponse`, `ExecuteResponse.usage`, inspector `CompletedRow.usage`, regenerated `openapi.json` (ACCT-02, ACCT-05)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

@@ -61,7 +61,18 @@ rand = { workspace = true }
 # `#[non_exhaustive]` -- it has no `Default`, so there is no functional-update
 # site to preserve, and construction goes through `new`/`with_metadata`/
 # `with_token_count`/`summary` rather than a struct literal.
+#
+# ACCT-01 / ACCT-02 (D-05, D-09, Phase 31 plans 31-01/31-02, MIGRATION.md
+# §9.2): `TokenUsage::from_total` was deleted outright (fires
+# `inherent_method_missing`) and `PaladinResult`'s `token_count` field was
+# replaced by `usage: TokenUsage` (fires `struct_pub_field_missing`, ADDING to
+# the pre-existing `constructible_struct_adds_field` suppression that already
+# covers this crate/type pair). Both lint ids were derived empirically via
+# `cargo semver-checks check-release --package paladin-ai-core
+# --default-features --baseline-version 0.9.0` (D-27), never guessed.
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
 constructible_struct_adds_field = "allow"
+inherent_method_missing = "allow"
+struct_pub_field_missing = "allow"
 struct_marked_non_exhaustive = "allow"

@@ -94,3 +94,58 @@ lint = "constructible_struct_adds_field"
 migration_row = "paladin-ai | Settings"
 requirement_id = "RT-02"
 justification = "Settings gained the additive agent_runtime: AgentRuntimeConfig field (X-09, D-10) with #[serde(default)], so an absent agent_runtime: key resolves to a fully inert default and a v0.9 config boots with identical behavior. The struct stays constructible and is deliberately NOT #[non_exhaustive] for the same reason PaladinResult is not (D-26): Settings implements Default, and cross-crate functional-update syntax is disallowed on non_exhaustive structs, so marking it would break every ..Default::default() site downstream. Only full struct literals break, and every in-tree one was migrated with the field."
+
+# --- Phase 31 (Lossless Token Accounting, ACCT-01..05) -----------------------
+# Entries below were derived empirically per D-27: run `cargo semver-checks
+# check-release --package <pkg> --default-features --baseline-version 0.9.0`
+# and write only the lint ids the tool actually reported (see 31-07-SUMMARY.md
+# for the captured output this plan recorded).
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "inherent_method_missing"
+migration_row = "paladin-ai-core | TokenUsage"
+requirement_id = "ACCT-01"
+justification = "TokenUsage::from_total was deleted outright (D-05) -- a constructor whose only purpose is to discard the prompt/completion split is the bug this phase exists to fix. Every in-tree caller migrated to TokenUsage::new(..) plus builders in the same commit; no #[deprecated] replacement was added."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai-core | TokenUsage"
+requirement_id = "ACCT-01"
+justification = "TokenUsage gained three additive Option<u32> sub-count fields (cache_read_tokens, cache_write_tokens, reasoning_tokens), each #[serde(default)] (D-01). The struct stays constructible and is deliberately NOT #[non_exhaustive] (X-10.3 option (b), D-04) -- it derives Default, so marking it non_exhaustive would break every ..Default::default() site downstream. Only full struct literals break, and every in-tree one was migrated to TokenUsage::new(..) plus the new with_cache_read/with_cache_write/with_reasoning builders in the same commit."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_pub_field_missing"
+migration_row = "paladin-ai-core | PaladinResult"
+requirement_id = "ACCT-02"
+justification = "PaladinResult's bare token_count: u32 field was replaced by usage: TokenUsage (D-07, D-09) -- the full prompt/completion/cache/reasoning split, not a rename-preserving total. usage carries #[serde(default)] so a pre-phase document deserialises with usage == TokenUsage::default() (D-25). This ADDS to the existing constructible_struct_adds_field entry on this same crate/type pair (the row-level gate is deduplicated by crate | type, not by lint) rather than duplicating the row."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-ports | StreamingResponse"
+requirement_id = "ACCT-03"
+justification = "StreamingResponse gained an additive usage: Option<TokenUsage> field (D-13) and is marked #[non_exhaustive]. The struct has no Default, so there is no functional-update site to preserve; marking it #[non_exhaustive] (X-10.3 option (a), the LlmRequest precedent already suppressed by this same lint id in this crate) makes the next field free. Every in-tree literal migrated to the new delta()/terminal()/with_usage() constructors in the same commit."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-ports | ChunkMetadata"
+requirement_id = "ACCT-03"
+justification = "ChunkMetadata gained an additive usage: Option<TokenUsage> field, populated only on the is_final stream chunk (D-18), and is marked #[non_exhaustive]. The type derived no Default at the v0.9.0 baseline, which is what makes X-10.3 option (a) the correct choice here (resolving CONTEXT.md D-18's open question). Every in-tree literal migrated to the new new()/with_tokens/with_loop_count/with_usage constructors in the same commit."
+
+[[entry]]
+crate = "paladin-web"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-web | ExecuteResponse"
+requirement_id = "ACCT-02, ACCT-05"
+justification = "ExecuteResponse gained the usage: TokenUsageResponse field replacing the bare token_count (D-24) -- a new utoipa::ToSchema DTO converted through the one From<PaladinResult> conversion point. Leaving a bare token_count on the wire would re-create the collapse one layer up and force a second break after 1.0; openapi.json was regenerated via make openapi in the same commit."
+
+[[entry]]
+crate = "paladin-web"
+lint = "struct_pub_field_missing"
+migration_row = "paladin-web | ExecuteResponse"
+requirement_id = "ACCT-02, ACCT-05"
+justification = "ExecuteResponse's token_count field was removed, replaced by usage: TokenUsageResponse (D-24) -- a published HTTP response contract, one-way door confirmed at plan 31-01's consolidated checkpoint. This ADDS to the constructible_struct_adds_field entry above on the same crate/type pair rather than duplicating the row (the row-level gate is deduplicated by crate | type, not by lint)."

@@ -209,11 +209,7 @@ impl LlmPort for MockLlmPort {
             model: request.model,
             content: self.response.clone(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 20,
-                completion_tokens: 60,
-                total_tokens: 80,
-            },
+            usage: TokenUsage::new(20, 60),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -435,11 +431,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .end_time(Utc::now())
             .duration_ms(1500)
             .model_used("gpt-4".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 42,
-                completion_tokens: 43,
-                total_tokens: 85,
-            })
+            .token_usage(TokenUsage::new(42, 43))
             .build()
             .unwrap();
         println!("{}\n", herald.finalize_stream(&metadata)?);

@@ -657,11 +657,10 @@ impl LlmPort for DeepSeekAdapter {
                 model: api_response.model,
                 content: choice.message.content.clone(),
                 finish_reason,
-                usage: TokenUsage {
-                    prompt_tokens: api_response.usage.prompt_tokens,
-                    completion_tokens: api_response.usage.completion_tokens,
-                    total_tokens: api_response.usage.total_tokens,
-                },
+                usage: TokenUsage::new(
+                    api_response.usage.prompt_tokens,
+                    api_response.usage.completion_tokens,
+                ),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,

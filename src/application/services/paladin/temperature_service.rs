@@ -328,11 +328,7 @@ mod tests {
                 model: "gpt-4".to_string(),
                 content: self.response.lock().unwrap().clone(),
                 finish_reason: FinishReason::Stop,
-                usage: TokenUsage {
-                    prompt_tokens: 10,
-                    completion_tokens: 5,
-                    total_tokens: 15,
-                },
+                usage: TokenUsage::new(10, 5),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,

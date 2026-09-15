@@ -55,11 +55,7 @@ impl FakeToolCallingLlm {
             model: "fake-model".to_string(),
             content: "Done".to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 1,
-                completion_tokens: 1,
-                total_tokens: 2,
-            },
+            usage: TokenUsage::new(1, 1),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -169,11 +165,7 @@ async fn function_call_dispatch_still_invokes_arsenal_exactly_once_with_matching
         model: "fake-model".to_string(),
         content: "I'll echo that.".to_string(),
         finish_reason: FinishReason::FunctionCall,
-        usage: TokenUsage {
-            prompt_tokens: 5,
-            completion_tokens: 5,
-            total_tokens: 10,
-        },
+        usage: TokenUsage::new(5, 5),
         created_at: Utc::now(),
         metadata: HashMap::new(),
         function_call: Some(FunctionCall {

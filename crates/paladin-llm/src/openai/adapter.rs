@@ -201,6 +201,11 @@ struct OpenAIChoice {
 struct OpenAIUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
+    // Deliberately unread: `TokenUsage::new` recomputes `total_tokens` as
+    // `prompt_tokens + completion_tokens` (D-02), so the provider's own
+    // reported total is discarded rather than trusted. Kept on the struct so
+    // the deserializer still matches the full wire shape for debugging.
+    #[allow(dead_code)]
     total_tokens: u32,
 }
 
@@ -618,11 +623,10 @@ impl LlmPort for OpenAIAdapter {
             model: response.model,
             content: choice.message.content.clone(),
             finish_reason,
-            usage: TokenUsage {
-                prompt_tokens: response.usage.prompt_tokens,
-                completion_tokens: response.usage.completion_tokens,
-                total_tokens: response.usage.total_tokens,
-            },
+            usage: TokenUsage::new(
+                response.usage.prompt_tokens,
+                response.usage.completion_tokens,
+            ),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,

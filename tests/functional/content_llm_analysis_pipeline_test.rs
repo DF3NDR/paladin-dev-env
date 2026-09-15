@@ -200,11 +200,7 @@ impl LlmPort for MockLlmPort {
             model: request.model,
             content: response_content,
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 150,
-                completion_tokens: 200,
-                total_tokens: 350,
-            },
+            usage: TokenUsage::new(150, 200),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,

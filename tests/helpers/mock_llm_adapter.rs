@@ -185,11 +185,7 @@ impl LlmPort for MockLlmAdapter {
                 model: request.model,
                 content,
                 finish_reason: FinishReason::Stop,
-                usage: TokenUsage {
-                    prompt_tokens: 10,
-                    completion_tokens: 20,
-                    total_tokens: 30,
-                },
+                usage: TokenUsage::new(10, 20),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
@@ -203,11 +199,7 @@ impl LlmPort for MockLlmAdapter {
                 model: request.model,
                 content: format!("Calling tool: {}", tool_name),
                 finish_reason: FinishReason::FunctionCall,
-                usage: TokenUsage {
-                    prompt_tokens: 10,
-                    completion_tokens: 15,
-                    total_tokens: 25,
-                },
+                usage: TokenUsage::new(10, 15),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall {
@@ -224,11 +216,7 @@ impl LlmPort for MockLlmAdapter {
                     model: request.model,
                     content,
                     finish_reason: FinishReason::Stop,
-                    usage: TokenUsage {
-                        prompt_tokens: 10,
-                        completion_tokens: 20,
-                        total_tokens: 30,
-                    },
+                    usage: TokenUsage::new(10, 20),
                     created_at: Utc::now(),
                     metadata: HashMap::new(),
                     function_call: None,

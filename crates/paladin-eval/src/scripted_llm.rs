@@ -275,11 +275,7 @@ impl ScenarioLlm {
                 model: request.model.clone(),
                 content: text.clone(),
                 finish_reason: FinishReason::Stop,
-                usage: TokenUsage {
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    total_tokens: 0,
-                },
+                usage: TokenUsage::new(0, 0),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
@@ -290,11 +286,7 @@ impl ScenarioLlm {
                 model: request.model.clone(),
                 content: format!("Calling tool: {name}"),
                 finish_reason: FinishReason::FunctionCall,
-                usage: TokenUsage {
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    total_tokens: 0,
-                },
+                usage: TokenUsage::new(0, 0),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall {

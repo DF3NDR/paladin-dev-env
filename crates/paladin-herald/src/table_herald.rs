@@ -590,11 +590,7 @@ mod tests {
             .execution_id(uuid::Uuid::new_v4())
             .start_time(chrono::Utc::now())
             .model_used("test-model".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 300,
-                completion_tokens: 200,
-                total_tokens: 500,
-            })
+            .token_usage(TokenUsage::new(300, 200))
             .duration_ms(1000)
             .build()
             .unwrap();
@@ -904,11 +900,7 @@ mod tests {
             .execution_id(uuid::Uuid::new_v4())
             .start_time(chrono::Utc::now())
             .model_used("test-model".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 240,
-                completion_tokens: 160,
-                total_tokens: 400,
-            })
+            .token_usage(TokenUsage::new(240, 160))
             .duration_ms(2000)
             .build()
             .unwrap();

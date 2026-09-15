@@ -659,11 +659,7 @@ mod tests {
             .execution_id(uuid::Uuid::new_v4())
             .start_time(chrono::Utc::now())
             .model_used("gpt-4".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 300,
-                completion_tokens: 200,
-                total_tokens: 500,
-            })
+            .token_usage(TokenUsage::new(300, 200))
             .duration_ms(1234)
             .build()
             .unwrap();
@@ -789,11 +785,7 @@ mod tests {
             .execution_id(uuid::Uuid::new_v4())
             .start_time(chrono::Utc::now())
             .model_used("gpt-4".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 180,
-                completion_tokens: 120,
-                total_tokens: 300,
-            })
+            .token_usage(TokenUsage::new(180, 120))
             .duration_ms(1500)
             .build()
             .unwrap();

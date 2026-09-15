@@ -223,11 +223,7 @@ fn test_execution_metadata_has_all_telemetry_fields() {
         end_time: Some(Utc::now()),
         duration_ms: Some(1500),
         model_used: "gpt-4".to_string(),
-        token_usage: TokenUsage {
-            prompt_tokens: 100,
-            completion_tokens: 50,
-            total_tokens: 150,
-        },
+        token_usage: TokenUsage::new(100, 50),
         cost_estimate: Some(0.003),
         error_count: 0,
         metadata: HashMap::new(),
@@ -253,11 +249,7 @@ fn test_execution_metadata_calculate_duration() {
         end_time: Some(end),
         duration_ms: None, // Not set initially
         model_used: "gpt-4".to_string(),
-        token_usage: TokenUsage {
-            prompt_tokens: 100,
-            completion_tokens: 50,
-            total_tokens: 150,
-        },
+        token_usage: TokenUsage::new(100, 50),
         cost_estimate: None,
         error_count: 0,
         metadata: HashMap::new(),
@@ -290,11 +282,7 @@ fn test_execution_metadata_serialization_round_trip() {
         end_time: Some(Utc::now()),
         duration_ms: Some(1234),
         model_used: "gpt-4-turbo".to_string(),
-        token_usage: TokenUsage {
-            prompt_tokens: 200,
-            completion_tokens: 100,
-            total_tokens: 300,
-        },
+        token_usage: TokenUsage::new(200, 100),
         cost_estimate: Some(0.006),
         error_count: 2,
         metadata: custom_metadata,
@@ -335,11 +323,7 @@ fn test_execution_metadata_builder_pattern() {
         .start_time(Utc::now())
         .end_time(Utc::now())
         .model_used("gpt-4".to_string())
-        .token_usage(TokenUsage {
-            prompt_tokens: 150,
-            completion_tokens: 75,
-            total_tokens: 225,
-        })
+        .token_usage(TokenUsage::new(150, 75))
         .cost_estimate(0.0045)
         .error_count(1)
         .add_metadata("key1".to_string(), json!("value1"))

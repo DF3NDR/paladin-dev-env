@@ -109,11 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .end_time(Utc::now())
         .duration_ms(2500)
         .model_used("gpt-4".to_string())
-        .token_usage(TokenUsage {
-            prompt_tokens: 62,
-            completion_tokens: 63,
-            total_tokens: 125,
-        })
+        .token_usage(TokenUsage::new(62, 63))
         .build()
         .unwrap();
 
@@ -267,11 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .end_time(Utc::now())
             .duration_ms(8500)
             .model_used("gpt-4".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 225,
-                completion_tokens: 225,
-                total_tokens: 450,
-            })
+            .token_usage(TokenUsage::new(225, 225))
             .build()
             .unwrap();
 

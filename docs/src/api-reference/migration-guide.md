@@ -26,6 +26,20 @@ outright, with no deprecated replacement — use `TokenUsage::new(prompt, comple
 [`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
 for the full per-type register.
 
+### Token primitives
+
+Two duplications in the token-counting/window-resolution primitives are collapsed to one each
+(PRIM-01…PRIM-04). `TokenCounterPort` gained `fn is_exact(&self) -> bool { false }`, so
+`Commissary::new`/`Commissary::from_port` no longer take a caller-supplied `is_exact_counter:
+bool` argument — `Commissary` now reads exactness live from the injected counter's `is_exact()`.
+The legacy fallible `garrison::TokenCounter` trait and its `TokenCounterFactory` are removed
+outright with no deprecated replacement; `TiktokenCounter` survives as the sole implementor of
+`TokenCounterPort`, now the workspace's only counting contract. Both `Commissary::new`'s window
+resolution and `HistoryTrimmer::resolve_limit` now call the same shared
+`paladin_llm::window::resolve_context_window` function in place of two independent precedence
+walks. See [`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
+for the full per-type register.
+
 ## Table of Contents
 
 - [Upgrading to v0.10.0 (from v0.9.x)](#upgrading-to-v0100-from-v09x)

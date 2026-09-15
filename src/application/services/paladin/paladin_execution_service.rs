@@ -89,7 +89,7 @@ use paladin_ports::output::llm_port::{FunctionCall, LlmPort, LlmRequest, Respons
 use paladin_ports::output::orchestrator_port::OrchestratorPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::paladin_port::{
-    PaladinResult, PaladinStream, PaladinStreamChunk, StopReason,
+    ChunkMetadata, PaladinResult, PaladinStream, PaladinStreamChunk, StopReason,
 };
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
 use paladin_ports::output::structured_executor_port::{
@@ -3214,6 +3214,11 @@ impl PaladinExecutionService {
             .clone()
             .or_else(current_trace_emitter);
 
+        // D-17: captured before the spawn (the spawned task never touches
+        // `self`) purely to name the provider in the no-usage warning below
+        // -- never any request/response content.
+        let provider_name = self.llm_port.get_provider_name();
+
         tokio::spawn(async move {
             use futures::StreamExt;
             let mut stream = Box::into_pin(provider_stream);
@@ -3226,10 +3231,35 @@ impl PaladinExecutionService {
                         if let Some(emitter) = &stream_trace_emitter {
                             Self::emit_stream_chunk_progress(emitter, resp.delta.len() as u64);
                         }
+                        // D-18: the terminal chunk's usage rides on
+                        // `ChunkMetadata.usage`; every non-final chunk
+                        // leaves it `None`. D-17: when the terminal chunk
+                        // reports no usage, this never calls
+                        // `self.token_counter()` (or any other estimator)
+                        // to fill the gap -- an estimate must never be
+                        // reported in the same field as a provider-billed
+                        // figure. Deferring an opt-in estimate is the
+                        // recorded decision (Milestone 14); do not "fix"
+                        // this by wiring the counter in.
+                        let metadata = if is_final {
+                            match resp.usage.clone() {
+                                Some(usage) => Some(ChunkMetadata::new().with_usage(usage)),
+                                None => {
+                                    warn!(
+                                        "streamed call to provider \"{provider_name}\" ended \
+                                         without a reported usage; recording a default usage \
+                                         rather than a TokenCounterPort estimate (D-17)"
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
                         let chunk = PaladinStreamChunk {
                             text: resp.delta,
                             is_final,
-                            metadata: None,
+                            metadata,
                         };
                         // --- FT-FR-09, D-19: a chunk arrived -- progress.
                         // Beaten BEFORE the send so a slow consumer never
@@ -3760,19 +3790,11 @@ mod tests {
             LlmError,
         > {
             let mut items: Vec<Result<StreamingResponse, LlmError>> = (0..self.chunks)
-                .map(|i| {
-                    Ok(StreamingResponse {
-                        id: Uuid::new_v4(),
-                        delta: format!("c{i}"),
-                        finish_reason: None,
-                    })
-                })
+                .map(|i| Ok(StreamingResponse::delta(format!("c{i}"))))
                 .collect();
-            items.push(Ok(StreamingResponse {
-                id: Uuid::new_v4(),
-                delta: String::new(),
-                finish_reason: Some(paladin_ports::output::llm_port::FinishReason::Stop),
-            }));
+            items.push(Ok(StreamingResponse::terminal(
+                paladin_ports::output::llm_port::FinishReason::Stop,
+            )));
             Ok(Box::new(futures::stream::iter(items)))
         }
 
@@ -6050,6 +6072,170 @@ mod token_counter_and_recall_limit_tests {
 
         let service = service.with_token_counter(Arc::new(AlwaysOneCounter));
         assert_eq!(service.token_counter().name(), "always-one-test-counter");
+    }
+}
+
+/// Phase 31 (ACCT-03, D-17/D-18): the streaming consumer carries the
+/// provider's terminal-chunk usage out to `ChunkMetadata`, with no
+/// `TokenCounterPort` estimate substituted when the provider reports
+/// nothing.
+#[cfg(test)]
+mod streamed_usage_tests {
+    use super::*;
+    use crate::core::base::entity::node::Node;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_llm::mock::MockLlmAdapter;
+    use std::sync::Mutex;
+
+    fn make_paladin() -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            max_loops: MaxLoops::Fixed(1),
+            ..Default::default()
+        };
+        Node::new(data, None)
+    }
+
+    fn make_service(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+    }
+
+    /// A `TokenCounterPort` that records how many times it was consulted --
+    /// distinct from `HeuristicTokenCounter`/`AlwaysOneCounter` so a test can
+    /// assert it was NEVER called (D-17).
+    #[derive(Default)]
+    struct CountingTokenCounter {
+        calls: Mutex<u32>,
+    }
+
+    impl CountingTokenCounter {
+        fn calls(&self) -> u32 {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    impl paladin_ports::output::token_counter_port::TokenCounterPort for CountingTokenCounter {
+        fn count(&self, _text: &str, _model: &str) -> u32 {
+            *self.calls.lock().unwrap() += 1;
+            1
+        }
+
+        fn name(&self) -> &str {
+            "counting-test-counter"
+        }
+    }
+
+    async fn drain_stream(
+        service: &PaladinExecutionService,
+        paladin: &Paladin,
+    ) -> (Vec<PaladinStreamChunk>, Option<PaladinError>) {
+        let mut stream = service.execute_stream(paladin, "hi").await.unwrap();
+        let mut chunks = Vec::new();
+        let mut error = None;
+        while let Some(item) = stream.recv().await {
+            match item {
+                Ok(chunk) => {
+                    let is_final = chunk.is_final;
+                    chunks.push(chunk);
+                    if is_final {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error = Some(e);
+                    break;
+                }
+            }
+        }
+        (chunks, error)
+    }
+
+    /// A streamed run whose terminal chunk reports usage produces a final
+    /// `PaladinStreamChunk` carrying that same usage on `ChunkMetadata`, and
+    /// `execute()` against the identical mock configuration reports the
+    /// identical `TokenUsage` on `PaladinResult.usage` -- field-for-field,
+    /// including the three optionals (D-18).
+    #[tokio::test]
+    async fn streamed_final_chunk_usage_equals_the_non_streamed_result_usage() {
+        let usage = TokenUsage::new(11, 7).with_cache_read(3).with_reasoning(2);
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(usage.clone()),
+        );
+        let service = make_service(llm);
+        let paladin = make_paladin();
+
+        let (chunks, error) = drain_stream(&service, &paladin).await;
+        assert!(error.is_none(), "unexpected stream error: {error:?}");
+
+        let final_chunk = chunks.last().expect("at least one chunk must be emitted");
+        assert!(final_chunk.is_final);
+        let final_usage = final_chunk
+            .metadata
+            .as_ref()
+            .and_then(|m| m.usage.clone())
+            .expect("the final chunk must carry usage when the provider reported one");
+        assert_eq!(final_usage, usage);
+
+        // Every non-final chunk must leave `metadata.usage` `None`.
+        for chunk in chunks.iter().filter(|c| !c.is_final) {
+            assert!(
+                chunk
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.usage.clone())
+                    .is_none(),
+                "a non-final chunk must never carry usage"
+            );
+        }
+
+        let buffered = service.execute(&paladin, "hi").await.unwrap();
+        assert_eq!(
+            buffered.usage, usage,
+            "execute() and execute_stream() must report the identical usage for the same call"
+        );
+    }
+
+    /// When the provider's terminal chunk reports no usage at all, the final
+    /// `PaladinStreamChunk`'s `metadata.usage` is `None` (never a fabricated
+    /// or estimated value), and the configured `TokenCounterPort` is never
+    /// consulted (D-17).
+    #[tokio::test]
+    async fn streamed_final_chunk_with_no_reported_usage_never_consults_the_token_counter() {
+        let counter = Arc::new(CountingTokenCounter::default());
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_no_streamed_usage(),
+        );
+        let service = make_service(llm).with_token_counter(counter.clone());
+        let paladin = make_paladin();
+
+        let (chunks, error) = drain_stream(&service, &paladin).await;
+        assert!(error.is_none(), "unexpected stream error: {error:?}");
+
+        let final_chunk = chunks.last().expect("at least one chunk must be emitted");
+        assert!(final_chunk.is_final);
+        assert!(
+            final_chunk
+                .metadata
+                .as_ref()
+                .and_then(|m| m.usage.clone())
+                .is_none(),
+            "the final chunk must carry no usage when the provider reported none"
+        );
+        assert_eq!(
+            counter.calls(),
+            0,
+            "the streaming no-usage path must never consult TokenCounterPort (D-17)"
+        );
     }
 }
 

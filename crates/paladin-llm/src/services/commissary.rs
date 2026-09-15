@@ -43,6 +43,8 @@ use paladin_ports::output::llm_port::{LlmPort, ProviderCapabilities};
 use paladin_ports::output::token_counter_port::TokenCounterPort;
 use thiserror::Error;
 
+use crate::window::{WindowFallbackPolicy, resolve_context_window};
+
 /// Planning-only tokens-per-1000-bytes ratio used ONLY internally by
 /// [`Commissary::dispense`] to decide how many bytes each item may keep while
 /// dispensing (deciding byte shares, not the final tally). The final tally reported on
@@ -300,6 +302,11 @@ pub struct Commissary {
     capabilities: ProviderCapabilities,
     provider: String,
     config: CommissaryPlan,
+    /// The context window resolved once, at construction, through
+    /// [`resolve_context_window`] under [`WindowFallbackPolicy::Strict`]. Read back by
+    /// [`Commissary::window`] instead of re-walking the precedence order on every
+    /// allowance query.
+    resolved_window: u32,
 }
 
 impl std::fmt::Debug for Commissary {
@@ -326,8 +333,11 @@ impl Commissary {
     ///
     /// - [`CommissaryError::InvalidConfig`] if `config.pessimistic_tokens_per_1000_bytes`
     ///   is zero, or if `config.per_item_min_bytes > config.per_item_max_bytes`.
-    /// - [`CommissaryError::UndeclaredContextWindow`] if `capabilities.max_context_tokens`
-    ///   is `None` and `config.fallback_context_tokens` is also `None`.
+    /// - [`CommissaryError::UndeclaredContextWindow`] if the context window is resolved,
+    ///   once, through [`resolve_context_window`] under [`WindowFallbackPolicy::Strict`]
+    ///   (no config table, `config.fallback_context_tokens` as the caller fallback) and
+    ///   that resolution refuses -- i.e. `capabilities.max_context_tokens` is `None` and
+    ///   `config.fallback_context_tokens` is also `None`.
     /// - [`CommissaryError::ReservationExceedsWindow`] if
     ///   `config.reserved_completion_tokens` is greater than or equal to the resolved
     ///   window.
@@ -351,12 +361,21 @@ impl Commissary {
             )));
         }
 
-        let window = capabilities
-            .max_context_tokens
-            .or(config.fallback_context_tokens)
-            .ok_or_else(|| CommissaryError::UndeclaredContextWindow {
-                provider: provider.clone(),
-            })?;
+        // Commissary passes no config table (D-03): step one of the shared resolver's
+        // walk is a permanent no-op here, so every window Commissary resolves stays
+        // identical to the pre-resolver value -- do not "fix" this by inventing a table.
+        let resolved = resolve_context_window(
+            &config.model_hint,
+            None,
+            &capabilities,
+            WindowFallbackPolicy::Strict {
+                caller_fallback: config.fallback_context_tokens,
+            },
+        )
+        .map_err(|_unknown| CommissaryError::UndeclaredContextWindow {
+            provider: provider.clone(),
+        })?;
+        let window = resolved.tokens;
 
         if config.reserved_completion_tokens >= window {
             return Err(CommissaryError::ReservationExceedsWindow {
@@ -370,6 +389,7 @@ impl Commissary {
             capabilities,
             provider,
             config,
+            resolved_window: window,
         })
     }
 
@@ -393,15 +413,12 @@ impl Commissary {
         )
     }
 
-    /// Resolves the context window: the provider's declared `max_context_tokens`, or
-    /// [`CommissaryPlan::fallback_context_tokens`] when the provider declared none.
-    /// Guaranteed to resolve to a value by the constructor's
-    /// [`CommissaryError::UndeclaredContextWindow`] guard.
+    /// The context window resolved once at construction, through
+    /// [`resolve_context_window`] under [`WindowFallbackPolicy::Strict`]
+    /// ([`Commissary::new`]). Guaranteed to have resolved to a value by the
+    /// constructor's [`CommissaryError::UndeclaredContextWindow`] guard.
     fn window(&self) -> u32 {
-        self.capabilities
-            .max_context_tokens
-            .or(self.config.fallback_context_tokens)
-            .unwrap_or(0)
+        self.resolved_window
     }
 
     /// The token allowance available for a prompt: the resolved window minus
@@ -993,8 +1010,9 @@ mod tests {
     }
 
     /// Equivalence snapshot (D-13): committed green against the PRE-RESOLVER inline
-    /// `capabilities.max_context_tokens.or(config.fallback_context_tokens)` guard in
-    /// `Commissary::new`. Plan 32-02 introduces `paladin_llm::window::
+    /// guard in `Commissary::new` -- `capabilities.max_context_tokens`, falling back to
+    /// `config.fallback_context_tokens` when the provider declared none. Plan 32-02
+    /// introduces `paladin_llm::window::
     /// resolve_context_window` as the single shared precedence walk, and plan 32-04
     /// rewires `Commissary::new` to call it — these three rows and their asserted
     /// allowances/error must stay byte-identical across that rewire. The CONTINUITY,

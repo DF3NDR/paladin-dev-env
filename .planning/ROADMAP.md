@@ -207,7 +207,7 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 **Token Economy — Commissary anchoring & lossless accounting** (added 2026-09-14, still v0.10.0 — the `0.10.0` tag is not yet cut; Phase 33 re-seals the Phase 29 release gates)
 
 - [x] **Phase 30: Token-Economy Vocabulary & Commissary Anchoring** - Record the units-plain / roles-medieval vocabulary rule, anchor `Commissary` with an ADR and an mdBook page, reserve `Treasurer` with its downstream guardrail, document the four `max_tokens` meanings, purge the orphan `Quartermaster` references, and record the clean-break versioning decision as an ADR (docs only) (completed 2026-09-14)
-- [ ] **Phase 31: Lossless Token Accounting** - Carry the full `TokenUsage` prompt/completion split (plus optional cache/reasoning fields) from the LLM port to `RunFinished` and a herald, remove the `from_total` zeroing from the battalion path, and prove streaming usage parity per adapter (keystone; breaking)
+- [x] **Phase 31: Lossless Token Accounting** - Carry the full `TokenUsage` prompt/completion split (plus optional cache/reasoning fields) from the LLM port to `RunFinished` and a herald, remove the `from_total` zeroing from the battalion path, and prove streaming usage parity per adapter (keystone; breaking) (completed 2026-09-15)
 - [ ] **Phase 32: Unified Token Primitives** - One counting contract (`TokenCounterPort::is_exact`, `Commissary::new` drops `is_exact_counter`, legacy `TokenCounter`/`TokenCounterFactory` retired) and one shared context-window resolver with a strict mode consumed by both `HistoryTrimmer` and `Commissary` (breaking)
 - [ ] **Phase 33: Commissary In-Tree Adoption** - Route RAG truncation through `Commissary::dispense` with shed records and a truncation marker, closing the last silent-truncation path with an integration-tested production caller, then re-seal the Phase 29 release gates on the final commit
 
@@ -907,7 +907,7 @@ Plans:
 | 28. Observability & Tooling | v0.10.0 | 17/17 | Complete    | 2026-09-09 |
 | 29. Program Gates & Release | v0.10.0 | 9/9 | Complete    | 2026-09-10 |
 | 30. Token-Economy Vocabulary & Commissary Anchoring | v0.10.0 | 3/3 | Complete    | 2026-09-14 |
-| 31. Lossless Token Accounting | v0.10.0 | 0/0 | Not started | — |
+| 31. Lossless Token Accounting | v0.10.0 | 7/7 | Complete    | 2026-09-15 |
 | 32. Unified Token Primitives | v0.10.0 | 0/0 | Not started | — |
 | 33. Commissary In-Tree Adoption | v0.10.0 | 0/0 | Not started | — |
 

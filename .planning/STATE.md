@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 31
-current_phase_name: lossless-token-accounting
-status: executing
+current_phase: 32
+current_phase_name: Unified Token Primitives
+status: planning
 stopped_at: Phase 31 context gathered
-last_updated: "2026-09-15T00:31:32.711Z"
+last_updated: "2026-09-15T09:16:50.799Z"
 last_activity: 2026-09-15
-last_activity_desc: Phase 31 execution started
+last_activity_desc: Phase 31 complete, transitioned to Phase 32
 progress:
   total_phases: 13
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 147
-  completed_plans: 140
+  completed_plans: 147
 ---
 
 # Project State
@@ -53,17 +53,17 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 31 (lossless-token-accounting) — EXECUTING
-Plan: 1 of 7
-Status: Executing Phase 31
-Last activity: 2026-09-15 — Phase 31 execution started
+Phase: 32 — Unified Token Primitives
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-15 — Phase 31 complete, transitioned to Phase 32
 Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 327
+- Total plans completed: 334
 - Average duration: —
 - Total execution time: —
 
@@ -100,6 +100,7 @@ Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetch
 | 28 | 17 | - | - |
 | 29 | 9 | - | - |
 | 30 | 3 | - | - |
+| 31 | 7 | - | - |
 
 *Updated after each plan completion*
 

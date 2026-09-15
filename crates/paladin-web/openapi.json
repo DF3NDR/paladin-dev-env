@@ -3350,7 +3350,7 @@
         "description": "Response body for a successful agent execution.\n\nCarries the agent output plus the safe execution metadata from\n[`PaladinResult`]. The `stop_reason` is rendered as a stable lowercase label\n(`\"completed\"`, `\"max_loops\"`, `\"stop_word\"`, `\"timeout\"`) rather than the raw\nserde enum shape, so the wire contract is stable.",
         "required": [
           "output",
-          "token_count",
+          "usage",
           "execution_time_ms",
           "loop_count",
           "stop_reason"
@@ -3376,11 +3376,9 @@
             "type": "string",
             "description": "Why execution stopped, as a stable label."
           },
-          "token_count": {
-            "type": "integer",
-            "format": "int32",
-            "description": "Total tokens used (prompt + completion).",
-            "minimum": 0
+          "usage": {
+            "$ref": "#/components/schemas/TokenUsageResponse",
+            "description": "Provider-reported token usage for this call (D-24). The three optional\nsub-counts are `null` when the provider did not report them."
           }
         }
       },
@@ -4207,6 +4205,62 @@
             "type": "string",
             "format": "date-time",
             "description": "When the thread's latest waypoint was created."
+          }
+        }
+      },
+      "TokenUsageResponse": {
+        "type": "object",
+        "description": "Wire representation of a [`TokenUsage`] on an HTTP response body (D-24).\n\nMirrors `TokenUsage`'s six fields field-for-field. `paladin-core` gains no\n`utoipa` dependency for this: the schema annotation lives here, on the\nweb-layer DTO, and never leaks inward (dependencies flow inward only). The\nthree optional sub-counts are `null` when the provider did not report the\nfigure -- see [`TokenUsage`]'s own docs for what each figure means.",
+        "required": [
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens"
+        ],
+        "properties": {
+          "cache_read_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Of `prompt_tokens`, how many were served from a provider-side cache read.\n`null` when the provider did not report this figure.",
+            "minimum": 0
+          },
+          "cache_write_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Of `prompt_tokens`, how many were written to a provider-side cache for\nfuture reuse. `null` when the provider did not report this figure.",
+            "minimum": 0
+          },
+          "completion_tokens": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of tokens in the generated completion (includes any reasoning tokens).",
+            "minimum": 0
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Number of tokens in the input prompt (includes any cache read/write tokens).",
+            "minimum": 0
+          },
+          "reasoning_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Of `completion_tokens`, how many were spent on internal reasoning /\nthinking rather than the visible output. `null` when the provider did\nnot report this figure.",
+            "minimum": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Total tokens; always `prompt_tokens + completion_tokens`.",
+            "minimum": 0
           }
         }
       },

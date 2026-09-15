@@ -857,7 +857,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 32-01-PLAN.md — `TokenCounterPort::is_exact` defaulted `false` with tiktoken `true` and heuristic inheriting it, `Commissary` dropping its caller-supplied exactness argument and reading the port, plus the consolidated one-way checkpoint for the phase (PRIM-01, PRIM-02)
+- [x] 32-01-PLAN.md — `TokenCounterPort::is_exact` defaulted `false` with tiktoken `true` and heuristic inheriting it, `Commissary` dropping its caller-supplied exactness argument and reading the port, plus the consolidated one-way checkpoint for the phase (PRIM-01, PRIM-02)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

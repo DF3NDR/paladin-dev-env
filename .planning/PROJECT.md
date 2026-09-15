@@ -109,6 +109,22 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 31 complete (2026-09-15)** — lossless-token-accounting, the keystone Token Economy phase
+(ACCT-01…05, breaking under ADR-0051): `TokenUsage` gains `cache_read_tokens` / `cache_write_tokens` /
+`reasoning_tokens` as `#[serde(default)]` optionals with an inclusive `total_tokens` contract, doc-tested
+`with_*` builders and saturating `Add`/`AddAssign`/`Sum`; `from_total` is deleted outright; `PaladinResult`,
+`NodeExecutionRecord`, `TraceEvent::NodeFinished`/`RunFinished`, Formation/Phalanx `per_paladin_tokens` and
+the `TraceDispatcher` accumulator all carry the full split; `StreamingResponse`/`ChunkMetadata` are
+`#[non_exhaustive]` with a terminal-chunk `usage` contract implemented by `CompatEngine`, OpenAI, DeepSeek,
+Anthropic (cache-inclusive `prompt_tokens` correction) and Gemini, proven by a ninth shared conformance case
+across eight adapters (the generic OpenAI-compatible server is the documented exception); JSON/Markdown/Table
+heralds, the CLI, the `TokenUsageResponse` HTTP DTO, SSE payloads and the regenerated `openapi.json` expose
+the breakdown; `MIGRATION.md` §9.2 gained seven empirically-derived allowlist-matched rows (13/13 set-equal),
+`CHANGELOG.md` `[0.10.0]` records the carrier change and both corrected under-reports. 7 plans in 6 waves;
+verification `passed` 5/5; code review CR-01 (agent streaming `done` event dropped usage) and WR-01 fixed;
+coverage 90.30 %; `make test` 3678/0. Carried: 77 pre-existing `cargo doc` warnings (WINDOWS.md #36) and
+the `cli_isolation` `--all-features` conflict (deferred-items.md) — neither introduced by this phase.
+
 **Phase 30 complete (2026-09-14)** — token-economy-vocabulary-commissary-anchoring, the first of the
 four Token Economy phases (VOCAB-01…07, docs only): the units-plain / roles-medieval vocabulary rule is
 written into this file, `docs/src/architecture/domain-model.md` and `.github/copilot-instructions.md`;
@@ -348,7 +364,7 @@ Security Paladin repo's token-economy systems analysis, findings F1-F8 / decisio
   (`VOCAB-01…07`, docs only) — **complete 2026-09-14**: ADR-0049/0050/0051 landed, verification 7/7
 - Phase 31 — lossless token accounting: full `TokenUsage` (plus optional cache/reasoning fields)
   carried from the LLM port to `RunFinished` and a herald; streaming parity (`ACCT-01…05`,
-  keystone, breaking)
+  keystone, breaking) — **complete 2026-09-15**: seven MIGRATION §9.2 rows + allowlist entries, verification 5/5, CR-01/WR-01 fixed
 - Phase 32 — one counting contract (`TokenCounterPort::is_exact`, `Commissary::new` without
   `is_exact_counter`, legacy `TokenCounter`/`TokenCounterFactory` retired) and one shared window
   resolver with a strict mode (`PRIM-01…05`, breaking)
@@ -722,6 +738,9 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
 - [x] **VOCAB-01 … VOCAB-07** (✓ Phase 30, 2026-09-14) — Vocabulary rule in all three lists, `Commissary`
   ADR-0049 + mdBook page, `Treasurer` reservation ADR-0050 + downstream guardrail, `max_tokens` terminology
   table, `cost_estimate` rustdoc reservation, `Quartermaster` purge, X-03 supersession ADR-0051 (Milestone 13 Epic 1)
+- [x] **ACCT-01 … ACCT-05** (✓ Phase 31, 2026-09-15) — six-field `TokenUsage` with inclusive total, full-split carriers
+  to `RunFinished`, terminal-chunk streaming parity per adapter, breakdown in JSON/Markdown heralds and the HTTP
+  edge, MIGRATION §9.2 + semver allowlist rows, CHANGELOG `[0.10.0]` entries (Milestone 13 Epic 2)
 
 *(The long-form forward-scope listing that previously lived here — the 90 ingest-derived
 requirements across Phases 5-16 plus Phase 17's `PROV-*` additions — shipped with v0.8.0 and is
@@ -1716,3 +1735,7 @@ at `0.10.0` with dated changelogs, 12/12 dry-run publish, WINDOWS.md `open_count
 Phases 30-33; VOCAB-01…07 validated — ADR-0049 Commissary, ADR-0050 Treasurer reservation, ADR-0051 X-03
 supersession, `commissary.md` page, `max_tokens` terminology table, Quartermaster purge; 10 of 13 phases,
 140/140 plans; next: `/gsd-discuss-phase 31` Lossless Token Accounting).*
+
+*Last updated: 2026-09-15 after Phase 31 completion (v0.10.0 milestone; ACCT-01…05 validated — lossless
+`TokenUsage` carriers, streaming parity, herald/HTTP breakdown, migration register; 11 of 13 phases, 147/147 plans;
+next: `/gsd-secure-phase 31` then `/gsd-discuss-phase 32` Unified Token Primitives).*

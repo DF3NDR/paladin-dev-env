@@ -60,7 +60,7 @@ tests`, so a live doctest would require inventing a public substitute — which 
 do.
 
 Constructing a `Commissary` and dispensing a consignment, mirroring
-`crates/paladin-llm/src/services/commissary.rs:631-686` (the `commissary()` test helper and
+`crates/paladin-llm/src/services/commissary.rs:644-698` (the `commissary()` test helper and
 `an_over_budget_consignment_sheds_the_lowest_priority_item_first`):
 
 ```rust,ignore
@@ -76,7 +76,6 @@ let commissary = Commissary::new(
     "deepseek",
     capabilities,
     /* counter: Arc<dyn TokenCounterPort> */ counter,
-    /* is_exact_counter */ false,
     CommissaryPlan::default(),
 )?;
 
@@ -118,11 +117,11 @@ match commissary.verify_fits(&assembled_prompt) {
 
 ## Honesty about exactness
 
-Not every model has an exact tokenizer available offline. `is_exact_counter` is supplied by the
-caller at `Commissary::new`/`Commissary::from_port` construction time — it already knows which
-concrete counter it injected — and surfaces unchanged as `Stockpile.exact_tally`, so a reader of a
-`Commissary`-produced stockpile can always tell an exact tally from a deliberately over-counting
-estimate and budget its own margin accordingly.
+Not every model has an exact tokenizer available offline. Exactness is declared by the injected
+`TokenCounterPort` itself, through its `is_exact` method — `TiktokenCounter` reports exact,
+`HeuristicTokenCounter` inherits the port's `false` default — and that answer surfaces unchanged
+as `Stockpile.exact_tally`, so a reader of a `Commissary`-produced stockpile can always tell an
+exact tally from a deliberately over-counting estimate and budget its own margin accordingly.
 
 ## See also
 

@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 32
 current_phase_name: Unified Token Primitives
-status: planning
-stopped_at: Phase 32 context gathered
-last_updated: "2026-09-15T14:04:48.751Z"
+status: executing
+stopped_at: "Phase 32 planned — 5 plans in 4 waves, checker passed; next: /gsd-execute-phase 32"
+last_updated: "2026-09-15T15:07:38.693Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 31 UAT complete (38/38 passed); Phase 32 ready to plan
 progress:
   total_phases: 13
   completed_phases: 11
-  total_plans: 147
+  total_plans: 152
   completed_plans: 147
 ---
 
@@ -55,7 +55,7 @@ names. See MILESTONES.md.
 
 Phase: 32 — Unified Token Primitives
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-15 — Phase 31 UAT complete (38/38 passed); Phase 32 ready to plan
 Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
@@ -948,14 +948,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 32 context gathered
+**Stopped at:** Phase 32 planned — 5 plans in 4 waves, checker passed; next: /gsd-execute-phase 32
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-15T14:04:48.651Z
-Resume file: .planning/phases/32-unified-token-primitives/32-CONTEXT.md
+Last session: 2026-09-15T15:07:38.611Z
+Resume file: .planning/phases/32-unified-token-primitives/32-01-PLAN.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

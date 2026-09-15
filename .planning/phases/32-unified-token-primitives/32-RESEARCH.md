@@ -667,7 +667,7 @@ lands) through the refactor commit, IS the equivalence snapshot D-13 asks for â€
 anticipated and hedged by CONTEXT.md's own decisions (D-05's mapping alternative, D-14's
 "empirical, not guessed" instruction).
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Exact `WindowFallbackPolicy`/`WindowSource`/`ResolvedWindow`/`UnknownContextWindow` names**
    - What we know: CONTEXT.md explicitly leaves these to Claude's Discretion; a design sketch is

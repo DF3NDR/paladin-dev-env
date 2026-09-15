@@ -165,6 +165,11 @@ PRD lock `paladin-llm`).
   run must also be added to that crate's `[package.metadata.cargo-semver-checks.lints]` table
   (`paladin-llm` has none today — add one; `paladin-memory` only if needed) so the CI job stays
   green.
+  **Release-type trap (Phase 31 plan 31-07 finding):** every crate is already bumped to `0.10.0`, so
+  a `--baseline-version 0.9.0` run treats the release as breaking-allowed and prints `0 checks, N
+  skipped` while exiting 0 — pass `--release-type minor` on every local discovery run so the lints
+  actually evaluate. The CI job's own command is left as it is; the allowlist rows are what the
+  row-level gate checks.
 - **D-15:** `MIGRATION.md` §9.2 gets **one row per `crate | Type` pair the row-level gate keys
   on** (Phase 29 D-04: the type cell reduces to its first backtick identifier):
   `paladin-llm | Commissary` (the `new`/`from_port` signature break — one row covers both
@@ -362,9 +367,11 @@ PRD lock `paladin-llm`).
   never claim exactness for arbitrary `model` strings passed to `count`.
 - Semver discovery commands (D-14), run from the repo root with the CI pin
   `cargo-semver-checks@0.50.0`:
-  `cargo semver-checks check-release --package paladin-memory --default-features --baseline-version 0.9.0`
-  and `cargo semver-checks check-release --package paladin-memory --features content-processing --baseline-version 0.9.0`
+  `cargo semver-checks check-release --package paladin-memory --default-features --baseline-version 0.9.0 --release-type minor`
+  and `cargo semver-checks check-release --package paladin-memory --features content-processing --baseline-version 0.9.0 --release-type minor`
   (same pair for `paladin-ai`; default-features only for `paladin-ports` and `paladin-llm`).
+  `--release-type minor` is mandatory on every discovery run (D-14); without it the tool skips all
+  lints for a 0.9.0 → 0.10.0 bump and reports nothing.
 
 </specifics>
 

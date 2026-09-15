@@ -62,6 +62,21 @@ from `MIGRATION.md` §9.8.
    exposes exactly one subcommand, `export` (`paladin-cli graph export --format mermaid|dot`),
    for inspecting a graph's structure — there is no separate command for a runtime probe.
 
+## Token usage carriers
+
+Every place a Paladin run's token usage is reported now carries the full prompt/completion split
+plus optional cache-read/cache-write/reasoning sub-counts, instead of a single bare count
+(ACCT-01/ACCT-02/ACCT-03). `PaladinResult.usage`, `NodeExecutionRecord.usage`,
+`TraceEvent::NodeFinished.usage`, `TraceEvent::RunFinished.usage`, `StreamingResponse.usage`,
+`ChunkMetadata.usage`, and the HTTP `ExecuteResponse.usage` all replace their former
+`token_count`/`total_tokens` field with a `TokenUsage`. `TokenUsage::from_total` — the
+total-only constructor — is deleted outright with no deprecated replacement; construct a
+`TokenUsage` via `TokenUsage::new(prompt, completion)` plus the `with_cache_read`/
+`with_cache_write`/`with_reasoning` builders instead. Two under-reports are also corrected: the
+battalion per-Paladin split was previously zeroed, and Anthropic's `prompt_tokens` previously
+excluded cached input. See [`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
+for the full per-type register and the `CHANGELOG.md` `[0.10.0]` entry for the corrected figures.
+
 ## Full migration record
 
 For every behavioral change's worked examples, the complete Rust API change register, schema

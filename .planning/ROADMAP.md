@@ -817,7 +817,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 31-02-PLAN.md — the carrier break: `PaladinResult`/`NodeExecutionRecord`/`NodeFinished`/`RunFinished` carry a full `TokenUsage`, the total-only constructor is deleted, real per-Paladin splits (ACCT-02)
+- [x] 31-02-PLAN.md — the carrier break: `PaladinResult`/`NodeExecutionRecord`/`NodeFinished`/`RunFinished` carry a full `TokenUsage`, the total-only constructor is deleted, real per-Paladin splits (ACCT-02)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

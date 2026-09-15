@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 31
-current_phase_name: Lossless Token Accounting
+current_phase_name: lossless-token-accounting
 status: executing
 stopped_at: Phase 31 context gathered
-last_updated: "2026-09-15T00:29:24.427Z"
-last_activity: 2026-09-14
-last_activity_desc: Phase 30 complete, transitioned to Phase 31
+last_updated: "2026-09-15T00:31:32.711Z"
+last_activity: 2026-09-15
+last_activity_desc: Phase 31 execution started
 progress:
   total_phases: 13
   completed_phases: 10
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-14 after Phase 30)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 30 complete (docs-only vocabulary + Commissary anchoring; ADR-0049/0050/0051 landed). Next: `/gsd-discuss-phase 31` (Lossless Token Accounting). `/gsd-complete-milestone v0.10.0` moves to after Phase 33's release re-seal (COMM-04).
+**Current focus:** Phase 31 — lossless-token-accounting
 `0.10.0` tag is cut (Phases 22-29 complete). Phase 30 is planned (3 plans, 3 waves). Next:
 `/gsd-execute-phase 30` (docs-only vocabulary + Commissary anchoring). `/gsd-complete-milestone v0.10.0` moves to after Phase 33's release
 re-seal (COMM-04).
@@ -53,10 +53,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 31 — Lossless Token Accounting
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-14 — Phase 30 complete, transitioned to Phase 31
+Phase: 31 (lossless-token-accounting) — EXECUTING
+Plan: 1 of 7
+Status: Executing Phase 31
+Last activity: 2026-09-15 — Phase 31 execution started
 Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics

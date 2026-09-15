@@ -813,7 +813,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 31-01-PLAN.md — `TokenUsage` gains the three optional sub-counts, saturating `Add`/`AddAssign`/`Sum` and builders; every in-tree literal migrates (ACCT-01)
+- [x] 31-01-PLAN.md — `TokenUsage` gains the three optional sub-counts, saturating `Add`/`AddAssign`/`Sum` and builders; every in-tree literal migrates (ACCT-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

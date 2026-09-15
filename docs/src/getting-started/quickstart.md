@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = service.execute(&paladin, "Say hello in one sentence.").await?;
 
     println!("Output : {}", result.output);
-    println!("Tokens : {}", result.token_count);
+    println!("Tokens : {}", result.usage.total_tokens);
     println!("Time   : {}ms", result.execution_time_ms);
 
     Ok(())
@@ -115,7 +115,7 @@ cargo run --example phalanx_parallel
 |-------|------|-------------|
 | `output` | `String` | Final LLM response text |
 | `loop_count` | `u32` | Number of reasoning loops performed |
-| `token_count` | `u32` | Approximate tokens consumed |
+| `usage` | `TokenUsage` | Prompt/completion split, plus cache/reasoning sub-counts when the provider reports them |
 | `execution_time_ms` | `u64` | Wall-clock time in milliseconds |
 | `stop_reason` | `StopReason` | Why execution stopped (`MaxLoops`, `StopWord`, `Done`) |
 

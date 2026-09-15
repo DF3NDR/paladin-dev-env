@@ -722,7 +722,9 @@ Logs:
 
 ### Execution Metrics
 
-Access detailed metrics from results:
+Access detailed metrics from results. Each expert's and the aggregator's `usage` field is a
+full `TokenUsage` (prompt/completion split, plus cache/reasoning sub-counts when the provider
+reports them) -- `.total_tokens` below is its derived sum:
 
 ```rust
 let result = service.execute(&conclave, input).await?;
@@ -736,7 +738,7 @@ for (name, expert_result) in result.expert_outputs.iter() {
     println!("{}: {}ms, {} tokens, {} loops",
         name,
         expert_result.execution_time_ms,
-        expert_result.token_count,
+        expert_result.usage.total_tokens,
         expert_result.loop_count
     );
 }
@@ -744,7 +746,7 @@ for (name, expert_result) in result.expert_outputs.iter() {
 // Aggregation metrics
 println!("Aggregator: {}ms, {} tokens",
     result.aggregated_output.execution_time_ms,
-    result.aggregated_output.token_count
+    result.aggregated_output.usage.total_tokens
 );
 
 // Success rate
@@ -939,8 +941,8 @@ let expert = PaladinBuilder::new(llm)
 let result = service.execute(&conclave, input).await?;
 
 let total_tokens: usize = result.expert_outputs.values()
-    .map(|r| r.token_count)
-    .sum::<usize>() + result.aggregated_output.token_count;
+    .map(|r| r.usage.total_tokens as usize)
+    .sum::<usize>() + result.aggregated_output.usage.total_tokens as usize;
 
 println!("Total tokens used: {}", total_tokens);
 ```

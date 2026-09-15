@@ -233,6 +233,11 @@ None - no external service configuration required.
   worktree) should be noted for any future fresh-worktree `mdbook build` — it is gitignored and
   regenerates instantly, so it is not a structural blocker, only a one-time local step.
 
+## Self-Check: PASSED
+
+All files listed under Files Created/Modified confirmed present on disk; all three commit hashes
+(`2b40e383`, `009b2b82`, `01d7f5fe`) confirmed in `git log --oneline -5`.
+
 ---
 *Phase: 32-unified-token-primitives*
 *Completed: 2026-09-15*

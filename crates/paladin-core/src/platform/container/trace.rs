@@ -55,6 +55,7 @@ use serde::{Deserialize, Serialize};
 use crate::platform::container::battlefield::FieldName;
 use crate::platform::container::parley::{ParleyId, ParleyKind};
 use crate::platform::container::run::RunId;
+use crate::platform::container::token_usage::TokenUsage;
 use crate::platform::container::waypoint::{NodeId, NodeOutcomeKind, ThreadId, WaypointId};
 
 /// Schema version stamped on every persisted [`TraceRecord`] (X-04),
@@ -231,9 +232,9 @@ pub enum TraceEvent {
         outcome: NodeOutcomeKind,
         /// How long this attempt took, in milliseconds.
         duration_ms: u64,
-        /// Tokens consumed by this attempt, `0` for a non-Paladin node or
-        /// a cache hit.
-        token_count: u64,
+        /// Token usage for this attempt (ACCT-02, D-07, D-11).
+        /// `TokenUsage::default()` for a non-Paladin node or a cache hit.
+        usage: TokenUsage,
         /// Whether this attempt's outcome was served from the node cache
         /// (FT-06) instead of by executing the node.
         cache_hit: bool,
@@ -284,8 +285,11 @@ pub enum TraceEvent {
         status: RunFinishStatus,
         /// Total supersteps executed by this run.
         total_supersteps: u64,
-        /// Total tokens consumed by this run.
-        total_tokens: u64,
+        /// Total token usage consumed by this run -- the saturating
+        /// `TokenUsage` sum over every `NodeFinished.usage` this run's
+        /// `TraceDispatcher` saw, exact the instant the final `emit`
+        /// returns (ACCT-02, D-07, D-11).
+        usage: TokenUsage,
         /// Total wall-clock duration of this run, in milliseconds.
         duration_ms: u64,
         /// The dispatching `TraceDispatcher`'s own drop count at the moment
@@ -386,7 +390,7 @@ mod tests {
                 attempt: 1,
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
-                token_count: 0,
+                usage: TokenUsage::default(),
                 cache_hit: false,
             },
             TraceEvent::EdgeEvaluated {
@@ -418,7 +422,7 @@ mod tests {
             TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
-                total_tokens: 0,
+                usage: TokenUsage::default(),
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },

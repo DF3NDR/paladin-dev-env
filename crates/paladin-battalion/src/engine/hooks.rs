@@ -41,6 +41,7 @@ use tokio::sync::mpsc;
 
 use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
 use paladin_core::platform::container::run::RunId;
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::output::trace_sink_port::{TraceEmitter, TraceEvent, TraceRecord, TraceSink};
 
@@ -84,13 +85,19 @@ struct TraceQueue {
     /// so the final value is accurate the instant `emit` returns — no race
     /// with the background sink drain.
     superstep_count: AtomicU64,
-    /// Total `token_count` this dispatcher has seen across every
-    /// `TraceEvent::NodeFinished` record stamped so far (D-02, D-04) —
-    /// readable via [`TraceDispatcher::token_total`], and what
-    /// `TraceEvent::RunFinished.total_tokens` is populated from. Counted
-    /// synchronously inside [`TraceDispatcher::emit`], for the same reason
-    /// `superstep_count` above is.
-    token_total: AtomicU64,
+    /// Total [`TokenUsage`] this dispatcher has seen across every
+    /// `TraceEvent::NodeFinished` record stamped so far (D-02, D-04, D-11) —
+    /// readable via [`TraceDispatcher::total_usage`], and what
+    /// `TraceEvent::RunFinished.usage` is populated from. Accumulated
+    /// through `TokenUsage::AddAssign` synchronously inside
+    /// [`TraceDispatcher::emit`] (never by the async consumer task), so the
+    /// value is exact the instant `emit` returns — the same
+    /// synchronous-accumulation guarantee `superstep_count` above provides.
+    /// A `std::sync::Mutex` rather than an atomic: `TokenUsage` is a
+    /// multi-field struct with saturating `Add`, not a single integer: the
+    /// mutex is recovered with `PoisonError::into_inner` on a poisoned lock
+    /// (library code must not panic) rather than `.unwrap()`/`.expect()`.
+    usage: Mutex<TokenUsage>,
 }
 
 /// The engine-owned trace event dispatcher (ENG-FR-21, D-03): sits between
@@ -206,7 +213,7 @@ impl TraceDispatcher {
             seq: AtomicU64::new(0),
             sink_panics: AtomicU64::new(0),
             superstep_count: AtomicU64::new(0),
-            token_total: AtomicU64::new(0),
+            usage: Mutex::new(TokenUsage::default()),
         });
         // Capacity 1: the doorbell only ever needs to prove "there is at
         // least one more thing to check for" -- the consumer always drains
@@ -300,8 +307,12 @@ impl TraceDispatcher {
             TraceEvent::SuperstepStarted { .. } => {
                 queue.superstep_count.fetch_add(1, Ordering::SeqCst);
             }
-            TraceEvent::NodeFinished { token_count, .. } => {
-                queue.token_total.fetch_add(*token_count, Ordering::SeqCst);
+            TraceEvent::NodeFinished { usage, .. } => {
+                let mut total = queue
+                    .usage
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                *total += usage.clone();
             }
             _ => {}
         }
@@ -368,14 +379,22 @@ impl TraceDispatcher {
             .map_or(0, |(queue, _)| queue.superstep_count.load(Ordering::SeqCst))
     }
 
-    /// Total `token_count` this dispatcher has seen across every
-    /// `TraceEvent::NodeFinished` record stamped so far (D-02, D-04) — what
-    /// `WarEngine::start`/`resume*` reads to populate
-    /// `RunFinished.total_tokens`. Always `0` with no sink configured.
-    pub fn token_total(&self) -> u64 {
+    /// Total [`TokenUsage`] this dispatcher has seen across every
+    /// `TraceEvent::NodeFinished` record stamped so far (D-02, D-04, D-11) —
+    /// what `WarEngine::start`/`resume*` reads to populate
+    /// `RunFinished.usage`. Exact the instant the last `emit` returns —
+    /// no background flush is required for the value to be right.
+    /// `TokenUsage::default()` with no sink configured.
+    pub fn total_usage(&self) -> TokenUsage {
         self.inner
             .as_ref()
-            .map_or(0, |(queue, _)| queue.token_total.load(Ordering::SeqCst))
+            .map_or_else(TokenUsage::default, |(queue, _)| {
+                queue
+                    .usage
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            })
     }
 
     /// Enable opt-in value inclusion on `TraceEvent::DeltaMerged
@@ -602,7 +621,7 @@ mod tests {
         TraceEvent::RunFinished {
             status: paladin_ports::output::trace_sink_port::RunFinishStatus::Completed,
             total_supersteps: 0,
-            total_tokens: 0,
+            usage: TokenUsage::default(),
             duration_ms: 0,
             trace_dropped_total: 0,
         }
@@ -1093,7 +1112,7 @@ mod tests {
                             attempt: 1,
                             outcome: paladin_core::platform::container::waypoint::NodeOutcomeKind::Succeeded,
                             duration_ms: 0,
-                            token_count: 0,
+                            usage: TokenUsage::default(),
                             cache_hit: false,
                         });
                     }

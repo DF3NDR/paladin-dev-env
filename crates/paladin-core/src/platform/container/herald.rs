@@ -689,7 +689,7 @@ mod tests {
         let herald = MockHerald;
         let result = PaladinResult {
             output: "Test output".to_string(),
-            token_count: 100,
+            usage: crate::platform::container::token_usage::TokenUsage::new(100, 0),
             execution_time_ms: 1500,
             loop_count: 1,
             stop_reason: StopReason::Completed,

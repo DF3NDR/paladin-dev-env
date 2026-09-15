@@ -22,6 +22,7 @@ use crate::platform::container::node_error::{AttemptRecord, NodeError};
 pub use crate::platform::container::parley::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
+use crate::platform::container::token_usage::TokenUsage;
 
 /// Maximum length, in bytes, of a [`ThreadId`].
 ///
@@ -568,8 +569,13 @@ pub struct NodeExecutionRecord {
     pub started_at: DateTime<Utc>,
     /// How long the node ran, in milliseconds.
     pub duration_ms: u64,
-    /// Tokens consumed by this node's execution, if applicable.
-    pub token_count: u64,
+    /// Token usage consumed by this node's execution (ACCT-02, D-07).
+    /// Additive and `#[serde(default)]`, following the `attempts`/
+    /// `cache_hit` precedent: a `Waypoint` written before this phase
+    /// deserialises with `usage == TokenUsage::default()` -- an all-zero,
+    /// all-`None` value, not a reconstructed total.
+    #[serde(default)]
+    pub usage: TokenUsage,
     /// The node's outcome.
     pub outcome: NodeOutcomeKind,
     /// The 1-indexed attempt number that produced this record's `outcome`
@@ -1712,7 +1718,7 @@ mod tests {
             paladin_id: None,
             started_at: Utc::now(),
             duration_ms: 5,
-            token_count: 0,
+            usage: TokenUsage::default(),
             outcome: NodeOutcomeKind::Succeeded,
             attempt: failed_attempts + 1,
             attempts,
@@ -1769,6 +1775,29 @@ mod tests {
             legacy.attempt, record.attempt,
             "every other field is untouched"
         );
+        assert_eq!(legacy.node_id, record.node_id);
+    }
+
+    /// D-25: a `NodeExecutionRecord` JSON blob persisted before this phase
+    /// -- carrying the retired `token_count` key and no `usage` key --
+    /// deserialises with `usage == TokenUsage::default()`, while `attempts`,
+    /// `cache_hit` and `attempt` survive untouched. Mirrors
+    /// `execution_result.rs`'s `legacy_json_deserialises_with_served_by_none`.
+    #[test]
+    fn legacy_json_deserialises_with_default_usage() {
+        let record = record_with_attempt_history(1);
+        let mut value = serde_json::to_value(&record).unwrap();
+        let object = value
+            .as_object_mut()
+            .expect("NodeExecutionRecord serializes to a JSON object");
+        object.remove("usage");
+        object.insert("token_count".to_string(), serde_json::json!(0));
+        let legacy: NodeExecutionRecord = serde_json::from_value(value).unwrap();
+
+        assert_eq!(legacy.usage, TokenUsage::default());
+        assert_eq!(legacy.attempts, record.attempts);
+        assert_eq!(legacy.cache_hit, record.cache_hit);
+        assert_eq!(legacy.attempt, record.attempt);
         assert_eq!(legacy.node_id, record.node_id);
     }
 

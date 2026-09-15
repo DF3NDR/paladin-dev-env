@@ -151,7 +151,7 @@ impl ExecutionOverlay {
                         attempt: record.attempt,
                         outcome: record.outcome.clone(),
                         duration_ms: record.duration_ms,
-                        tokens: record.token_count,
+                        tokens: u64::from(record.usage.total_tokens),
                         cache_hit: record.cache_hit,
                     });
             }
@@ -194,9 +194,8 @@ impl ExecutionOverlay {
     ///
     /// Visits: one per `TraceEvent::NodeFinished` (one per attempt, D-16) --
     /// the paired `NodeStarted` establishes when the attempt began, but
-    /// every value a [`Visit`] needs (`outcome`, `duration_ms`,
-    /// `token_count`, `cache_hit`) is already carried on `NodeFinished`
-    /// itself.
+    /// every value a [`Visit`] needs (`outcome`, `duration_ms`, `usage`,
+    /// `cache_hit`) is already carried on `NodeFinished` itself.
     ///
     /// Edges: every `TraceEvent::EdgeEvaluated` is added to `evaluated_edges`
     /// unconditionally, and to `fired_edges` too when `fired` is `true` --
@@ -218,7 +217,7 @@ impl ExecutionOverlay {
                     attempt,
                     outcome,
                     duration_ms,
-                    token_count,
+                    usage,
                     cache_hit,
                 } => {
                     visits.entry(node_id.clone()).or_default().push(Visit {
@@ -226,7 +225,7 @@ impl ExecutionOverlay {
                         attempt: *attempt,
                         outcome: outcome.clone(),
                         duration_ms: *duration_ms,
-                        tokens: *token_count,
+                        tokens: u64::from(usage.total_tokens),
                         cache_hit: *cache_hit,
                     });
                 }
@@ -284,6 +283,7 @@ mod tests {
 
     use chrono::Utc;
     use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::waypoint::{
         FrontierSnapshot, GraphFingerprint, NodeExecutionRecord, ThreadId, WaypointStatus,
     };
@@ -326,7 +326,7 @@ mod tests {
         attempt: u32,
         outcome: NodeOutcomeKind,
         duration_ms: u64,
-        token_count: u64,
+        token_count: u32,
         cache_hit: bool,
     ) -> NodeExecutionRecord {
         NodeExecutionRecord {
@@ -334,7 +334,7 @@ mod tests {
             paladin_id: None,
             started_at: Utc::now(),
             duration_ms,
-            token_count,
+            usage: TokenUsage::new(token_count, 0),
             outcome,
             attempt,
             attempts: Vec::new(),
@@ -576,7 +576,7 @@ mod tests {
                     attempt: 1,
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 10,
-                    token_count: 5,
+                    usage: TokenUsage::new(5, 0),
                     cache_hit: false,
                 },
             ),
@@ -671,7 +671,7 @@ mod tests {
                     attempt: 1,
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 10,
-                    token_count: 5,
+                    usage: TokenUsage::new(5, 0),
                     cache_hit: false,
                 },
             ),
@@ -735,7 +735,7 @@ mod tests {
                     attempt: 1,
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 10,
-                    token_count: 5,
+                    usage: TokenUsage::new(5, 0),
                     cache_hit: false,
                 },
             ),
@@ -765,7 +765,7 @@ mod tests {
                     attempt: 1,
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 10,
-                    token_count: 5,
+                    usage: TokenUsage::new(5, 0),
                     cache_hit: false,
                 },
             ),

@@ -576,7 +576,7 @@ Important: Use the exact specialist names shown above. Separate multiple special
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paladin_core::platform::container::battalion::BattalionConfig;
+    use paladin_core::platform::container::battalion::{BattalionConfig, TokenUsage};
     use paladin_core::platform::container::paladin::{Paladin, PaladinData};
     use paladin_ports::output::paladin_port::PaladinResult;
 
@@ -607,7 +607,7 @@ mod tests {
             {
                 Ok(PaladinResult {
                     output: String::new(),
-                    token_count: 0,
+                    usage: TokenUsage::new(0, 0),
                     execution_time_ms: 0,
                     loop_count: 1,
                     stop_reason: StopReason::Completed,
@@ -657,7 +657,7 @@ mod tests {
             {
                 Ok(PaladinResult {
                     output: String::new(),
-                    token_count: 0,
+                    usage: TokenUsage::new(0, 0),
                     execution_time_ms: 0,
                     loop_count: 1,
                     stop_reason: StopReason::Completed,
@@ -715,7 +715,7 @@ mod tests {
             use paladin_ports::output::paladin_port::StopReason;
             Ok(PaladinResult {
                 output: String::new(),
-                token_count: 0,
+                usage: TokenUsage::new(0, 0),
                 execution_time_ms: 0,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,

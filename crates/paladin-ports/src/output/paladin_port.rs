@@ -92,7 +92,7 @@
 //!         .await?;
 //!
 //!     println!("Output: {}", result.output);
-//!     println!("Tokens: {}", result.token_count);
+//!     println!("Tokens: {}", result.usage.total_tokens);
 //!     println!("Time: {}ms", result.execution_time_ms);
 //!     println!("Loops: {}", result.loop_count);
 //!     println!("Stop reason: {:?}", result.stop_reason);
@@ -304,7 +304,7 @@
 //!
 //!         Ok(PaladinResult {
 //!             output: self.output.clone(),
-//!             token_count: 100,
+//!             usage: TokenUsage::new(100, 0),
 //!             execution_time_ms: 500,
 //!             loop_count: 1,
 //!             stop_reason: StopReason::Completed,
@@ -498,7 +498,7 @@ pub type PaladinStream = mpsc::Receiver<Result<PaladinStreamChunk, PaladinError>
 ///         // 4. Return result
 ///         Ok(PaladinResult {
 ///             output,
-///             token_count: 500, // Track actual usage
+///             usage: TokenUsage::new(500, 0), // Track actual usage
 ///             execution_time_ms: start_time.elapsed().as_millis() as u64,
 ///             loop_count,
 ///             stop_reason: StopReason::Completed,
@@ -690,7 +690,7 @@ pub trait PaladinPort: Send + Sync {
     ///         .unwrap();
     ///
     ///     println!("Output: {}", result.output);
-    ///     println!("Used {} tokens in {}ms", result.token_count, result.execution_time_ms);
+    ///     println!("Used {} tokens in {}ms", result.usage.total_tokens, result.execution_time_ms);
     ///
     ///     if !result.stop_reason.is_successful() {
     ///         eprintln!("Warning: Execution stopped due to: {:?}", result.stop_reason);
@@ -973,6 +973,7 @@ pub trait PaladinPort: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_core::platform::container::token_usage::TokenUsage;
 
     /// Plan 25-09, D-19 / X-10.4: `execute_observed` is a DEFAULTED method
     /// whose default body delegates to `execute` and beats nothing. A port
@@ -996,7 +997,7 @@ mod tests {
             ) -> Result<PaladinResult, PaladinError> {
                 Ok(PaladinResult {
                     output: format!("echo:{input}"),
-                    token_count: 7,
+                    usage: TokenUsage::new(7, 0),
                     loop_count: 1,
                     stop_reason: StopReason::Completed,
                     ..Default::default()
@@ -1030,7 +1031,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(observed.output, direct.output);
-        assert_eq!(observed.token_count, direct.token_count);
+        assert_eq!(observed.usage, direct.usage);
         assert_eq!(observed.loop_count, direct.loop_count);
         assert_eq!(observed.stop_reason, direct.stop_reason);
         assert_eq!(heartbeat.beats(), 0, "the default body emits no beat");
@@ -1058,7 +1059,7 @@ mod tests {
             ) -> Result<PaladinResult, PaladinError> {
                 Ok(PaladinResult {
                     output: format!("echo:{input}"),
-                    token_count: 3,
+                    usage: TokenUsage::new(3, 0),
                     loop_count: 1,
                     stop_reason: StopReason::Completed,
                     ..Default::default()
@@ -1098,7 +1099,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(scoped.output, observed.output);
-        assert_eq!(scoped.token_count, observed.token_count);
+        assert_eq!(scoped.usage, observed.usage);
         assert_eq!(scoped.loop_count, observed.loop_count);
         assert_eq!(scoped.stop_reason, observed.stop_reason);
     }
@@ -1107,7 +1108,7 @@ mod tests {
     fn test_paladin_result_creation() {
         let result = PaladinResult {
             output: "Test output".to_string(),
-            token_count: 100,
+            usage: TokenUsage::new(100, 0),
             execution_time_ms: 500,
             loop_count: 2,
             stop_reason: StopReason::Completed,
@@ -1117,7 +1118,7 @@ mod tests {
         };
 
         assert_eq!(result.output, "Test output");
-        assert_eq!(result.token_count, 100);
+        assert_eq!(result.usage.total_tokens, 100);
         assert_eq!(result.loop_count, 2);
         assert!(!result.has_plan());
         assert!(!result.has_handoffs());
@@ -1181,7 +1182,7 @@ mod tests {
     fn test_paladin_result_serialization() {
         let result = PaladinResult {
             output: "Test".to_string(),
-            token_count: 50,
+            usage: TokenUsage::new(50, 0),
             execution_time_ms: 250,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -1195,7 +1196,7 @@ mod tests {
             serde_json::from_str(&json).expect("Failed to deserialize");
 
         assert_eq!(result.output, deserialized.output);
-        assert_eq!(result.token_count, deserialized.token_count);
+        assert_eq!(result.usage, deserialized.usage);
         assert_eq!(result.stop_reason, deserialized.stop_reason);
     }
 
@@ -1204,7 +1205,7 @@ mod tests {
         let result = PaladinResult::default();
 
         assert_eq!(result.output, "");
-        assert_eq!(result.token_count, 0);
+        assert_eq!(result.usage, TokenUsage::default());
         assert_eq!(result.execution_time_ms, 0);
         assert_eq!(result.loop_count, 0);
         assert_eq!(result.stop_reason, StopReason::Completed);
@@ -1228,7 +1229,7 @@ mod tests {
 
         let result = PaladinResult {
             output: "Task completed".to_string(),
-            token_count: 200,
+            usage: TokenUsage::new(200, 0),
             execution_time_ms: 1000,
             loop_count: 3,
             stop_reason: StopReason::Completed,
@@ -1264,7 +1265,7 @@ mod tests {
 
         let result = PaladinResult {
             output: "All tasks completed".to_string(),
-            token_count: 500,
+            usage: TokenUsage::new(500, 0),
             execution_time_ms: 3000,
             loop_count: 5,
             stop_reason: StopReason::Completed,
@@ -1307,7 +1308,7 @@ mod tests {
 
         let result = PaladinResult {
             output: "Final output".to_string(),
-            token_count: 300,
+            usage: TokenUsage::new(300, 0),
             execution_time_ms: 2000,
             loop_count: 4,
             stop_reason: StopReason::Completed,
@@ -1332,6 +1333,10 @@ mod tests {
         assert_eq!(deserialized.handoff_count(), 1);
     }
 
+    /// D-25: a `PaladinResult` JSON document persisted before this phase --
+    /// carrying the retired `token_count` key and no `usage` key at all --
+    /// deserialises with `usage == TokenUsage::default()`, never with the
+    /// retired key's value mapped forward into `usage.total_tokens`.
     #[test]
     fn test_paladin_result_deserialization_backward_compatibility() {
         // Old JSON format without plan and handoff_history fields
@@ -1348,7 +1353,7 @@ mod tests {
             serde_json::from_str(old_json).expect("Failed to deserialize old format");
 
         assert_eq!(result.output, "Old result");
-        assert_eq!(result.token_count, 150);
+        assert_eq!(result.usage, TokenUsage::default());
         assert_eq!(result.execution_time_ms, 800);
         assert_eq!(result.loop_count, 2);
         assert_eq!(result.stop_reason, StopReason::Completed);
@@ -1364,14 +1369,14 @@ mod tests {
     fn test_paladin_result_new_constructor() {
         let result = PaladinResult::new(
             "Constructor test".to_string(),
-            250,
+            TokenUsage::new(250, 0),
             1500,
             3,
             StopReason::MaxLoops,
         );
 
         assert_eq!(result.output, "Constructor test");
-        assert_eq!(result.token_count, 250);
+        assert_eq!(result.usage.total_tokens, 250);
         assert_eq!(result.execution_time_ms, 1500);
         assert_eq!(result.loop_count, 3);
         assert_eq!(result.stop_reason, StopReason::MaxLoops);

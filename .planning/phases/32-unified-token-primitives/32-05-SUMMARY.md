@@ -207,4 +207,146 @@ cargo semver-checks check-release --package paladin-ai --only-explicit-features 
 
 ---
 
-*(Task 2 and Task 3 sections follow below once those tasks execute.)*
+## Task 2: Migration register, allowlist, CHANGELOG, and reader-facing docs
+
+Writing scope was strictly bounded to what Task 1 actually observed. No lint id was written into
+a row, an entry, or a Cargo.toml lints table unless a discovery run reported it.
+
+### MIGRATION.md §9.2 — two new rows
+
+Both new rows are `paladin-memory`, matching the two lints Run 5 (content-processing) fired:
+
+| Crate | Type | Deliberate-breaking? |
+|---|---|---|
+| `paladin-memory` | `TokenCounter` | Y — `trait_missing` |
+| `paladin-memory` | `TokenCounterFactory` | Y — `struct_missing` |
+
+**No row exists for `paladin-llm | Commissary` or `paladin-ports | TokenCounterPort`** — both
+crate/type pairs fired zero lints across every discovery run (Task 1, Runs 1-2, 6). Per this
+plan's own EDGE(PRIM-05/empty) truth, a pair with zero fired lints gets zero rows and zero
+allowlist entries; both breaks are still described in CHANGELOG.md's `[0.10.0]` section below,
+independent of semver-checks detection. A note was added to MIGRATION.md immediately after the
+new rows explaining this explicitly, so a reader auditing the register does not mistake the
+absence for an oversight.
+
+### `.cargo/semver-checks-allowlist.toml` — two new entries, same commit as their rows
+
+```toml
+[[entry]]
+crate = "paladin-memory"
+lint = "trait_missing"
+migration_row = "paladin-memory | TokenCounter"
+requirement_id = "PRIM-03, PRIM-05"
+
+[[entry]]
+crate = "paladin-memory"
+lint = "struct_missing"
+migration_row = "paladin-memory | TokenCounterFactory"
+requirement_id = "PRIM-03, PRIM-05"
+```
+
+Both justifications name the `content-processing` feature gate and state plainly that CI's
+`--default-features`-only `semver` job cannot observe either removal — the entry and its
+justification are the only record of that gap (D-14, Pitfall 3).
+
+### Per-crate lints tables — no changes
+
+Neither lint fired on a **default-features** run (only on the `content-processing` run), so per
+the plan's own instruction no `[package.metadata.cargo-semver-checks.lints]` line was added to
+`crates/paladin-memory/Cargo.toml` — CI's default-features `semver` job never evaluates this lint
+pair, so an unnecessary allow there would hide a future real (default-features) occurrence.
+`crates/paladin-llm/Cargo.toml` and `crates/paladin-ports/Cargo.toml` are **unmodified** — no
+lint fired for either crate on any run, default-features or content-processing. Confirmed via
+`git status --porcelain -- crates/paladin-llm/Cargo.toml crates/paladin-memory/Cargo.toml
+crates/paladin-ports/Cargo.toml` showing no changes to any of the three files.
+
+### CHANGELOG.md `[0.10.0]` — three bullets
+
+- **Changed:** `Commissary::new`/`Commissary::from_port` losing the `is_exact_counter` argument,
+  plus the shared `paladin_llm::window::resolve_context_window` resolver replacing two independent
+  inline precedence walks.
+- **Removed:** the legacy `garrison::TokenCounter` trait and `TokenCounterFactory`, deleted
+  outright with no deprecated replacement.
+- **Added:** `TokenCounterPort::is_exact(&self) -> bool`.
+
+All three link to `MIGRATION.md` §9.2; every version string in the new text reads `v0.10.0`
+(confirmed: `grep -rn 'v0\.11\.0' CHANGELOG.md docs/src/api-reference/upgrading.md
+docs/src/api-reference/migration-guide.md` returns nothing).
+
+### Reader-facing docs — two new sections
+
+`docs/src/api-reference/upgrading.md` gained `## Token primitives` directly after its existing
+`## Token usage carriers` section; `docs/src/api-reference/migration-guide.md` gained
+`### Token primitives` directly after its `### Token usage carriers` subsection. Both describe the
+same three changes (exactness moved to the port, the legacy pair's removal, the shared resolver)
+in each page's existing register and length, linking to `MIGRATION.md` §9.2 the same way their
+neighboring sections do.
+
+### Verification run in this task
+
+- `mdbook-mermaid install docs/` (Rule 3 — the same gitignored-asset regeneration plan 32-01's
+  Task 2 already documented for a fresh worktree) followed by `mdbook build docs/`: exit 0,
+  `[INFO] mdbook_linkcheck] No broken links found`.
+- `cargo check --workspace --all-features --all-targets`: exit 0 (all twelve crates + the facade +
+  doc-examples), using the real workspace `Cargo.lock` (no qdrant-client drift — that issue was
+  specific to `cargo-semver-checks`' own from-scratch placeholder-crate resolution, see Task 1).
+- `grep -q '^## Token primitives' docs/src/api-reference/upgrading.md` and
+  `grep -q '^### Token primitives' docs/src/api-reference/migration-guide.md`: both found.
+- `! grep -rqn 'v0\.11\.0' CHANGELOG.md docs/src/api-reference/upgrading.md
+  docs/src/api-reference/migration-guide.md`: confirmed, nothing found.
+- `! git grep -qnE '\bTokenCounterFactory\b|garrison::TokenCounter\b' -- crates`: confirmed,
+  nothing found (plan 32-03's exit grep stays clean; the new Cargo.toml comments — of which there
+  are none — did not reintroduce either name).
+- **The CI row-level set-equality step**, copied verbatim from `.github/workflows/ci.yml` lines
+  377-445 into a scratch script and run locally from the worktree root:
+
+```
+MIGRATION.md section 9.2 deliberate-breaking crate|type pairs:
+paladin-ai | Settings
+paladin-ai-core | BattalionError
+paladin-ai-core | GarrisonEntry
+paladin-ai-core | PaladinError
+paladin-ai-core | PaladinResult
+paladin-ai-core | StopReason
+paladin-ai-core | TokenUsage
+paladin-memory | TokenCounter
+paladin-memory | TokenCounterFactory
+paladin-ports | ChunkMetadata
+paladin-ports | LlmError
+paladin-ports | LlmRequest
+paladin-ports | StreamingResponse
+paladin-web | ExecuteResponse
+paladin-web | require_authentication
+Allowlist crate|type pairs:
+paladin-ai | Settings
+paladin-ai-core | BattalionError
+paladin-ai-core | GarrisonEntry
+paladin-ai-core | PaladinError
+paladin-ai-core | PaladinResult
+paladin-ai-core | StopReason
+paladin-ai-core | TokenUsage
+paladin-memory | TokenCounter
+paladin-memory | TokenCounterFactory
+paladin-ports | ChunkMetadata
+paladin-ports | LlmError
+paladin-ports | LlmRequest
+paladin-ports | StreamingResponse
+paladin-web | ExecuteResponse
+paladin-web | require_authentication
+Allowlist is set-equal to the MIGRATION.md section 9.2 deliberate-breaking register (crate|type pairs).
+```
+
+**Exits 0, set-equal in both directions.** The two new `paladin-memory | TokenCounter` /
+`paladin-memory | TokenCounterFactory` pairs appear in both lists; every pre-existing pair from
+Phases 25-31 is unchanged.
+
+### Deviations recorded in this task
+
+**[Rule 3 - Blocking] Regenerated missing mdbook-mermaid gitignored assets before `mdbook build`**
+— identical root cause and fix to plan 32-01's Task 2 deviation (a fresh worktree has no
+`docs/mermaid.min.js`/`docs/mermaid-init.js`, both gitignored, regenerated via
+`mdbook-mermaid install docs/`). No tracked file changed.
+
+---
+
+*(Task 3 section follows below once it executes.)*

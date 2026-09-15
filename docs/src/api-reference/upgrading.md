@@ -77,6 +77,21 @@ battalion per-Paladin split was previously zeroed, and Anthropic's `prompt_token
 excluded cached input. See [`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
 for the full per-type register and the `CHANGELOG.md` `[0.10.0]` entry for the corrected figures.
 
+## Token primitives
+
+Two duplications in the token-counting/window-resolution primitives are collapsed to one each in
+v0.10.0 (PRIM-01…PRIM-04). `TokenCounterPort` gained `fn is_exact(&self) -> bool { false }` — the
+counting port now declares its own exactness, so `Commissary::new` and `Commissary::from_port`
+no longer take a caller-supplied `is_exact_counter: bool` argument; `Commissary` reads
+`Stockpile.exact_tally` live from the injected counter's `is_exact()` instead. The legacy
+fallible `garrison::TokenCounter` trait and its `TokenCounterFactory` are removed outright, with
+no deprecated replacement — `TiktokenCounter` survives as the sole implementor of
+`TokenCounterPort`, which is now the only counting contract in the workspace. Separately, both
+context-window precedence walks (`Commissary::new`'s inline fallback guard and
+`HistoryTrimmer::resolve_limit`) now call the same shared `paladin_llm::window::resolve_context_window`
+function instead of each maintaining its own. See [`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
+for the full per-type register.
+
 ## Full migration record
 
 For every behavioral change's worked examples, the complete Rust API change register, schema

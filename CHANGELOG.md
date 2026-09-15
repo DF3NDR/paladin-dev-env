@@ -93,6 +93,24 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register) for
   the full per-type register and every `cargo semver-checks` suppression.
 
+- **`Commissary::new`/`Commissary::from_port` no longer take a caller-supplied exactness
+  argument; the `HistoryTrimmer`/`Commissary` context-window resolvers are now one shared
+  function (PRIM-01, PRIM-02, PRIM-04).** `TokenCounterPort` gained a defaulted
+  `is_exact(&self) -> bool { false }` method (`TiktokenCounter` overrides it `true`,
+  `HeuristicTokenCounter` inherits the default); `Commissary` now reads `Stockpile.exact_tally`
+  live from `counter.is_exact()` instead of a fourth constructor argument, so `new` drops one
+  positional parameter and `from_port` drops one too. Separately, `paladin_llm::window::resolve_context_window`
+  — one pure, four-step precedence function (config table → provider capabilities → framework
+  default or caller fallback, with an explicit `WindowFallbackPolicy` instead of a strict-bool
+  flag) — now backs both `Commissary::new`'s window resolution (strict policy) and
+  `HistoryTrimmer::resolve_limit` (lenient policy), replacing two independent inline `.or(...)`
+  precedence walks with one; the facade's local `LimitSource` enum is gone, folded into the
+  shared `WindowSource`. Six pre-refactor equivalence fixtures, committed green before either
+  consumer was rewired, prove neither Commissary's resolved windows nor HistoryTrimmer's trims
+  changed. See [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
+  (no register row exists for this break — every discovery run recorded zero fired
+  `cargo semver-checks` lints for it; see that section's note).
+
 ### Added
 
 - **Typed error taxonomy (FT-01).** `Transience { Transient, Permanent, Unknown }` in `paladin-core`,
@@ -302,6 +320,25 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   rather than changing it; the fed-back text is now redacted (bearer tokens, API-key shapes,
   `key=`/`token=` values, JWT-shaped triples) before being bounded — see
   [`MIGRATION.md` §9.1, M-B-03](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes).
+- **`TokenCounterPort::is_exact(&self) -> bool` (PRIM-01).** A defaulted method (`false` by
+  default) that lets a counting adapter declare whether its `count` result is the model's own
+  exact tokenizer tally or an approximation. `TiktokenCounter` overrides it `true` (scoped to the
+  encoding resolved at `new(model)`); `HeuristicTokenCounter` relies on the trait default. See
+  [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
+
+### Removed
+
+- **Legacy fallible `garrison::TokenCounter` trait and `TokenCounterFactory` deleted outright, no
+  deprecated replacement (PRIM-03).** `paladin-memory`'s pre-`TokenCounterPort` counting contract
+  — the `TokenCounter` trait (`count_tokens`, `model_name`) and its `TokenCounterFactory`
+  (`for_model`/`supported_models`/`is_supported`) — is removed with no `#[deprecated]` shim and no
+  forwarding alias, per ADR-0051's clean-break authority for Phases 31-33. `TiktokenCounter`'s
+  only counting path is now its `TokenCounterPort` implementation, with the BPE lookup and
+  per-string cache inlined directly into `count`; `TokenCounterPort` is now the only counting
+  contract in the workspace. Both types sit behind the `content-processing` feature, so this
+  removal is invisible to a default-features build; enable `content-processing` and migrate any
+  caller of the removed trait/factory to `TokenCounterPort` directly. See
+  [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
 
 ### Fixed
 

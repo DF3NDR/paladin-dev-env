@@ -149,3 +149,31 @@ lint = "struct_pub_field_missing"
 migration_row = "paladin-web | ExecuteResponse"
 requirement_id = "ACCT-02, ACCT-05"
 justification = "ExecuteResponse's token_count field was removed, replaced by usage: TokenUsageResponse (D-24) -- a published HTTP response contract, one-way door confirmed at plan 31-01's consolidated checkpoint. This ADDS to the constructible_struct_adds_field entry above on the same crate/type pair rather than duplicating the row (the row-level gate is deduplicated by crate | type, not by lint)."
+
+# --- Phase 32 (Unified Token Primitives, PRIM-01..05) -----------------------
+# Entries below were derived empirically per D-14: cargo-semver-checks 0.50.0
+# was run with --release-type minor (mandatory -- a 0.9.0 -> 0.10.0 bump is
+# already-major-equivalent without it) for --default-features AND, separately,
+# --features content-processing (the legacy pair sits behind that feature in
+# both paladin-memory and the facade, invisible to CI's --default-features-only
+# semver job). Only lint ids the tool actually reported are entered here --
+# see 32-05-SUMMARY.md Task 1 for the six captured discovery runs. Notably,
+# NO entry exists for paladin-llm | Commissary (D-08's constructor-arity break)
+# or paladin-ports | TokenCounterPort (D-06/D-07's additive is_exact method):
+# both fired zero lints across every recorded run (32-05-SUMMARY.md Runs 1-2,
+# 6) -- confirmed, not guessed; see MIGRATION.md's note immediately following
+# the CompletedRow row.
+
+[[entry]]
+crate = "paladin-memory"
+lint = "trait_missing"
+migration_row = "paladin-memory | TokenCounter"
+requirement_id = "PRIM-03, PRIM-05"
+justification = "The legacy fallible TokenCounter trait was removed outright with no #[deprecated] shim (D-09) -- zero in-tree callers existed outside its own definition file and the three re-export sites. content-processing-gated in both paladin-memory and the facade, so CI's semver job's --default-features-only invocation cannot observe this removal at all; this entry and its justification are the only record of that gap. Empirically confirmed via cargo semver-checks check-release --package paladin-memory --features content-processing --baseline-version 0.9.0 --release-type minor (trait_missing on all 3 re-export paths)."
+
+[[entry]]
+crate = "paladin-memory"
+lint = "struct_missing"
+migration_row = "paladin-memory | TokenCounterFactory"
+requirement_id = "PRIM-03, PRIM-05"
+justification = "The legacy TokenCounterFactory struct (for_model/supported_models/is_supported) was removed outright with no #[deprecated] shim (D-09) -- zero in-tree callers. content-processing-gated identically to TokenCounter above, so CI's semver job's --default-features-only invocation cannot observe this removal either; this entry and its justification are the only record of that gap. Empirically confirmed via cargo semver-checks check-release --package paladin-memory --features content-processing --baseline-version 0.9.0 --release-type minor (struct_missing on all 3 re-export paths)."

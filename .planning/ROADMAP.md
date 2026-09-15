@@ -834,7 +834,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 31-07-PLAN.md — `MIGRATION.md` §9.2 rows, empirically-derived semver allowlist entries, `CHANGELOG.md` `[0.10.0]`, and the phase gate evidence (ACCT-05)
+- [x] 31-07-PLAN.md — `MIGRATION.md` §9.2 rows, empirically-derived semver allowlist entries, `CHANGELOG.md` `[0.10.0]`, and the phase gate evidence (ACCT-05)
 
 ### Phase 32: Unified Token Primitives
 

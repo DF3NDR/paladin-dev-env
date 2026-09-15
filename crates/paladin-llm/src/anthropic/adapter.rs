@@ -1612,6 +1612,13 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 .to_string()
         }
 
+        /// Stands in for `crate::conformance::cases::streaming_usage_equals_non_streaming_usage`
+        /// (D-19, plan 31-04): Anthropic's event-accumulation wire shape (usage split across
+        /// `message_start`/`message_delta`, no `[DONE]` sentinel) diverges too far from
+        /// `ConformanceFixture`'s single-`stream_body()`-string assumption to instantiate the
+        /// shared macro, so this test asserts the identical three properties by hand: exactly
+        /// one chunk carries a finish reason, that SAME chunk is the only one carrying usage,
+        /// and its usage equals the non-streaming path's `LlmResponse.usage` field-for-field.
         #[tokio::test]
         async fn message_stop_is_the_only_usage_bearing_chunk_and_equals_the_non_streaming_usage() {
             let mut non_stream_server = Server::new_async().await;

@@ -315,6 +315,35 @@ async fn test_rate_limiting() {
 - ✅ Invalid model errors
 - ✅ Malformed responses
 
+### Streaming Usage Terminal-Chunk Contract (v0.10.0, ACCT-03)
+
+Every adapter's streaming path must satisfy one contract: **`usage` is `Some` on exactly the
+chunk that carries a finish reason, and `None` on every other chunk.** A new adapter's test suite
+proves this the same way the shared conformance suite does for every adapter that already ships
+(`crates/paladin-llm/src/conformance.rs`'s `streaming_usage_equals_non_streaming_usage` case,
+instantiated via `crate::llm_conformance_suite!` where your adapter's wire shape fits the shared
+`ConformanceFixture`, or a dedicated test asserting the identical three properties where it does
+not):
+
+1. Exactly one chunk in the stream has `usage.is_some()`.
+2. That chunk is the SAME chunk whose `finish_reason.is_some()`.
+3. That chunk's `usage` equals the non-streaming `LlmResponse.usage`, field-for-field —
+   including the three optional sub-counts (`cache_read_tokens`, `cache_write_tokens`,
+   `reasoning_tokens`).
+
+If your provider's streaming endpoint cannot report usage at all — or only does so when the
+caller opts in and the caller cannot know ahead of time whether the specific configured server
+honors that opt-in — document the gap as an explicit exception in TWO places, not one:
+
+- Your adapter's own rustdoc (see `crates/paladin-llm/src/openai_compatible/adapter.rs`'s
+  `OpenAiCompatibleAdapter` doc comment for the house pattern).
+- The "Streamed usage" table in `docs/src/appendix/provider-expansion.md`, using exactly one of
+  the three permitted values that table documents.
+
+Never invent a fourth "partial" value, and never substitute a `TokenCounterPort` estimate for a
+missing billed figure — an unreported streamed usage is `None`, not an estimate presented as a
+provider-billed count.
+
 ### Integration Tests (Optional)
 
 Create `tests/integration/llm/myprovider_integration_test.rs` with tests marked `#[ignore]` for live API testing.

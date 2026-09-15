@@ -16,6 +16,10 @@
 //! `crate::http_status` and `crate::redaction` for the mapping and redaction logic this suite
 //! proves is wired in).
 //!
+//! Plan 31-04 (D-19) adds a ninth case, `streaming_usage_equals_non_streaming_usage`, proving the
+//! terminal-chunk streaming usage contract (D-14) holds for every adapter: the streamed usage on
+//! the finish-reason-bearing chunk equals the non-streaming `LlmResponse.usage` field-for-field.
+//!
 //! `#[cfg(test)]`-only: [`ConformanceFixture`] and [`llm_conformance_suite!`] never ship in a
 //! release build.
 
@@ -69,6 +73,11 @@ pub trait ConformanceFixture {
 
     /// A well-formed streaming success response body that assembles, in wire order, to
     /// `"Hello world"` with a terminal stop signal.
+    ///
+    /// **D-19 (plan 31-04):** the terminal chunk's usage MUST carry the SAME figures
+    /// [`Self::success_body`] carries — [`cases::streaming_usage_equals_non_streaming_usage`]
+    /// asserts the two are equal field-for-field, so a fixture whose streaming and
+    /// non-streaming usage figures diverge fails that case by construction.
     fn stream_body() -> String;
 
     /// A well-formed error response body for `status`. Content need only be plausible for the
@@ -361,6 +370,79 @@ pub mod cases {
         );
     }
 
+    /// Case (D-19, plan 31-04): the streaming path's terminal-chunk usage equals the
+    /// non-streaming path's usage, field-for-field, including the three optional sub-counts.
+    /// Opens `success_body()` through `generate()` and `stream_body()` through
+    /// `generate_stream()` against separate mockito servers, and asserts: exactly one yielded
+    /// chunk carries `usage`; that chunk is the SAME one carrying `finish_reason`; and its usage
+    /// equals `LlmResponse.usage` from the non-streaming call.
+    pub async fn streaming_usage_equals_non_streaming_usage<F: ConformanceFixture>() {
+        let mut non_stream_server = Server::new_async().await;
+        non_stream_server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(F::success_body())
+            .create_async()
+            .await;
+
+        let non_streaming_adapter = F::adapter(&non_stream_server.url());
+        let non_streaming = non_streaming_adapter
+            .generate(conformance_request())
+            .await
+            .expect("success_body() must produce a well-formed response");
+
+        let mut stream_server = Server::new_async().await;
+        stream_server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(F::stream_body())
+            .create_async()
+            .await;
+
+        let streaming_adapter = F::adapter(&stream_server.url());
+        let stream = streaming_adapter
+            .generate_stream(conformance_request())
+            .await
+            .expect("stream_body() must open successfully");
+        let mut stream = Box::into_pin(stream);
+
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.next().await {
+            chunks.push(item.expect("stream_body() must assemble with no error"));
+        }
+
+        let finish_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.finish_reason.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        let usage_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.usage.is_some())
+            .map(|(i, _)| i)
+            .collect();
+
+        assert_eq!(
+            usage_indices.len(),
+            1,
+            "exactly one chunk must carry a usage"
+        );
+        assert_eq!(
+            finish_indices, usage_indices,
+            "the finish-reason chunk and the usage chunk must be the SAME chunk"
+        );
+        assert_eq!(
+            chunks[usage_indices[0]].usage,
+            Some(non_streaming.usage),
+            "streamed terminal usage must equal the non-streaming usage field-for-field, \
+             including the three optional sub-counts"
+        );
+    }
+
     /// Case: a redirect to a different host is never followed while carrying a credential header
     /// -- proven by asserting the redirect TARGET is never contacted at all
     /// (security.instructions.md; T-26-46).
@@ -413,6 +495,7 @@ macro_rules! llm_conformance_suite {
             transience_by_value,
             credential_never_appears_in_a_rendered_error,
             redirect_is_not_followed_with_a_credential_header,
+            streaming_usage_equals_non_streaming_usage,
         );
     };
     (@cases $fixture:ty; $($case:ident),+ $(,)?) => {
@@ -476,6 +559,10 @@ mod tests {
         delta: String,
         #[serde(default)]
         done: bool,
+        /// D-19: present only on the terminal (`done: true`) frame, carrying the SAME figures
+        /// [`TrivialFixture::success_body`] carries.
+        #[serde(default)]
+        usage: Option<TrivialUsage>,
     }
 
     const TRIVIAL_PROVIDER: &str = "trivial-fixture";
@@ -564,6 +651,12 @@ mod tests {
                                     if frame.done {
                                         item.finish_reason = Some(FinishReason::Stop);
                                     }
+                                    if let Some(usage) = frame.usage {
+                                        item = item.with_usage(TokenUsage::new(
+                                            usage.prompt_tokens,
+                                            usage.completion_tokens,
+                                        ));
+                                    }
                                     items.push(Ok(item));
                                 }
                                 Err(e) => items.push(Err(LlmError::ProcessingError(e.to_string()))),
@@ -620,10 +713,13 @@ mod tests {
         }
 
         fn stream_body() -> String {
+            // D-19: the terminal frame carries the SAME usage figures as `success_body()`
+            // above (prompt_tokens 1, completion_tokens 1) -- the shared parity case asserts
+            // equality between the two.
             concat!(
                 "data: {\"delta\":\"Hel\",\"done\":false}\n\n",
                 "data: {\"delta\":\"lo \",\"done\":false}\n\n",
-                "data: {\"delta\":\"world\",\"done\":true}\n\n",
+                "data: {\"delta\":\"world\",\"done\":true,\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n",
             )
             .to_string()
         }
@@ -643,8 +739,8 @@ mod tests {
     #[test]
     fn suite_generates_the_full_case_list_for_a_fixture() {
         assert_eq!(
-            CASE_COUNT, 8,
-            "llm_conformance_suite! must generate exactly the documented 8 fixed cases -- if this \
+            CASE_COUNT, 9,
+            "llm_conformance_suite! must generate exactly the documented 9 fixed cases -- if this \
              fails, a case was added to or removed from the macro's list without updating this \
              pinned expectation"
         );

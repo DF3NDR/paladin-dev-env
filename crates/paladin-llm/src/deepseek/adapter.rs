@@ -1718,4 +1718,63 @@ mod tests {
         let assembled: String = chunks.iter().map(|c| c.delta.as_str()).collect();
         assert_eq!(assembled, "Hello");
     }
+
+    // ── Shared conformance suite (D-19, plan 31-04) ──
+    //
+    // Nested in its own module (rather than inline in `mod tests`) so every generated test's
+    // full path contains "conformance" -- `cargo test --lib conformance` (the plan's own
+    // acceptance criterion) selects it by that substring.
+    mod conformance_suite {
+        use super::*;
+        use serde_json::json;
+
+        struct DeepSeekFixture;
+
+        impl crate::conformance::ConformanceFixture for DeepSeekFixture {
+            const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
+
+            fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
+                let config = DeepSeekConfig::new(
+                    "test-key".to_string(),
+                    base_url.to_string(),
+                    "deepseek-chat".to_string(),
+                );
+                Arc::new(DeepSeekAdapter::new(config).expect("test config must build"))
+            }
+
+            fn success_body() -> String {
+                json!({
+                    "id": "cmpl-1",
+                    "model": "deepseek-chat",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi there"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+                })
+                .to_string()
+            }
+
+            fn stream_body() -> String {
+                // D-19: the trailing empty-`choices` usage frame carries the SAME figures as
+                // `success_body()` above -- the shared parity case asserts equality.
+                concat!(
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"lo \"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"world\"},\"finish_reason\":\"stop\"}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\n",
+                    "data: [DONE]\n\n",
+                )
+                .to_string()
+            }
+
+            fn error_body(status: u16) -> String {
+                json!({"error": {"message": format!("mock error for status {status}"), "type": "mock_error"}})
+                    .to_string()
+            }
+        }
+
+        crate::llm_conformance_suite!(DeepSeekFixture);
+    }
 }

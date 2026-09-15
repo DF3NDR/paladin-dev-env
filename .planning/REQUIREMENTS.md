@@ -432,7 +432,7 @@ at `src/application/services/paladin/middleware/history.rs`.
   and `HistoryTrimmer` produces the same trims as before this phase (PRD R4, R5 + Epic 4 R3;
   D-6)
 
-- [ ] **PRIM-05**: The `Commissary::new` change and the legacy-counter removal each have a
+- [x] **PRIM-05**: The `Commissary::new` change and the legacy-counter removal each have a
   `MIGRATION.md` §9.2 row and a semver-checks allowlist row (row-level gate green); the
   `CHANGELOG.md` `[0.10.0]` section records them; `make clean-code` and the coverage floor are
   green (PRD R6; X-10)

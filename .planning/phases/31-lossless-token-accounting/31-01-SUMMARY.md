@@ -290,6 +290,15 @@ Formation/Phalanx zeroing bug, since `from_total` was deliberately left in place
 every other in-tree caller of the old three-field literal shape has already been migrated to
 `TokenUsage::new`. No blockers.
 
+## Self-Check: PASSED
+
+- FOUND: `crates/paladin-core/src/platform/container/token_usage.rs`
+- FOUND: `.planning/phases/31-lossless-token-accounting/31-01-SUMMARY.md`
+- FOUND: `.planning/phases/31-lossless-token-accounting/deferred-items.md`
+- FOUND commit `18d69e5c` (test: RED)
+- FOUND commit `524d59c7` (feat: GREEN)
+- FOUND commit `338f44d4` (refactor: literal migration)
+
 ---
 *Phase: 31-lossless-token-accounting*
 *Completed: 2026-09-15*

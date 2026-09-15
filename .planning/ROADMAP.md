@@ -825,7 +825,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 31-04-PLAN.md — Anthropic and Gemini streaming usage, the shared parity conformance case, and the documented provider exception (ACCT-03)
+- [x] 31-04-PLAN.md — Anthropic and Gemini streaming usage, the shared parity conformance case, and the documented provider exception (ACCT-03)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

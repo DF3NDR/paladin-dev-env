@@ -300,7 +300,7 @@ impl AnthropicAdapter {
             model: response.model,
             content,
             finish_reason,
-            usage: TokenUsage::new(response.usage.input_tokens, response.usage.output_tokens),
+            usage: map_claude_usage(&response.usage),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -503,46 +503,81 @@ impl LlmPort for AnthropicAdapter {
             return Err(self.map_error(status, &body));
         }
 
-        let stream = response
-            .bytes_stream()
-            .map(move |chunk_result| match chunk_result {
+        // D-14 terminal-chunk contract: Anthropic's wire has no `[DONE]`
+        // sentinel — `message_stop` IS the terminal chunk (D-15). Usage
+        // arrives split across two earlier events: `message_start.message.usage`
+        // carries the input/cache figures, `message_delta.usage` carries the
+        // cumulative output/thinking figures. Both are held in state captured
+        // by this `move` closure and merged (`merge_claude_stream_usage`) onto
+        // the ONE `TokenUsage` attached to `message_stop`.
+        //
+        // `flat_map` rather than `map` (Rule 1 auto-fix, mirroring the
+        // identical latent bug fixed in `CompatEngine`/`openai`/`deepseek` by
+        // plan 31-03): a single network chunk — as `mockito`'s `with_body()`
+        // realistically delivers a whole multi-frame SSE body in one chunk —
+        // can carry more than one `data:` line. The prior `.map()` returned on
+        // the FIRST matching line per chunk, silently dropping every
+        // subsequent event (including `message_stop` itself) whenever a test
+        // or a real transport delivered more than one frame per chunk.
+        let mut held_usage: Option<ClaudeUsage> = None;
+
+        let stream = response.bytes_stream().flat_map(move |chunk_result| {
+            let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
                 Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes);
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    let mut items = Vec::new();
 
                     for line in text.lines() {
-                        if let Some(json_str) = line.strip_prefix("data: ") {
-                            if json_str.trim() == "[DONE]" {
-                                continue;
-                            }
+                        let Some(json_str) = line.strip_prefix("data: ") else {
+                            continue;
+                        };
+                        if json_str.trim() == "[DONE]" {
+                            continue;
+                        }
 
-                            if let Ok(event) = serde_json::from_str::<ClaudeStreamEvent>(json_str) {
-                                match event.event_type.as_str() {
-                                    "content_block_delta" => {
-                                        if let Some(delta) = event.delta
-                                            && let Some(text) = delta.text
-                                        {
-                                            return Ok(StreamingResponse::delta(text));
-                                        }
-                                    }
-                                    "message_stop" => {
-                                        // Mechanical migration only (Task 1,
-                                        // plan 31-03): real usage
-                                        // accumulation across
-                                        // `message_start`/`message_delta`
-                                        // and attachment to this terminal
-                                        // chunk lands in plan 31-04 (D-15).
-                                        return Ok(StreamingResponse::terminal(FinishReason::Stop));
-                                    }
-                                    _ => {}
+                        let Ok(event) = serde_json::from_str::<ClaudeStreamEvent>(json_str) else {
+                            continue;
+                        };
+
+                        match event.event_type.as_str() {
+                            "content_block_delta" => {
+                                if let Some(text) = event.delta.and_then(|d| d.text) {
+                                    items.push(Ok(StreamingResponse::delta(text)));
                                 }
                             }
+                            "message_start" => {
+                                if let Some(usage) = event.message.and_then(|m| m.usage) {
+                                    held_usage =
+                                        Some(merge_claude_stream_usage(held_usage.take(), usage));
+                                }
+                            }
+                            "message_delta" => {
+                                if let Some(usage) = event.usage {
+                                    held_usage =
+                                        Some(merge_claude_stream_usage(held_usage.take(), usage));
+                                }
+                            }
+                            "message_stop" => {
+                                let mut terminal = StreamingResponse::terminal(FinishReason::Stop);
+                                if let Some(usage) = held_usage.take() {
+                                    terminal = terminal.with_usage(map_claude_usage(&usage));
+                                }
+                                items.push(Ok(terminal));
+                            }
+                            _ => {}
                         }
                     }
 
-                    Ok(StreamingResponse::delta(String::new()))
+                    items
                 }
-                Err(e) => Err(LlmError::ProcessingError(format!("Stream error: {}", e))),
-            });
+                Err(e) => vec![Err(LlmError::ProcessingError(format!(
+                    "Stream error: {}",
+                    e
+                )))],
+            };
+
+            futures::stream::iter(items)
+        });
 
         Ok(Box::new(stream))
     }
@@ -649,10 +684,105 @@ struct ClaudeContent {
     text: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ClaudeUsage {
+    #[serde(default)]
     input_tokens: u32,
+    #[serde(default)]
     output_tokens: u32,
+    /// Cached tokens read for this call. `#[serde(default)]`+`Option`
+    /// (never a bare `u32`) so a provider that omits the key entirely
+    /// yields `None` ("not reported", D-03) rather than a fabricated
+    /// `Some(0)`; the field arrives as an explicit `0` on every one of the
+    /// three pre-existing captured fixtures, so it deserializes to
+    /// `Some(0)` for them, exactly as D-03 requires.
+    #[serde(default)]
+    cache_read_input_tokens: Option<u32>,
+    /// Cached tokens written for this call. Same `Option` reasoning as
+    /// [`Self::cache_read_input_tokens`].
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u32>,
+    /// Only present on a reasoning/thinking response.
+    #[serde(default)]
+    output_tokens_details: Option<ClaudeUsageOutputDetails>,
+}
+
+/// The `usage.output_tokens_details` sub-object Anthropic includes on a
+/// reasoning/thinking response, carrying the thinking-token sub-count of
+/// `output_tokens` (D-20: maps to [`TokenUsage::reasoning_tokens`]).
+#[derive(Debug, Deserialize)]
+struct ClaudeUsageOutputDetails {
+    #[serde(default)]
+    thinking_tokens: Option<u32>,
+}
+
+/// Maps Anthropic's wire-shape [`ClaudeUsage`] onto [`TokenUsage`], applying
+/// the D-20 cache-inclusive `prompt_tokens` correction and populating the
+/// cache/reasoning sub-counts wherever the payload carries them.
+///
+/// **The correction:** Anthropic's `input_tokens` EXCLUDES cached tokens —
+/// before this correction, `TokenUsage::new(usage.input_tokens, ..)`
+/// under-reported billed input on every call that used prompt caching.
+/// `prompt_tokens` is now computed as
+/// `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`
+/// (saturating), matching what Anthropic actually bills. `completion_tokens`
+/// is `output_tokens` unchanged — it already includes any thinking tokens.
+/// Shared by both [`AnthropicAdapter::parse_response`] (the non-streaming
+/// path) and [`AnthropicAdapter::generate_stream`]'s event accumulator, so
+/// the two paths cannot drift.
+fn map_claude_usage(usage: &ClaudeUsage) -> TokenUsage {
+    let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
+    let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
+    let prompt_tokens = usage
+        .input_tokens
+        .saturating_add(cache_read)
+        .saturating_add(cache_write);
+
+    let mut mapped = TokenUsage::new(prompt_tokens, usage.output_tokens);
+    if let Some(cache_read_input_tokens) = usage.cache_read_input_tokens {
+        mapped = mapped.with_cache_read(cache_read_input_tokens);
+    }
+    if let Some(cache_creation_input_tokens) = usage.cache_creation_input_tokens {
+        mapped = mapped.with_cache_write(cache_creation_input_tokens);
+    }
+    if let Some(thinking_tokens) = usage
+        .output_tokens_details
+        .as_ref()
+        .and_then(|details| details.thinking_tokens)
+    {
+        mapped = mapped.with_reasoning(thinking_tokens);
+    }
+    mapped
+}
+
+/// Merges a newly-arrived Anthropic streaming usage payload onto the usage
+/// accumulated so far (D-15). `message_start.message.usage` carries the
+/// input and cache figures; `message_delta.usage` carries the cumulative
+/// output and thinking figures. Each event reports only the fields it owns
+/// (the other side's numeric fields default to `0`/`None` via
+/// `#[serde(default)]`), so a field-level merge — not a blind overwrite —
+/// is required to combine both into the one [`ClaudeUsage`] eventually
+/// mapped onto the `message_stop` terminal chunk.
+fn merge_claude_stream_usage(existing: Option<ClaudeUsage>, incoming: ClaudeUsage) -> ClaudeUsage {
+    let Some(mut merged) = existing else {
+        return incoming;
+    };
+    if incoming.input_tokens != 0 {
+        merged.input_tokens = incoming.input_tokens;
+    }
+    if incoming.output_tokens != 0 {
+        merged.output_tokens = incoming.output_tokens;
+    }
+    if incoming.cache_read_input_tokens.is_some() {
+        merged.cache_read_input_tokens = incoming.cache_read_input_tokens;
+    }
+    if incoming.cache_creation_input_tokens.is_some() {
+        merged.cache_creation_input_tokens = incoming.cache_creation_input_tokens;
+    }
+    if incoming.output_tokens_details.is_some() {
+        merged.output_tokens_details = incoming.output_tokens_details;
+    }
+    merged
 }
 
 /// Character budget for [`extract_regain_hint`]'s extracted prose. This is
@@ -770,6 +900,23 @@ struct ClaudeStreamEvent {
     event_type: String,
     #[serde(default)]
     delta: Option<ClaudeDelta>,
+    /// Present on `message_start`; carries the input/cache usage figures
+    /// (D-15).
+    #[serde(default)]
+    message: Option<ClaudeStreamMessage>,
+    /// Present on `message_delta`; carries the cumulative output/thinking
+    /// usage figures (D-15). `message_start`'s usage lives one level down,
+    /// under [`Self::message`], not here — the two events place their
+    /// usage object at different nesting depths on Anthropic's own wire.
+    #[serde(default)]
+    usage: Option<ClaudeUsage>,
+}
+
+/// The `message` payload of a `message_start` event.
+#[derive(Debug, Deserialize)]
+struct ClaudeStreamMessage {
+    #[serde(default)]
+    usage: Option<ClaudeUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -898,6 +1045,15 @@ stake, so an attacker donating to himself alone is a strict loss.";
     /// concatenate in array order.
     const MIXED_BLOCK_SHAPE_EXTENSION_JSON: &str = r#"{"model":"claude-opus-5","id":"msg_mixed_shape_extension","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"reasoning...","signature":"sig"},{"type":"text","text":"Part one. "},{"type":"tool_use","id":"toolu_01","name":"lookup","input":{"query":"foo"}},{"type":"redacted_thinking","data":"opaque"},{"type":"text","text":"Part two."}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":20}}"#;
 
+    /// Phase 31 (D-20): a NEW captured-style fixture whose `usage` carries
+    /// non-zero `cache_read_input_tokens`/`cache_creation_input_tokens` —
+    /// none of the three pre-existing fixtures above exercise this (all
+    /// three report explicit zeros), so none of them can catch a regression
+    /// in the cache-inclusive `prompt_tokens` correction (RESEARCH.md
+    /// Pitfall 3/5). Token counts and message scaffolding only — no
+    /// credential-shaped literal.
+    const CACHED_PROMPT_SONNET_5_JSON: &str = r#"{"model":"claude-sonnet-5","id":"msg_011CachedPromptFixture","type":"message","role":"assistant","content":[{"type":"text","text":"Answered from cache."}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":85,"cache_creation_input_tokens":128,"cache_read_input_tokens":512,"output_tokens":40,"output_tokens_details":{"thinking_tokens":0}}}"#;
+
     fn test_adapter() -> AnthropicAdapter {
         let config = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
@@ -937,6 +1093,55 @@ stake, so an attacker donating to himself alone is a strict loss.";
 
         assert_eq!(response.usage.input_tokens, 85);
         assert_eq!(response.usage.output_tokens, 3000);
+    }
+
+    // ── Plan 31-04 (D-20): cache-inclusive `prompt_tokens` + reasoning ────
+
+    #[test]
+    fn test_thinking_text_maps_reasoning_and_reports_explicit_zero_cache_figures() {
+        let response: ClaudeResponse = serde_json::from_str(THINKING_TEXT_OPUS_5_JSON)
+            .expect("captured opus-5 thinking+text body must deserialize");
+
+        let adapter = test_adapter();
+        let llm_response = adapter
+            .parse_response(Uuid::new_v4(), response)
+            .expect("thinking+text response must parse");
+
+        assert_eq!(llm_response.usage.completion_tokens, 3000);
+        assert_eq!(llm_response.usage.reasoning_tokens, Some(2561));
+        // This fixture's cache figures are explicit zeros, so the D-20
+        // correction is a no-op for it: prompt_tokens == input_tokens.
+        assert_eq!(llm_response.usage.prompt_tokens, 85);
+        assert_eq!(llm_response.usage.cache_read_tokens, Some(0));
+        assert_eq!(llm_response.usage.cache_write_tokens, Some(0));
+        assert!(
+            llm_response.usage.reasoning_tokens.unwrap() <= llm_response.usage.completion_tokens
+        );
+    }
+
+    #[test]
+    fn test_cache_inclusive_prompt_tokens_correction_fires_on_non_zero_cache_fixture() {
+        let response: ClaudeResponse = serde_json::from_str(CACHED_PROMPT_SONNET_5_JSON)
+            .expect("new cached-prompt fixture must deserialize");
+
+        let adapter = test_adapter();
+        let llm_response = adapter
+            .parse_response(Uuid::new_v4(), response)
+            .expect("cached-prompt response must parse");
+
+        // input_tokens(85) + cache_read(512) + cache_write(128) == 725.
+        assert_eq!(llm_response.usage.prompt_tokens, 725);
+        assert_eq!(llm_response.usage.cache_read_tokens, Some(512));
+        assert_eq!(llm_response.usage.cache_write_tokens, Some(128));
+        assert_eq!(
+            llm_response.usage.total_tokens,
+            llm_response.usage.prompt_tokens + llm_response.usage.completion_tokens
+        );
+        assert!(
+            llm_response.usage.cache_read_tokens.unwrap()
+                + llm_response.usage.cache_write_tokens.unwrap()
+                <= llm_response.usage.prompt_tokens
+        );
     }
 
     #[test]
@@ -1355,5 +1560,154 @@ stake, so an attacker donating to himself alone is a strict loss.";
             "Anthropic has no native JSON mode -- response_format must not \
              appear on the wire, got: {body_text}"
         );
+    }
+
+    // ── Plan 31-04 (D-14/D-15/D-19): event-accumulation streaming usage ───
+
+    mod streaming_usage_wiring {
+        use super::*;
+        use futures::StreamExt;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+        fn adapter_at(base_url: &str) -> AnthropicAdapter {
+            let config = AnthropicConfig::new(
+                "sk-ant-test123".to_string(),
+                base_url.to_string(),
+                "claude-sonnet-5".to_string(),
+                4096,
+            );
+            AnthropicAdapter::new(config).expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "claude-sonnet-5",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        /// A `message_start`/`content_block_delta`(s)/`message_delta`/
+        /// `message_stop` event sequence whose combined usage figures match
+        /// [`super::CACHED_PROMPT_SONNET_5_JSON`]'s non-streaming usage
+        /// EXACTLY (`ConformanceFixture::stream_body()`'s D-19 contract:
+        /// stream and non-stream must carry the same usage figures) —
+        /// `input_tokens: 85`, `cache_read_input_tokens: 512`,
+        /// `cache_creation_input_tokens: 128`, `output_tokens: 40`,
+        /// `thinking_tokens: 0`.
+        fn sse_body_with_usage() -> String {
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\
+             \"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\
+             \"stop_sequence\":null,\"usage\":{\"input_tokens\":85,\"cache_creation_input_tokens\":128,\
+             \"cache_read_input_tokens\":512,\"output_tokens\":1}}}\n\n\
+             data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}\n\n\
+             data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}\n\n\
+             data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\
+             \"usage\":{\"output_tokens\":40,\"output_tokens_details\":{\"thinking_tokens\":0}}}\n\n\
+             data: {\"type\":\"message_stop\"}\n\n"
+                .to_string()
+        }
+
+        #[tokio::test]
+        async fn message_stop_is_the_only_usage_bearing_chunk_and_equals_the_non_streaming_usage() {
+            let mut non_stream_server = Server::new_async().await;
+            non_stream_server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_body(CACHED_PROMPT_SONNET_5_JSON)
+                .create_async()
+                .await;
+            let non_streaming = adapter_at(&non_stream_server.url())
+                .generate(build_request())
+                .await
+                .expect("non-streaming call must succeed");
+
+            let mut stream_server = Server::new_async().await;
+            stream_server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(sse_body_with_usage())
+                .create_async()
+                .await;
+
+            let stream = adapter_at(&stream_server.url())
+                .generate_stream(build_request())
+                .await
+                .expect("streaming call must succeed");
+            let mut stream = Box::into_pin(stream);
+
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every chunk must parse"));
+            }
+
+            let finish_indices: Vec<usize> = chunks
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.finish_reason.is_some())
+                .map(|(i, _)| i)
+                .collect();
+            let usage_indices: Vec<usize> = chunks
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.usage.is_some())
+                .map(|(i, _)| i)
+                .collect();
+
+            assert_eq!(
+                finish_indices.len(),
+                1,
+                "exactly one chunk must carry a finish reason"
+            );
+            assert_eq!(usage_indices.len(), 1, "exactly one chunk must carry usage");
+            assert_eq!(
+                finish_indices, usage_indices,
+                "the finish-reason chunk and the usage chunk must be the SAME chunk (message_stop)"
+            );
+            assert_eq!(
+                chunks[usage_indices[0]].usage,
+                Some(non_streaming.usage),
+                "streamed usage must equal the non-streaming usage field-for-field"
+            );
+
+            let assembled: String = chunks.iter().map(|c| c.delta.as_str()).collect();
+            assert_eq!(assembled, "Hello");
+        }
+
+        #[tokio::test]
+        async fn message_stop_carries_usage_none_when_no_usage_payload_ever_arrives() {
+            let mut server = Server::new_async().await;
+            let sse_body = "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n\
+                 data: {\"type\":\"message_stop\"}\n\n";
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(sse_body)
+                .create_async()
+                .await;
+
+            let stream = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await
+                .expect("streaming call must succeed");
+            let mut stream = Box::into_pin(stream);
+
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every chunk must parse"));
+            }
+
+            let terminal = chunks
+                .iter()
+                .find(|c| c.finish_reason.is_some())
+                .expect("stream must still end with a message_stop terminal chunk");
+            assert_eq!(terminal.usage, None);
+        }
     }
 }

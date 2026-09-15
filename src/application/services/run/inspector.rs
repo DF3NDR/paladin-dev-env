@@ -292,7 +292,7 @@ fn build_supersteps(
                 // rather than a possibly-stale or possibly-zero number
                 // (28-UI-SPEC.md E2 "partial").
                 duration_ms: (!record.cache_hit).then_some(record.duration_ms),
-                token_count: (!record.cache_hit).then_some(u64::from(record.usage.total_tokens)),
+                usage: (!record.cache_hit).then_some(record.usage.clone()),
                 cache_hit: record.cache_hit,
             })
             .collect();
@@ -462,12 +462,30 @@ mod tests {
         token_count: u32,
         cache_hit: bool,
     ) -> NodeExecutionRecord {
+        record_with_usage(
+            node_id,
+            attempt,
+            outcome,
+            duration_ms,
+            TokenUsage::new(token_count, 0),
+            cache_hit,
+        )
+    }
+
+    fn record_with_usage(
+        node_id: &str,
+        attempt: u32,
+        outcome: NodeOutcomeKind,
+        duration_ms: u64,
+        usage: TokenUsage,
+        cache_hit: bool,
+    ) -> NodeExecutionRecord {
         NodeExecutionRecord {
             node_id: NodeId::new(node_id),
             paladin_id: None,
             started_at: chrono::Utc::now(),
             duration_ms,
-            usage: paladin_core::platform::container::token_usage::TokenUsage::new(token_count, 0),
+            usage,
             outcome,
             attempt,
             attempts: Vec::new(),
@@ -1031,10 +1049,11 @@ mod tests {
         assert!(view.observed_only);
     }
 
-    /// Test: a cache-hit attempt yields `None` in `duration_ms`/
-    /// `token_count` rather than a (possibly stale, possibly zero) number
-    /// -- the page renders a dash and the row is never omitted. A
-    /// non-cache-hit attempt still carries `Some` real figures.
+    /// Test: a cache-hit attempt yields `None` in `duration_ms`/`usage`
+    /// rather than a (possibly stale, possibly zero) number -- the page
+    /// renders a dash and the row is never omitted. A non-cache-hit attempt
+    /// still carries `Some` real figures, including a non-zero prompt AND
+    /// completion count (D-24).
     #[tokio::test]
     async fn completed_row_partial_values_are_representable() {
         let waypoint_port: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
@@ -1051,7 +1070,14 @@ mod tests {
             vec![],
             vec![
                 record_with_cost("cached", 1, NodeOutcomeKind::Succeeded, 999, 999, true),
-                record_with_cost("executed", 1, NodeOutcomeKind::Succeeded, 42, 7, false),
+                record_with_usage(
+                    "executed",
+                    1,
+                    NodeOutcomeKind::Succeeded,
+                    42,
+                    TokenUsage::new(7, 3),
+                    false,
+                ),
             ],
             WaypointStatus::Completed,
             empty_battlefield(),
@@ -1069,7 +1095,7 @@ mod tests {
             .unwrap();
         assert!(cached.cache_hit);
         assert_eq!(cached.duration_ms, None);
-        assert_eq!(cached.token_count, None);
+        assert_eq!(cached.usage, None);
 
         let executed = row
             .completed
@@ -1078,7 +1104,10 @@ mod tests {
             .unwrap();
         assert!(!executed.cache_hit);
         assert_eq!(executed.duration_ms, Some(42));
-        assert_eq!(executed.token_count, Some(7));
+        let usage = executed.usage.as_ref().expect("executed row carries usage");
+        assert_eq!(usage.prompt_tokens, 7);
+        assert_eq!(usage.completion_tokens, 3);
+        assert_eq!(usage.total_tokens, 10);
     }
 
     /// Test: a Gate suspension yields a superstep row with an empty

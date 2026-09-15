@@ -183,6 +183,7 @@ mod tests {
     use uuid::Uuid;
 
     use paladin_core::platform::container::run::{RunId, RunStatus};
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::user::UserRole;
     use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, WaypointId};
     use paladin_ports::input::run_inspector_port::{
@@ -229,7 +230,7 @@ mod tests {
             attempt: 1,
             outcome,
             duration_ms: Some(12),
-            token_count: Some(34),
+            usage: Some(TokenUsage::new(30, 4)),
             cache_hit: false,
         }
     }
@@ -638,7 +639,7 @@ mod tests {
                         attempt: 1,
                         outcome: NodeOutcomeKind::Succeeded,
                         duration_ms: None,
-                        token_count: None,
+                        usage: None,
                         cache_hit: true,
                     }],
                     field_changes: vec![],
@@ -749,7 +750,7 @@ mod tests {
         assert!(body.contains("\"evaluated_edges\":[]"));
     }
 
-    /// E2 partial: a cache-hit `CompletedRow` carries `duration_ms`/`token_count` as
+    /// E2 partial: a cache-hit `CompletedRow` carries `duration_ms`/`usage` as
     /// `None` by construction -- the page renders a dash rather than a stale/misleading
     /// number.
     #[tokio::test]
@@ -757,7 +758,17 @@ mod tests {
         let body = html_body_for(partial_fixture_view()).await;
         assert!(body.contains("\"cache_hit\":true"));
         assert!(body.contains("\"duration_ms\":null"));
-        assert!(body.contains("\"token_count\":null"));
+        assert!(body.contains("\"usage\":null"));
+    }
+
+    /// D-24: an executed (non-cache-hit) `CompletedRow` embeds its full six-key
+    /// `usage` object -- not a bare count -- in the page's `InspectorView` JSON.
+    #[tokio::test]
+    async fn dev_ui_page_embeds_executed_row_with_full_usage_object() {
+        let body = html_body_for(branching_fixture_view()).await;
+        assert!(body.contains("\"prompt_tokens\":30"));
+        assert!(body.contains("\"completion_tokens\":4"));
+        assert!(body.contains("\"total_tokens\":34"));
     }
 
     /// E4 partial: an awaiting-input superstep's `completed` list is empty by

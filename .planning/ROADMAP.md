@@ -821,7 +821,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 31-03-PLAN.md — streaming terminal-chunk usage contract on the port plus `CompatEngine`/OpenAI/DeepSeek, and the no-estimation fallback (ACCT-03)
+- [x] 31-03-PLAN.md — streaming terminal-chunk usage contract on the port plus `CompatEngine`/OpenAI/DeepSeek, and the no-estimation fallback (ACCT-03)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

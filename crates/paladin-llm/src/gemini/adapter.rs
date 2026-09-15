@@ -492,7 +492,7 @@ impl GeminiAdapter {
             model: model.to_string(),
             content,
             finish_reason,
-            usage: TokenUsage::new(usage.prompt_token_count, usage.candidates_token_count),
+            usage: map_gemini_usage(&usage),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -1063,6 +1063,43 @@ struct GeminiUsageMetadata {
     #[allow(dead_code)]
     #[serde(default, rename = "totalTokenCount")]
     total_token_count: u32,
+    /// Cached-content tokens counted toward `prompt_token_count` (D-20 ->
+    /// [`TokenUsage::cache_read_tokens`]). `Option<u32>`, not a bare `u32`
+    /// like the three fields above, so an absent key maps to `None`
+    /// ("not reported", D-03) rather than a fabricated `Some(0)` — Pitfall 4
+    /// in RESEARCH.md. `#[derive(Default)]` on this struct is unaffected:
+    /// `Option<u32>` is itself `Default`-derivable, so a response with no
+    /// `usageMetadata` key at all still parses via `unwrap_or_default()`.
+    #[serde(default, rename = "cachedContentTokenCount")]
+    cached_content_token_count: Option<u32>,
+    /// Thinking-token sub-count of `candidates_token_count` (D-20 ->
+    /// [`TokenUsage::reasoning_tokens`]). Same `Option` reasoning as
+    /// [`Self::cached_content_token_count`].
+    #[serde(default, rename = "thoughtsTokenCount")]
+    thoughts_token_count: Option<u32>,
+}
+
+/// Maps Gemini's wire-shape [`GeminiUsageMetadata`] onto [`TokenUsage`],
+/// applying the D-02 inclusive-total contract: `completion_tokens =
+/// candidatesTokenCount + thoughtsTokenCount` (saturating) so `total_tokens`
+/// stays `prompt + completion` — this agrees with Gemini's own documented
+/// `totalTokenCount = prompt + candidates + toolUsePrompt + thoughts`
+/// arithmetic. Gemini reports no cache-write figure, so
+/// [`TokenUsage::cache_write_tokens`] always stays `None`. Shared by both
+/// the non-streaming path and the streaming path's terminal-frame attachment
+/// (D-15) so the two paths cannot drift.
+fn map_gemini_usage(usage: &GeminiUsageMetadata) -> TokenUsage {
+    let thoughts = usage.thoughts_token_count.unwrap_or(0);
+    let completion_tokens = usage.candidates_token_count.saturating_add(thoughts);
+
+    let mut mapped = TokenUsage::new(usage.prompt_token_count, completion_tokens);
+    if let Some(cached) = usage.cached_content_token_count {
+        mapped = mapped.with_cache_read(cached);
+    }
+    if let Some(thoughts_tokens) = usage.thoughts_token_count {
+        mapped = mapped.with_reasoning(thoughts_tokens);
+    }
+    mapped
 }
 
 #[derive(Debug, Deserialize)]
@@ -1249,16 +1286,28 @@ fn parse_sse_chunk(bytes: &[u8]) -> Vec<Result<StreamingResponse, LlmError>> {
                         .as_deref()
                         .map(|r| map_finish_reason(Some(r)));
 
-                    // Mechanical migration only (Task 1, plan 31-03) --
-                    // real usage parsing for this adapter's `usageMetadata`
-                    // lands in plan 31-04 (D-15). `delta` and `finish_reason`
-                    // can arrive on the SAME frame here, which the fixed
-                    // three constructors don't express directly; the
-                    // `finish_reason` field is `pub`, so it is set after
-                    // construction rather than losing the delta text a
-                    // `terminal()`-only chunk would force to empty.
+                    // `delta` and `finish_reason` can arrive on the SAME
+                    // frame here, which the fixed three constructors don't
+                    // express directly; the `finish_reason` field is `pub`,
+                    // so it is set after construction rather than losing the
+                    // delta text a `terminal()`-only chunk would force to
+                    // empty.
                     let mut item = StreamingResponse::delta(delta);
                     item.finish_reason = finish_reason;
+
+                    // D-14/D-15: every SSE frame's `usageMetadata` is
+                    // CUMULATIVE, not a per-frame delta, and it arrives
+                    // together with the terminal `finishReason` on the SAME
+                    // frame -- so attaching usage only on the
+                    // finish-reason-bearing frame IS "take the last frame's
+                    // value" without needing to hold state across chunks.
+                    // Every earlier frame keeps `usage: None`.
+                    if item.finish_reason.is_some()
+                        && let Some(usage) = parsed.usage_metadata.as_ref()
+                    {
+                        item = item.with_usage(map_gemini_usage(usage));
+                    }
+
                     items.push(Ok(item));
                 }
             }
@@ -1608,6 +1657,87 @@ mod tests {
         assert_eq!(llm_response.usage.prompt_tokens, 5);
         assert_eq!(llm_response.usage.completion_tokens, 3);
         assert_eq!(llm_response.usage.total_tokens, 8);
+    }
+
+    // ── Plan 31-04 (D-20): cached-content + thoughts sub-count mapping ────
+
+    #[test]
+    fn parse_response_maps_cached_content_and_thoughts_into_completion_and_optionals() {
+        let adapter = test_adapter("https://example.invalid");
+        let body = json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "Hello there"}]},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 310,
+                "candidatesTokenCount": 88,
+                "cachedContentTokenCount": 96,
+                "thoughtsTokenCount": 41,
+                "totalTokenCount": 439
+            }
+        });
+        let response: GeminiResponse = serde_json::from_value(body).unwrap();
+
+        let llm_response = adapter
+            .parse_response(Uuid::new_v4(), "gemini-2.5-flash", response)
+            .unwrap();
+
+        assert_eq!(llm_response.usage.prompt_tokens, 310);
+        // completion_tokens = candidates(88) + thoughts(41) (D-02 inclusive total).
+        assert_eq!(llm_response.usage.completion_tokens, 129);
+        assert_eq!(llm_response.usage.total_tokens, 439);
+        assert_eq!(llm_response.usage.cache_read_tokens, Some(96));
+        assert_eq!(llm_response.usage.reasoning_tokens, Some(41));
+        assert_eq!(llm_response.usage.cache_write_tokens, None);
+    }
+
+    #[test]
+    fn parse_response_leaves_cache_and_reasoning_none_when_the_payload_omits_them() {
+        let adapter = test_adapter("https://example.invalid");
+        let body = json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "Hello there"}]},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 5,
+                "candidatesTokenCount": 3,
+                "totalTokenCount": 8
+            }
+        });
+        let response: GeminiResponse = serde_json::from_value(body).unwrap();
+
+        let llm_response = adapter
+            .parse_response(Uuid::new_v4(), "gemini-2.5-flash", response)
+            .unwrap();
+
+        // completion_tokens == candidates alone when thoughts is absent.
+        assert_eq!(llm_response.usage.completion_tokens, 3);
+        assert_eq!(llm_response.usage.cache_read_tokens, None);
+        assert_eq!(llm_response.usage.reasoning_tokens, None);
+        assert_eq!(llm_response.usage.cache_write_tokens, None);
+    }
+
+    #[test]
+    fn parse_response_with_no_usage_metadata_key_still_parses_via_default() {
+        // GeminiUsageMetadata keeps its `Default` derive (RESEARCH.md
+        // Pitfall 4) even with the two new `Option<u32>` fields, so a
+        // response with no `usageMetadata` key at all still parses.
+        let adapter = test_adapter("https://example.invalid");
+        let body = json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "Hello there"}]},
+                "finishReason": "STOP"
+            }]
+        });
+        let response: GeminiResponse = serde_json::from_value(body).unwrap();
+
+        let llm_response = adapter
+            .parse_response(Uuid::new_v4(), "gemini-2.5-flash", response)
+            .unwrap();
+
+        assert_eq!(llm_response.usage, TokenUsage::new(0, 0));
     }
 
     // ── WR-03 (new): a truncated-to-empty completion is an error, not a success ──
@@ -2149,6 +2279,117 @@ mod tests {
         assert_eq!(item_count, 3);
         assert_eq!(assembled, "Hello world");
         assert!(matches!(last_finish_reason, Some(FinishReason::Stop)));
+    }
+
+    #[tokio::test]
+    async fn generate_stream_last_frame_usage_equals_the_non_streaming_usage() {
+        let sse_body = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hel\"}]}}]}\n\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo \"}]}}]}\n\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"world\"}],\"role\":\"model\"},",
+            "\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":310,",
+            "\"candidatesTokenCount\":88,\"cachedContentTokenCount\":96,",
+            "\"thoughtsTokenCount\":41,\"totalTokenCount\":439}}\n\n",
+        );
+
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter(&server.url());
+        let request = build_request(
+            "gemini-2.5-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        );
+
+        let stream = adapter.generate_stream(request).await.unwrap();
+        let mut stream = Box::into_pin(stream);
+
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.next().await {
+            chunks.push(item.unwrap());
+        }
+
+        let finish_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.finish_reason.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        let usage_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.usage.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(finish_indices.len(), 1);
+        assert_eq!(usage_indices.len(), 1);
+        assert_eq!(
+            finish_indices, usage_indices,
+            "the finish-reason chunk and the usage chunk must be the SAME (last) chunk"
+        );
+
+        let expected = map_gemini_usage(&GeminiUsageMetadata {
+            prompt_token_count: 310,
+            candidates_token_count: 88,
+            total_token_count: 439,
+            cached_content_token_count: Some(96),
+            thoughts_token_count: Some(41),
+        });
+        assert_eq!(chunks[usage_indices[0]].usage, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn generate_stream_without_usage_metadata_yields_terminal_chunk_with_usage_none() {
+        let sse_body = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hi\"}]}}]}\n\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"\"}],\"role\":\"model\"},",
+            "\"finishReason\":\"STOP\"}]}\n\n",
+        );
+
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter(&server.url());
+        let request = build_request(
+            "gemini-2.5-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        );
+
+        let stream = adapter.generate_stream(request).await.unwrap();
+        let mut stream = Box::into_pin(stream);
+
+        let mut terminal_usage = None;
+        let mut saw_finish = false;
+        while let Some(item) = stream.next().await {
+            let chunk = item.unwrap();
+            if chunk.finish_reason.is_some() {
+                saw_finish = true;
+                terminal_usage = chunk.usage;
+            }
+        }
+
+        assert!(saw_finish, "stream must still end with a finish reason");
+        assert_eq!(terminal_usage, None);
     }
 
     #[tokio::test]
@@ -3089,11 +3330,16 @@ mod tests {
             }
 
             fn stream_body() -> String {
+                // D-19: the terminal frame carries the SAME usage figures as
+                // `success_body()` above (promptTokenCount 5, candidates 3,
+                // total 8) -- the shared parity case asserts equality
+                // between the two.
                 concat!(
                     "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hel\"}]}}]}\n\n",
                     "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo \"}]}}]}\n\n",
                     "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"world\"}],\"role\":\"model\"},",
-                    "\"finishReason\":\"STOP\"}]}\n\n",
+                    "\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":5,",
+                    "\"candidatesTokenCount\":3,\"totalTokenCount\":8}}\n\n",
                 )
                 .to_string()
             }

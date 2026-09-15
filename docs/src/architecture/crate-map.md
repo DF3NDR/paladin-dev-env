@@ -175,7 +175,7 @@ src/
 |------|---------|---------|
 | `sqlite` | no | `SqliteGarrison` |
 | `qdrant` | no | `QdrantSanctumAdapter` |
-| `content-processing` | no | `TiktokenCounter`, `TokenCounter` |
+| `content-processing` | no | `TiktokenCounter` |
 
 **Key modules:**
 ```

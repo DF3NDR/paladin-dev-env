@@ -1136,10 +1136,14 @@ mod tests {
         assert_eq!(usage.total_tokens, 150);
     }
 
+    /// D-05: the total-only constructor is gone -- a real split is always
+    /// required. `TokenUsage::new(200, 0)` is the all-in-prompt construction
+    /// a caller reaches for when only a total is available, and it still
+    /// carries a genuine (if degenerate) split rather than a zeroed one.
     #[test]
-    fn test_token_usage_from_total() {
-        let usage = TokenUsage::from_total(200);
-        assert_eq!(usage.prompt_tokens, 0);
+    fn test_token_usage_new_with_zero_completion() {
+        let usage = TokenUsage::new(200, 0);
+        assert_eq!(usage.prompt_tokens, 200);
         assert_eq!(usage.completion_tokens, 0);
         assert_eq!(usage.total_tokens, 200);
     }
@@ -1206,7 +1210,7 @@ mod tests {
         let mut per_paladin_tokens = HashMap::new();
         per_paladin_tokens.insert("agent_a".to_string(), TokenUsage::new(500, 200));
         per_paladin_tokens.insert("agent_b".to_string(), TokenUsage::new(300, 150));
-        per_paladin_tokens.insert("agent_c".to_string(), TokenUsage::from_total(100));
+        per_paladin_tokens.insert("agent_c".to_string(), TokenUsage::new(100, 0));
 
         // Calculate total from individual token usages
         let total_tokens: u64 = per_paladin_tokens

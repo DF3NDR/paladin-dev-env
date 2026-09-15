@@ -556,11 +556,11 @@ mod tests {
         let mut per_paladin_tokens = std::collections::HashMap::new();
         per_paladin_tokens.insert(
             "Scout".to_string(),
-            paladin_core::platform::container::battalion::TokenUsage::from_total(137),
+            paladin_core::platform::container::battalion::TokenUsage::new(137, 0),
         );
         per_paladin_tokens.insert(
             "Sentinel".to_string(),
-            paladin_core::platform::container::battalion::TokenUsage::from_total(263),
+            paladin_core::platform::container::battalion::TokenUsage::new(263, 0),
         );
 
         let result = BattalionResult {

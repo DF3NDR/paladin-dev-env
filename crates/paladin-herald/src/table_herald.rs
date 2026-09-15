@@ -400,7 +400,7 @@ mod tests {
             per_paladin_times.insert((*name).to_string(), execution_time_ms);
             per_paladin_tokens.insert(
                 (*name).to_string(),
-                paladin_core::platform::container::battalion::TokenUsage::from_total(token_count),
+                paladin_core::platform::container::battalion::TokenUsage::new(token_count, 0),
             );
             total_tokens += u64::from(token_count);
             paladin_results.push(paladin_core::platform::container::herald::PaladinResult {

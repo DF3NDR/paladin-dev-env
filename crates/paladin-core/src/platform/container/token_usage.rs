@@ -74,18 +74,6 @@ impl TokenUsage {
         }
     }
 
-    /// Create a `TokenUsage` from a total count only (no prompt/completion breakdown)
-    pub fn from_total(total_tokens: u32) -> Self {
-        Self {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens,
-            cache_read_tokens: None,
-            cache_write_tokens: None,
-            reasoning_tokens: None,
-        }
-    }
-
     /// Set the cache-read sub-count (of the already-reported prompt tokens).
     ///
     /// ```
@@ -188,14 +176,6 @@ mod tests {
     }
 
     #[test]
-    fn from_total_leaves_prompt_and_completion_at_zero() {
-        let usage = TokenUsage::from_total(263);
-        assert_eq!(usage.prompt_tokens, 0);
-        assert_eq!(usage.completion_tokens, 0);
-        assert_eq!(usage.total_tokens, 263);
-    }
-
-    #[test]
     fn default_is_all_zero() {
         let usage = TokenUsage::default();
         assert_eq!(usage.prompt_tokens, 0);
@@ -209,7 +189,9 @@ mod tests {
     #[test]
     fn partial_eq_compares_all_three_fields_not_only_total() {
         assert_eq!(TokenUsage::new(1, 2), TokenUsage::new(1, 2));
-        assert_ne!(TokenUsage::new(1, 2), TokenUsage::from_total(3));
+        // Same total (3) as `TokenUsage::new(1, 2)`, different split -- proves
+        // equality compares the full struct, not just `total_tokens`.
+        assert_ne!(TokenUsage::new(1, 2), TokenUsage::new(3, 0));
     }
 
     #[test]

@@ -388,8 +388,8 @@ mod tests {
         let herald = JsonHerald::new();
 
         let mut per_paladin_tokens = std::collections::HashMap::new();
-        per_paladin_tokens.insert("Scout".to_string(), TokenUsage::from_total(137));
-        per_paladin_tokens.insert("Sentinel".to_string(), TokenUsage::from_total(263));
+        per_paladin_tokens.insert("Scout".to_string(), TokenUsage::new(137, 0));
+        per_paladin_tokens.insert("Sentinel".to_string(), TokenUsage::new(263, 0));
 
         let result = BattalionResult {
             battalion_id: Uuid::new_v4(),

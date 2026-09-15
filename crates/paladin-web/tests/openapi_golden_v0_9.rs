@@ -11,14 +11,30 @@
 //! - keep only the six v0.9 `paths` entries (this file, `restrict_paths`)
 //! - follow the transitive `$ref` closure of those operations into `components.schemas`
 //! - keep `components.securitySchemes` in full, unrestricted
-//! - drop `info.version` -- the ONLY sanctioned normalisation; any other inequality is a real,
+//! - drop `info.version` -- one sanctioned normalisation; any other inequality is a real,
 //!   reported SHIP-02 failure, never something to normalise away
+//! - drop the ONE sanctioned `ExecuteResponse` field rename below (Phase 31, D-24 / ADR-0051)
 //!
 //! This file has no environment-variable-driven regeneration escape hatch (unlike
 //! `crates/paladin-web/src/openapi.rs::openapi_matches_committed_baseline`, whose committed
 //! baseline the version bump legitimately regenerates): `tests/fixtures/openapi-v0.9.0.json` is a
 //! frozen historical record of the `v0.9.0` tag, not a baseline that tracks HEAD. There is nothing
 //! to regenerate it from -- see `tests/fixtures/README.md` for the exact provenance.
+//!
+//! ## Phase 31 exception: `ExecuteResponse.token_count` -> `usage` (D-24, ADR-0051)
+//!
+//! `.planning/phases/31-lossless-token-accounting/31-CONTEXT.md` declares this phase a
+//! "breaking, clean break, no shims" program (ADR-0051, X-03 -- the no-breaking-change-without-a-
+//! shim rule this SHIP-02 gate itself enforces -- explicitly superseded for Phases 31-33 only).
+//! `ExecuteResponse`'s bare `token_count: u32` becomes `usage: TokenUsageResponse` (a full
+//! six-field token split) so the HTTP edge stops re-collapsing the split this phase exists to
+//! carry end to end; the one-way door was confirmed at the phase's plan 31-01 consolidated
+//! checkpoint. [`strip_known_v0_10_execute_response_divergence`] removes exactly this one
+//! field-level divergence (and the new `TokenUsageResponse` schema it introduces) from BOTH
+//! documents' `ExecuteResponse` schema before the ref-closure comparison runs, so this gate keeps
+//! catching any OTHER, unintentional break to a pre-existing v0.9 path or schema -- this is a
+//! second sanctioned, narrowly-scoped, explicitly-documented exception alongside `info.version`,
+//! never a loosening of the gate's general power.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -217,6 +233,29 @@ fn ref_closure(
     closure
 }
 
+/// Remove the ONE sanctioned Phase 31 schema divergence (D-24, ADR-0051, see this file's module
+/// docs) from a `components.schemas` closure map in place: `ExecuteResponse`'s `token_count`
+/// (present only in the frozen `v0.9.0` baseline) and `usage` (present only in the generated
+/// v0.10 document) are both dropped from `properties` and `required`, and the `TokenUsageResponse`
+/// schema the generated document's `usage` field introduces is dropped entirely. Every other
+/// schema, and every other field of `ExecuteResponse` itself, is left untouched -- a regression in
+/// `output`, `execution_time_ms`, `loop_count` or `stop_reason` still fails this gate.
+fn strip_known_v0_10_execute_response_divergence(schemas: &mut BTreeMap<String, Value>) {
+    if let Some(object) = schemas
+        .get_mut("ExecuteResponse")
+        .and_then(Value::as_object_mut)
+    {
+        if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
+            required.retain(|v| v != "token_count" && v != "usage");
+        }
+        if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+            properties.remove("token_count");
+            properties.remove("usage");
+        }
+    }
+    schemas.remove("TokenUsageResponse");
+}
+
 /// The restriction itself must never be vacuous: an empty or partial restriction must fail
 /// loudly here rather than let [`openapi_v0_9_paths_match_the_frozen_baseline`] pass on two
 /// empty maps (D-08, threat T-29-02-04).
@@ -267,9 +306,15 @@ fn ref_closure_schemas_match_the_frozen_baseline() {
     let generated_doc = generated_spec();
     let baseline_doc = load_baseline();
 
-    let generated_closure =
+    let mut generated_closure =
         ref_closure(&restrict_paths(&generated_doc), schemas_of(&generated_doc));
-    let baseline_closure = ref_closure(&restrict_paths(&baseline_doc), schemas_of(&baseline_doc));
+    let mut baseline_closure =
+        ref_closure(&restrict_paths(&baseline_doc), schemas_of(&baseline_doc));
+
+    // The ONE sanctioned Phase 31 schema divergence (D-24, ADR-0051) -- see this file's module
+    // docs and `strip_known_v0_10_execute_response_divergence`'s own docs.
+    strip_known_v0_10_execute_response_divergence(&mut generated_closure);
+    strip_known_v0_10_execute_response_divergence(&mut baseline_closure);
 
     let generated_value = serde_json::to_value(&generated_closure).expect("serialize closure");
     let baseline_value = serde_json::to_value(&baseline_closure).expect("serialize closure");
@@ -279,6 +324,68 @@ fn ref_closure_schemas_match_the_frozen_baseline() {
         &baseline_value,
         "the $ref closure of the six v0.9 paths into components.schemas",
     );
+}
+
+/// The Phase 31 `ExecuteResponse` exception strips exactly the two known-divergent keys and the
+/// `TokenUsageResponse` schema -- proven directly against the real generated/baseline closures,
+/// so a future edit that widens the exception (e.g. also dropping an unrelated field) breaks this
+/// test instead of silently passing.
+#[test]
+fn execute_response_exception_is_narrowly_scoped() {
+    let generated_doc = generated_spec();
+    let baseline_doc = load_baseline();
+
+    let mut generated_closure =
+        ref_closure(&restrict_paths(&generated_doc), schemas_of(&generated_doc));
+    let mut baseline_closure =
+        ref_closure(&restrict_paths(&baseline_doc), schemas_of(&baseline_doc));
+
+    // Before stripping: the two closures must actually differ under `ExecuteResponse`, and the
+    // generated closure must actually contain `TokenUsageResponse` -- otherwise this test would
+    // exercise nothing.
+    assert_ne!(
+        generated_closure.get("ExecuteResponse"),
+        baseline_closure.get("ExecuteResponse"),
+        "fixture must actually diverge on ExecuteResponse before stripping"
+    );
+    assert!(
+        generated_closure.contains_key("TokenUsageResponse"),
+        "generated closure must contain the new TokenUsageResponse schema before stripping"
+    );
+
+    strip_known_v0_10_execute_response_divergence(&mut generated_closure);
+    strip_known_v0_10_execute_response_divergence(&mut baseline_closure);
+
+    assert!(!generated_closure.contains_key("TokenUsageResponse"));
+    assert!(!baseline_closure.contains_key("TokenUsageResponse"));
+
+    for (label, closure) in [
+        ("generated", &generated_closure),
+        ("baseline", &baseline_closure),
+    ] {
+        let execute_response = closure
+            .get("ExecuteResponse")
+            .expect("ExecuteResponse present in both closures");
+        let properties = execute_response
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("ExecuteResponse has properties");
+        assert!(
+            !properties.contains_key("token_count"),
+            "{label}: token_count must be stripped"
+        );
+        assert!(
+            !properties.contains_key("usage"),
+            "{label}: usage must be stripped"
+        );
+        // Every other field must survive the exception untouched.
+        for field in ["output", "execution_time_ms", "loop_count", "stop_reason"] {
+            assert!(
+                properties.contains_key(field),
+                "{label}: {field} must survive the exception"
+            );
+        }
+    }
 }
 
 /// The closure must never be vacuous, and every `$ref` it encounters must resolve to a present

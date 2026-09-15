@@ -156,6 +156,7 @@ pub fn map_trace_event(
             superstep,
             node_id,
             outcome,
+            usage,
             ..
         } => Some((
             thread_id,
@@ -164,6 +165,7 @@ pub fn map_trace_event(
                 "superstep": superstep,
                 "node_id": node_id.as_str(),
                 "outcome": outcome,
+                "usage": usage,
                 "trace_seq": trace_seq,
             }),
         )),
@@ -201,7 +203,7 @@ pub fn map_trace_event(
                 "trace_seq": trace_seq,
             }),
         )),
-        TraceEvent::RunFinished { status, .. } => {
+        TraceEvent::RunFinished { status, usage, .. } => {
             let (kind, status_str) = match status {
                 RunFinishStatus::Completed => (RunStreamEventKind::Done, "completed"),
                 RunFinishStatus::Halted => (RunStreamEventKind::Done, "halted"),
@@ -213,11 +215,13 @@ pub fn map_trace_event(
                     "status": status_str,
                     "message": serde_json::Value::Null,
                     "waypoint_id": serde_json::Value::Null,
+                    "usage": usage,
                     "trace_seq": trace_seq,
                 }),
                 _ => serde_json::json!({
                     "status": status_str,
                     "waypoint_id": serde_json::Value::Null,
+                    "usage": usage,
                     "trace_seq": trace_seq,
                 }),
             };
@@ -1116,6 +1120,66 @@ mod tests {
             payload.get("outcome").cloned(),
             Some(serde_json::to_value(NodeOutcomeKind::Failed).unwrap())
         );
+    }
+
+    /// D-24: the serialized `node_finished` wire payload carries a `usage`
+    /// object with all six `TokenUsage` keys -- checked against the actual
+    /// serialized JSON, not inferred from the type definition.
+    #[test]
+    fn node_finished_payload_carries_six_key_usage_object() {
+        let thread_id = ThreadId::new("t1").unwrap();
+        let usage = TokenUsage::new(11, 4)
+            .with_cache_read(2)
+            .with_cache_write(1)
+            .with_reasoning(3);
+        let record = wrap(
+            thread_id,
+            1,
+            TraceEvent::NodeFinished {
+                superstep: 1,
+                node_id: NodeId::new("n1"),
+                attempt: 1,
+                outcome: NodeOutcomeKind::Succeeded,
+                duration_ms: 5,
+                usage,
+                cache_hit: false,
+            },
+        );
+        let (_, _, payload) = map_trace_event(record).expect("NodeFinished must map");
+        let usage_value = payload.get("usage").expect("usage object present");
+        assert_eq!(usage_value["prompt_tokens"], 11);
+        assert_eq!(usage_value["completion_tokens"], 4);
+        assert_eq!(usage_value["total_tokens"], 15);
+        assert_eq!(usage_value["cache_read_tokens"], 2);
+        assert_eq!(usage_value["cache_write_tokens"], 1);
+        assert_eq!(usage_value["reasoning_tokens"], 3);
+    }
+
+    /// D-24: the serialized `run_finished` (`done`) wire payload carries a
+    /// `usage` object with all six `TokenUsage` keys.
+    #[test]
+    fn run_finished_payload_carries_six_key_usage_object() {
+        let thread_id = ThreadId::new("t1").unwrap();
+        let usage = TokenUsage::new(100, 50);
+        let record = wrap(
+            thread_id,
+            1,
+            TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 1,
+                usage,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        );
+        let (_, _, payload) = map_trace_event(record).expect("RunFinished must map");
+        let usage_value = payload.get("usage").expect("usage object present");
+        assert_eq!(usage_value["prompt_tokens"], 100);
+        assert_eq!(usage_value["completion_tokens"], 50);
+        assert_eq!(usage_value["total_tokens"], 150);
+        assert!(usage_value["cache_read_tokens"].is_null());
+        assert!(usage_value["cache_write_tokens"].is_null());
+        assert!(usage_value["reasoning_tokens"].is_null());
     }
 
     /// Every mapped wire event's payload carries `trace_seq` equal to the

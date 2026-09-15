@@ -58,7 +58,7 @@ pub mod user_controller;
 
 pub use agent_auth::{AgentAuthConfig, Principal};
 pub use agent_controller::{
-    AgentApiState, AgentSummary, ExecuteRequest, ExecuteResponse, agent_router,
+    AgentApiState, AgentSummary, ExecuteRequest, ExecuteResponse, TokenUsageResponse, agent_router,
 };
 pub use agent_registry::{
     AgentEntry, AgentProvisioner, AgentRegistry, AgentSpec, ProvisionError, ProvisionedAgent,

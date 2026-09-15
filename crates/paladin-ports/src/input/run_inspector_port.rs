@@ -62,6 +62,7 @@ use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::battlefield::FieldName;
 use paladin_core::platform::container::run::{RunId, RunStatus};
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, ThreadId, WaypointId};
 
 /// One node's execution within one superstep, as rendered for the
@@ -81,9 +82,11 @@ pub struct CompletedRow {
     /// duration is not a meaningful execution figure, so the page renders
     /// a dash instead of a misleading number (28-UI-SPEC.md E2 "partial").
     pub duration_ms: Option<u64>,
-    /// Tokens consumed by this attempt. `None` under the same
-    /// [`Self::cache_hit`] rule as [`Self::duration_ms`].
-    pub token_count: Option<u64>,
+    /// Full token usage for this attempt (D-24). `None` under the same
+    /// [`Self::cache_hit`] rule as [`Self::duration_ms`] -- a cache-served
+    /// attempt's stored usage is not a meaningful execution figure, so the
+    /// page renders a dash instead of a misleading number.
+    pub usage: Option<TokenUsage>,
     /// Whether this attempt's outcome was served from the node cache
     /// (FT-06) rather than by executing the node.
     pub cache_hit: bool,

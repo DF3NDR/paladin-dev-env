@@ -37,6 +37,7 @@ use serde_json::json;
 use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_ports::output::paladin_port::{PaladinStream, PaladinStreamChunk};
 
 use utoipa_axum::router::OpenApiRouter;
@@ -113,6 +114,46 @@ pub struct ExecuteRequest {
     pub timeout_seconds: Option<u64>,
 }
 
+/// Wire representation of a [`TokenUsage`] on an HTTP response body (D-24).
+///
+/// Mirrors `TokenUsage`'s six fields field-for-field. `paladin-core` gains no
+/// `utoipa` dependency for this: the schema annotation lives here, on the
+/// web-layer DTO, and never leaks inward (dependencies flow inward only). The
+/// three optional sub-counts are `null` when the provider did not report the
+/// figure -- see [`TokenUsage`]'s own docs for what each figure means.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TokenUsageResponse {
+    /// Number of tokens in the input prompt (includes any cache read/write tokens).
+    pub prompt_tokens: u32,
+    /// Number of tokens in the generated completion (includes any reasoning tokens).
+    pub completion_tokens: u32,
+    /// Total tokens; always `prompt_tokens + completion_tokens`.
+    pub total_tokens: u32,
+    /// Of `prompt_tokens`, how many were served from a provider-side cache read.
+    /// `null` when the provider did not report this figure.
+    pub cache_read_tokens: Option<u32>,
+    /// Of `prompt_tokens`, how many were written to a provider-side cache for
+    /// future reuse. `null` when the provider did not report this figure.
+    pub cache_write_tokens: Option<u32>,
+    /// Of `completion_tokens`, how many were spent on internal reasoning /
+    /// thinking rather than the visible output. `null` when the provider did
+    /// not report this figure.
+    pub reasoning_tokens: Option<u32>,
+}
+
+impl From<TokenUsage> for TokenUsageResponse {
+    fn from(usage: TokenUsage) -> Self {
+        Self {
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            cache_write_tokens: usage.cache_write_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+        }
+    }
+}
+
 /// Response body for a successful agent execution.
 ///
 /// Carries the agent output plus the safe execution metadata from
@@ -123,8 +164,9 @@ pub struct ExecuteRequest {
 pub struct ExecuteResponse {
     /// The generated output text.
     pub output: String,
-    /// Total tokens used (prompt + completion).
-    pub token_count: u32,
+    /// Provider-reported token usage for this call (D-24). The three optional
+    /// sub-counts are `null` when the provider did not report them.
+    pub usage: TokenUsageResponse,
     /// Wall-clock execution time in milliseconds.
     pub execution_time_ms: u64,
     /// Number of reasoning loops executed.
@@ -137,7 +179,7 @@ impl From<PaladinResult> for ExecuteResponse {
     fn from(result: PaladinResult) -> Self {
         Self {
             output: result.output,
-            token_count: result.usage.total_tokens,
+            usage: TokenUsageResponse::from(result.usage),
             execution_time_ms: result.execution_time_ms,
             loop_count: result.loop_count,
             stop_reason: stop_reason_label(&result.stop_reason).to_string(),
@@ -755,7 +797,6 @@ mod tests {
     use axum::http::Request;
     use axum::routing::post;
     use paladin_core::platform::container::paladin::PaladinData;
-    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::user::UserRole;
     use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
     use tower::ServiceExt; // for `Router::oneshot`
@@ -1168,7 +1209,7 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["output"], "done");
-        assert_eq!(body["token_count"], 5);
+        assert_eq!(body["usage"]["total_tokens"], 5);
         assert_eq!(body["execution_time_ms"], 10);
         assert_eq!(body["loop_count"], 1);
         assert_eq!(body["stop_reason"], "completed");
@@ -1650,10 +1691,51 @@ mod tests {
         );
         let response = ExecuteResponse::from(result);
         assert_eq!(response.output, "hi");
-        assert_eq!(response.token_count, 7);
+        assert_eq!(response.usage.total_tokens, 7);
+        assert_eq!(response.usage.prompt_tokens, 7);
+        assert_eq!(response.usage.completion_tokens, 0);
         assert_eq!(response.execution_time_ms, 42);
         assert_eq!(response.loop_count, 2);
         assert_eq!(response.stop_reason, "max_loops");
+    }
+
+    /// D-24: `TokenUsageResponse::from` mirrors every `TokenUsage` field, including the
+    /// three optional sub-counts, field-for-field.
+    #[test]
+    fn token_usage_response_from_token_usage_maps_all_six_fields_unchanged() {
+        let usage = TokenUsage::new(1_234, 567)
+            .with_cache_read(100)
+            .with_cache_write(50)
+            .with_reasoning(200);
+        let response = TokenUsageResponse::from(usage);
+        assert_eq!(response.prompt_tokens, 1_234);
+        assert_eq!(response.completion_tokens, 567);
+        assert_eq!(response.total_tokens, 1_801);
+        assert_eq!(response.cache_read_tokens, Some(100));
+        assert_eq!(response.cache_write_tokens, Some(50));
+        assert_eq!(response.reasoning_tokens, Some(200));
+    }
+
+    /// D-24: the serialized `ExecuteResponse` carries a `usage` object with all six
+    /// keys present, the three optional ones `null` when the provider did not report
+    /// them -- asserted against the actual serialized JSON, not the type definition.
+    #[test]
+    fn execute_response_serializes_usage_object_with_six_keys() {
+        let result = PaladinResult::new(
+            "hi".to_string(),
+            TokenUsage::new(7, 3),
+            42,
+            2,
+            StopReason::Completed,
+        );
+        let value = serde_json::to_value(ExecuteResponse::from(result)).expect("serialize");
+        let usage = value.get("usage").expect("usage object present");
+        assert_eq!(usage["prompt_tokens"], 7);
+        assert_eq!(usage["completion_tokens"], 3);
+        assert_eq!(usage["total_tokens"], 10);
+        assert!(usage["cache_read_tokens"].is_null());
+        assert!(usage["cache_write_tokens"].is_null());
+        assert!(usage["reasoning_tokens"].is_null());
     }
 
     #[test]

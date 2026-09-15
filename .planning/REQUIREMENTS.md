@@ -420,7 +420,7 @@ at `src/application/services/paladin/middleware/history.rs`.
   exactness from the port — no forwarding constructor — and every in-tree call site compiles
   against the new signature (PRD R2; D-5)
 
-- [ ] **PRIM-03**: The legacy `garrison::TokenCounter` trait and `TokenCounterFactory` are
+- [x] **PRIM-03**: The legacy `garrison::TokenCounter` trait and `TokenCounterFactory` are
   removed with their three re-exports, every former in-tree caller consuming `TokenCounterPort`;
   if one internal caller genuinely cannot migrate it is `#[deprecated]` with the blocking reason
   recorded in the phase context and removal assigned to Phase 33 (PRD R3; D-5)

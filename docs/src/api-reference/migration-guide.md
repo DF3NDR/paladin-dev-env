@@ -13,6 +13,19 @@ changes are recorded in
 [`CHANGELOG.md`](https://github.com/DF3NDR/paladin-dev-env/blob/main/CHANGELOG.md), not in this
 guide.
 
+### Token usage carriers
+
+Every token-usage carrier now reports the full prompt/completion split plus optional
+cache-read/cache-write/reasoning sub-counts, instead of a single bare count
+(ACCT-01/ACCT-02/ACCT-03). `PaladinResult.usage`, `NodeExecutionRecord.usage`,
+`TraceEvent::NodeFinished.usage`, `TraceEvent::RunFinished.usage`, `StreamingResponse.usage`,
+`ChunkMetadata.usage`, and the HTTP `ExecuteResponse.usage` all replace their former
+`token_count`/`total_tokens` field with a `TokenUsage`. `TokenUsage::from_total` is deleted
+outright, with no deprecated replacement — use `TokenUsage::new(prompt, completion)` plus the
+`with_cache_read`/`with_cache_write`/`with_reasoning` builders instead. See
+[`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
+for the full per-type register.
+
 ## Table of Contents
 
 - [Upgrading to v0.10.0 (from v0.9.x)](#upgrading-to-v0100-from-v09x)

@@ -377,27 +377,27 @@ Keystone; **breaking** (clean break, no shims). Source PRD: `prd-lossless-token-
 `crates/paladin-core/src/platform/container/execution_result.rs`; `TokenUsage::from_total` on the
 battalion path at `crates/paladin-battalion/src/formation_service.rs` and `phalanx_service.rs`.
 
-- [ ] **ACCT-01**: `TokenUsage` (single definition) gains `cache_read_tokens`,
+- [x] **ACCT-01**: `TokenUsage` (single definition) gains `cache_read_tokens`,
   `cache_write_tokens` and `reasoning_tokens` as `#[serde(default)]` optionals; the rustdoc
   states whether `total_tokens` includes them; legacy JSON without the fields deserializes via
   defaults and new JSON round-trips (PRD R2)
 
-- [ ] **ACCT-02**: `PaladinResult`, `BattalionResult.per_paladin_tokens`, the Waypoint
+- [x] **ACCT-02**: `PaladinResult`, `BattalionResult.per_paladin_tokens`, the Waypoint
   `NodeExecutionRecord`, `TraceEvent::NodeFinished` and `RunFinished` carry a full `TokenUsage`
   rather than a bare count; `TokenUsage::from_total` is removed from the battalion aggregation
   path; a round-trip test proves a usage with non-zero prompt AND completion (plus cache/reasoning)
   reaches `RunFinished` intact and a battalion test proves `per_paladin_tokens` preserves the
   split; no `#[deprecated]` bare-count accessor is added for downstream compatibility (PRD R1, R3)
 
-- [ ] **ACCT-03**: Every LLM adapter's `execute_stream` path is audited; a per-adapter test
+- [x] **ACCT-03**: Every LLM adapter's `execute_stream` path is audited; a per-adapter test
   asserts accumulated streaming `TokenUsage` equals the non-streaming path, or the inability is
   documented as an explicit exception in the adapter rustdoc and the mdBook provider page (PRD
   R4; F8)
 
-- [ ] **ACCT-04**: The prompt/completion/cache/reasoning breakdown is observable in at least one
+- [x] **ACCT-04**: The prompt/completion/cache/reasoning breakdown is observable in at least one
   herald in both JSON and Markdown output (PRD R5)
 
-- [ ] **ACCT-05**: Every touched public type has a `MIGRATION.md` §9.2 row and a matching
+- [x] **ACCT-05**: Every touched public type has a `MIGRATION.md` §9.2 row and a matching
   `cargo semver-checks` allowlist row (Phase 29 D-04 row-level gate green); the `CHANGELOG.md`
   `[0.10.0]` section records the carrier change; `make clean-code` and the 82 % coverage floor
   are green (PRD R6; X-10)
@@ -561,11 +561,11 @@ Which phases cover which requirements. Populated during roadmap creation.
 | VOCAB-05 | Phase 30 | Complete |
 | VOCAB-06 | Phase 30 | Complete |
 | VOCAB-07 | Phase 30 | Complete |
-| ACCT-01 | Phase 31 | Not started |
-| ACCT-02 | Phase 31 | Not started |
-| ACCT-03 | Phase 31 | Not started |
-| ACCT-04 | Phase 31 | Not started |
-| ACCT-05 | Phase 31 | Not started |
+| ACCT-01 | Phase 31 | Complete |
+| ACCT-02 | Phase 31 | Complete |
+| ACCT-03 | Phase 31 | Complete |
+| ACCT-04 | Phase 31 | Complete |
+| ACCT-05 | Phase 31 | Complete |
 | PRIM-01 | Phase 32 | Not started |
 | PRIM-02 | Phase 32 | Not started |
 | PRIM-03 | Phase 32 | Not started |

@@ -16,6 +16,23 @@
 > Rows are derived from `31-RESEARCH.md` § Architecture Pattern 3 (per-provider mechanisms, verified
 > against current provider documentation) and are reconciled against what actually landed by plan
 > 31-07, task 2.
+>
+> **Reconciliation (plan 31-07, task 2):** one row moved. `grok.reasoning` was written `OPT-OUT` at
+> plan time (RESEARCH.md assumption A2: no reasoning-token field confirmed in xAI's own docs) but
+> the landed code (`crates/paladin-llm/src/grok/adapter.rs`) delegates `generate`/`generate_stream`
+> entirely to `CompatEngine`, which parses `completion_tokens_details.reasoning_tokens` through the
+> SAME shared `map_compat_usage` function every other CompatEngine-backed preset uses — the
+> identical code path already marked `INTEGRATE` on `kimi.reasoning`/`qwen.reasoning`/
+> `ollama.reasoning`/`openai_compatible.reasoning`, with no per-preset override disabling it for
+> Grok. `INTEGRATE` here means "the code attempts to parse this figure using the correct mechanism
+> for this provider" (it still resolves to `None` per D-03 on any response that omits the field) —
+> the same standard already applied to every sibling row in this family, so singling out Grok as
+> `OPT-OUT` was the inconsistency, not the fact that xAI's own field presence remains unconfirmed.
+> `deepseek.reasoning` — the other row RESEARCH.md flagged as assumed-not-confirmed
+> (`completion_tokens_details.reasoning_tokens`) — was already `INTEGRATE` and needed no change: its
+> own `map_usage` function (`crates/paladin-llm/src/deepseek/adapter.rs`) attempts the identical
+> field mapping, gracefully degrading to `None` if the assumption is wrong, which is exactly what
+> `INTEGRATE` records here. No other row's decision changed.
 
 | capability | decision | reason |
 |---|---|---|
@@ -43,7 +60,7 @@
 | grok.streaming_usage_frame | INTEGRATE | |
 | grok.cache_read | INTEGRATE | |
 | grok.cache_write | OPT-OUT | xAI's `prompt_tokens_details` carries no cache-write figure — `None` per D-03 |
-| grok.reasoning | OPT-OUT | No reasoning-token field was confirmed in xAI's usage object (RESEARCH.md assumption A2); the shared OpenAI-shaped parser reads one if the server sends it, and otherwise reports `None` per D-03 |
+| grok.reasoning | INTEGRATE | |
 | kimi.non_streaming_usage | INTEGRATE | |
 | kimi.streaming_usage_frame | INTEGRATE | |
 | kimi.cache_read | INTEGRATE | |

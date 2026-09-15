@@ -77,6 +77,22 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   either never makes `resume` fail with `GraphMismatch`. A thread suspended under a `v4`
   fingerprint fails closed on resume exactly as the `v3` → `v4` bump did.
 
+- **Every token-usage carrier now reports the full prompt/completion/cache/reasoning split instead
+  of a bare count (ACCT-01/ACCT-02/ACCT-03, Phase 31).** `PaladinResult.usage`,
+  `NodeExecutionRecord.usage`, `TraceEvent::NodeFinished.usage`, `TraceEvent::RunFinished.usage`,
+  `StreamingResponse.usage` (`#[non_exhaustive]`) and `ChunkMetadata.usage` (`#[non_exhaustive]`)
+  all replace their former `token_count`/`total_tokens` bare-count field with a full `TokenUsage`
+  (`prompt_tokens`, `completion_tokens`, `total_tokens`, plus optional `cache_read_tokens`,
+  `cache_write_tokens`, `reasoning_tokens`). The HTTP edge follows: `ExecuteResponse.usage` is now
+  a `TokenUsageResponse` DTO in place of `token_count: u32`. `TokenUsage::from_total` — the
+  total-only constructor that discarded the split — is **deleted outright**, with no
+  `#[deprecated]` replacement; every accumulator in the tree (the execution service's reasoning
+  loop, Formation/Phalanx per-Paladin aggregation, the engine's `TraceDispatcher`) now saturates a
+  real `TokenUsage` via its new `Add`/`AddAssign`/`Sum` impls instead of reconstructing a
+  zero-split usage from a total. See
+  [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register) for
+  the full per-type register and every `cargo semver-checks` suppression.
+
 ### Added
 
 - **Typed error taxonomy (FT-01).** `Transience { Transient, Permanent, Unknown }` in `paladin-core`,
@@ -308,6 +324,22 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   even if a later `after_model` hook (e.g. a `Guardrail` rule) requested a different one. The
   `after_model` pass's own `FinalResult` now wins when present, mirroring the already-correct
   sibling post-model-call path.
+- **Two token-usage under-reports corrected (ACCT-02/ACCT-03, Phase 31).**
+  1. **Battalion per-Paladin token split was always zeroed.** `Formation`/`Phalanx`'s aggregation
+     path built each `BattalionResult.per_paladin_tokens` entry from a bare total via
+     `TokenUsage::from_total(total)`, which always left `prompt_tokens`/`completion_tokens` at `0`
+     even though the real split was available on the underlying `PaladinResult`. The real
+     `result.usage` split is now inserted directly, with no reconstruction step.
+  2. **Anthropic's `prompt_tokens` excluded cached input, under-reporting the billed figure.** The
+     adapter previously reported `prompt_tokens = input_tokens` alone; Anthropic's own
+     `input_tokens` field EXCLUDES cache reads and cache writes, both of which the API still
+     bills. `prompt_tokens` is now `input_tokens + cache_read_input_tokens +
+     cache_creation_input_tokens` (saturating) — the actual billed input. **Before/after:** a call
+     that previously reported `prompt_tokens: 85` with a 512-token cache read now reports
+     `prompt_tokens: 597`; a consumer computing its own cost estimate from `prompt_tokens` will see
+     a LARGER number for any call that hits the prompt cache, and that larger number is the one
+     Anthropic actually billed. See
+     [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
 
 ### Known limitations
 

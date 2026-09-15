@@ -42,6 +42,18 @@ mime_guess = "2"
 # *next* field free. Register/remove this suppression only in the same commit as
 # the matching MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml`
 # entry (kept set-equal by CI's `semver` job).
+#
+# ACCT-03 (D-13, D-18, Phase 31 plan 31-03, MIGRATION.md §9.2): `StreamingResponse`
+# and `ChunkMetadata` both gained an additive `usage: Option<TokenUsage>` field
+# and are marked `#[non_exhaustive]` -- neither has a pre-existing `Default`
+# derive that a functional-update site would need to preserve, so marking
+# each `#[non_exhaustive]` (X-10.3 option (a)) makes the next field free. Both
+# fire the SAME `struct_marked_non_exhaustive` lint already allowed above for
+# `LlmRequest` -- empirically confirmed via `cargo semver-checks check-release
+# --package paladin-ports --default-features --baseline-version 0.9.0` (D-27),
+# no new lint id and no Cargo.toml change needed; two new
+# `.cargo/semver-checks-allowlist.toml` entries mirror this crate's existing
+# suppression on the two new `crate | type` pairs.
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
 struct_marked_non_exhaustive = "allow"

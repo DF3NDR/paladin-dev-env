@@ -1249,11 +1249,17 @@ fn parse_sse_chunk(bytes: &[u8]) -> Vec<Result<StreamingResponse, LlmError>> {
                         .as_deref()
                         .map(|r| map_finish_reason(Some(r)));
 
-                    items.push(Ok(StreamingResponse {
-                        id: Uuid::new_v4(),
-                        delta,
-                        finish_reason,
-                    }));
+                    // Mechanical migration only (Task 1, plan 31-03) --
+                    // real usage parsing for this adapter's `usageMetadata`
+                    // lands in plan 31-04 (D-15). `delta` and `finish_reason`
+                    // can arrive on the SAME frame here, which the fixed
+                    // three constructors don't express directly; the
+                    // `finish_reason` field is `pub`, so it is set after
+                    // construction rather than losing the delta text a
+                    // `terminal()`-only chunk would force to empty.
+                    let mut item = StreamingResponse::delta(delta);
+                    item.finish_reason = finish_reason;
+                    items.push(Ok(item));
                 }
             }
             Err(e) => {

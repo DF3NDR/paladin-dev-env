@@ -64,6 +64,12 @@ struct MockState {
     /// order (Phase 26 D-02: the golden equivalence test inspects the exact
     /// rendered prompt bytes a real run produced).
     requests: Vec<LlmRequest>,
+    /// D-16: when `true`, the default (non-scripted) `generate_stream`
+    /// path's terminal chunk omits `usage` entirely -- simulating a
+    /// provider whose streaming endpoint never reports token usage. Has no
+    /// effect on `with_stream_items`-scripted streams, which never attach a
+    /// finish reason or usage to begin with.
+    omit_streamed_usage: bool,
 }
 
 impl Default for MockState {
@@ -80,6 +86,7 @@ impl Default for MockState {
             stream_script: None,
             model_query_error: None,
             requests: Vec::new(),
+            omit_streamed_usage: false,
         }
     }
 }
@@ -214,6 +221,17 @@ impl MockLlmAdapter {
     /// answer `Err(error)` instead of consulting the configured model list.
     pub fn with_model_query_error(self, error: LlmError) -> Self {
         self.state.lock().unwrap().model_query_error = Some(error);
+        self
+    }
+
+    /// Make the default (non-scripted) [`LlmPort::generate_stream`] path's
+    /// terminal chunk omit `usage` entirely (D-16, D-17): simulates a
+    /// provider whose streaming endpoint never reports token usage, so a
+    /// consumer test can exercise the "no estimate, default usage plus one
+    /// warning" fallback without a network mock. Has no effect on
+    /// [`Self::with_stream_items`]-scripted streams.
+    pub fn with_no_streamed_usage(self) -> Self {
+        self.state.lock().unwrap().omit_streamed_usage = true;
         self
     }
 
@@ -392,32 +410,28 @@ impl LlmPort for MockLlmAdapter {
             script
         };
         if let Some(items) = scripted {
+            // No finish reason and no usage on any scripted item (unchanged
+            // by D-13/D-16 -- see `with_stream_items`'s own rustdoc): a
+            // scripted stream has no terminal chunk to attach usage to.
             let chunks: Vec<Result<StreamingResponse, LlmError>> = items
                 .into_iter()
-                .map(|item| {
-                    item.map(|delta| StreamingResponse {
-                        id: Uuid::new_v4(),
-                        delta,
-                        finish_reason: None,
-                    })
-                })
+                .map(|item| item.map(StreamingResponse::delta))
                 .collect();
             return Ok(Box::new(stream::iter(chunks)));
         }
 
+        let omit_usage = self.state.lock().unwrap().omit_streamed_usage;
         let response = self.generate(request).await?;
-        // Emit the full response as a single streaming chunk, then stop.
+        // Emit the full response as a delta chunk, then a terminal chunk
+        // carrying the response's finish reason and (unless the test opted
+        // out via `with_no_streamed_usage`) its configured usage (D-15).
+        let mut terminal = StreamingResponse::terminal(response.finish_reason);
+        if !omit_usage {
+            terminal = terminal.with_usage(response.usage.clone());
+        }
         let chunks = vec![
-            Ok(StreamingResponse {
-                id: Uuid::new_v4(),
-                delta: response.content.clone(),
-                finish_reason: None,
-            }),
-            Ok(StreamingResponse {
-                id: Uuid::new_v4(),
-                delta: String::new(),
-                finish_reason: Some(response.finish_reason),
-            }),
+            Ok(StreamingResponse::delta(response.content.clone())),
+            Ok(terminal),
         ];
         Ok(Box::new(stream::iter(chunks)))
     }
@@ -530,11 +544,10 @@ impl LlmPort for MultiStepMockLlmPort {
     ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
     {
         let response = self.generate(request).await?;
-        let chunks = vec![Ok(StreamingResponse {
-            id: Uuid::new_v4(),
-            delta: response.content,
-            finish_reason: Some(FinishReason::Stop),
-        })];
+        let chunks = vec![
+            Ok(StreamingResponse::delta(response.content)),
+            Ok(StreamingResponse::terminal(FinishReason::Stop).with_usage(response.usage)),
+        ];
         Ok(Box::new(stream::iter(chunks)))
     }
 
@@ -651,6 +664,50 @@ mod tests {
             adapter.last_response_format(),
             Some(ResponseFormat::JsonObject)
         );
+    }
+
+    // ── Phase 31 (D-13..D-17): streaming terminal-chunk usage contract ────
+
+    #[tokio::test]
+    async fn default_stream_terminal_chunk_carries_the_configured_usage() {
+        let adapter = MockLlmAdapter::new()
+            .with_response("streamed")
+            .with_token_usage_struct(TokenUsage::new(11, 7).with_cache_read(3));
+
+        let mut stream = Box::into_pin(adapter.generate_stream(make_request()).await.unwrap());
+        let mut chunks = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            chunks.push(item.unwrap());
+        }
+
+        let terminal = chunks
+            .iter()
+            .find(|c| c.finish_reason.is_some())
+            .expect("a terminal chunk must exist");
+        assert_eq!(
+            terminal.usage,
+            Some(TokenUsage::new(11, 7).with_cache_read(3))
+        );
+        assert!(
+            chunks.iter().filter(|c| c.usage.is_some()).count() == 1,
+            "exactly one chunk carries usage"
+        );
+    }
+
+    #[tokio::test]
+    async fn with_no_streamed_usage_omits_usage_but_keeps_the_finish_reason() {
+        let adapter = MockLlmAdapter::new()
+            .with_response("streamed")
+            .with_no_streamed_usage();
+
+        let mut stream = Box::into_pin(adapter.generate_stream(make_request()).await.unwrap());
+        let mut chunks = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            chunks.push(item.unwrap());
+        }
+
+        assert!(chunks.iter().all(|c| c.usage.is_none()));
+        assert!(chunks.iter().any(|c| c.finish_reason.is_some()));
     }
 
     #[tokio::test]

@@ -213,17 +213,15 @@ impl LlmPort for MockLlmPort {
     ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
     {
         let response = self.generate(request).await?;
+        let midpoint = response.content.len() / 2;
         let chunks = vec![
-            Ok(StreamingResponse {
-                id: response.id,
-                delta: response.content[..response.content.len() / 2].to_string(),
-                finish_reason: None,
-            }),
-            Ok(StreamingResponse {
-                id: response.id,
-                delta: response.content[response.content.len() / 2..].to_string(),
-                finish_reason: Some(FinishReason::Stop),
-            }),
+            Ok(StreamingResponse::delta(
+                response.content[..midpoint].to_string(),
+            )),
+            Ok(StreamingResponse::delta(
+                response.content[midpoint..].to_string(),
+            )),
+            Ok(StreamingResponse::terminal(FinishReason::Stop).with_usage(response.usage)),
         ];
 
         Ok(Box::new(stream::iter(chunks)))

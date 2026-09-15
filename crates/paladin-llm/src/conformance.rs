@@ -559,15 +559,13 @@ mod tests {
                                 continue;
                             };
                             match serde_json::from_str::<TrivialStreamFrame>(json_str) {
-                                Ok(frame) => items.push(Ok(StreamingResponse {
-                                    id: uuid::Uuid::new_v4(),
-                                    delta: frame.delta,
-                                    finish_reason: if frame.done {
-                                        Some(FinishReason::Stop)
-                                    } else {
-                                        None
-                                    },
-                                })),
+                                Ok(frame) => {
+                                    let mut item = StreamingResponse::delta(frame.delta);
+                                    if frame.done {
+                                        item.finish_reason = Some(FinishReason::Stop);
+                                    }
+                                    items.push(Ok(item));
+                                }
                                 Err(e) => items.push(Err(LlmError::ProcessingError(e.to_string()))),
                             }
                         }

@@ -870,7 +870,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 32-05-PLAN.md — empirical semver discovery with the mandatory `--release-type minor` and the feature-gated second pass, `MIGRATION.md` §9.2 rows with row-matched allowlist entries, `CHANGELOG.md` `[0.10.0]` bullets, the two migration pages, and the phase gate evidence (PRIM-05)
+- [x] 32-05-PLAN.md — empirical semver discovery with the mandatory `--release-type minor` and the feature-gated second pass, `MIGRATION.md` §9.2 rows with row-matched allowlist entries, `CHANGELOG.md` `[0.10.0]` bullets, the two migration pages, and the phase gate evidence (PRIM-05)
 
 ### Phase 33: Commissary In-Tree Adoption
 

@@ -609,6 +609,10 @@ None - no external service configuration required.
 - **Carried forward, not blocking:** the pre-existing `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` RED gate (14 unresolved links in `paladin-ai-core`'s graph-fingerprinting and webhook-delivery doc families) remains open, as Phase 31 already logged it; the pre-existing `cli_isolation` `--all-features` test conflict remains open, as Phases 31 and 32's own plan 32-04 already logged it; the pre-existing broken `[`HeuristicTokenCounter`]` intra-doc link plan 32-03 logged in `deferred-items.md` also remains open (a narrower, different gate than the one measured here). None of these three items is new, and none blocks PRIM-05's own success criteria.
 - No blockers.
 
+## Orchestrator Addendum (post-wave reconciliation)
+
+The execute-phase orchestrator added a `paladin-llm | Commissary` row to `MIGRATION.md` §9.2 after this plan returned. The plan's EDGE(PRIM-05/empty) rule (zero fired lints → zero rows) was applied faithfully by the executor, but it conflicts with CONTEXT.md D-15 (which lists that row unconditionally) and PRD R6 / ROADMAP success criterion 5 (the constructor break must be documented in §9.2 as downstream migration guidance). The row's Deliberate-breaking cell starts with `N/A —`, so the CI row-level set-equality gate still sees exactly the two `Y` rows mirrored by the two new allowlist entries; the register note and the CHANGELOG parenthetical that said no row existed were reworded to match. No code changed; the lint-discovery findings in Task 1 stand.
+
 ## Self-Check: PASSED
 
 All files listed under `key-files.modified` in the frontmatter are confirmed present and modified

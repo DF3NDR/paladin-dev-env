@@ -108,8 +108,8 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   shared `WindowSource`. Six pre-refactor equivalence fixtures, committed green before either
   consumer was rewired, prove neither Commissary's resolved windows nor HistoryTrimmer's trims
   changed. See [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
-  (no register row exists for this break — every discovery run recorded zero fired
-  `cargo semver-checks` lints for it; see that section's note).
+  (the `paladin-llm | Commissary` row is marked `N/A` with no allowlist mirror — every
+  discovery run recorded zero fired `cargo semver-checks` lints for it; see that section's note).
 
 ### Added
 

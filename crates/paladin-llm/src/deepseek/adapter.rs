@@ -286,30 +286,6 @@ fn detect_empty_completion(content: &str, finish_reason: &FinishReason) -> Optio
     }
 }
 
-/// Annotate an [`LlmError::EmptyCompletion`] with the provider's own reported
-/// `usage` so a caller's error message names `prompt_tokens`,
-/// `completion_tokens`, and `total_tokens` instead of discarding them.
-///
-/// A reasoning model that returns `finish_reason=length` with empty content
-/// is ambiguous between two distinct failure modes: "the prompt itself
-/// consumed the whole context window" and "reasoning genuinely overran the
-/// completion budget on a well-sized prompt". `prompt_tokens` is the number
-/// that distinguishes them — before this function existed, `api_response.usage`
-/// was deserialized and then thrown away on exactly the failure path where it
-/// mattered (`detect_empty_completion` returns its error, at the call site
-/// below, BEFORE the `LlmResponse` carrying `usage` is ever constructed).
-///
-/// Deliberately additive and narrow: every non-`EmptyCompletion` variant
-/// passes through byte-identical (no reconstruction), and this does NOT
-/// change [`detect_empty_completion`]'s own signature — five existing tests
-/// call it with two arguments and are left untouched.
-///
-/// **Known, deliberate limitation.** The reasoning/content token SPLIT stays
-/// unobservable: [`DeepSeekUsage`] does not deserialize
-/// `completion_tokens_details.reasoning_tokens`. Recording `prompt_tokens`
-/// here is a strictly smaller, separately-scoped change — splitting
-/// reasoning from content is a distinct upstream change left for its own
-/// task, not silently implied as solved by this one.
 /// Map a wire-reported [`DeepSeekUsage`] into [`TokenUsage`], applying the
 /// D-20 cache/reasoning sub-count builders only when the payload actually
 /// carried the figure (D-03: an absent figure is `None`, never a fabricated
@@ -329,6 +305,29 @@ fn map_usage(usage: DeepSeekUsage) -> TokenUsage {
     mapped
 }
 
+/// Annotate an [`LlmError::EmptyCompletion`] with the provider's own reported
+/// `usage` so a caller's error message names `prompt_tokens`,
+/// `completion_tokens`, and `total_tokens` instead of discarding them.
+///
+/// A reasoning model that returns `finish_reason=length` with empty content
+/// is ambiguous between two distinct failure modes: "the prompt itself
+/// consumed the whole context window" and "reasoning genuinely overran the
+/// completion budget on a well-sized prompt". `prompt_tokens` is the number
+/// that distinguishes them — before this function existed, `api_response.usage`
+/// was deserialized and then thrown away on exactly the failure path where it
+/// mattered (`detect_empty_completion` returns its error, at the call site
+/// below, BEFORE the `LlmResponse` carrying `usage` is ever constructed).
+///
+/// Deliberately additive and narrow: every non-`EmptyCompletion` variant
+/// passes through byte-identical (no reconstruction), and this does NOT
+/// change [`detect_empty_completion`]'s own signature — five existing tests
+/// call it with two arguments and are left untouched.
+///
+/// Recording `prompt_tokens`/`completion_tokens`/`total_tokens` here is a
+/// strictly smaller, separately-scoped change from full [`TokenUsage`]
+/// mapping — see [`map_usage`], which is now responsible for the full
+/// D-20 cache/reasoning sub-count split (including
+/// `completion_tokens_details.reasoning_tokens`).
 fn annotate_with_usage(err: LlmError, usage: &DeepSeekUsage) -> LlmError {
     match err {
         LlmError::EmptyCompletion(msg) => LlmError::EmptyCompletion(format!(

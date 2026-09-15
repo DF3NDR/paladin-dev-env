@@ -756,4 +756,63 @@ mod tests {
         assert_eq!(deltas, vec!["a".to_string(), "b".to_string()]);
         assert_eq!(streaming.call_count(), 1);
     }
+
+    // ── Plan 31-04 (D-19): mock adapter streaming-usage parity ────────────
+    //
+    // `MockLlmAdapter` has no network wire shape to speak -- per its own module doc, it is "an
+    // in-process LLM adapter without real API calls" -- so it cannot meaningfully instantiate
+    // `crate::llm_conformance_suite!`: five of that macro's nine cases
+    // (`stream_error_before_the_first_chunk`, `dedicated_status_mappings`,
+    // `transience_by_value`, `credential_never_appears_in_a_rendered_error`,
+    // `redirect_is_not_followed_with_a_credential_header`) require the adapter to actually issue
+    // an HTTP request that a `mockito` server answers with a specific status, routed through
+    // `crate::http_status::map_http_status` -- exactly the real network path this adapter exists
+    // to avoid. Forcing it to grow one just to satisfy the shared macro would be test theater,
+    // not an audit. D-19's own text anticipates this: "the execution-service parity test runs
+    // offline" -- this dedicated test IS that offline stand-in, asserting the identical three
+    // properties the shared `streaming_usage_equals_non_streaming_usage` case asserts, directly
+    // against the DEFAULT (non-scripted) `generate_stream` path.
+    #[tokio::test]
+    async fn streaming_usage_equals_non_streaming_usage_for_the_default_stream_path() {
+        let usage = TokenUsage::new(37, 29).with_reasoning(11);
+        let adapter = MockLlmAdapter::new()
+            .with_response("Hello world")
+            .with_token_usage_struct(usage);
+
+        let non_streaming = adapter.generate(make_request()).await.unwrap();
+
+        let mut stream = Box::into_pin(adapter.generate_stream(make_request()).await.unwrap());
+        let mut chunks = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            chunks.push(item.unwrap());
+        }
+
+        let finish_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.finish_reason.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        let usage_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.usage.is_some())
+            .map(|(i, _)| i)
+            .collect();
+
+        assert_eq!(
+            usage_indices.len(),
+            1,
+            "exactly one chunk must carry a usage"
+        );
+        assert_eq!(
+            finish_indices, usage_indices,
+            "the finish-reason chunk and the usage chunk must be the SAME chunk"
+        );
+        assert_eq!(
+            chunks[usage_indices[0]].usage,
+            Some(non_streaming.usage),
+            "streamed terminal usage must equal the non-streaming usage field-for-field"
+        );
+    }
 }

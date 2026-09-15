@@ -105,6 +105,45 @@ Paladin supports multiple LLM providers out of the box, allowing you to choose t
 
 ---
 
+### Streamed Usage Support
+
+Every adapter's streaming path is audited (ACCT-03) for whether the terminal chunk of a streamed
+response carries the same token usage the non-streaming path reports. This table covers every
+adapter Paladin ships, not only the three profiled above. Each cell is exactly one of three
+values — the three permitted values below, and no fourth "in-between" value:
+
+| Provider | Streamed usage |
+|----------|-----------------|
+| OpenAI | yes (usage frame) |
+| DeepSeek | yes (usage frame) |
+| xAI Grok | yes (usage frame) |
+| Moonshot Kimi | yes (usage frame) |
+| Alibaba Qwen (DashScope compatible-mode) | yes (usage frame) |
+| Ollama (OpenAI-compat `/v1/chat/completions`) | yes (usage frame) |
+| Anthropic | yes (event accumulation) |
+| Google Gemini | yes (event accumulation) |
+| Generic OpenAI-compatible (`OpenAiCompatibleAdapter`) | server-dependent — `None` when omitted |
+
+**"yes (usage frame)"** — the OpenAI-compatible family (OpenAI itself, DeepSeek, Grok, Kimi, Qwen,
+and Ollama's own OpenAI-compatibility layer) all send `stream_options: {"include_usage": true}`
+and parse the trailing usage frame the provider returns before `[DONE]`. For Ollama specifically,
+this depends on the pinned dev-stack Ollama version having `stream_options` support in its
+OpenAI-compatibility layer — Ollama's own documentation lists it as supported, so this is a
+version caveat, not a known gap.
+
+**"yes (event accumulation)"** — Anthropic and Gemini have no `stream_options`-style opt-in and no
+single trailing usage frame; each adapter accumulates usage across the event stream itself
+(Anthropic's `message_start`/`message_delta` events; Gemini's cumulative per-frame
+`usageMetadata`) and attaches the final figure to the terminal chunk.
+
+**The generic preset's own cell** — `OpenAiCompatibleAdapter` is configured against an arbitrary,
+operator-chosen base URL, so it cannot know ahead of time whether that third-party or self-hosted
+server implements `stream_options` at all. When the server ignores it, no usage frame ever
+arrives, and the terminal chunk correctly reports `usage: None` rather than a fabricated or
+estimated figure — see the adapter's own rustdoc for the full rationale.
+
+---
+
 ## Configuration Guide
 
 ### Environment Variables

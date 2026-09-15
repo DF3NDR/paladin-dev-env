@@ -586,10 +586,13 @@ mod tests {
             }
 
             fn stream_body() -> String {
+                // D-19: the trailing empty-`choices` usage frame carries the SAME figures as
+                // `success_body()` above -- the shared parity case asserts equality.
                 concat!(
                     "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n",
                     "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"lo \"},\"finish_reason\":null}]}\n\n",
                     "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"world\"},\"finish_reason\":\"stop\"}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\n",
                     "data: [DONE]\n\n",
                 )
                 .to_string()

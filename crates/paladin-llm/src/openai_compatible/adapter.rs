@@ -510,6 +510,23 @@ const OPENAI_COMPATIBLE_PROVIDER: &str = "openai-compatible";
 ///
 /// Every method delegates to an owned [`CompatEngine`] (D-05) — this struct
 /// carries no protocol logic of its own.
+///
+/// **Streamed usage is server-dependent (D-16, ACCT-03) — the one documented
+/// exception to this crate's terminal-chunk usage contract.** [`CompatEngine`]
+/// sends `stream_options: {"include_usage": true}` on every streaming
+/// request, exactly like every other `CompatEngine`-based preset. Every
+/// vendor this crate names a dedicated adapter for (OpenAI itself, DeepSeek,
+/// xAI Grok, Moonshot Kimi, Alibaba DashScope/Qwen, and Ollama's own
+/// OpenAI-compatibility layer) documents honoring that field. But this
+/// adapter is configured against an arbitrary, operator-chosen base URL — a
+/// third-party or self-hosted server this crate has never seen — and it
+/// cannot know ahead of time whether that server implements
+/// `stream_options` at all. If the server silently ignores it, no usage
+/// frame ever arrives on the wire, and the terminal `StreamingResponse`
+/// correctly carries `usage: None` rather than a fabricated or estimated
+/// figure (D-03/D-17). See the "Streamed usage" column of
+/// `docs/src/appendix/provider-expansion.md` for the same statement in the
+/// operator-facing docs.
 pub struct OpenAiCompatibleAdapter {
     engine: CompatEngine,
 }
@@ -1307,10 +1324,18 @@ mod tests {
             }
 
             fn stream_body() -> String {
+                // D-19: the trailing empty-`choices` usage frame carries the SAME figures as
+                // `success_body()` above -- the shared parity case asserts equality. This
+                // fixture proves the code path correctly attaches usage WHEN a server sends
+                // the frame; a server that ignores `stream_options` and never sends one is the
+                // documented D-16 exception (see this adapter's own rustdoc and
+                // `docs/src/appendix/provider-expansion.md`), not something this shared fixture
+                // exercises.
                 concat!(
                     "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n",
                     "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"lo \"},\"finish_reason\":null}]}\n\n",
                     "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"world\"},\"finish_reason\":\"stop\"}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\n",
                     "data: [DONE]\n\n",
                 )
                 .to_string()

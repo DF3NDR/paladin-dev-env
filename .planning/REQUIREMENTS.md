@@ -412,11 +412,11 @@ legacy `TokenCounter`/`TokenCounterFactory` re-exported from `paladin-memory` `g
 `prelude.rs` and the facade `src/infrastructure/adapters/garrison/mod.rs`; `HistoryTrimmer::resolve_limit`
 at `src/application/services/paladin/middleware/history.rs`.
 
-- [ ] **PRIM-01**: `TokenCounterPort` has `fn is_exact(&self) -> bool` defaulting to `false`; the
+- [x] **PRIM-01**: `TokenCounterPort` has `fn is_exact(&self) -> bool` defaulting to `false`; the
   tiktoken-backed counter returns `true`, the heuristic returns `false`, each proven by a test
   (PRD R1; D-5)
 
-- [ ] **PRIM-02**: `Commissary::new` drops the `is_exact_counter: bool` argument and reads
+- [x] **PRIM-02**: `Commissary::new` drops the `is_exact_counter: bool` argument and reads
   exactness from the port — no forwarding constructor — and every in-tree call site compiles
   against the new signature (PRD R2; D-5)
 

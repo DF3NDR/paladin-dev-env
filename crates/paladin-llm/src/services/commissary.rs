@@ -30,13 +30,12 @@
 //! policy crosses into this crate.
 //!
 //! **Honesty clause.** Not every model has an exact tokenizer available offline
-//! (`claude-*`, `deepseek-*`). [`TokenCounterPort::count`] is infallible and carries no
-//! built-in exactness signal (unlike the removed, fallible `TokenCounter::is_exact`), so
-//! the caller supplies `is_exact_counter` explicitly at construction — it already knows
-//! which concrete counter it injected (e.g. `HeuristicTokenCounter` → `false`,
-//! `TiktokenCounter` → `true`). That flag is threaded straight into
-//! [`Stockpile::exact_tally`] so a caller reading a `Commissary`-produced stockpile can
-//! tell an exact tally from an estimate and budget its own margin accordingly.
+//! (`claude-*`, `deepseek-*`). Exactness is declared by the injected
+//! [`TokenCounterPort`] itself, through [`TokenCounterPort::is_exact`] — one source of
+//! truth, with no cached duplicate on `Commissary`. `Commissary` reads
+//! `self.counter.is_exact()` live where [`Stockpile::exact_tally`] is set, so a caller
+//! reading a `Commissary`-produced stockpile can always tell an exact tally from a
+//! deliberately over-counting estimate and budget its own margin accordingly.
 
 use std::sync::Arc;
 
@@ -205,11 +204,10 @@ pub struct Stockpile {
     /// The token allowance this stockpile was dispensed against
     /// ([`Commissary::allotted_tokens`] at the time of dispensing).
     pub allotted_tokens: u32,
-    /// Threaded from the `is_exact_counter` argument supplied at
-    /// [`Commissary::new`]/[`Commissary::from_port`] construction time: `true` if
-    /// `prompt_tokens` is an exact tally, `false` if it is a deliberately over-counting
-    /// estimate. A caller treating an estimate as exact would be over-trusting the
-    /// guard — this field is how it avoids that mistake.
+    /// Read live from the injected [`TokenCounterPort::is_exact`] where this
+    /// `Stockpile` is built: `true` if `prompt_tokens` is an exact tally, `false` if it
+    /// is a deliberately over-counting estimate. A caller treating an estimate as exact
+    /// would be over-trusting the guard — this field is how it avoids that mistake.
     pub exact_tally: bool,
 }
 
@@ -302,7 +300,6 @@ pub struct Commissary {
     capabilities: ProviderCapabilities,
     provider: String,
     config: CommissaryPlan,
-    is_exact_counter: bool,
 }
 
 impl std::fmt::Debug for Commissary {
@@ -311,7 +308,8 @@ impl std::fmt::Debug for Commissary {
             .field("provider", &self.provider)
             .field("capabilities", &self.capabilities)
             .field("config", &self.config)
-            .field("is_exact_counter", &self.is_exact_counter)
+            .field("counter", &self.counter.name())
+            .field("is_exact", &self.counter.is_exact())
             .finish()
     }
 }
@@ -320,11 +318,9 @@ impl Commissary {
     /// Constructs a `Commissary` for `provider` from an already-obtained
     /// [`ProviderCapabilities`] and [`TokenCounterPort`].
     ///
-    /// `is_exact_counter` is caller-supplied because the new, infallible
-    /// [`TokenCounterPort`] contract carries no built-in exactness signal (unlike the
-    /// removed, fallible `TokenCounter::is_exact`) — the caller already knows which
-    /// concrete counter it is injecting (e.g. `HeuristicTokenCounter` → `false`,
-    /// `TiktokenCounter` → `true`).
+    /// Exactness is not a caller-supplied argument: [`Stockpile::exact_tally`] is read
+    /// live from `counter.is_exact()` wherever a stockpile is built, so there is exactly
+    /// one source of truth for whether `counter` produces exact or approximate tallies.
     ///
     /// # Errors
     ///
@@ -339,7 +335,6 @@ impl Commissary {
         provider: impl Into<String>,
         capabilities: ProviderCapabilities,
         counter: Arc<dyn TokenCounterPort>,
-        is_exact_counter: bool,
         config: CommissaryPlan,
     ) -> Result<Self, CommissaryError> {
         let provider = provider.into();
@@ -375,7 +370,6 @@ impl Commissary {
             capabilities,
             provider,
             config,
-            is_exact_counter,
         })
     }
 
@@ -389,14 +383,12 @@ impl Commissary {
     pub fn from_port(
         llm: &dyn LlmPort,
         counter: Arc<dyn TokenCounterPort>,
-        is_exact_counter: bool,
         config: CommissaryPlan,
     ) -> Result<Self, CommissaryError> {
         Self::new(
             llm.get_provider_name().to_string(),
             llm.get_capabilities(),
             counter,
-            is_exact_counter,
             config,
         )
     }
@@ -439,8 +431,8 @@ impl Commissary {
     /// 6. Each retained item is truncated to its final share with a char-boundary-safe
     ///    walk, with the truncation marker appended when a cut was needed.
     /// 7. The final `fixed + rendered` text is tallied through the configured
-    ///    [`TokenCounterPort`] for `prompt_tokens`; `is_exact_counter` (supplied at
-    ///    construction) is carried into `exact_tally`.
+    ///    [`TokenCounterPort`] for `prompt_tokens`; `exact_tally` is read live from
+    ///    `counter.is_exact()`.
     /// 8. The stockpile is returned with `shed` populated in shed order.
     ///
     /// # Errors
@@ -544,7 +536,7 @@ impl Commissary {
             shed,
             prompt_tokens,
             allotted_tokens,
-            exact_tally: self.is_exact_counter,
+            exact_tally: self.counter.is_exact(),
         })
     }
 
@@ -604,8 +596,21 @@ mod tests {
     /// A deterministic, infallible stand-in [`TokenCounterPort`] for these tests: the
     /// same `chars() / 4` approximation [`HeuristicTokenCounter`] uses, reimplemented
     /// locally so this module's tests do not need a `paladin-memory` dev-dependency.
+    /// Exactness is configurable via the `exact` field so tests can exercise both
+    /// directions of [`Stockpile::exact_tally`] without a constructor argument on
+    /// `Commissary` itself; the default (`false`) keeps every existing helper
+    /// unchanged.
     #[derive(Debug, Default, Clone, Copy)]
-    struct MockCounter;
+    struct MockCounter {
+        exact: bool,
+    }
+
+    impl MockCounter {
+        /// A `MockCounter` that reports exact tokenisation.
+        fn exact() -> Self {
+            Self { exact: true }
+        }
+    }
 
     impl TokenCounterPort for MockCounter {
         fn count(&self, text: &str, _model: &str) -> u32 {
@@ -615,10 +620,18 @@ mod tests {
         fn name(&self) -> &str {
             "mock"
         }
+
+        fn is_exact(&self) -> bool {
+            self.exact
+        }
     }
 
     fn counter() -> Arc<dyn TokenCounterPort> {
-        Arc::new(MockCounter)
+        Arc::new(MockCounter::default())
+    }
+
+    fn exact_counter() -> Arc<dyn TokenCounterPort> {
+        Arc::new(MockCounter::exact())
     }
 
     fn capabilities_with_window(window: Option<u32>) -> ProviderCapabilities {
@@ -633,7 +646,6 @@ mod tests {
             "deepseek",
             capabilities_with_window(Some(window)),
             counter(),
-            false,
             config,
         )
         .unwrap()
@@ -807,7 +819,6 @@ mod tests {
             "mystery-provider",
             capabilities_with_window(None),
             counter(),
-            false,
             CommissaryPlan::default(),
         );
 
@@ -827,7 +838,6 @@ mod tests {
             "mystery-provider",
             capabilities_with_window(None),
             counter(),
-            false,
             config,
         )
         .unwrap();
@@ -845,7 +855,6 @@ mod tests {
             "deepseek",
             capabilities_with_window(Some(100)),
             counter(),
-            false,
             config,
         );
 
@@ -868,7 +877,6 @@ mod tests {
             "deepseek",
             capabilities_with_window(Some(10_000)),
             counter(),
-            false,
             config,
         );
 
@@ -886,7 +894,6 @@ mod tests {
             "deepseek",
             capabilities_with_window(Some(10_000)),
             counter(),
-            false,
             config,
         );
 
@@ -949,29 +956,32 @@ mod tests {
     }
 
     #[test]
-    fn exact_tally_true_is_threaded_from_the_constructor_argument() {
+    fn exact_tally_true_is_read_from_an_exact_injected_port() {
         let commissary = Commissary::new(
             "deepseek",
             capabilities_with_window(Some(10_000)),
-            counter(),
-            /* is_exact_counter */ true,
+            exact_counter(),
             CommissaryPlan::default(),
         )
         .unwrap();
         let consignment = Consignment::new();
 
-        let stockpile = commissary.dispense("fixed material", &consignment).unwrap();
+        let first = commissary.dispense("fixed material", &consignment).unwrap();
+        let second = commissary.dispense("fixed material", &consignment).unwrap();
 
-        assert!(stockpile.exact_tally);
+        assert!(first.exact_tally);
+        assert_eq!(
+            first.exact_tally, second.exact_tally,
+            "exact_tally does not depend on dispense call order"
+        );
     }
 
     #[test]
-    fn exact_tally_false_is_threaded_from_the_constructor_argument() {
+    fn exact_tally_false_is_read_from_an_approximate_injected_port() {
         let commissary = Commissary::new(
             "deepseek",
             capabilities_with_window(Some(10_000)),
             counter(),
-            /* is_exact_counter */ false,
             CommissaryPlan::default(),
         )
         .unwrap();
@@ -989,14 +999,12 @@ mod tests {
 
         let mock_adapter = MockLlmAdapter::new();
         let mock_commissary =
-            Commissary::from_port(&mock_adapter, counter(), false, CommissaryPlan::default())
-                .unwrap();
+            Commissary::from_port(&mock_adapter, counter(), CommissaryPlan::default()).unwrap();
 
         let big_commissary = Commissary::new(
             "big-provider",
             capabilities_with_window(Some(64_000)),
             counter(),
-            false,
             CommissaryPlan::default(),
         )
         .unwrap();

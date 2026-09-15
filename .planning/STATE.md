@@ -5,8 +5,8 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 32
 current_phase_name: Unified Token Primitives
 status: planning
-stopped_at: Phase 31 context gathered
-last_updated: "2026-09-15T09:16:50.799Z"
+stopped_at: "Phase 31 complete (7/7 plans, verification passed 5/5, code review CR-01/WR-01 fixed) — next: /gsd-secure-phase 31, then /gsd-discuss-phase 32"
+last_updated: "2026-09-15T09:23:19.891Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 31 complete, transitioned to Phase 32
 progress:
@@ -948,14 +948,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 31 context gathered
+**Stopped at:** Phase 31 complete (7/7 plans, verification passed 5/5, code review CR-01/WR-01 fixed) — next: /gsd-secure-phase 31, then /gsd-discuss-phase 32
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-14T23:21:55.776Z
-Resume file: .planning/phases/31-lossless-token-accounting/31-CONTEXT.md
+Last session: 2026-09-15T09:23:19.799Z
+Resume file: .planning/phases/31-lossless-token-accounting/31-VERIFICATION.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

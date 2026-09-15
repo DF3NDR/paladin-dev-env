@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 31
 current_phase_name: Lossless Token Accounting
-status: planning
+status: executing
 stopped_at: Phase 31 context gathered
-last_updated: "2026-09-14T23:21:55.874Z"
+last_updated: "2026-09-15T00:29:24.427Z"
 last_activity: 2026-09-14
 last_activity_desc: Phase 30 complete, transitioned to Phase 31
 progress:
   total_phases: 13
   completed_phases: 10
-  total_plans: 140
+  total_plans: 147
   completed_plans: 140
 ---
 
@@ -55,7 +55,7 @@ names. See MILESTONES.md.
 
 Phase: 31 — Lossless Token Accounting
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-14 — Phase 30 complete, transitioned to Phase 31
 Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 

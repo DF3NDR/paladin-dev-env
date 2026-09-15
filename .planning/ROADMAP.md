@@ -811,13 +811,29 @@ Plans:
 **Plans**: 7 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 31-01-PLAN.md — `TokenUsage` gains the three optional sub-counts, saturating `Add`/`AddAssign`/`Sum` and builders; every in-tree literal migrates (ACCT-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 31-02-PLAN.md — the carrier break: `PaladinResult`/`NodeExecutionRecord`/`NodeFinished`/`RunFinished` carry a full `TokenUsage`, the total-only constructor is deleted, real per-Paladin splits (ACCT-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 31-03-PLAN.md — streaming terminal-chunk usage contract on the port plus `CompatEngine`/OpenAI/DeepSeek, and the no-estimation fallback (ACCT-03)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 31-04-PLAN.md — Anthropic and Gemini streaming usage, the shared parity conformance case, and the documented provider exception (ACCT-03)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 31-05-PLAN.md — JSON and Markdown herald breakdown, CLI split rendering, and the mdBook/rustdoc sweep (ACCT-04)
 - [ ] 31-06-PLAN.md — HTTP edge: `TokenUsageResponse`, `ExecuteResponse.usage`, inspector `CompletedRow.usage`, regenerated `openapi.json` (ACCT-02, ACCT-05)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 31-07-PLAN.md — `MIGRATION.md` §9.2 rows, empirically-derived semver allowlist entries, `CHANGELOG.md` `[0.10.0]`, and the phase gate evidence (ACCT-05)
 
 ### Phase 32: Unified Token Primitives

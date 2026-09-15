@@ -6,9 +6,9 @@ current_phase: 32
 current_phase_name: Unified Token Primitives
 status: executing
 stopped_at: "Phase 32 planned — 5 plans in 4 waves, checker passed; next: /gsd-execute-phase 32"
-last_updated: "2026-09-15T15:07:38.693Z"
+last_updated: "2026-09-15T15:09:20.630Z"
 last_activity: 2026-09-15
-last_activity_desc: Phase 31 UAT complete (38/38 passed); Phase 32 ready to plan
+last_activity_desc: Phase 32 execution started
 progress:
   total_phases: 13
   completed_phases: 11
@@ -53,10 +53,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 32 — Unified Token Primitives
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-15 — Phase 31 UAT complete (38/38 passed); Phase 32 ready to plan
+Phase: 32 (Unified Token Primitives) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 32
+Last activity: 2026-09-15 — Phase 32 execution started
 Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics

@@ -176,3 +176,12 @@ _Note: Task 1's commit also narrowed the two paladin-memory-internal re-export s
 ---
 *Phase: 32-unified-token-primitives*
 *Completed: 2026-09-15*
+
+## Self-Check: PASSED
+
+Supplied by the execute-phase orchestrator's post-wave spot-check (the executor omitted the
+section): all seven `key-files.modified` paths exist on the merged tree at `62264f05`; the three
+task commits (`99f13386`, `7e18cf07`, `6266ad6c`) are present on `feature/phase-30`; the D-12 exit
+grep (`grep -rnE '\bTokenCounterFactory\b|garrison::TokenCounter\b|is_exact_counter' crates src
+docs/src examples benches tests`) returns nothing; the post-wave `git hook run pre-commit`
+(fmt + workspace clippy `-D warnings`) passed.

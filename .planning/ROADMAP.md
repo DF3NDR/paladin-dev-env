@@ -861,8 +861,8 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 32-02-PLAN.md — the pre-resolver equivalence snapshot committed green, then `paladin_llm::window`: one precedence walk with an explicit fallback-policy enum, a labelled source enum and four precedence tests (PRIM-04)
-- [ ] 32-03-PLAN.md — legacy `garrison::TokenCounter`/`TokenCounterFactory` deleted outright, the tiktoken counting path inlined into the port impl, four re-export sites narrowed and the doc sweep with its exit grep (PRIM-03)
+- [x] 32-02-PLAN.md — the pre-resolver equivalence snapshot committed green, then `paladin_llm::window`: one precedence walk with an explicit fallback-policy enum, a labelled source enum and four precedence tests (PRIM-04)
+- [x] 32-03-PLAN.md — legacy `garrison::TokenCounter`/`TokenCounterFactory` deleted outright, the tiktoken counting path inlined into the port impl, four re-export sites narrowed and the doc sweep with its exit grep (PRIM-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

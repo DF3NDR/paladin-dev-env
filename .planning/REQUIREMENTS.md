@@ -425,7 +425,7 @@ at `src/application/services/paladin/middleware/history.rs`.
   if one internal caller genuinely cannot migrate it is `#[deprecated]` with the blocking reason
   recorded in the phase context and removal assigned to Phase 33 (PRD R3; D-5)
 
-- [ ] **PRIM-04**: A shared resolver in `paladin-llm` owns the precedence config table →
+- [x] **PRIM-04**: A shared resolver in `paladin-llm` owns the precedence config table →
   provider capabilities → default with an explicit strict mode that errors rather than defaults
   when the window is unknown; both `HistoryTrimmer` and `Commissary` consume it; precedence tests
   cover all four outcomes, and equivalence snapshots prove `Commissary` resolves the same windows

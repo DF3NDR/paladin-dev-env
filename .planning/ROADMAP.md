@@ -866,7 +866,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 32-04-PLAN.md — both consumers call the shared resolver: `Commissary::new` under the strict policy with an absent table, `HistoryTrimmer::resolve_limit` under the lenient policy, the facade's duplicate source enum deleted, equivalence fixtures green and unedited (PRIM-04)
+- [x] 32-04-PLAN.md — both consumers call the shared resolver: `Commissary::new` under the strict policy with an absent table, `HistoryTrimmer::resolve_limit` under the lenient policy, the facade's duplicate source enum deleted, equivalence fixtures green and unedited (PRIM-04)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

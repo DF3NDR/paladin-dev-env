@@ -4,9 +4,10 @@ slug: lossless-token-accounting
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
 # audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-09-14
+updated: 2026-09-15
 ---
 
 # Phase 31 — Validation Strategy
@@ -42,15 +43,28 @@ created: 2026-09-14
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 31-01-01 | 01 | 1 | ACCT-01 | T-31-01 / — | N/A | unit | `cargo test -p paladin-core --lib token_usage` | ✅ (new cases in existing module) | ⬜ pending |
-| 31-0X-XX | — | — | ACCT-02 | — | N/A | integration | `cargo test -p paladin-battalion --lib engine` + `formation_service` + `phalanx_service` (D-30 round-trip + split regression) | ✅ harness exists (`RecordingPaladinPort`) | ⬜ pending |
-| 31-0X-XX | — | — | ACCT-03 | — | Response bodies redacted before truncation in any new stream-parse error path | integration (mockito) | `cargo test -p paladin-llm streaming_usage_equals_non_streaming_usage` (new `llm_conformance_suite!` case, CASE_COUNT 8→9) + `cargo test -p paladin-ai --lib paladin_execution_service` | ✅ harness exists (`conformance.rs`) | ⬜ pending |
-| 31-0X-XX | — | — | ACCT-04 | — | N/A | unit | `cargo test -p paladin-herald --lib json_herald` + `markdown_herald` | ✅ | ⬜ pending |
-| 31-0X-XX | — | — | ACCT-05 | — | No credential-shaped literal in fixtures or docs | CI + local | `cargo semver-checks check-release --package <pkg> --default-features --baseline-version 0.9.0` for `paladin-ai-core`, `paladin-ports`, `paladin-web`; the `ci.yml` allowlist awk comparison run locally; `make openapi` then `cargo test -p paladin-web --lib openapi`; `cargo llvm-cov --workspace --fail-under-lines 82` | ✅ jobs/targets exist | ⬜ pending |
+| 31-01-00 | 01 | 1 | ACCT-01 | — | N/A | checkpoint:decision | N/A — blocking human confirmation of the one-way wire/API shape (D-01/D-02/D-07/D-13/D-24); exempt from the automated-verify rule | N/A | ⬜ pending |
+| 31-01-01 | 01 | 1 | ACCT-01 | T-31-01 / T-31-02 / T-31-03 | Saturating arithmetic cannot wrap a hostile figure; no credential-shaped literal in the new doc examples | unit (tracer, TDD) | `cargo test -p paladin-ai-core --lib token_usage && cargo test -p paladin-ai-core --doc token_usage` | ✅ (new cases in existing module) | ⬜ pending |
+| 31-01-02 | 01 | 1 | ACCT-01 | T-31-02 | No fabricated `Some(0)` introduced while migrating ~96 literals | workspace build + suite | `cargo check --workspace --all-targets --all-features && cargo test --workspace --all-features && cargo fmt --check && cargo clippy --workspace --all-targets --all-features -- -D warnings` | ✅ | ⬜ pending |
+| 31-02-01 | 02 | 2 | ACCT-02 | T-31-04 / T-31-05 | Poisoned-mutex recovery instead of a panicking `expect` in the run-total accumulator | integration (tracer, TDD) | `cargo test -p paladin-ai-core --lib platform::container && cargo test -p paladin-battalion --lib engine && cargo test -p paladin-battalion --lib formation_service && cargo test -p paladin-battalion --lib phalanx_service` | ✅ harness exists (`RecordingPaladinPort`) | ⬜ pending |
+| 31-02-02 | 02 | 2 | ACCT-02 | T-31-06 | SSE payload gains numeric counts only; no new principal or content exposed | workspace build + suite | `cargo check --workspace --all-targets --all-features && cargo test --workspace --all-features && cargo fmt --check && cargo clippy --workspace --all-targets --all-features -- -D warnings` | ✅ | ⬜ pending |
+| 31-02-03 | 02 | 2 | ACCT-02 | T-31-05 / T-31-07 | No legacy-shape deserializer; pre-phase rows report a default usage | unit (TDD) | `cargo test -p paladin-ai-core --lib token_usage && cargo test -p paladin-ai-core --lib execution_result && cargo test -p paladin-ai-core --lib waypoint && cargo test --workspace --all-features` | ✅ | ⬜ pending |
+| 31-03-01 | 03 | 3 | ACCT-03 | T-31-08 / T-31-09 | Response bodies still redacted BEFORE truncation in every stream-parse error path; `diagnostic_excerpt` call count unchanged | integration, mockito (tracer, TDD) | `cargo test -p paladin-llm --lib compat && cargo test -p paladin-llm --lib openai_compatible && cargo test -p paladin-ports --lib llm_port && cargo test -p paladin-ports --doc` | ✅ harness exists (mockito) | ⬜ pending |
+| 31-03-02 | 03 | 3 | ACCT-03 | T-31-09 / T-31-12 | No credential-shaped literal in the new provider fixtures | integration, mockito (TDD) | `cargo test -p paladin-llm --lib openai && cargo test -p paladin-llm --lib deepseek` | ✅ | ⬜ pending |
+| 31-03-03 | 03 | 3 | ACCT-03 | T-31-10 / T-31-11 | The absent-usage `warn!` names the provider only; no estimate substituted for a billed count | integration (TDD) | `cargo test -p paladin-ai --lib paladin_execution_service && cargo test --workspace --all-features && cargo clippy --workspace --all-targets --all-features -- -D warnings` | ✅ mock adapter exists | ⬜ pending |
+| 31-04-01 | 04 | 4 | ACCT-03 | T-31-13 / T-31-16 | Redact-before-truncate intact in the Anthropic adapter; new non-zero-cache fixture carries no key-shaped literal | integration, mockito (tracer, TDD) | `cargo test -p paladin-llm --lib anthropic` | ✅ captured fixtures exist | ⬜ pending |
+| 31-04-02 | 04 | 4 | ACCT-03 | T-31-14 / T-31-15 | No unbounded accumulation across an adversarial event stream | integration, mockito (TDD) | `cargo test -p paladin-llm --lib gemini` | ✅ `GeminiFixture` exists | ⬜ pending |
+| 31-04-03 | 04 | 4 | ACCT-03 | T-31-13 | Documented exception states what a server-dependent adapter cannot guarantee | integration + docs build (TDD) | `cargo test -p paladin-llm && mdbook build docs/` | ✅ `conformance.rs` + mdBook exist | ⬜ pending |
+| 31-05-01 | 05 | 5 | ACCT-04 | T-31-17 / T-31-19 | Rendered output gains numeric counts only; a coexisting bare total is asserted equal to the object | unit (tracer, TDD) | `cargo test -p paladin-herald --lib json_herald` | ✅ | ⬜ pending |
+| 31-05-02 | 05 | 5 | ACCT-04 | T-31-17 / T-31-18 | Per-Paladin table row count unchanged; only the column count grows | unit (TDD) | `cargo test -p paladin-herald && cargo test -p paladin-ai --lib cli` | ✅ | ⬜ pending |
+| 31-05-03 | 05 | 5 | ACCT-04 | — | N/A | doc build | `cargo test --workspace --doc && mdbook build docs/ && cargo doc --workspace --no-deps` | ✅ | ⬜ pending |
+| 31-06-01 | 06 | 5 | ACCT-02, ACCT-05 | T-31-20 / T-31-21 / T-31-23 | Committed OpenAPI baseline regenerated in the same commit; no `utoipa` dependency crossed into `paladin-core` | integration + baseline (tracer, TDD) | `cargo test -p paladin-web --lib agent_controller && make openapi && cargo test -p paladin-web --lib openapi_matches_committed_baseline && git diff --exit-code crates/paladin-web/openapi.json` | ✅ baseline test + `make openapi` exist | ⬜ pending |
+| 31-06-02 | 06 | 5 | ACCT-02 | T-31-20 / T-31-22 / T-31-23 | No route, handler signature or auth middleware layering changed; `paladin-ports` gains no web dependency | integration (TDD) | `cargo test -p paladin-ports --lib run_inspector_port && cargo test -p paladin-ai --lib run::inspector && cargo test -p paladin-ai --lib run::events && cargo test -p paladin-web && cargo test --workspace --all-features` | ✅ | ⬜ pending |
+| 31-07-01 | 07 | 6 | ACCT-05 | T-31-24 / T-31-25 | Lint ids derived empirically from the tool's output, never guessed | CI tool, local | `cargo semver-checks check-release --package paladin-ai-core --default-features --baseline-version 0.9.0 && cargo semver-checks check-release --package paladin-ports --default-features --baseline-version 0.9.0 && cargo semver-checks check-release --package paladin-web --default-features --baseline-version 0.9.0` | ✅ job exists; ❌ new allowlist rows | ⬜ pending |
+| 31-07-02 | 07 | 6 | ACCT-05 | T-31-24 | Changelog names the two corrected under-reports with the before/after formula | gate + docs build | `node /workspace/.claude/gsd-core/bin/gsd-tools.cjs query check api-coverage.verify-pre .planning/phases/31-lossless-token-accounting && mdbook build docs/` | ✅ `COVERAGE.md` written at plan time | ⬜ pending |
+| 31-07-03 | 07 | 6 | ACCT-05 | T-31-08 / T-31-13 / T-31-26 | Manual credential-handling review of the phase diff recorded as the closing evidence for both high-severity threats | phase gate | `make clean-code && cargo test --workspace --all-features && cargo test --workspace --doc && make security && cargo doc --workspace --no-deps && mdbook build docs/ && cargo llvm-cov --workspace --fail-under-lines 82` | ✅ targets exist | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
-
-*(The planner replaces the `31-0X-XX` placeholder rows with one row per task, carrying each task's real `<verify><automated>` command and threat reference.)*
 
 ---
 
@@ -77,11 +91,11 @@ scaffolding is required — only new test CASES inside existing harnesses:
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 480s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies — 19 of 20 rows carry a real command; the single exception (`31-01-00`) is a `checkpoint:decision`, which has no automated form by definition
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify — the longest gap is one task (`31-01-00`), immediately followed by two verified tasks
+- [x] Wave 0 covers all MISSING references — RESEARCH.md § Wave 0 Gaps records none; every harness this phase needs (`llm_conformance_suite!`, `RecordingPaladinPort`, `MockLlmAdapter::with_token_usage_struct`, mockito, `cargo-semver-checks` 0.50.0, `cargo-llvm-cov`) already exists
+- [x] No watch-mode flags — every command is a single-shot `cargo`/`make`/`mdbook`/`node` invocation
+- [x] Feedback latency < 480s — per-task filters run in ~5-60 s warm and wave-level workspace runs in ~3-8 min. One deliberate exception: `31-07-03` is the phase gate itself and includes `cargo llvm-cov` (~10-20 min); it is the last task of the last wave, so no other task waits on it
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** planner sign-off 2026-09-15 — map filled from the seven plans' `<verify><automated>` blocks; `status` stays `draft` until `/gsd-validate-phase` promotes it

@@ -91,10 +91,13 @@ pub(crate) struct CompatUsage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     /// Some compatible providers omit `total_tokens` from their usage
-    /// object. When absent, the engine computes `prompt_tokens +
-    /// completion_tokens` rather than reporting zero (PROV-02 precision
-    /// edge) — see [`super::engine::CompatEngine`]'s usage-construction
-    /// site.
+    /// object, and even when present it is deliberately unread:
+    /// `TokenUsage::new` recomputes `total_tokens` as `prompt_tokens +
+    /// completion_tokens` (D-02), so the provider's own reported total is
+    /// discarded rather than trusted — see [`super::engine::CompatEngine`]'s
+    /// usage-construction site. Kept on the struct so the deserializer still
+    /// matches the full wire shape for debugging.
+    #[allow(dead_code)]
     #[serde(default)]
     pub total_tokens: Option<u32>,
 }

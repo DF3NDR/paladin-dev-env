@@ -58,11 +58,7 @@ impl LlmPort for MockToolLlm {
                 model: "mock".to_string(),
                 content: "Done".to_string(),
                 finish_reason: FinishReason::Stop,
-                usage: TokenUsage {
-                    prompt_tokens: 5,
-                    completion_tokens: 5,
-                    total_tokens: 10,
-                },
+                usage: TokenUsage::new(5, 5),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
@@ -283,11 +279,7 @@ async fn test_paladin_with_stdio_tool() {
             model: "mock-model".to_string(),
             content: "I'll calculate that for you.".to_string(),
             finish_reason: FinishReason::FunctionCall,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 10,
-                total_tokens: 20,
-            },
+            usage: TokenUsage::new(10, 10),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: Some(FunctionCall {
@@ -307,11 +299,7 @@ async fn test_paladin_with_stdio_tool() {
             model: "mock-model".to_string(),
             content: "The result is 96.".to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 5,
-                total_tokens: 15,
-            },
+            usage: TokenUsage::new(10, 5),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -323,11 +311,7 @@ async fn test_paladin_with_stdio_tool() {
             model: "mock-model".to_string(),
             content: "The result is 96.".to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 5,
-                completion_tokens: 5,
-                total_tokens: 10,
-            },
+            usage: TokenUsage::new(5, 5),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -374,11 +358,7 @@ async fn test_paladin_with_sse_tool() {
             model: "mock-model".to_string(),
             content: "Let me echo that back.".to_string(),
             finish_reason: FinishReason::FunctionCall,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 10,
-                total_tokens: 20,
-            },
+            usage: TokenUsage::new(10, 10),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: Some(FunctionCall {
@@ -396,11 +376,7 @@ async fn test_paladin_with_sse_tool() {
             model: "mock-model".to_string(),
             content: "I echoed your message: Hello, World!".to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 8,
-                total_tokens: 18,
-            },
+            usage: TokenUsage::new(10, 8),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -412,11 +388,7 @@ async fn test_paladin_with_sse_tool() {
             model: "mock-model".to_string(),
             content: "I echoed your message: Hello, World!".to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 5,
-                completion_tokens: 5,
-                total_tokens: 10,
-            },
+            usage: TokenUsage::new(5, 5),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -464,11 +436,7 @@ async fn test_multiple_tool_invocations() {
             model: "mock-model".to_string(),
             content: "Let me calculate the first part.".to_string(),
             finish_reason: FinishReason::FunctionCall,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 10,
-                total_tokens: 20,
-            },
+            usage: TokenUsage::new(10, 10),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: Some(FunctionCall {
@@ -488,11 +456,7 @@ async fn test_multiple_tool_invocations() {
             model: "mock-model".to_string(),
             content: "Now let me multiply the result.".to_string(),
             finish_reason: FinishReason::FunctionCall,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 10,
-                total_tokens: 20,
-            },
+            usage: TokenUsage::new(10, 10),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: Some(FunctionCall {
@@ -513,11 +477,7 @@ async fn test_multiple_tool_invocations() {
             content: "First I added 10 and 5 to get 15, then multiplied by 2 to get 30."
                 .to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 15,
-                total_tokens: 25,
-            },
+            usage: TokenUsage::new(10, 15),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -530,11 +490,7 @@ async fn test_multiple_tool_invocations() {
             content: "First I added 10 and 5 to get 15, then multiplied by 2 to get 30."
                 .to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 5,
-                completion_tokens: 10,
-                total_tokens: 15,
-            },
+            usage: TokenUsage::new(5, 10),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -546,11 +502,7 @@ async fn test_multiple_tool_invocations() {
             content: "First I added 10 and 5 to get 15, then multiplied by 2 to get 30."
                 .to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 5,
-                completion_tokens: 10,
-                total_tokens: 15,
-            },
+            usage: TokenUsage::new(5, 10),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -597,11 +549,7 @@ async fn test_tool_timeout_handling() {
             model: "mock-model".to_string(),
             content: "Let me run that slow operation.".to_string(),
             finish_reason: FinishReason::FunctionCall,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 10,
-                total_tokens: 20,
-            },
+            usage: TokenUsage::new(10, 10),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: Some(FunctionCall {
@@ -619,11 +567,7 @@ async fn test_tool_timeout_handling() {
             model: "mock-model".to_string(),
             content: "The operation completed successfully.".to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 8,
-                total_tokens: 18,
-            },
+            usage: TokenUsage::new(10, 8),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -635,11 +579,7 @@ async fn test_tool_timeout_handling() {
             model: "mock-model".to_string(),
             content: "The operation completed successfully.".to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 5,
-                completion_tokens: 5,
-                total_tokens: 10,
-            },
+            usage: TokenUsage::new(5, 5),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -682,11 +622,7 @@ async fn test_tool_failure_resilience() {
             model: "mock-model".to_string(),
             content: "Let me calculate that.".to_string(),
             finish_reason: FinishReason::FunctionCall,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 10,
-                total_tokens: 20,
-            },
+            usage: TokenUsage::new(10, 10),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: Some(FunctionCall {
@@ -707,11 +643,7 @@ async fn test_tool_failure_resilience() {
             content: "I apologize, I cannot divide by zero. That operation is undefined."
                 .to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 15,
-                total_tokens: 25,
-            },
+            usage: TokenUsage::new(10, 15),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -723,11 +655,7 @@ async fn test_tool_failure_resilience() {
             model: "mock-model".to_string(),
             content: "I apologize, I cannot divide by zero.".to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 5,
-                completion_tokens: 8,
-                total_tokens: 13,
-            },
+            usage: TokenUsage::new(5, 8),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,

@@ -33,11 +33,7 @@ impl LlmPort for MockLlmPort {
             model: request.model,
             content: self.response.clone(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 30,
-                completion_tokens: 80,
-                total_tokens: 110,
-            },
+            usage: TokenUsage::new(30, 80),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,

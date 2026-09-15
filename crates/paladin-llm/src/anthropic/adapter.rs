@@ -300,11 +300,7 @@ impl AnthropicAdapter {
             model: response.model,
             content,
             finish_reason,
-            usage: TokenUsage {
-                prompt_tokens: response.usage.input_tokens,
-                completion_tokens: response.usage.output_tokens,
-                total_tokens: response.usage.input_tokens + response.usage.output_tokens,
-            },
+            usage: TokenUsage::new(response.usage.input_tokens, response.usage.output_tokens),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,

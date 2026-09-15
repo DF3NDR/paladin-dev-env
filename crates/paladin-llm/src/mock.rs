@@ -72,11 +72,7 @@ impl Default for MockState {
             responses: vec![MockEntry::Success("Mock LLM response".to_string())],
             response_index: 0,
             delay: None,
-            token_usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 20,
-                total_tokens: 30,
-            },
+            token_usage: TokenUsage::new(10, 20),
             finish_reason: FinishReason::Stop,
             available_models: vec!["mock-model".to_string()],
             call_count: 0,
@@ -152,18 +148,19 @@ impl MockLlmAdapter {
         self
     }
 
-    /// Configure the token usage returned with each response (prompt, completion, total).
+    /// Configure the token usage returned with each response (prompt, completion).
+    ///
+    /// `total` is accepted for source compatibility with existing call sites
+    /// but is otherwise ignored: `TokenUsage::new` recomputes `total_tokens`
+    /// as `prompt_tokens + completion_tokens` (D-02), so a caller cannot
+    /// configure a mock response with an inconsistent total.
     pub fn with_token_usage(
         self,
         prompt_tokens: u32,
         completion_tokens: u32,
-        total_tokens: u32,
+        _total_tokens: u32,
     ) -> Self {
-        self.state.lock().unwrap().token_usage = TokenUsage {
-            prompt_tokens,
-            completion_tokens,
-            total_tokens,
-        };
+        self.state.lock().unwrap().token_usage = TokenUsage::new(prompt_tokens, completion_tokens);
         self
     }
 
@@ -520,11 +517,7 @@ impl LlmPort for MultiStepMockLlmPort {
             model: request.model.clone(),
             content,
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 20,
-                total_tokens: 30,
-            },
+            usage: TokenUsage::new(10, 20),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,

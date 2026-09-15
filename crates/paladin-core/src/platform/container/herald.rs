@@ -410,11 +410,7 @@ impl StreamChunkBuilder {
 ///     .execution_id(Uuid::new_v4())
 ///     .start_time(Utc::now())
 ///     .model_used("gpt-4".to_string())
-///     .token_usage(TokenUsage {
-///         prompt_tokens: 100,
-///         completion_tokens: 50,
-///         total_tokens: 150,
-///     })
+///     .token_usage(TokenUsage::new(100, 50))
 ///     .build()
 ///     .expect("Valid metadata");
 /// ```
@@ -436,11 +432,7 @@ impl StreamChunkBuilder {
 ///     .start_time(start)
 ///     .end_time(Utc::now())
 ///     .model_used("gpt-4".to_string())
-///     .token_usage(TokenUsage {
-///         prompt_tokens: 250,
-///         completion_tokens: 500,
-///         total_tokens: 750,
-///     })
+///     .token_usage(TokenUsage::new(250, 500))
 ///     .build()
 ///     .unwrap();
 ///
@@ -463,11 +455,7 @@ impl StreamChunkBuilder {
 ///     .end_time(Utc::now())
 ///     .duration_ms(2500)
 ///     .model_used("gpt-4".to_string())
-///     .token_usage(TokenUsage {
-///         prompt_tokens: 1000,
-///         completion_tokens: 2000,
-///         total_tokens: 3000,
-///     })
+///     .token_usage(TokenUsage::new(1000, 2000))
 ///     .cost_estimate(0.045)  // illustrative value; reserved for the Treasurer (Milestone 14 / FUT-08)
 ///     .error_count(2)        // Encountered 2 retryable errors
 ///     .build()
@@ -491,11 +479,7 @@ impl StreamChunkBuilder {
 ///     .execution_id(Uuid::new_v4())
 ///     .start_time(Utc::now())
 ///     .model_used("gpt-4".to_string())
-///     .token_usage(TokenUsage {
-///         prompt_tokens: 150,
-///         completion_tokens: 300,
-///         total_tokens: 450,
-///     })
+///     .token_usage(TokenUsage::new(150, 300))
 ///     .add_metadata("user_id".to_string(), json!("user_123"))
 ///     .add_metadata("request_source".to_string(), json!("api"))
 ///     .add_metadata("cache_hit".to_string(), json!(false))
@@ -780,11 +764,7 @@ mod tests {
             .execution_id(Uuid::new_v4())
             .start_time(Utc::now())
             .model_used("test-model".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 300,
-                completion_tokens: 200,
-                total_tokens: 500,
-            })
+            .token_usage(TokenUsage::new(300, 200))
             .duration_ms(1234)
             .build()
             .unwrap();

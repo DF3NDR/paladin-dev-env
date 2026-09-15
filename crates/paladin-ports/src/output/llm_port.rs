@@ -142,11 +142,7 @@
 //!             model: request.model,
 //!             content: "Response from local LLM".to_string(),
 //!             finish_reason: FinishReason::Stop,
-//!             usage: TokenUsage {
-//!                 prompt_tokens: 10,
-//!                 completion_tokens: 20,
-//!                 total_tokens: 30,
-//!             },
+//!             usage: TokenUsage::new(10, 20),
 //!             created_at: Utc::now(),
 //!             metadata: HashMap::new(),
 //!             function_call: None,
@@ -986,11 +982,7 @@ pub enum FinishReason {
 /// ```rust
 /// use paladin_ports::output::llm_port::TokenUsage;
 ///
-/// let usage = TokenUsage {
-///     prompt_tokens: 150,
-///     completion_tokens: 300,
-///     total_tokens: 450,
-/// };
+/// let usage = TokenUsage::new(150, 300);
 ///
 /// // Calculate cost for GPT-4 (example: $0.03/1K prompt, $0.06/1K completion)
 /// let prompt_cost = (usage.prompt_tokens as f64 / 1000.0) * 0.03;

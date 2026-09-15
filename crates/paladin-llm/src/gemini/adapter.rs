@@ -492,11 +492,7 @@ impl GeminiAdapter {
             model: model.to_string(),
             content,
             finish_reason,
-            usage: TokenUsage {
-                prompt_tokens: usage.prompt_token_count,
-                completion_tokens: usage.candidates_token_count,
-                total_tokens: usage.total_token_count,
-            },
+            usage: TokenUsage::new(usage.prompt_token_count, usage.candidates_token_count),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -1060,6 +1056,11 @@ struct GeminiUsageMetadata {
     prompt_token_count: u32,
     #[serde(default, rename = "candidatesTokenCount")]
     candidates_token_count: u32,
+    // Deliberately unread: `TokenUsage::new` recomputes `total_tokens` as
+    // `prompt_tokens + completion_tokens` (D-02), so the provider's own
+    // reported total is discarded rather than trusted. Kept on the struct so
+    // the deserializer still matches the full wire shape for debugging.
+    #[allow(dead_code)]
     #[serde(default, rename = "totalTokenCount")]
     total_token_count: u32,
 }

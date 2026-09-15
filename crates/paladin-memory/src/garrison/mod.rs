@@ -13,4 +13,4 @@ pub use sqlite_garrison::SqliteGarrison;
 #[cfg(feature = "content-processing")]
 pub mod token_counter;
 #[cfg(feature = "content-processing")]
-pub use token_counter::{TiktokenCounter, TokenCounter, TokenCounterFactory};
+pub use token_counter::TiktokenCounter;

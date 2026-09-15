@@ -84,4 +84,16 @@ mod tests {
     fn name_identifies_the_counter() {
         assert_eq!(HeuristicTokenCounter.name(), "heuristic");
     }
+
+    /// Test 8: `HeuristicTokenCounter` writes no `is_exact` override, so it
+    /// reports `false` through the `TokenCounterPort` trait default -- and
+    /// that answer is unchanged after counting the empty string, proving it
+    /// does not depend on any argument.
+    #[test]
+    fn heuristic_is_exact_reports_false_through_the_trait_default() {
+        let counter = HeuristicTokenCounter;
+        assert!(!counter.is_exact());
+        let _ = counter.count("", "any-model");
+        assert!(!counter.is_exact());
+    }
 }

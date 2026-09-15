@@ -155,6 +155,14 @@ impl TokenCounterPort for TiktokenCounter {
     fn name(&self) -> &str {
         "tiktoken"
     }
+
+    /// Exact for the encoding resolved at [`TiktokenCounter::new`] -- `count`
+    /// delegates to that already-loaded encoding and never re-resolves its
+    /// own `model` argument, so this is never a claim about arbitrary model
+    /// strings passed to `count`.
+    fn is_exact(&self) -> bool {
+        true
+    }
 }
 
 /// Factory for creating token counters by model name.
@@ -377,5 +385,18 @@ mod tests {
         let via_port: &dyn TokenCounterPort = &counter;
         assert_eq!(via_port.name(), "tiktoken");
         assert_ne!(via_port.name(), HeuristicTokenCounter.name());
+    }
+
+    /// Test 8: `TiktokenCounter` reports exact tokenisation unconditionally,
+    /// scoped to the encoding resolved at `new("gpt-4")` -- and that answer
+    /// is unchanged after counting the empty string, proving it does not
+    /// depend on any argument.
+    #[test]
+    fn tiktoken_counter_is_exact() {
+        let counter = TiktokenCounter::new("gpt-4").unwrap();
+        let via_port: &dyn TokenCounterPort = &counter;
+        assert!(via_port.is_exact());
+        let _ = via_port.count("", "gpt-4");
+        assert!(via_port.is_exact());
     }
 }

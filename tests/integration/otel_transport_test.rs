@@ -161,7 +161,7 @@ async fn export_one_fixture_run(sink: &OtelTraceSink) {
             attempt: 1,
             outcome: NodeOutcomeKind::Succeeded,
             duration_ms: 1,
-            token_count: 0,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(0, 0),
             cache_hit: false,
         },
     })
@@ -176,7 +176,7 @@ async fn export_one_fixture_run(sink: &OtelTraceSink) {
         event: TraceEvent::RunFinished {
             status: RunFinishStatus::Completed,
             total_supersteps: 1,
-            total_tokens: 0,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(0, 0),
             duration_ms: 1,
             trace_dropped_total: 0,
         },

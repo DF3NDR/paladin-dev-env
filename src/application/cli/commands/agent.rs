@@ -507,7 +507,7 @@ pub async fn handle_agent_run(args: AgentRunArgs) -> Result<(), CliError> {
             "{} Loops: {}, Tokens: {}",
             "→".cyan().bold(),
             result.loop_count,
-            result.token_count
+            result.usage.total_tokens
         );
         println!(
             "{} Stop reason: {:?}",

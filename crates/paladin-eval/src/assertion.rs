@@ -162,12 +162,12 @@ impl<'a> AssertionContext<'a> {
             TraceEvent::RunFinished {
                 status,
                 total_supersteps,
-                total_tokens,
+                usage,
                 ..
             } => Some(RunFinishedInfo {
                 seq: r.seq,
                 status,
-                total_tokens: *total_tokens,
+                total_tokens: u64::from(usage.total_tokens),
                 total_supersteps: *total_supersteps,
             }),
             _ => None,
@@ -803,6 +803,7 @@ mod tests {
         BattlefieldSchema, CustomDispatchResolver, DispatchRule, FieldSpec, StateDelta,
     };
     use paladin_core::platform::container::parley::ParleyId;
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::waypoint::{NodeId, ThreadId, WaypointId};
 
     fn thread() -> ThreadId {
@@ -846,7 +847,7 @@ mod tests {
                 attempt,
                 outcome,
                 duration_ms: 1,
-                token_count: 1,
+                usage: TokenUsage::new(1, 0),
                 cache_hit: false,
             },
         )
@@ -1311,7 +1312,7 @@ mod tests {
             TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 4,
-                total_tokens: 5,
+                usage: TokenUsage::new(5, 0),
                 duration_ms: 1,
                 trace_dropped_total: 0,
             },

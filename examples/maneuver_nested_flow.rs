@@ -164,7 +164,7 @@ impl PaladinPort for ExamplePaladinPort {
 
         Ok(PaladinResult {
             output,
-            token_count: 150,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(150, 0),
             execution_time_ms: delay,
             loop_count: 1,
             stop_reason: StopReason::Completed,

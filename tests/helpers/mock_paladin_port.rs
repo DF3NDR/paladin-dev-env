@@ -300,7 +300,7 @@ impl PaladinPort for FaultyPaladinPort {
                 "FaultyPaladinPort: {} processed {}",
                 paladin.node.name, input
             ),
-            token_count: 10,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(10, 0),
             execution_time_ms: self.delay_ms,
             loop_count: 1,
             stop_reason: StopReason::Completed,

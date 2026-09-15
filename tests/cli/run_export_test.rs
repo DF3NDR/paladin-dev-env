@@ -21,6 +21,7 @@ use paladin_core::platform::container::assistant::{
 };
 use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
 use paladin_core::platform::container::run::{AssistantRef, Run, RunId};
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::trace::{TraceEvent, TraceRecord};
 use paladin_core::platform::container::waypoint::{
     FrontierSnapshot, GraphFingerprint, NodeExecutionRecord, NodeId, NodeOutcomeKind, ThreadId,
@@ -65,7 +66,7 @@ fn node_record(node_id: &str, attempt: u32, outcome: NodeOutcomeKind) -> NodeExe
         paladin_id: None,
         started_at: Utc::now(),
         duration_ms: 10,
-        token_count: 5,
+        usage: TokenUsage::new(5, 0),
         outcome,
         attempt,
         attempts: Vec::new(),
@@ -214,7 +215,7 @@ async fn run_export_prefers_trace_rows_when_present() {
                 attempt: 1,
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 10,
-                token_count: 5,
+                usage: TokenUsage::new(5, 0),
                 cache_hit: false,
             },
         ),

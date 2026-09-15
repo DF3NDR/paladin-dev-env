@@ -26,7 +26,7 @@ fn test_herald_uses_real_paladin_result_type() {
     // Create a real PaladinResult with all actual fields
     let result = PaladinResult {
         output: "Test output".to_string(),
-        token_count: 150,
+        usage: paladin_ports::output::llm_port::TokenUsage::new(150, 0),
         execution_time_ms: 1250,
         loop_count: 2,
         stop_reason: StopReason::Completed,
@@ -36,7 +36,7 @@ fn test_herald_uses_real_paladin_result_type() {
     // This should compile if Herald uses the real type
     // For now, just verify the type exists and has expected fields
     assert_eq!(result.output, "Test output");
-    assert_eq!(result.token_count, 150);
+    assert_eq!(result.usage.total_tokens, 150);
     assert_eq!(result.execution_time_ms, 1250);
     assert_eq!(result.loop_count, 2);
     assert_eq!(result.stop_reason, StopReason::Completed);
@@ -411,7 +411,7 @@ fn test_herald_pipeline_with_consolidated_types() {
     // Create a real PaladinResult
     let paladin_result = PaladinResult {
         output: "Integration test output".to_string(),
-        token_count: 200,
+        usage: paladin_ports::output::llm_port::TokenUsage::new(200, 0),
         execution_time_ms: 2000,
         loop_count: 3,
         stop_reason: StopReason::Completed,

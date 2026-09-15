@@ -35,7 +35,7 @@ impl PaladinPort for MockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
         Ok(PaladinResult {
             output: format!("Processed: {} by {}", input, paladin.node.name),
-            token_count: 100,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(100, 0),
             execution_time_ms: 10,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -89,7 +89,7 @@ impl PaladinExecutorPort for MockExecutor {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
         Ok(PaladinResult {
             output: format!("{} handled: {input}", paladin.node.name),
-            token_count: 42,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(42, 0),
             execution_time_ms: 5,
             loop_count: 1,
             stop_reason: StopReason::Completed,

@@ -517,7 +517,7 @@ mod tests {
         let result = service.execute(&paladin, "hi").await.unwrap();
 
         assert_eq!(llm.call_count(), 3);
-        assert_eq!(result.token_count, 300);
+        assert_eq!(result.usage.total_tokens, 300);
         assert_eq!(result.stop_reason, StopReason::TokenBudget);
         assert!(result.stop_reason.is_successful());
         assert!(result.output.contains(TOKEN_BUDGET_NOTICE));

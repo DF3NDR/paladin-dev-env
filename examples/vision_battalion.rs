@@ -145,7 +145,7 @@ async fn demonstrate_formation(
         .await?;
 
     println!("│ Output: {}", stage_1_result.output.trim());
-    println!("│ Tokens: {}", stage_1_result.token_count);
+    println!("│ Tokens: {}", stage_1_result.usage.total_tokens);
     println!("└{}", "─".repeat(79));
     println!();
 
@@ -162,7 +162,7 @@ async fn demonstrate_formation(
         "│ Output:\n│ {}",
         stage_2_result.output.replace('\n', "\n│ ")
     );
-    println!("│ Tokens: {}", stage_2_result.token_count);
+    println!("│ Tokens: {}", stage_2_result.usage.total_tokens);
     println!("└{}", "─".repeat(79));
     println!();
 
@@ -179,7 +179,7 @@ async fn demonstrate_formation(
         "│ Output:\n│ {}",
         stage_3_result.output.replace('\n', "\n│ ")
     );
-    println!("│ Tokens: {}", stage_3_result.token_count);
+    println!("│ Tokens: {}", stage_3_result.usage.total_tokens);
     println!("└{}", "─".repeat(79));
     println!();
 
@@ -191,7 +191,9 @@ async fn demonstrate_formation(
     println!("Total Execution Time: {:.2}s", duration.as_secs_f64());
     println!(
         "Total Tokens: {}",
-        stage_1_result.token_count + stage_2_result.token_count + stage_3_result.token_count
+        stage_1_result.usage.total_tokens
+            + stage_2_result.usage.total_tokens
+            + stage_3_result.usage.total_tokens
     );
     println!("Pipeline Stages: 3 (sequential)");
     println!("Final Output Length: {} chars", stage_3_result.output.len());
@@ -282,11 +284,11 @@ async fn demonstrate_phalanx(
         match task.await {
             Ok((name, Ok(result))) => {
                 success_count += 1;
-                total_tokens += result.token_count;
+                total_tokens += result.usage.total_tokens;
 
                 println!("┌─ {} ─┐", name);
                 println!("│ Status: ✅ Success");
-                println!("│ Tokens: {}", result.token_count);
+                println!("│ Tokens: {}", result.usage.total_tokens);
                 println!("│ Time: {:.2}s", result.execution_time_ms as f64 / 1000.0);
                 println!("│");
                 println!("│ Analysis:");

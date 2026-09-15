@@ -47,7 +47,7 @@ impl PaladinPort for GroveMockPaladinPort {
 
         Ok(PaladinResult {
             output: format!("[{}]: Handled task: {}", paladin.node.name, input),
-            token_count: 100,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(100, 0),
             execution_time_ms: 10,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -675,7 +675,7 @@ async fn test_grove_error_handling() {
 
             Ok(PaladinResult {
                 output: format!("[{}]: Success", paladin.node.name),
-                token_count: 50,
+                usage: paladin_ports::output::llm_port::TokenUsage::new(50, 0),
                 execution_time_ms: 10,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,

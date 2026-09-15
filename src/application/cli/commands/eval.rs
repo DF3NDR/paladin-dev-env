@@ -453,9 +453,12 @@ fn record_fingerprint(record: &TraceRecord) -> String {
         TraceEvent::RunFinished {
             status,
             total_supersteps,
-            total_tokens,
+            usage,
             ..
-        } => format!("run_finished:{status:?}:{total_supersteps}:{total_tokens}"),
+        } => format!(
+            "run_finished:{status:?}:{total_supersteps}:{}",
+            usage.total_tokens
+        ),
         TraceEvent::FallbackHop {
             node_id,
             from_provider,

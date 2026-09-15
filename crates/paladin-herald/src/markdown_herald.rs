@@ -254,7 +254,7 @@ impl Herald for MarkdownHerald {
 
         // Metadata section
         output.push_str(&self.heading(self.config.heading_level + 1, "Metadata"));
-        output.push_str(&self.format_field("Token Count", &result.token_count.to_string()));
+        output.push_str(&self.format_field("Token Count", &result.usage.total_tokens.to_string()));
         output.push_str(
             &self.format_field("Execution Time (ms)", &result.execution_time_ms.to_string()),
         );
@@ -369,14 +369,16 @@ impl Herald for MarkdownHerald {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use paladin_core::platform::container::battalion::{BattalionStatus, BattalionStrategy};
+    use paladin_core::platform::container::battalion::{
+        BattalionStatus, BattalionStrategy, TokenUsage,
+    };
     use paladin_ports::output::paladin_port::StopReason;
     use uuid::Uuid;
 
     fn create_test_paladin_result() -> PaladinResult {
         PaladinResult {
             output: "Test output content".to_string(),
-            token_count: 100,
+            usage: TokenUsage::new(100, 0),
             execution_time_ms: 1500,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -395,7 +397,7 @@ mod tests {
                 create_test_paladin_result(),
                 PaladinResult {
                     output: "Second output".to_string(),
-                    token_count: 150,
+                    usage: TokenUsage::new(150, 0),
                     execution_time_ms: 2000,
                     loop_count: 2,
                     stop_reason: StopReason::MaxLoops,
@@ -570,7 +572,7 @@ mod tests {
             paladin_results: vec![
                 PaladinResult {
                     output: "Scout output".to_string(),
-                    token_count: 137,
+                    usage: TokenUsage::new(137, 0),
                     execution_time_ms: 1500,
                     loop_count: 1,
                     stop_reason: StopReason::Completed,
@@ -578,7 +580,7 @@ mod tests {
                 },
                 PaladinResult {
                     output: "Sentinel output".to_string(),
-                    token_count: 263,
+                    usage: TokenUsage::new(263, 0),
                     execution_time_ms: 2000,
                     loop_count: 2,
                     stop_reason: StopReason::Completed,

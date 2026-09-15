@@ -359,7 +359,10 @@ async fn test_herald_with_metadata() {
     let result = result.unwrap();
 
     // Verify metadata is present in result
-    assert!(result.token_count > 0, "Token count should be populated");
+    assert!(
+        result.usage.total_tokens > 0,
+        "Token count should be populated"
+    );
     let _ = result.execution_time_ms;
     assert!(result.loop_count >= 1, "Loop count should be at least 1");
 
@@ -400,7 +403,7 @@ impl PaladinPort for MockPaladinPort {
                 "{}: {} - {}",
                 paladin.node.name, input, self.response_suffix
             ),
-            token_count: 50,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(50, 0),
             execution_time_ms: 25,
             loop_count: 1,
             stop_reason: StopReason::Completed,

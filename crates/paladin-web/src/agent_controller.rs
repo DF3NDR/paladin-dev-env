@@ -485,12 +485,22 @@ type SseEventStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Sen
 /// Render a streaming chunk (or error) as an SSE event.
 ///
 /// Emits `chunk` events with `{ "text": ... }`, a terminal `done` event, and an `error`
-/// event for a mid-stream failure (after which the stream closes).
+/// event for a mid-stream failure (after which the stream closes). The `done` event
+/// carries `usage` (D-18/D-24) whenever the final chunk's metadata reports it --
+/// `null` when the provider's stream ended without reporting usage (D-17: never a
+/// fabricated estimate).
 fn chunk_to_event(item: Result<PaladinStreamChunk, PaladinError>) -> Event {
     match item {
-        Ok(chunk) if chunk.is_final => Event::default()
-            .event("done")
-            .data(json!({ "done": true }).to_string()),
+        Ok(chunk) if chunk.is_final => {
+            let usage = chunk
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.usage.clone())
+                .map(TokenUsageResponse::from);
+            Event::default()
+                .event("done")
+                .data(json!({ "done": true, "usage": usage }).to_string())
+        }
         Ok(chunk) => Event::default()
             .event("chunk")
             .data(json!({ "text": chunk.text }).to_string()),
@@ -930,6 +940,59 @@ mod tests {
         AgentApiState::new(Arc::new(registry))
     }
 
+    /// In-test streamer whose final chunk carries `metadata.usage` (CR-01), mirroring
+    /// what `PaladinExecutionService`'s real streaming consumer does on the terminal
+    /// provider chunk (D-18).
+    struct MockStreamerWithUsage {
+        text: String,
+        usage: Option<TokenUsage>,
+    }
+
+    #[async_trait]
+    impl StreamingExecutorPort for MockStreamerWithUsage {
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            let (tx, rx) = tokio::sync::mpsc::channel(8);
+            let text = self.text.clone();
+            let usage = self.usage.clone();
+            tokio::spawn(async move {
+                let metadata = usage.map(|u| {
+                    paladin_ports::output::paladin_port::ChunkMetadata::new().with_usage(u)
+                });
+                let _ = tx
+                    .send(Ok(PaladinStreamChunk {
+                        text,
+                        is_final: true,
+                        metadata,
+                    }))
+                    .await;
+            });
+            Ok(rx)
+        }
+    }
+
+    fn state_with_streaming_usage_agent(
+        id: &str,
+        text: &str,
+        usage: Option<TokenUsage>,
+    ) -> AgentApiState {
+        let registry = AgentRegistry::new();
+        let streamer: Arc<dyn StreamingExecutorPort> = Arc::new(MockStreamerWithUsage {
+            text: text.to_string(),
+            usage,
+        });
+        registry.insert_with_streaming(
+            id,
+            test_agent(id),
+            Arc::new(MockExecutor::Succeeds("buffered".to_string())),
+            Some(streamer),
+        );
+        AgentApiState::new(Arc::new(registry))
+    }
+
     #[tokio::test]
     async fn stream_emits_chunk_events_then_done() {
         let state = state_with_streaming_agent("r", vec!["Hel".to_string(), "lo".to_string()]);
@@ -956,6 +1019,76 @@ mod tests {
             body.contains("event: done"),
             "expected a done event: {body}"
         );
+    }
+
+    /// CR-01: D-18 requires the SSE run-stream AND paladin-web streaming responses to
+    /// forward the terminal chunk's usage. The `done` event must carry a `usage` object
+    /// (same six-key `TokenUsageResponse` shape as the non-streaming `ExecuteResponse`)
+    /// when the final chunk's metadata reports it.
+    #[tokio::test]
+    async fn stream_done_event_carries_usage_when_final_chunk_reports_it() {
+        let usage = TokenUsage::new(11, 4).with_reasoning(2);
+        let state = state_with_streaming_usage_agent("r", "done text", Some(usage));
+        let response = execute_agent_stream(
+            State(state),
+            admin(),
+            Path("r".to_string()),
+            Json(ExecuteRequest {
+                input: "hi".to_string(),
+                timeout_seconds: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = read_body(response).await;
+        assert!(
+            body.contains("event: done"),
+            "expected a done event: {body}"
+        );
+        let data_line = body
+            .lines()
+            .find(|line| line.starts_with("data:") && line.contains("\"usage\""))
+            .unwrap_or_else(|| panic!("expected a data: line with usage: {body}"));
+        let payload: serde_json::Value =
+            serde_json::from_str(data_line.trim_start_matches("data:").trim())
+                .expect("done event data is valid JSON");
+        assert_eq!(payload["done"], true);
+        let usage = payload.get("usage").expect("usage object present");
+        assert_eq!(usage["prompt_tokens"], 11);
+        assert_eq!(usage["completion_tokens"], 4);
+        assert_eq!(usage["total_tokens"], 15);
+        assert_eq!(usage["reasoning_tokens"], 2);
+        assert!(usage["cache_read_tokens"].is_null());
+        assert!(usage["cache_write_tokens"].is_null());
+    }
+
+    /// D-17: a final chunk whose metadata carries no usage must never fabricate one --
+    /// the `done` event's `usage` key stays `null`.
+    #[tokio::test]
+    async fn stream_done_event_usage_is_null_when_final_chunk_has_none() {
+        let state = state_with_streaming_usage_agent("r", "done text", None);
+        let response = execute_agent_stream(
+            State(state),
+            admin(),
+            Path("r".to_string()),
+            Json(ExecuteRequest {
+                input: "hi".to_string(),
+                timeout_seconds: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = read_body(response).await;
+        let data_line = body
+            .lines()
+            .find(|line| line.starts_with("data:") && line.contains("\"done\":true"))
+            .unwrap_or_else(|| panic!("expected a done data: line: {body}"));
+        let payload: serde_json::Value =
+            serde_json::from_str(data_line.trim_start_matches("data:").trim())
+                .expect("done event data is valid JSON");
+        assert!(payload["usage"].is_null());
     }
 
     #[tokio::test]

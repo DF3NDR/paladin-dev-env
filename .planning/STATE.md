@@ -4,9 +4,9 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 33
 current_phase_name: Commissary In-Tree Adoption
-status: planning
-stopped_at: "Phase 32 planned — 5 plans in 4 waves, checker passed; next: /gsd-execute-phase 32"
-last_updated: "2026-09-16T03:30:11.314Z"
+status: ready_to_plan
+stopped_at: "Phase 32 complete (UAT 22/22, verification passed, security verified); next: /gsd-discuss-phase 33"
+last_updated: "2026-09-16T14:33:03Z"
 last_activity: 2026-09-16
 last_activity_desc: Phase 32 complete, transitioned to Phase 33
 progress:
@@ -20,17 +20,19 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-14 after Phase 30)
+See: .planning/PROJECT.md (updated 2026-09-16 after Phase 32)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 32 — Unified Token Primitives
-`0.10.0` tag is cut (Phases 22-29 complete). Phase 30 is planned (3 plans, 3 waves). Next:
-`/gsd-execute-phase 30` (docs-only vocabulary + Commissary anchoring). `/gsd-complete-milestone v0.10.0` moves to after Phase 33's release
-re-seal (COMM-04).
+**Current focus:** Phase 33 — Commissary In-Tree Adoption
+`0.10.0` tag is cut (Phases 22-29 complete). Phases 30-32 (Token Economy) are closed; Phase 32
+closed 2026-09-16 with UAT 22/22, verification `passed`, security `verified`. Next:
+`/gsd-discuss-phase 33` (no `33-CONTEXT.md` yet) then `/gsd-plan-phase 33` — RAG rations through
+`Commissary::dispense` plus the Phase 29 release-gate re-seal (COMM-04). `/gsd-complete-milestone
+v0.10.0` stays deferred to after that re-seal.
 
-**Progress:** [█████████████████░░░] v0.10.0 — 11 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29, 30, 31); Phases 32-33 remain (Token Economy, added 2026-09-14); 147/147 plans (100%)
+**Progress:** [███████████████████░] v0.10.0 — 12 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32); Phase 33 remains (Token Economy, added 2026-09-14); 152/152 plans (100%)
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -56,8 +58,9 @@ names. See MILESTONES.md.
 Phase: 33 — Commissary In-Tree Adoption
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
-Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
+Last activity: 2026-09-16 — Phase 32 closed: UAT 22/22 passed, verification passed, security verified; ready to plan Phase 33
+Previous: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
+Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics
 
@@ -134,6 +137,30 @@ Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetch
 ## Accumulated Context
 
 ### Decisions
+
+**Phase 32 (closed 2026-09-16) — recorded as D-01 … D-16 in `32-CONTEXT.md`; the ones later
+phases must honor:**
+
+- D-01/D-02: the context window is resolved by exactly one function, `paladin_llm::window::
+  resolve_context_window`, with a `WindowFallbackPolicy` enum (`Default(n)` / `Strict`) — never a
+  `bool` — and a labelled `WindowSource`; the facade's duplicate `LimitSource` is gone.
+
+- D-04/D-05: `Commissary::new` calls the resolver once under `Strict` (no config table, so the
+  "no invented window" refusal survives as `CommissaryError::UndeclaredContextWindow`, byte-identical);
+  `HistoryTrimmer::resolve_limit` is a thin call under `Default(config.default_context_tokens)`.
+
+- D-06/D-08: exactness is a property of the counter instance — `TokenCounterPort::is_exact`
+  defaults `false`, tiktoken returns `true`, and `Commissary` reads it live from the port; the
+  `is_exact_counter` constructor argument is a clean break with no forwarding shim.
+
+- D-09/D-10: the legacy `garrison::TokenCounter` trait and `TokenCounterFactory` were deleted
+  outright (the `#[deprecated]` escape hatch was not needed); `TiktokenCounter`'s only counting
+  path is its port impl.
+
+- D-13/D-14: equivalence is proven by TDD-ordered fixture tests committed green before the
+  resolver existed (not `insta`); semver discovery is empirical per feature set — `cargo-semver-checks`
+  0.50.0 has no lint for an inherent method's parameter count, so the `Commissary::new` break is
+  recorded in `CHANGELOG.md` only, with `MIGRATION.md` §9.2 rows for the two lints that did fire.
 
 **Phase 29 (closed 2026-09-10) — recorded as D-01 … D-25 in `29-CONTEXT.md`; the ones later
 milestones must honor:**
@@ -419,6 +446,20 @@ Entering them here would fabricate authority the corpus does not contain.
 - `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md` — evaluate RustFS as the dev/test object store; the quay.io MinIO pin from quick task 260913-15w is terminal (no newer community tags will exist).
 
 ### Blockers/Concerns
+
+**Phase 32 close (2026-09-16): no blockers.** 5 plans in 4 waves; verification `passed` 5/5
+roadmap truths; UAT 22/22 (`32-UAT.md`: 21 coverage-mode automated passes + one human confirmation
+of the gate evidence); `32-SECURITY.md` `verified`, `threats_open: 0`; `32-VALIDATION.md` and
+`32-REVIEW.md` present. Release gates (`32-05-SUMMARY.md`): `make clean-code`, `make security`,
+mdbook, doctests green; coverage 90.25 % local; workspace tests 6771 passed / 1 pre-existing
+`cli_isolation` failure. Carried, all pre-existing and none introduced here: (a) `RUSTDOCFLAGS="-D
+warnings" cargo doc --workspace --all-features --no-deps` stays RED (14 unresolved intra-doc links in
+`paladin-ai-core`'s graph-fingerprinting and webhook-delivery docs — a subset of the 77 warnings
+Phase 31 measured; accepted at UAT Test 22 as the Phase 31 precedent); (b) the `--all-features`
+`cli_isolation` test conflict; (c) the broken `[HeuristicTokenCounter]` intra-doc link logged by plan
+32-03 in `deferred-items.md`. Note for Phase 33: the api-coverage gate detected one `consume api`
+signal that `COVERAGE.md` overrides as "no external API" — re-check that declaration when RAG
+retrieval gains a production caller.
 
 **Phase 29 close (2026-09-10): no blockers.** 9 plans in 5 waves; verification `passed` 4/4 roadmap
 truths (18/18 plan-level must-haves reproduced); UAT 3/3 human checkpoints passed (`29-UAT.md`,
@@ -950,14 +991,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 32 planned — 5 plans in 4 waves, checker passed; next: /gsd-execute-phase 32
+**Stopped at:** Phase 32 complete, ready to plan Phase 33 — UAT 22/22 passed, verification `passed`, security `verified`; next: /gsd-discuss-phase 33
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-15T15:07:38.611Z
-Resume file: .planning/phases/32-unified-token-primitives/32-01-PLAN.md
+Last session: 2026-09-16T14:33:03Z
+Resume file: None
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**
@@ -1018,6 +1059,8 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
+- Phase 32 closed 2026-09-16: UAT 22/22 passed (`32-UAT.md`, `edaf690b`), `32-VERIFICATION.md` `passed` (5/5), `32-SECURITY.md` `verified` (`threats_open: 0`), `32-VALIDATION.md` and `32-REVIEW.md` present. The `cargo doc -D warnings` RED gate is carried forward as pre-existing (Phase 31 precedent), not fixed.
+- Next: `/gsd-discuss-phase 33` (no `33-CONTEXT.md` yet) then `/gsd-plan-phase 33` — Commissary In-Tree Adoption (COMM-*, RAG rations via `Commissary::dispense`; re-seal the Phase 29 release gates on the final commit). `/gsd-complete-milestone v0.10.0` stays deferred to after that re-seal.
 - Phase 30 closed 2026-09-14: UAT 10/10 passed (`30-UAT.md`, `19a28185` — nine coverage-mode automated passes + one human confirmation), `30-VERIFICATION.md` `passed` (scoped re-verification `bc275c1c` after a one-field SUMMARY metadata fix), `30-SECURITY.md` `verified` (`threats_open: 0`, 11/11). Three non-threat doc-precision observations (O-30-01..03: `configuration.md` Anthropic row says "required" but `ANTHROPIC_MAX_TOKENS` defaults to 4096; Garrison/RAG owner column says `src/config/` but the structs live in `crates/paladin-memory/src/config/`; `vision.*.max_tokens` is an unlisted fifth surface) recorded in `30-SECURITY.md` for a docs follow-up.
 - Next: `/gsd-discuss-phase 31` (no `31-CONTEXT.md` yet) then `/gsd-plan-phase 31` — Lossless Token Accounting (keystone; breaking under ADR-0051). `/gsd-complete-milestone v0.10.0` stays deferred to after Phase 33's release re-seal (COMM-04).
 - Phase 29 closed 2026-09-10: UAT 3/3 passed (`29-UAT.md`, `640570eb`), `29-VERIFICATION.md` `passed`, `29-SECURITY.md` `verified` (`threats_open: 0`, 37/37). **v0.10.0 milestone: all 9 phases complete.**

@@ -109,6 +109,21 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 32 complete (2026-09-16)** — unified-token-primitives (PRIM-01…05, breaking under
+ADR-0051): `TokenCounterPort::is_exact` (doc-tested `false` default; `TiktokenCounter` `true`, heuristic inherits)
+replaces `Commissary::new`/`from_port`'s caller-supplied exactness flag, with `Stockpile.exact_tally` read live from
+the port; the legacy fallible `garrison::TokenCounter` trait and `TokenCounterFactory` are deleted outright and
+the four re-export sites narrowed to `TiktokenCounter`; `paladin_llm::window::resolve_context_window` (a
+`WindowFallbackPolicy` enum — lenient default vs strict caller-fallback — and a labelled `WindowSource`) is the
+one precedence walk behind both `Commissary::new` (strict, error mapped into the unchanged
+`UndeclaredContextWindow`) and `HistoryTrimmer::resolve_limit` (lenient; the facade's `LimitSource` is gone), with
+six equivalence fixtures committed green before the rewiring; MIGRATION §9.2 gains two `Y` rows with mirrored
+allowlist entries plus an unmirrored `paladin-llm | Commissary` row (no cargo-semver-checks 0.50.0 lint covers
+inherent-method arity — discovered empirically with `--release-type minor`), CHANGELOG `[0.10.0]` bullets and
+the two migration pages; 5 plans in 4 waves, verification 5/5, local coverage 90.25 %. Pre-existing defects
+logged in `deferred-items.md`, not fixed: a Phase 26 intra-doc link in `token_counter/mod.rs`, the
+`cli_isolation` `--all-features` failure, `cargo doc -D warnings` red in `paladin-ai-core`.
+
 **Phase 31 complete (2026-09-15)** — lossless-token-accounting, the keystone Token Economy phase
 (ACCT-01…05, breaking under ADR-0051): `TokenUsage` gains `cache_read_tokens` / `cache_write_tokens` /
 `reasoning_tokens` as `#[serde(default)]` optionals with an inclusive `total_tokens` contract, doc-tested
@@ -367,7 +382,8 @@ Security Paladin repo's token-economy systems analysis, findings F1-F8 / decisio
   keystone, breaking) — **complete 2026-09-15**: seven MIGRATION §9.2 rows + allowlist entries, verification 5/5, CR-01/WR-01 fixed
 - Phase 32 — one counting contract (`TokenCounterPort::is_exact`, `Commissary::new` without
   `is_exact_counter`, legacy `TokenCounter`/`TokenCounterFactory` retired) and one shared window
-  resolver with a strict mode (`PRIM-01…05`, breaking)
+  resolver with a strict mode (`PRIM-01…05`, breaking) — **complete 2026-09-16**: `paladin_llm::window`,
+  legacy pair removed, two §9.2 rows + allowlist entries, verification 5/5, review WR-01/IN-01 advisory
 - Phase 33 — RAG rations through `Commissary::dispense` with shed records and a truncation
   marker; Phase 29's release gates re-sealed on the final commit (`COMM-01…04`)
 
@@ -741,6 +757,11 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
 - [x] **ACCT-01 … ACCT-05** (✓ Phase 31, 2026-09-15) — six-field `TokenUsage` with inclusive total, full-split carriers
   to `RunFinished`, terminal-chunk streaming parity per adapter, breakdown in JSON/Markdown heralds and the HTTP
   edge, MIGRATION §9.2 + semver allowlist rows, CHANGELOG `[0.10.0]` entries (Milestone 13 Epic 2)
+- [x] **PRIM-01 … PRIM-05** (✓ Phase 32, 2026-09-16) — `TokenCounterPort::is_exact` with tiktoken/heuristic proofs,
+  `Commissary::new`/`from_port` reading exactness from the port, legacy `TokenCounter`/`TokenCounterFactory` removed
+  with re-exports narrowed, `paladin_llm::window::resolve_context_window` behind both `Commissary` and
+  `HistoryTrimmer` with pre-refactor equivalence fixtures, MIGRATION §9.2 + allowlist rows, CHANGELOG `[0.10.0]`
+  entries (Milestone 13 Epic 3)
 
 *(The long-form forward-scope listing that previously lived here — the 90 ingest-derived
 requirements across Phases 5-16 plus Phase 17's `PROV-*` additions — shipped with v0.8.0 and is
@@ -1739,3 +1760,8 @@ supersession, `commissary.md` page, `max_tokens` terminology table, Quartermaste
 *Last updated: 2026-09-15 after Phase 31 completion (v0.10.0 milestone; ACCT-01…05 validated — lossless
 `TokenUsage` carriers, streaming parity, herald/HTTP breakdown, migration register; 11 of 13 phases, 147/147 plans;
 next: `/gsd-secure-phase 31` then `/gsd-discuss-phase 32` Unified Token Primitives).*
+
+*Last updated: 2026-09-16 after Phase 32 completion (v0.10.0 milestone; PRIM-01…05 validated — one counting
+contract on `TokenCounterPort::is_exact`, legacy counter pair removed, `paladin_llm::window` shared resolver, migration
+register; 12 of 13 phases, 152/152 plans; next: `/gsd-secure-phase 32` then `/gsd-discuss-phase 33` Commissary In-Tree
+Adoption).*

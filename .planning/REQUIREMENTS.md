@@ -566,11 +566,11 @@ Which phases cover which requirements. Populated during roadmap creation.
 | ACCT-03 | Phase 31 | Complete |
 | ACCT-04 | Phase 31 | Complete |
 | ACCT-05 | Phase 31 | Complete |
-| PRIM-01 | Phase 32 | Not started |
-| PRIM-02 | Phase 32 | Not started |
-| PRIM-03 | Phase 32 | Not started |
-| PRIM-04 | Phase 32 | Not started |
-| PRIM-05 | Phase 32 | Not started |
+| PRIM-01 | Phase 32 | Complete |
+| PRIM-02 | Phase 32 | Complete |
+| PRIM-03 | Phase 32 | Complete |
+| PRIM-04 | Phase 32 | Complete |
+| PRIM-05 | Phase 32 | Complete |
 | COMM-01 | Phase 33 | Not started |
 | COMM-02 | Phase 33 | Not started |
 | COMM-03 | Phase 33 | Not started |

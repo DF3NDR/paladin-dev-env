@@ -129,7 +129,8 @@ fifth (RAG rationing, below) results from the signature break registered in
   retained memories (each with the post-dispense `body` — render this, never `memory.content`),
   the shed record (`shed: Vec<ShedItem>`), and the Commissary's `Stockpile` accounting
   (`prompt_tokens`/`allotted_tokens`/`exact_tally`). A new `RagRetrievalError` enum surfaces
-  Sanctum/Commissary/budget-conversion failures, and a new
+  Sanctum/Commissary/budget-conversion failures (plus `DuplicateMemoryId` when one search result
+  set carries the same memory UUID twice — a typed error rather than a silent overwrite), and a new
   `with_token_counter(Arc<dyn TokenCounterPort>)` builder mirrors
   `PaladinExecutionService::with_token_counter` so a caller can inject an exact counter. No
   forwarding method and no `#[deprecated]` alias ship (ADR-0051 clean break) — see

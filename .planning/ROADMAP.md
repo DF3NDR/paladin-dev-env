@@ -909,7 +909,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 — runs on the phase's final commit)*
 
-- [ ] 33-06-PLAN.md — the full Phase 29 gate re-seal with the PRIM-04 regression check, `33-CI-EVIDENCE.md`, and audit §11 with one unticked human-only tag box (COMM-04)
+- [x] 33-06-PLAN.md — the full Phase 29 gate re-seal with the PRIM-04 regression check, `33-CI-EVIDENCE.md`, and audit §11 with one unticked human-only tag box (COMM-04)
 
 ## Progress
 

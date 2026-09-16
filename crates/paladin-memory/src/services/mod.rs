@@ -10,5 +10,5 @@ pub use memory_extraction_service::{
 pub mod rag_retrieval_service;
 pub use rag_retrieval_service::{
     RagConfig, RagRetainedMemory, RagRetrievalError, RagRetrievalResult, RagRetrievalService,
-    RetrievalTrigger, ShedItem, retrieve_context_with_timeout,
+    RetrievalTrigger, ShedItem, rag_omission_marker, retrieve_context_with_timeout,
 };

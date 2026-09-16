@@ -896,7 +896,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 33-02-PLAN.md — one shared omission-marker helper emitted by both renderers, the counts-only observability line, and the both-directions marker/shed tests (COMM-02)
+- [x] 33-02-PLAN.md — one shared omission-marker helper emitted by both renderers, the counts-only observability line, and the both-directions marker/shed tests (COMM-02)
 
 **Wave 3** *(blocked on Wave 2; 33-03 and 33-04 run in parallel)*
 

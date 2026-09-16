@@ -50,10 +50,15 @@ Commissary.
 - **D-01:** The `Commissary::dispense` call lives **inside `RagRetrievalService`** in
   `paladin-memory`, exactly where the success criterion places it. To reach it,
   `crates/paladin-memory/Cargo.toml` gains `paladin-llm = { version = "0.10.0", path =
-  "../paladin-llm", default-features = false }` — a lateral adapter→adapter edge with direct
-  house precedent (`crates/paladin-battalion/Cargo.toml:67-69` depends on `paladin-llm` the
-  same way, with its "No cycle: paladin-llm depends only on core + ports" comment;
-  `paladin-content` takes it optionally). No cycle: `paladin-llm` depends on `paladin-core` and
+  "../paladin-llm", default-features = false }` — a lateral adapter→adapter edge. Precedent,
+  stated precisely (corrected 2026-09-16 after research): `paladin-battalion` takes `paladin-llm`
+  as a **dev-dependency** only (`crates/paladin-battalion/Cargo.toml:67-69`, for
+  `MockLlmAdapter` in its tests — copy its "No cycle: paladin-llm depends only on core + ports"
+  comment shape), and `paladin-content` takes it as an **optional** production dependency behind
+  its `llm` feature (`Cargo.toml:23,28`). This phase's edge is therefore the first
+  **unconditional production** lateral adapter→adapter edge in the workspace — say so plainly in
+  the crate-map narrative and commit message rather than calling it a repeat of an existing
+  commitment. No cycle: `paladin-llm` depends on `paladin-core` and
   `paladin-ports` only. `default-features = false` keeps `reqwest`/`rand` out of the memory
   crate — `commissary` and `window` are unconditional modules in `paladin-llm`, so a
   featureless build is enough (the `crate-isolation` CI job's `cargo build -p paladin-memory

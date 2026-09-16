@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 33
 current_phase_name: Commissary In-Tree Adoption
-status: ready_to_plan
-stopped_at: Phase 33 context gathered
-last_updated: "2026-09-16T14:58:54.410Z"
+status: executing
+stopped_at: "Phase 33 planned — 6 plans in 5 waves, plan-checker passed (iteration 2); next: /gsd-execute-phase 33"
+last_updated: "2026-09-16T15:46:39.863Z"
 last_activity: 2026-09-16
 last_activity_desc: "Phase 32 closed: UAT 22/22 passed, verification passed, security verified; ready to plan Phase 33"
 progress:
   total_phases: 13
   completed_phases: 12
-  total_plans: 152
+  total_plans: 158
   completed_plans: 152
 ---
 
@@ -57,7 +57,7 @@ names. See MILESTONES.md.
 
 Phase: 33 — Commissary In-Tree Adoption
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-16 — Phase 32 closed: UAT 22/22 passed, verification passed, security verified; ready to plan Phase 33
 Previous: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
@@ -991,14 +991,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 33 context gathered
+**Stopped at:** Phase 33 planned — 6 plans in 5 waves, plan-checker passed (iteration 2); next: /gsd-execute-phase 33
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-16T14:58:54.283Z
-Resume file: .planning/phases/33-commissary-in-tree-adoption/33-CONTEXT.md
+Last session: 2026-09-16T15:46:39.775Z
+Resume file: .planning/phases/33-commissary-in-tree-adoption/33-01-PLAN.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

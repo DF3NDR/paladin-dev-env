@@ -118,3 +118,15 @@ repos:
         stages: [pre-push]
         pass_filenames: false
         always_run: true
+
+      # This sits at pre-push, not pre-commit, for two reasons: GSD executor
+      # commits bypass commit-stage hooks entirely, and the check costs ~95s,
+      # which is tolerable once per push alongside the build + lib tests above
+      # but not on every commit.
+      - id: check-api-surface
+        name: check public API surface vs baseline
+        entry: ./scripts/check-api-surface.sh .project/current-exports.txt
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        files: ^(src|crates)/.*\.rs$|^Cargo\.toml$

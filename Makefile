@@ -374,6 +374,17 @@ openapi: ## Regenerate the committed OpenAPI baseline (crates/paladin-web/openap
 	@UPDATE_OPENAPI=1 $(CARGO) test -p paladin-web --lib openapi_matches_committed_baseline -- --quiet
 	@echo "Wrote crates/paladin-web/openapi.json"
 
+.PHONY: api-surface
+api-surface: ## Check the public API surface against the committed baseline
+	@echo "$(CYAN)Checking public API surface...$(NC)"
+	@./scripts/check-api-surface.sh .project/current-exports.txt
+
+.PHONY: api-surface-update
+api-surface-update: ## Regenerate the committed public API baseline (.project/current-exports.txt)
+	@echo "$(CYAN)Regenerating public API baseline...$(NC)"
+	@./scripts/extract-public-api.sh .project/current-exports.txt
+	@echo "$(YELLOW)Remember to add a CHANGELOG.md entry describing the public surface change.$(NC)"
+
 .PHONY: bless-golden
 bless-golden: ## Regenerate the committed graph-export goldens (crates/paladin-battalion/tests/golden/export/)
 	@echo "$(CYAN)Regenerating graph-export goldens...$(NC)"

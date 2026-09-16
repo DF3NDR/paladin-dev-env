@@ -92,6 +92,15 @@ context-window precedence walks (`Commissary::new`'s inline fallback guard and
 function instead of each maintaining its own. See [`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
 for the full per-type register.
 
+Separately, in v0.10.0 (Phase 33, COMM-01…03), `RagRetrievalService::retrieve_context`
+and `retrieve_context_with_timeout` change their return type to a result struct
+carrying the Commissary's shed record, and `format_for_prompt` changes its parameter
+to that struct; a new `with_token_counter` builder mirrors
+`PaladinExecutionService::with_token_counter`. Read `.memories` and `.shed` off the
+returned result rather than the old `Vec`. See the `paladin-memory | RagRetrievalService`
+and `paladin-memory | retrieve_context_with_timeout` rows in
+[`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
+
 ## Full migration record
 
 For every behavioral change's worked examples, the complete Rust API change register, schema

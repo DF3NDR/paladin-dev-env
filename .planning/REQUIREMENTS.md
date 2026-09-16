@@ -455,7 +455,7 @@ facade re-export.
   marker is emitted when content was shed; tests assert both present when the budget is exceeded
   and both absent when everything fits (PRD R2; D-7)
 
-- [ ] **COMM-03**: An integration test exercises `Commissary::dispense` through the real RAG path
+- [x] **COMM-03**: An integration test exercises `Commissary::dispense` through the real RAG path
   (the F4 production-caller evidence), and no silent token-based truncation remains in-tree,
   grep-provable (PRD §5, §6; F4, F6)
 

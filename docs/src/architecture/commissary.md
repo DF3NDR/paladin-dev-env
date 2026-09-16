@@ -115,6 +115,57 @@ match commissary.verify_fits(&assembled_prompt) {
 }
 ```
 
+## In-tree caller: RAG
+
+`RagRetrievalService::retrieve_context` (`crates/paladin-memory/src/services/rag_retrieval_service.rs`)
+is the Commissary's first production caller (Phase 33, COMM-01…03): it rations retrieved
+memories through `Commissary::dispense` instead of the old silent, inline byte-length
+budget estimate. RAG has no LLM provider window, only an injection cap
+(`rag.max_tokens`), so it constructs its `Commissary` over synthetic capabilities rather
+than `Commissary::from_port`, mirroring the ungated integration test at
+`tests/integration/rag_commissary_test.rs`:
+
+```rust,ignore
+use paladin_ports::output::llm_port::ProviderCapabilities;
+
+// RAG has no provider window -- synthesize one from its own injection cap.
+let capabilities = ProviderCapabilities {
+    max_context_tokens: Some(budget_tokens),
+    ..ProviderCapabilities::default()
+};
+let plan = CommissaryPlan {
+    reserved_completion_tokens: 0, // the whole budget is for memories
+    fallback_context_tokens: None,
+    ..CommissaryPlan::default()
+};
+let commissary = Commissary::new("rag", capabilities, counter, plan)?;
+
+// One ConsignmentItem per ranked memory: the UUID as label, rank order as priority
+// (lower number == higher priority == shed last), so "the highest-scoring memories
+// are the ones retained" is structural, not a rounding property.
+let mut consignment = Consignment::new();
+for (rank, result) in ranked_memories.iter().enumerate() {
+    consignment.push(ConsignmentItem {
+        label: result.entry.memory.id.to_string(),
+        body: result.entry.memory.content.clone(),
+        priority: u8::try_from(rank).unwrap_or(u8::MAX),
+    });
+}
+
+let stockpile = commissary.dispense("", &consignment)?;
+// stockpile.dispensed -> RagRetrievalResult::memories (retained, in rank order)
+// stockpile.shed      -> RagRetrievalResult::shed (never silently dropped)
+```
+
+Two consequences worth stating plainly:
+
+- A single memory larger than the whole budget is **retained, truncated** with the
+  Commissary's per-item marker inside its body — never silently dropped, the opposite
+  of the retired byte-length estimate's behaviour.
+- At a given `rag.max_tokens`, the volume of memory content actually injected is
+  planned at the Commissary's pessimistic `pessimistic_tokens_per_1000_bytes` ratio,
+  which plans fewer bytes than the old estimate allowed at the same token figure.
+
 ## Honesty about exactness
 
 Not every model has an exact tokenizer available offline. Exactness is declared by the injected

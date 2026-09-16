@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 32
-current_phase_name: Unified Token Primitives
-status: executing
+current_phase: 33
+current_phase_name: Commissary In-Tree Adoption
+status: planning
 stopped_at: "Phase 32 planned — 5 plans in 4 waves, checker passed; next: /gsd-execute-phase 32"
-last_updated: "2026-09-15T15:09:20.630Z"
-last_activity: 2026-09-15
-last_activity_desc: Phase 32 execution started
+last_updated: "2026-09-16T03:30:11.314Z"
+last_activity: 2026-09-16
+last_activity_desc: Phase 32 complete, transitioned to Phase 33
 progress:
   total_phases: 13
-  completed_phases: 11
+  completed_phases: 12
   total_plans: 152
-  completed_plans: 147
+  completed_plans: 152
 ---
 
 # Project State
@@ -53,17 +53,17 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 32 (Unified Token Primitives) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 32
-Last activity: 2026-09-15 — Phase 32 execution started
+Phase: 33 — Commissary In-Tree Adoption
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-16 — Phase 32 complete, transitioned to Phase 33
 Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 334
+- Total plans completed: 339
 - Average duration: —
 - Total execution time: —
 
@@ -101,6 +101,7 @@ Previous: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetch
 | 29 | 9 | - | - |
 | 30 | 3 | - | - |
 | 31 | 7 | - | - |
+| 32 | 5 | - | - |
 
 *Updated after each plan completion*
 

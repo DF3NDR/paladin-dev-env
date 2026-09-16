@@ -999,7 +999,7 @@ mod tests {
 
     /// D-10(a) edge: one memory whose body is far larger than the whole allowance is
     /// RETAINED, TRUNCATED with the Commissary's per-item marker — never shed, never
-    /// dropped. This is the exact opposite of the pre-phase `truncate_to_token_budget`
+    /// dropped. This is the exact opposite of the pre-Phase-33 silent-drop helper's
     /// behaviour, which silently dropped it and returned nothing at all.
     #[test]
     fn single_memory_larger_than_budget_is_retained_truncated_not_dropped() {

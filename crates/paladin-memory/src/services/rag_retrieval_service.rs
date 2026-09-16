@@ -107,6 +107,17 @@ pub enum RagRetrievalError {
         /// The label that failed to resolve.
         label: String,
     },
+    /// `ranked` contained two [`SanctumSearchResult`]s sharing the same memory UUID —
+    /// e.g. a `SanctumPort::search` implementation that returns the same stored id
+    /// twice across different index shards. Rather than silently overwriting the
+    /// earlier rank with the later one (which could point a retained/shed
+    /// [`RagRetainedMemory`] at the wrong [`SanctumSearchResult`]), `ration()` fails
+    /// loud (WR-02).
+    #[error("duplicate memory id '{label}' in a single search result set")]
+    DuplicateMemoryId {
+        /// The memory UUID (as a label) that appeared more than once.
+        label: String,
+    },
 }
 
 /// Renders the RAG-level omission marker (D-15): a single trailing line naming how
@@ -251,7 +262,9 @@ impl RagRetrievalService {
         let mut index_by_label: HashMap<String, usize> = HashMap::with_capacity(ranked.len());
         for (rank, result) in ranked.iter().enumerate() {
             let label = result.entry.memory.id.to_string();
-            index_by_label.insert(label.clone(), rank);
+            if index_by_label.insert(label.clone(), rank).is_some() {
+                return Err(RagRetrievalError::DuplicateMemoryId { label });
+            }
             consignment.push(ConsignmentItem {
                 label,
                 body: result.entry.memory.content.clone(),
@@ -1065,6 +1078,40 @@ mod tests {
             other => panic!(
                 "expected Err(RagRetrievalError::BudgetTooLarge {{ .. }}), got {other:?} -- \
                  a budget beyond u32::MAX must never produce a reduced-budget Ok result"
+            ),
+        }
+    }
+
+    /// WR-02 edge: `ranked` containing two entries sharing the same memory UUID (e.g. a
+    /// `SanctumPort::search` implementation that legitimately returns the same stored id
+    /// twice across different index shards) must fail loud with
+    /// `RagRetrievalError::DuplicateMemoryId` rather than silently letting the later
+    /// rank's `index_by_label.insert` overwrite the earlier one, which would otherwise
+    /// leave `Consignment` holding two `ConsignmentItem`s with an identical label and
+    /// risk `RagRetainedMemory::result` silently pointing at the wrong
+    /// `SanctumSearchResult`.
+    #[test]
+    fn duplicate_memory_id_in_ranked_returns_typed_error_not_silent_overwrite() {
+        let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+        let embedding = Arc::new(MockEmbeddingPort);
+        let service = RagRetrievalService::new(sanctum, embedding, RagConfig::default());
+
+        let first = create_test_entry("paladin-1", "first body", 0.5, 0.9);
+        let duplicate_id = first.entry.memory.id;
+        let mut second = create_test_entry("paladin-1", "second body", 0.5, 0.5);
+        second.entry.memory.id = duplicate_id;
+
+        match service.ration(vec![first, second]) {
+            Err(RagRetrievalError::DuplicateMemoryId { label }) => {
+                assert_eq!(
+                    label,
+                    duplicate_id.to_string(),
+                    "the error must name the colliding memory id"
+                );
+            }
+            other => panic!(
+                "expected Err(RagRetrievalError::DuplicateMemoryId {{ .. }}), got {other:?} -- \
+                 a duplicate memory id must never be silently overwritten in index_by_label"
             ),
         }
     }

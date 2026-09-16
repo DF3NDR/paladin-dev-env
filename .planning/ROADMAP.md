@@ -886,11 +886,30 @@ Plans:
   3. An integration test exercises `Commissary::dispense` through the real RAG path — the F4 production-caller evidence — and no silent token-based truncation remains in-tree (the Phase 26 D-13 deferral closes; grep-provable) (COMM-03)
   4. The Phase 29 release gates are re-sealed on the final commit of this phase: `MIGRATION.md` has no "TBD" and its §9.2 register matches the semver-checks allowlist row-for-row, `v0_9_config_boot` and the OpenAPI golden diff pass, `cargo semver-checks` and the MSRV job are green, `cargo publish --dry-run` is green in dependency order, and the `CHANGELOG.md` `[0.10.0]` section carries the RAG truncation-marker behavioural note plus the Phase 31/32 API entries — with the evidence appended to the Phase 29 acceptance audit rather than a new audit (COMM-04)
 
-**Plans**: TBD (run `/gsd-plan-phase 33` to break down)
+**Plans**: 6 plans
 
 Plans:
 
-- [ ] TBD
+**Wave 1**
+
+- [ ] 33-01-PLAN.md — the `paladin-memory` → `paladin-llm` production edge plus the tracer slice: result struct, error enum, the sync `ration` seam and the first `Commissary::dispense` call, with every consumer migrated in one commit (COMM-01)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 33-02-PLAN.md — one shared omission-marker helper emitted by both renderers, the counts-only observability line, and the both-directions marker/shed tests (COMM-02)
+
+**Wave 3** *(blocked on Wave 2; 33-03 and 33-04 run in parallel)*
+
+- [ ] 33-03-PLAN.md — the `proptest` over the rationing seam plus the four named edge tests: oversized-single-memory, non-clamping budget conversion, equal-score tie order, budget boundary (COMM-01)
+- [ ] 33-04-PLAN.md — the ungated `rag_commissary` integration test (F4 evidence), the Commissary module-doc retirement and the D-19 exit greps (COMM-03)
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 33-05-PLAN.md — empirical semver discovery, the two `MIGRATION.md` §9.2 rows with row-matched allowlist entries, the `CHANGELOG.md` `[0.10.0]` entries with the `[Unreleased]` fold, and the regenerated API baseline (COMM-04)
+
+**Wave 5** *(blocked on Wave 4 — runs on the phase's final commit)*
+
+- [ ] 33-06-PLAN.md — the full Phase 29 gate re-seal with the PRIM-04 regression check, `33-CI-EVIDENCE.md`, and audit §11 with one unticked human-only tag box (COMM-04)
 
 ## Progress
 

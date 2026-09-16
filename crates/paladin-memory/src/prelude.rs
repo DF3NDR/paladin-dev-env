@@ -22,7 +22,8 @@ pub use crate::vault::SqliteVault;
 
 // Services
 pub use crate::services::{
-    MemoryExtractionService, MemoryExtractionStrategy, RagConfig, RagRetrievalService,
+    MemoryExtractionService, MemoryExtractionStrategy, RagConfig, RagRetainedMemory,
+    RagRetrievalError, RagRetrievalResult, RagRetrievalService,
 };
 
 // Config types

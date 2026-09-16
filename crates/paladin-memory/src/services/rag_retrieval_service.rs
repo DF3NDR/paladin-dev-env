@@ -9,18 +9,105 @@
 /// - Filters by similarity threshold
 /// - Deduplicates near-identical memories
 /// - Ranks by relevance
-/// - Truncates to fit token budget
+/// - Rations to fit the injection budget via `Commissary::dispense` (Phase 33, COMM-01)
 /// - Formats memories for prompt injection
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+pub use paladin_llm::services::commissary::ShedItem;
+use paladin_llm::services::commissary::{
+    Commissary, CommissaryError, CommissaryPlan, Consignment, ConsignmentItem,
+};
 use paladin_ports::output::embedding_port::EmbeddingPort;
+use paladin_ports::output::llm_port::ProviderCapabilities;
 use paladin_ports::output::sanctum_port::{
     SanctumError, SanctumFilter, SanctumPort, SanctumQuery, SanctumSearchResult,
 };
+use paladin_ports::output::token_counter_port::TokenCounterPort;
+use thiserror::Error;
 
 // RagConfig and RetrievalTrigger moved to crates/paladin-memory/src/config/rag.rs (Task 6.0)
 pub use crate::config::rag::{RagConfig, RetrievalTrigger};
+
+/// A single memory that survived Commissary rationing, in relevance-rank order.
+#[derive(Debug, Clone)]
+pub struct RagRetainedMemory {
+    /// The original Sanctum search result (entry + score) this item was ranked from.
+    pub result: SanctumSearchResult,
+    /// The post-dispense body — possibly cut and marker-suffixed by the Commissary.
+    /// Renderers must print THIS, never `result.entry.memory.content` (D-12).
+    pub body: String,
+    /// Whether `body` had to be shortened by the Commissary to fit its allotted share.
+    pub truncated: bool,
+}
+
+/// The result of a rationed RAG retrieval (D-12): the retained memories in
+/// relevance-rank order, the shed record, and the Commissary's Stockpile accounting.
+///
+/// Nothing is dropped silently — every memory that did not survive rationing appears
+/// in [`RagRetrievalResult::shed`], and every retained memory whose body was cut
+/// carries `truncated: true`.
+#[derive(Debug, Clone, Default)]
+pub struct RagRetrievalResult {
+    /// Retained memories, in descending relevance-score order (ties keep insertion
+    /// order — the rank sort is stable).
+    pub memories: Vec<RagRetainedMemory>,
+    /// Memories shed to stay within `rag.max_tokens`, in shed order. Never silently
+    /// dropped — every shed memory is recorded here labelled by its memory UUID (D-09).
+    pub shed: Vec<ShedItem>,
+    /// The final measured token tally of the rendered context.
+    pub prompt_tokens: u32,
+    /// The token allowance this retrieval was dispensed against (`rag.max_tokens`,
+    /// converted to `u32`).
+    pub allotted_tokens: u32,
+    /// `true` if `prompt_tokens` is an exact tally (read live from the injected
+    /// [`TokenCounterPort::is_exact`]), `false` if it is a deliberately over-counting
+    /// estimate.
+    pub exact_tally: bool,
+}
+
+impl RagRetrievalResult {
+    /// The number of retained memories.
+    pub fn len(&self) -> usize {
+        self.memories.len()
+    }
+
+    /// Whether no memories were retained.
+    pub fn is_empty(&self) -> bool {
+        self.memories.is_empty()
+    }
+
+    /// Whether this retrieval shed at least one memory, or truncated at least one
+    /// retained memory's body, to fit the budget.
+    pub fn was_rationed(&self) -> bool {
+        !self.shed.is_empty() || self.memories.iter().any(|m| m.truncated)
+    }
+}
+
+/// Errors from a rationed RAG retrieval (D-13).
+#[derive(Debug, Error)]
+pub enum RagRetrievalError {
+    /// The underlying Sanctum search or embedding step failed.
+    #[error("Sanctum error: {0}")]
+    Sanctum(#[from] SanctumError),
+    /// The Commissary failed to dispense the retrieved memories.
+    #[error("Commissary error: {0}")]
+    Commissary(#[from] CommissaryError),
+    /// `rag.max_tokens` (a `usize`) does not fit in the `u32` the Commissary takes.
+    /// Never clamped — a typed error, per ADR-0004 / D-05.
+    #[error("rag.max_tokens ({max_tokens}) exceeds u32::MAX and cannot be rationed")]
+    BudgetTooLarge {
+        /// The configured `max_tokens` value that failed conversion.
+        max_tokens: usize,
+    },
+    /// A dispensed item's label did not map back to any retrieved memory — an internal
+    /// invariant violation. Fails loud rather than silently skipping the item.
+    #[error("dispensed item label '{label}' did not match any retrieved memory")]
+    UnmatchedDispensedLabel {
+        /// The label that failed to resolve.
+        label: String,
+    },
+}
 
 /// Service for retrieving relevant memories using RAG.
 ///
@@ -45,6 +132,7 @@ pub struct RagRetrievalService {
     sanctum: Arc<dyn SanctumPort>,
     embedding: Arc<dyn EmbeddingPort>,
     config: RagConfig,
+    token_counter: Arc<dyn TokenCounterPort>,
 }
 
 impl RagRetrievalService {
@@ -55,6 +143,10 @@ impl RagRetrievalService {
     /// * `sanctum` - Vector storage port for memory retrieval
     /// * `embedding` - Embedding generation port for query vectorization
     /// * `config` - RAG configuration parameters
+    ///
+    /// Defaults the token counter to [`crate::token_counter::HeuristicTokenCounter`]
+    /// (D-07) — use [`Self::with_token_counter`] to inject an exact counter such as
+    /// `TiktokenCounter`.
     pub fn new(
         sanctum: Arc<dyn SanctumPort>,
         embedding: Arc<dyn EmbeddingPort>,
@@ -64,7 +156,107 @@ impl RagRetrievalService {
             sanctum,
             embedding,
             config,
+            token_counter: Arc::new(crate::token_counter::HeuristicTokenCounter),
         }
+    }
+
+    /// Sets the token-counting port the Commissary rations against (D-07). Mirrors
+    /// `PaladinExecutionService::with_token_counter` exactly, so a caller who injects
+    /// an exact counter (e.g. `TiktokenCounter`) there can inject it here too.
+    ///
+    /// # Arguments
+    ///
+    /// * `counter` - The token-counting adapter to use
+    ///
+    /// # Returns
+    ///
+    /// Returns self for method chaining.
+    pub fn with_token_counter(mut self, counter: Arc<dyn TokenCounterPort>) -> Self {
+        self.token_counter = counter;
+        self
+    }
+
+    /// Constructs a per-call [`Commissary`] over synthetic capabilities for `budget`
+    /// (D-04, D-06). RAG has no provider window, only an injection cap, so the
+    /// capabilities are synthesized: provider label `"rag"`,
+    /// `max_context_tokens: Some(budget)`, and a [`CommissaryPlan`] with
+    /// `reserved_completion_tokens: 0` (the whole budget is for memories) and
+    /// `fallback_context_tokens: None`.
+    fn commissary(&self, budget: u32) -> Result<Commissary, RagRetrievalError> {
+        let capabilities = ProviderCapabilities {
+            max_context_tokens: Some(budget),
+            ..ProviderCapabilities::default()
+        };
+        let plan = CommissaryPlan {
+            reserved_completion_tokens: 0,
+            fallback_context_tokens: None,
+            ..CommissaryPlan::default()
+        };
+        let commissary =
+            Commissary::new("rag", capabilities, Arc::clone(&self.token_counter), plan)?;
+        Ok(commissary)
+    }
+
+    /// Rations `ranked` (already sorted by score descending, stable) through
+    /// [`Commissary::dispense`], building a [`Consignment`] whose priority mirrors
+    /// rank order: item `i` gets `priority = u8::try_from(i).unwrap_or(u8::MAX)` (D-08)
+    /// — lower number == higher priority == shed last, so "the highest-scoring
+    /// memories are the ones retained" is a structural guarantee, not a rounding
+    /// property. Equal scores keep insertion order — the rank sort is stable.
+    ///
+    /// Consequence (D-10(a)): a single memory larger than the whole budget is
+    /// RETAINED, TRUNCATED with the Commissary's per-item marker, never silently
+    /// dropped — the opposite of the old byte-length helper's behaviour.
+    fn ration(
+        &self,
+        ranked: Vec<SanctumSearchResult>,
+    ) -> Result<RagRetrievalResult, RagRetrievalError> {
+        if ranked.is_empty() {
+            return Ok(RagRetrievalResult::default());
+        }
+
+        let budget = u32::try_from(self.config.max_tokens).map_err(|_| {
+            RagRetrievalError::BudgetTooLarge {
+                max_tokens: self.config.max_tokens,
+            }
+        })?;
+        let commissary = self.commissary(budget)?;
+
+        let mut consignment = Consignment::new();
+        let mut index_by_label: HashMap<String, usize> = HashMap::with_capacity(ranked.len());
+        for (rank, result) in ranked.iter().enumerate() {
+            let label = result.entry.memory.id.to_string();
+            index_by_label.insert(label.clone(), rank);
+            consignment.push(ConsignmentItem {
+                label,
+                body: result.entry.memory.content.clone(),
+                priority: u8::try_from(rank).unwrap_or(u8::MAX),
+            });
+        }
+
+        let stockpile = commissary.dispense("", &consignment)?;
+
+        let mut memories = Vec::with_capacity(stockpile.dispensed.len());
+        for item in stockpile.dispensed {
+            let idx = *index_by_label.get(&item.label).ok_or_else(|| {
+                RagRetrievalError::UnmatchedDispensedLabel {
+                    label: item.label.clone(),
+                }
+            })?;
+            memories.push(RagRetainedMemory {
+                result: ranked[idx].clone(),
+                body: item.body,
+                truncated: item.truncated,
+            });
+        }
+
+        Ok(RagRetrievalResult {
+            memories,
+            shed: stockpile.shed,
+            prompt_tokens: stockpile.prompt_tokens,
+            allotted_tokens: stockpile.allotted_tokens,
+            exact_tally: stockpile.exact_tally,
+        })
     }
 
     /// Retrieve relevant memories for a given query.
@@ -76,16 +268,18 @@ impl RagRetrievalService {
     ///
     /// # Returns
     ///
-    /// A vector of search results sorted by relevance (descending).
+    /// A [`RagRetrievalResult`] carrying the retained memories (descending relevance
+    /// order), the shed record, and the Commissary's Stockpile accounting.
     ///
     /// # Errors
     ///
-    /// Returns [`SanctumError`] if embedding generation or search fails.
+    /// Returns [`RagRetrievalError`] if embedding generation, search, or Commissary
+    /// rationing fails.
     pub async fn retrieve_context(
         &self,
         paladin_id: &str,
         query: &str,
-    ) -> Result<Vec<SanctumSearchResult>, SanctumError> {
+    ) -> Result<RagRetrievalResult, RagRetrievalError> {
         // Generate query embedding
         let embedding_result = self.embedding.embed_text(query).await.map_err(|e| {
             SanctumError::SearchError(format!("Embedding generation failed: {}", e))
@@ -113,9 +307,19 @@ impl RagRetrievalService {
         results = self.filter_by_similarity(results);
         results = self.deduplicate_memories(results);
         results = self.rank_by_relevance(results);
-        results = self.truncate_to_token_budget(results);
 
-        Ok(results)
+        let rationed = self.ration(results)?;
+
+        log::info!(
+            "RAG rationing: retained={}, shed={}, prompt_tokens={}, allotted_tokens={}, exact_tally={}",
+            rationed.memories.len(),
+            rationed.shed.len(),
+            rationed.prompt_tokens,
+            rationed.allotted_tokens,
+            rationed.exact_tally
+        );
+
+        Ok(rationed)
     }
 
     /// Filter results by minimum similarity threshold.
@@ -180,67 +384,38 @@ impl RagRetrievalService {
         results
     }
 
-    /// Truncate results to fit within token budget.
-    ///
-    /// Estimates tokens per memory and removes lowest-scoring memories
-    /// to stay within the configured `max_tokens` limit.
-    fn truncate_to_token_budget(
-        &self,
-        results: Vec<SanctumSearchResult>,
-    ) -> Vec<SanctumSearchResult> {
-        let mut total_tokens = 0;
-        let mut truncated = Vec::new();
-
-        for result in results {
-            // Rough estimation: ~4 characters per token
-            let estimated_tokens = result.entry.memory.content.len() / 4;
-
-            if total_tokens + estimated_tokens <= self.config.max_tokens {
-                total_tokens += estimated_tokens;
-                truncated.push(result);
-            } else {
-                log::debug!(
-                    "Truncating memories at token budget: {} tokens used of {} max",
-                    total_tokens,
-                    self.config.max_tokens
-                );
-                break;
-            }
-        }
-
-        truncated
-    }
-
     /// Format retrieved memories for prompt injection.
     ///
     /// Creates a structured text block suitable for including in the system
-    /// prompt or user message.
+    /// prompt or user message. Prints [`RagRetainedMemory::body`] (the post-dispense
+    /// body) rather than the raw memory content, so a truncated excerpt is rendered
+    /// exactly as the Commissary retained it.
     ///
     /// # Arguments
     ///
-    /// * `memories` - The search results to format
+    /// * `result` - The rationed retrieval result to format
     ///
     /// # Returns
     ///
     /// A formatted string containing the relevant context section.
-    pub fn format_for_prompt(&self, memories: &[SanctumSearchResult]) -> String {
-        if memories.is_empty() {
+    pub fn format_for_prompt(&self, result: &RagRetrievalResult) -> String {
+        if result.memories.is_empty() {
             return String::new();
         }
 
         let mut formatted = String::from("## Relevant Context\n\n");
         formatted.push_str("The following memories may be relevant to your current task:\n\n");
 
-        for (idx, result) in memories.iter().enumerate() {
-            let memory = &result.entry.memory;
+        for (idx, retained) in result.memories.iter().enumerate() {
+            let memory = &retained.result.entry.memory;
 
             formatted.push_str(&format!(
                 "**Memory {}** (Similarity: {:.2})\n",
                 idx + 1,
-                result.score
+                retained.result.score
             ));
             formatted.push_str(&format!("Type: {:?}\n", memory.memory_type));
-            formatted.push_str(&format!("Content: {}\n", memory.content));
+            formatted.push_str(&format!("Content: {}\n", retained.body));
             formatted.push_str(&format!(
                 "Source: Conversation on {}\n\n",
                 memory.created_at.format("%Y-%m-%d")
@@ -254,13 +429,13 @@ impl RagRetrievalService {
 
 /// Async wrapper for [`RagRetrievalService::retrieve_context`] with a timeout.
 ///
-/// Returns an empty `Vec` on timeout to enable graceful degradation.
+/// Returns an empty [`RagRetrievalResult`] on timeout to enable graceful degradation.
 pub async fn retrieve_context_with_timeout(
     service: &RagRetrievalService,
     paladin_id: &str,
     query: &str,
     timeout_secs: u64,
-) -> Result<Vec<SanctumSearchResult>, SanctumError> {
+) -> Result<RagRetrievalResult, RagRetrievalError> {
     match tokio::time::timeout(
         std::time::Duration::from_secs(timeout_secs),
         service.retrieve_context(paladin_id, query),
@@ -273,7 +448,7 @@ pub async fn retrieve_context_with_timeout(
                 "Memory retrieval timed out after {} seconds, continuing with empty context",
                 timeout_secs
             );
-            Ok(Vec::new())
+            Ok(RagRetrievalResult::default())
         }
     }
 }
@@ -288,6 +463,7 @@ mod tests {
         SanctumError, SanctumFilter, SanctumPort, SanctumQuery, SanctumSearchResult,
     };
     use std::sync::Arc;
+    use uuid::Uuid;
 
     // ── Mock helpers ──────────────────────────────────────────────────────────
 
@@ -372,6 +548,28 @@ mod tests {
             .unwrap();
         let entry = SanctumEntry::new(memory, vec![0.1, 0.2, 0.3, 0.4, 0.5]).unwrap();
         SanctumSearchResult::new(entry, score)
+    }
+
+    /// Wraps already-retrieved [`SanctumSearchResult`]s directly into a
+    /// [`RagRetrievalResult`], with each body sourced verbatim from the memory's
+    /// content and `truncated: false` — for tests that exercise the renderer without
+    /// going through a real Commissary dispense.
+    fn build_result(memories: Vec<SanctumSearchResult>) -> RagRetrievalResult {
+        let retained = memories
+            .into_iter()
+            .map(|result| {
+                let body = result.entry.memory.content.clone();
+                RagRetainedMemory {
+                    result,
+                    body,
+                    truncated: false,
+                }
+            })
+            .collect();
+        RagRetrievalResult {
+            memories: retained,
+            ..RagRetrievalResult::default()
+        }
     }
 
     // ── Config / trigger tests ────────────────────────────────────────────────
@@ -460,7 +658,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(results.len(), 2);
-        assert!(results.iter().all(|r| r.score >= 0.7));
+        assert!(results.memories.iter().all(|m| m.result.score >= 0.7));
     }
 
     #[test]
@@ -474,7 +672,8 @@ mod tests {
         let embedding = Arc::new(MockEmbeddingPort);
         let service = RagRetrievalService::new(sanctum, embedding, RagConfig::default());
 
-        let formatted = service.format_for_prompt(&memories);
+        let result = build_result(memories);
+        let formatted = service.format_for_prompt(&result);
 
         assert!(formatted.contains("## Relevant Context"));
         assert!(formatted.contains("First memory"));
@@ -494,5 +693,86 @@ mod tests {
             .await
             .unwrap();
         assert!(results.is_empty());
+    }
+
+    // ── Commissary rationing tracer (Phase 33, COMM-01) ─────────────────────────
+
+    /// End-to-end proof that a real retrieval is rationed through
+    /// `Commissary::dispense`: a budget too small for all three memories sheds the
+    /// lowest-scoring ones (recorded, never silently dropped), keeps the retained
+    /// memory in descending-score order, and never loses or duplicates an id across
+    /// `memories` and `shed`. Distinct, non-round body sizes (987 / 654 / 321 bytes)
+    /// so a swapped priority could not pass by coincidence (Phase 31 house style).
+    ///
+    /// The budget (233 tokens) is chosen small enough to force at least one shed
+    /// under the Commissary's default pessimistic byte-planning ratio — a budget of
+    /// 1,234 tokens (the figure sketched for the property test's random-input
+    /// strategy) yields an allowance of ~3,446 bytes, comfortably fitting the
+    /// 1,962-byte sum of all three bodies here and so would shed nothing.
+    #[tokio::test]
+    async fn commissary_rations_rag_retrieval_end_to_end() {
+        let entry_a = create_test_entry("paladin-1", &"A".repeat(987), 0.9, 0.95);
+        let entry_b = create_test_entry("paladin-1", &"B".repeat(654), 0.8, 0.85);
+        let entry_c = create_test_entry("paladin-1", &"C".repeat(321), 0.7, 0.75);
+
+        let input_ids: HashSet<String> = [&entry_a, &entry_b, &entry_c]
+            .into_iter()
+            .map(|r| r.entry.memory.id.to_string())
+            .collect();
+
+        let sanctum = Arc::new(MockSanctumPort {
+            results: vec![entry_a, entry_b, entry_c],
+        });
+        let embedding = Arc::new(MockEmbeddingPort);
+        let config = RagConfig {
+            max_tokens: 233,
+            ..RagConfig::default()
+        };
+
+        let service = RagRetrievalService::new(sanctum, embedding, config);
+        let result = service
+            .retrieve_context("paladin-1", "test query")
+            .await
+            .expect("retrieval should succeed");
+
+        assert!(
+            !result.shed.is_empty(),
+            "a tight budget must shed at least the lowest-scoring memory"
+        );
+        for shed in &result.shed {
+            Uuid::parse_str(&shed.label)
+                .unwrap_or_else(|e| panic!("shed label '{}' is not a UUID: {e}", shed.label));
+        }
+        assert!(
+            result.prompt_tokens <= result.allotted_tokens,
+            "prompt_tokens ({}) must not exceed allotted_tokens ({})",
+            result.prompt_tokens,
+            result.allotted_tokens
+        );
+
+        let scores: Vec<f32> = result.memories.iter().map(|m| m.result.score).collect();
+        let mut sorted_desc = scores.clone();
+        sorted_desc.sort_by(|a, b| b.partial_cmp(a).unwrap());
+        assert_eq!(
+            scores, sorted_desc,
+            "retained memories must come back in descending-score order"
+        );
+
+        let mut seen_ids: HashSet<String> = result
+            .memories
+            .iter()
+            .map(|m| m.result.entry.memory.id.to_string())
+            .collect();
+        for shed in &result.shed {
+            assert!(
+                seen_ids.insert(shed.label.clone()),
+                "id {} appeared more than once across memories and shed",
+                shed.label
+            );
+        }
+        assert_eq!(
+            seen_ids, input_ids,
+            "every input memory id must appear exactly once across memories and shed"
+        );
     }
 }

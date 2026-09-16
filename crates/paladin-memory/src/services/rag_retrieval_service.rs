@@ -109,6 +109,31 @@ pub enum RagRetrievalError {
     },
 }
 
+/// Renders the RAG-level omission marker (D-15): a single trailing line naming how
+/// many lower-relevance memories were dropped ENTIRELY and the token budget they were
+/// rationed against — see the example in `rag_omission_marker_uses_plural_noun_for_multiple_omissions`
+/// for the exact rendered shape. Chooses the singular noun (`memory`) when
+/// `omitted == 1`, the plural (`memories`) otherwise. The returned string carries a
+/// leading and trailing newline so it appends cleanly to either renderer's output
+/// without the caller needing to reason about existing trailing whitespace.
+///
+/// This is the RAG-level marker — which memories were omitted entirely from the
+/// result. It is distinct from
+/// [`CommissaryPlan::truncation_marker`](paladin_llm::services::commissary::CommissaryPlan::truncation_marker),
+/// the PER-ITEM marker the Commissary appends inside a retained body that was cut to
+/// its share (D-10). Two markers, two meanings, both visible.
+///
+/// This is the ONLY place this string is constructed (D-15) — both
+/// [`RagRetrievalService::format_for_prompt`] and the facade's
+/// `format_retrieved_context` call this function rather than re-typing the literal, so
+/// the two renderers can never drift.
+pub fn rag_omission_marker(omitted: usize, budget_tokens: u32) -> String {
+    let noun = if omitted == 1 { "memory" } else { "memories" };
+    format!(
+        "\n[{omitted} lower-relevance {noun} omitted to fit the {budget_tokens}-token RAG budget]\n"
+    )
+}
+
 /// Service for retrieving relevant memories using RAG.
 ///
 /// Depends only on port traits — contains no concrete adapter references.
@@ -423,6 +448,14 @@ impl RagRetrievalService {
         }
 
         formatted.push_str("---\n\n");
+
+        if !result.shed.is_empty() {
+            formatted.push_str(&rag_omission_marker(
+                result.shed.len(),
+                result.allotted_tokens,
+            ));
+        }
+
         formatted
     }
 }
@@ -774,5 +807,95 @@ mod tests {
             seen_ids, input_ids,
             "every input memory id must appear exactly once across memories and shed"
         );
+    }
+
+    // ── RAG omission marker tests (Phase 33, COMM-02, D-15) ─────────────────────
+
+    #[test]
+    fn rag_omission_marker_uses_plural_noun_for_multiple_omissions() {
+        let marker = rag_omission_marker(3, 2_000);
+        assert_eq!(
+            marker,
+            "\n[3 lower-relevance memories omitted to fit the 2000-token RAG budget]\n"
+        );
+    }
+
+    #[test]
+    fn rag_omission_marker_uses_singular_noun_for_one_omission() {
+        let marker = rag_omission_marker(1, 1_234);
+        assert_eq!(
+            marker,
+            "\n[1 lower-relevance memory omitted to fit the 1234-token RAG budget]\n"
+        );
+    }
+
+    #[test]
+    fn format_for_prompt_ends_with_marker_when_shed_nonempty() {
+        let memories = vec![create_test_entry("paladin-1", "Kept memory", 0.9, 0.95)];
+        let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+        let embedding = Arc::new(MockEmbeddingPort);
+        let service = RagRetrievalService::new(sanctum, embedding, RagConfig::default());
+
+        let mut result = build_result(memories);
+        result.shed = vec![ShedItem {
+            label: Uuid::new_v4().to_string(),
+            priority: 1,
+            original_bytes: 512,
+        }];
+        result.allotted_tokens = 1_234;
+
+        let formatted = service.format_for_prompt(&result);
+        assert!(
+            formatted.ends_with(&rag_omission_marker(1, 1_234)),
+            "expected formatted output to end with the shared omission marker, got: {formatted}"
+        );
+    }
+
+    #[test]
+    fn format_for_prompt_contains_no_marker_when_shed_empty() {
+        let memories = vec![create_test_entry("paladin-1", "Kept memory", 0.9, 0.95)];
+        let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+        let embedding = Arc::new(MockEmbeddingPort);
+        let service = RagRetrievalService::new(sanctum, embedding, RagConfig::default());
+
+        let result = build_result(memories);
+        assert!(result.shed.is_empty());
+
+        let formatted = service.format_for_prompt(&result);
+        assert!(!formatted.contains("omitted to fit"));
+    }
+
+    /// Named edge test (COMM-02): an empty retrieval renders the empty string with no
+    /// shed record and no omission marker.
+    #[test]
+    fn format_for_prompt_empty_retrieval_has_no_shed_and_no_marker() {
+        let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+        let embedding = Arc::new(MockEmbeddingPort);
+        let service = RagRetrievalService::new(sanctum, embedding, RagConfig::default());
+
+        let result = RagRetrievalResult::default();
+        assert!(result.shed.is_empty());
+
+        let formatted = service.format_for_prompt(&result);
+        assert_eq!(formatted, "");
+        assert!(!formatted.contains("omitted to fit"));
+    }
+
+    /// Named edge test (COMM-02): a single memory that fits the budget is retained
+    /// whole (`truncated == false`), `shed` is empty, and no marker is emitted.
+    #[test]
+    fn format_for_prompt_single_fitting_memory_has_no_marker() {
+        let memory = create_test_entry("paladin-1", "Small memory", 0.9, 0.95);
+        let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+        let embedding = Arc::new(MockEmbeddingPort);
+        let service = RagRetrievalService::new(sanctum, embedding, RagConfig::default());
+
+        let result = build_result(vec![memory]);
+        assert_eq!(result.memories.len(), 1);
+        assert!(!result.memories[0].truncated);
+        assert!(result.shed.is_empty());
+
+        let formatted = service.format_for_prompt(&result);
+        assert!(!formatted.contains("omitted to fit"));
     }
 }

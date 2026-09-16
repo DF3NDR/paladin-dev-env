@@ -6,7 +6,7 @@
 pub use paladin_memory::services::{
     ExtractedMemory, MemoryExtractionService, MemoryExtractionStrategy, RagConfig,
     RagRetainedMemory, RagRetrievalError, RagRetrievalResult, RagRetrievalService,
-    RetrievalTrigger, ShedItem, retrieve_context_with_timeout,
+    RetrievalTrigger, ShedItem, rag_omission_marker, retrieve_context_with_timeout,
 };
 
 /// Memory extraction service (backward-compatible sub-module path).
@@ -20,6 +20,6 @@ pub mod memory_extraction_service {
 pub mod rag_retrieval_service {
     pub use paladin_memory::services::{
         RagConfig, RagRetainedMemory, RagRetrievalError, RagRetrievalResult, RagRetrievalService,
-        RetrievalTrigger, ShedItem, retrieve_context_with_timeout,
+        RetrievalTrigger, ShedItem, rag_omission_marker, retrieve_context_with_timeout,
     };
 }

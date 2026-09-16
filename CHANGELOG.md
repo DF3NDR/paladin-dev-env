@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Commissary prompt-budgeting types are now re-exported from the `paladin` facade:
   `Commissary`, `CommissaryError`, `CommissaryPlan`, `Consignment`, `ConsignmentItem`,
   `DispensedItem`, `ShedItem`, and `Stockpile`.
+- The shared context-window resolution types are now re-exported from the `paladin` facade:
+  `ResolvedWindow`, `UnknownContextWindow`, `WindowFallbackPolicy`, `WindowSource`, and
+  `resolve_context_window`, sourced from `paladin_llm::window`.
 
 ## [0.10.0] - 2026-09-10
 

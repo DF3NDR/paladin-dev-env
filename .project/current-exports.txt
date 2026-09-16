@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-09-12 23:30:32 UTC
+# Public API Surface - Generated 2026-09-16 12:23:35 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -24,8 +24,13 @@ pub use paladin::Paladin
 pub use paladin::PaladinConfig
 pub use paladin::PaladinData
 pub use paladin::PaladinStatus
+pub use paladin::ResolvedWindow
 pub use paladin::ShedItem
 pub use paladin::Stockpile
+pub use paladin::UnknownContextWindow
+pub use paladin::WindowFallbackPolicy
+pub use paladin::WindowSource
+pub use paladin::resolve_context_window
 pub mod paladin::application
 pub mod paladin::application::errors
 pub mod paladin::application::errors::citadel_error
@@ -7906,4 +7911,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 3944
+Total public items: 3949

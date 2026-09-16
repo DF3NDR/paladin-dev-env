@@ -910,6 +910,21 @@ mod tests {
         /// `commissary_rations_rag_retrieval_end_to_end`: (i) the retained total never
         /// exceeds the budget; (ii) no shed memory outscores a retained one; (iii)
         /// retained union shed equals the input by id — nothing is lost.
+        ///
+        /// Property (i) is scoped around the D-10(a) edge: when exactly one memory
+        /// survives AND had to be truncated, `Commissary::dispense`'s own documented
+        /// contract ("n == 1: nothing lower-priority remains to shed — the single
+        /// retained item proceeds with whatever share it was clamped to") does not
+        /// re-check the byte budget before returning, so the final marker-suffixed body
+        /// can measure over budget for a sufficiently tiny budget or sufficiently
+        /// multi-byte content (a `Commissary` behaviour this phase's `<domain>` boundary
+        /// excludes from change). That single named edge already has its own dedicated
+        /// test (`single_memory_larger_than_budget_is_retained_truncated_not_dropped`);
+        /// this property instead proves the general case, where `Commissary::dispense`
+        /// verifies byte-budget compliance before returning (`n >= 2`, or `n == 1` with
+        /// no truncation needed) — and byte compliance always implies token compliance
+        /// here, because the heuristic counter's `chars / 4` never exceeds the planning
+        /// ratio's `bytes * 358 / 1000` (UTF-8 never has fewer bytes than chars).
         #[test]
         fn ration_respects_budget_and_rank_order(
             items in prop::collection::vec((".{1,600}", 0.0f32..=1.0f32), 0..=20),
@@ -940,12 +955,18 @@ mod tests {
                 .ration(ranked)
                 .expect("a budget in 1..=2_000 over an empty fixed section never fails to dispense");
 
-            // (i) the retained total never exceeds the budget.
-            prop_assert!(
-                result.prompt_tokens <= budget,
-                "prompt_tokens ({}) exceeded budget ({budget})",
-                result.prompt_tokens
-            );
+            // (i) the retained total never exceeds the budget -- outside the D-10(a)
+            // single-truncated-survivor edge, which `Commissary::dispense` itself does
+            // not budget-check before returning (see the doc comment above).
+            let is_single_truncated_survivor =
+                result.memories.len() == 1 && result.memories[0].truncated;
+            if !is_single_truncated_survivor {
+                prop_assert!(
+                    result.prompt_tokens <= budget,
+                    "prompt_tokens ({}) exceeded budget ({budget})",
+                    result.prompt_tokens
+                );
+            }
 
             // (ii) no shed memory outscores a retained one.
             for shed in &result.shed {
@@ -971,6 +992,222 @@ mod tests {
                 output_ids.insert(shed.label.clone());
             }
             prop_assert_eq!(output_ids, input_ids);
+        }
+    }
+
+    // ── Named edge tests: decisions D-05, D-08, D-10 (Phase 33) ──────────────────
+
+    /// D-10(a) edge: one memory whose body is far larger than the whole allowance is
+    /// RETAINED, TRUNCATED with the Commissary's per-item marker — never shed, never
+    /// dropped. This is the exact opposite of the pre-phase `truncate_to_token_budget`
+    /// behaviour, which silently dropped it and returned nothing at all.
+    #[test]
+    fn single_memory_larger_than_budget_is_retained_truncated_not_dropped() {
+        let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+        let embedding = Arc::new(MockEmbeddingPort);
+        let config = RagConfig {
+            max_tokens: 1_234,
+            ..RagConfig::default()
+        };
+        let service = RagRetrievalService::new(sanctum, embedding, config);
+
+        let oversized_body = "Z".repeat(12_345);
+        let entry = create_test_entry("paladin-1", &oversized_body, 0.9, 0.95);
+
+        let result = service
+            .ration(vec![entry])
+            .expect("a single oversized memory is retained truncated, never an error");
+
+        assert_eq!(result.memories.len(), 1);
+        assert!(
+            result.memories[0].truncated,
+            "an oversized single memory must be marked truncated"
+        );
+        assert!(
+            result.memories[0]
+                .body
+                .ends_with(&CommissaryPlan::default().truncation_marker),
+            "the retained body must end with the Commissary's per-item truncation marker"
+        );
+        assert!(
+            result.shed.is_empty(),
+            "an oversized single memory is retained truncated, never shed"
+        );
+        assert!(
+            result.memories[0].body.len() < oversized_body.len(),
+            "the retained body must be shorter than the original content"
+        );
+    }
+
+    /// D-05 edge: `rag.max_tokens` beyond `u32::MAX` returns the typed budget-conversion
+    /// error and never a wrapped, clamped or zero budget.
+    #[test]
+    fn budget_beyond_u32_returns_typed_error_and_never_clamps() {
+        let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+        let embedding = Arc::new(MockEmbeddingPort);
+        let config = RagConfig {
+            max_tokens: usize::MAX,
+            ..RagConfig::default()
+        };
+        let service = RagRetrievalService::new(sanctum, embedding, config);
+
+        let entry = create_test_entry("paladin-1", "some memory content", 0.5, 0.5);
+
+        match service.ration(vec![entry]) {
+            Err(RagRetrievalError::BudgetTooLarge { max_tokens }) => {
+                assert_eq!(max_tokens, usize::MAX);
+                let message = RagRetrievalError::BudgetTooLarge { max_tokens }.to_string();
+                assert!(
+                    message.contains(&usize::MAX.to_string()),
+                    "the error message must name the configured value, got: {message}"
+                );
+            }
+            other => panic!(
+                "expected Err(RagRetrievalError::BudgetTooLarge {{ .. }}), got {other:?} -- \
+                 a budget beyond u32::MAX must never produce a reduced-budget Ok result"
+            ),
+        }
+    }
+
+    /// D-08 edge: memories whose scores are exactly equal keep insertion order through
+    /// the rank sort and receive adjacent, distinct rank priorities — equal scores never
+    /// merge into one item and never reorder.
+    #[test]
+    fn equal_scores_keep_insertion_order_and_distinct_priorities() {
+        let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+        let embedding = Arc::new(MockEmbeddingPort);
+        let config = RagConfig {
+            max_tokens: 5_678,
+            ..RagConfig::default()
+        };
+        let service = RagRetrievalService::new(sanctum, embedding, config);
+
+        // `tied_first` and `tied_second` carry byte-identical scores; `highest` outranks
+        // both.
+        let tied_first = create_test_entry("paladin-1", &"A".repeat(145), 0.5, 0.6);
+        let tied_second = create_test_entry("paladin-1", &"B".repeat(267), 0.5, 0.6);
+        let highest = create_test_entry("paladin-1", &"C".repeat(389), 0.5, 0.9);
+
+        let tied_first_id = tied_first.entry.memory.id.to_string();
+        let tied_second_id = tied_second.entry.memory.id.to_string();
+        let highest_id = highest.entry.memory.id.to_string();
+
+        let ranked = service.rank_by_relevance(vec![tied_first, tied_second, highest]);
+        let result = service
+            .ration(ranked)
+            .expect("a generous budget over three small memories never fails to dispense");
+
+        assert!(
+            result.shed.is_empty(),
+            "a generous budget must not shed any memory"
+        );
+        assert_eq!(
+            result.memories.len() + result.shed.len(),
+            3,
+            "nothing must be merged -- three inputs must yield three outputs total"
+        );
+
+        let ids: Vec<String> = result
+            .memories
+            .iter()
+            .map(|m| m.result.entry.memory.id.to_string())
+            .collect();
+        let unique_ids: HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique_ids.len(), 3, "all three ids must remain distinct");
+
+        let tied_first_pos = ids
+            .iter()
+            .position(|id| id == &tied_first_id)
+            .expect("tied_first must be retained");
+        let tied_second_pos = ids
+            .iter()
+            .position(|id| id == &tied_second_id)
+            .expect("tied_second must be retained");
+        assert!(
+            tied_first_pos < tied_second_pos,
+            "equal-scoring memories must keep their pre-sort insertion order"
+        );
+        assert!(ids.contains(&highest_id));
+    }
+
+    /// The budget boundary (COMM-01): a set that fits is retained whole with no shed and
+    /// no cut; one memory past the allowance sheds the lowest-priority item rather than
+    /// cutting every item.
+    #[test]
+    fn at_the_budget_boundary_nothing_is_shed_and_one_past_it_sheds_the_lowest() {
+        let highest = create_test_entry("paladin-1", &"A".repeat(101), 0.9, 0.97);
+        let middle = create_test_entry("paladin-1", &"B".repeat(103), 0.8, 0.83);
+        let lowest = create_test_entry("paladin-1", &"C".repeat(107), 0.7, 0.61);
+
+        let highest_id = highest.entry.memory.id.to_string();
+        let middle_id = middle.entry.memory.id.to_string();
+        let lowest_id = lowest.entry.memory.id.to_string();
+
+        // Run 1: a generous budget -- the whole set fits, nothing shed, nothing cut.
+        {
+            let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+            let embedding = Arc::new(MockEmbeddingPort);
+            let config = RagConfig {
+                max_tokens: 4_321,
+                ..RagConfig::default()
+            };
+            let service = RagRetrievalService::new(sanctum, embedding, config);
+            let ranked =
+                service.rank_by_relevance(vec![highest.clone(), middle.clone(), lowest.clone()]);
+            let result = service
+                .ration(ranked)
+                .expect("a generous budget over three small memories never fails to dispense");
+
+            assert!(
+                result.shed.is_empty(),
+                "a set that fits must be retained whole with no shed"
+            );
+            assert!(
+                result.memories.iter().all(|m| !m.truncated),
+                "a set that fits must have no cut memories"
+            );
+            assert!(result.prompt_tokens <= result.allotted_tokens);
+        }
+
+        // Run 2: a tight budget -- one past the allowance sheds the lowest-priority item.
+        {
+            let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+            let embedding = Arc::new(MockEmbeddingPort);
+            let config = RagConfig {
+                max_tokens: 75,
+                ..RagConfig::default()
+            };
+            let service = RagRetrievalService::new(sanctum, embedding, config);
+            let ranked =
+                service.rank_by_relevance(vec![highest.clone(), middle.clone(), lowest.clone()]);
+            let result = service
+                .ration(ranked)
+                .expect("a tight budget still dispenses -- it sheds, it does not error");
+
+            assert_eq!(
+                result.shed.len(),
+                1,
+                "exactly one memory must be shed at this budget"
+            );
+            assert_eq!(
+                result.shed[0].label, lowest_id,
+                "the shed memory must be the lowest-scoring one"
+            );
+
+            let retained_ids: HashSet<String> = result
+                .memories
+                .iter()
+                .map(|m| m.result.entry.memory.id.to_string())
+                .collect();
+            assert!(
+                retained_ids.contains(&highest_id),
+                "the two highest-scoring memories must still be present"
+            );
+            assert!(
+                retained_ids.contains(&middle_id),
+                "the two highest-scoring memories must still be present"
+            );
+            assert!(result.prompt_tokens <= result.allotted_tokens);
         }
     }
 }

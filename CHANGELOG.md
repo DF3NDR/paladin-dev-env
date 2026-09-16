@@ -5,22 +5,17 @@ All notable changes to the Paladin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-- The Commissary prompt-budgeting types are now re-exported from the `paladin` facade:
-  `Commissary`, `CommissaryError`, `CommissaryPlan`, `Consignment`, `ConsignmentItem`,
-  `DispensedItem`, `ShedItem`, and `Stockpile`.
-- The shared context-window resolution types are now re-exported from the `paladin` facade:
-  `ResolvedWindow`, `UnknownContextWindow`, `WindowFallbackPolicy`, `WindowSource`, and
-  `resolve_context_window`, sourced from `paladin_llm::window`.
-
 ## [0.10.0] - 2026-09-10
 
 ### Behavioral changes
 
-Four user-visible behavior changes ship in this release without requiring a code change. Each is
-detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes).
+Five user-visible behavior changes ship in this release without requiring a code change. The
+first four (`M-B-01`…`M-B-04`) are detailed, with a worked before/after example, in
+[`MIGRATION.md` §9.1](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes); the
+fifth (RAG rationing, below) results from the signature break registered in
+[`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)'s
+`paladin-memory` rows, with its own worked example in `docs/src/architecture/commissary.md`'s
+"In-tree caller: RAG" section rather than a §9.1 table row.
 
 - **M-B-01 — `EdgeCondition::Custom` no longer defaults to `true` when no evaluator is registered
   (BUG-01 fix).** Campaign/graph validation now fails, naming every unregistered condition, before
@@ -31,6 +26,20 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   halt before exiting. Set `terminationGracePeriodSeconds` ≥ 2 × `shutdown_grace` in any Kubernetes
   Deployment manifest before rolling out this upgrade (both shipped manifests already ship `60`).
   Set `APP_ENGINE_GRACEFUL_SHUTDOWN=false` to restore the old immediate-exit behavior.
+- **RAG retrieval output now carries a truncation marker and a shed record where it previously
+  dropped silently (COMM-01, COMM-02, Phase 33).** `RagRetrievalService::retrieve_context` rations
+  retrieved memories through a `Commissary::dispense` call instead of the old inline
+  `content.len() / 4` byte-length estimate: a single memory larger than the whole `rag.max_tokens`
+  budget is now **retained truncated** with the Commissary's own per-item marker, rather than
+  dropped entirely — the exact opposite of the old behavior, which injected nothing for it — and
+  every memory that does not survive rationing is recorded in `RagRetrievalResult::shed` and
+  surfaced as a trailing omission line in the rendered prompt (both `format_for_prompt` and the
+  facade's `format_retrieved_context`) whenever `shed` is non-empty. At an unchanged
+  `rag.max_tokens`, the injected volume is now planned at the Commissary's pessimistic ratio (358
+  tokens per 1000 bytes), so roughly 30% fewer bytes are planned for injection than the old
+  byte-length estimate allowed at the same setting; `RagRetrievalResult::prompt_tokens` /
+  `allotted_tokens` / `exact_tally` show the real, measured usage. No `rag.max_tokens` value needs
+  to change to get this behavior — it applies at whatever budget is already configured.
 - **M-B-03 — `tool_error_mode` defaults to `FeedToModel`, naming v0.9's existing behavior rather
   than changing it.** A failed Arsenal/handoff tool call was always fed back to the model and the
   run continued — that is unchanged. The only observable difference: the fed-back text is now
@@ -113,6 +122,20 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   changed. See [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
   (the `paladin-llm | Commissary` row is marked `N/A` with no allowlist mirror — every
   discovery run recorded zero fired `cargo semver-checks` lints for it; see that section's note).
+
+- **`RagRetrievalService::retrieve_context`/`retrieve_context_with_timeout` return a new
+  `RagRetrievalResult` in place of their v0.9.0 return type; `format_for_prompt` now takes that
+  struct as its parameter (COMM-01, COMM-02, COMM-04, Phase 33).** `RagRetrievalResult` carries the
+  retained memories (each with the post-dispense `body` — render this, never `memory.content`),
+  the shed record (`shed: Vec<ShedItem>`), and the Commissary's `Stockpile` accounting
+  (`prompt_tokens`/`allotted_tokens`/`exact_tally`). A new `RagRetrievalError` enum surfaces
+  Sanctum/Commissary/budget-conversion failures, and a new
+  `with_token_counter(Arc<dyn TokenCounterPort>)` builder mirrors
+  `PaladinExecutionService::with_token_counter` so a caller can inject an exact counter. No
+  forwarding method and no `#[deprecated]` alias ship (ADR-0051 clean break) — see
+  [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register) (the
+  two `paladin-memory` rows, both marked `N/A` with no allowlist mirror for the same tool-coverage
+  reason as the `Commissary` row immediately above) for the full per-row migration guidance.
 
 ### Added
 
@@ -328,6 +351,19 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   exact tokenizer tally or an approximation. `TiktokenCounter` overrides it `true` (scoped to the
   encoding resolved at `new(model)`); `HeuristicTokenCounter` relies on the trait default. See
   [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
+- **`paladin-memory` gains an unconditional production dependency on `paladin-llm`
+  (`default-features = false`) (COMM-01, Phase 33).** `RagRetrievalService` calls
+  `Commissary::dispense` directly to ration retrieved memories — the workspace's first
+  unconditional production lateral adapter-to-adapter crate edge (`paladin-battalion` takes
+  `paladin-llm` as a dev-dependency only; `paladin-content` takes it optionally behind its `llm`
+  feature). No cycle: `paladin-llm` depends only on `paladin-core` and `paladin-ports`; the
+  featureless dependency keeps `reqwest`/`rand` out of `paladin-memory`'s build.
+- **The Commissary prompt-budgeting types are now re-exported from the `paladin` facade
+  (Phase 32).** `Commissary`, `CommissaryError`, `CommissaryPlan`, `Consignment`,
+  `ConsignmentItem`, `DispensedItem`, `ShedItem`, and `Stockpile`.
+- **The shared context-window resolution types are now re-exported from the `paladin` facade
+  (Phase 32).** `ResolvedWindow`, `UnknownContextWindow`, `WindowFallbackPolicy`, `WindowSource`,
+  and `resolve_context_window`, sourced from `paladin_llm::window`.
 
 ### Removed
 

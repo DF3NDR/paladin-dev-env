@@ -3,36 +3,38 @@ gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 33
-current_phase_name: Commissary In-Tree Adoption
-status: executing
-stopped_at: "Phase 33 planned — 6 plans in 5 waves, plan-checker passed (iteration 2); next: /gsd-execute-phase 33"
-last_updated: "2026-09-16T15:49:24.178Z"
+status: completed
+stopped_at: "Phase 33 complete — 6/6 plans, verification passed 25/25, code review 0 critical / 3 warnings (advisory); next: /gsd-secure-phase 33, then /gsd-verify-work 33 (UAT + human sign-off of audit §11), then /gsd-complete-milestone v0.10.0"
+last_updated: "2026-09-16T19:18:37.473Z"
 last_activity: 2026-09-16
-last_activity_desc: Phase 33 execution started
+last_activity_desc: Phase 33 complete
 progress:
   total_phases: 13
-  completed_phases: 12
+  completed_phases: 13
   total_plans: 158
-  completed_plans: 152
+  completed_plans: 158
+current_phase_name: Commissary In-Tree Adoption
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-16 after Phase 32)
+See: .planning/PROJECT.md (updated 2026-09-16 after Phase 33)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 33 — Commissary In-Tree Adoption
-`0.10.0` tag is cut (Phases 22-29 complete). Phases 30-32 (Token Economy) are closed; Phase 32
-closed 2026-09-16 with UAT 22/22, verification `passed`, security `verified`. Next:
-`/gsd-discuss-phase 33` (no `33-CONTEXT.md` yet) then `/gsd-plan-phase 33` — RAG rations through
-`Commissary::dispense` plus the Phase 29 release-gate re-seal (COMM-04). `/gsd-complete-milestone
-v0.10.0` stays deferred to after that re-seal.
+**Current focus:** Phase 33 closed — v0.10.0 milestone close-out
+`0.10.0` tag is not yet cut. Phases 30-33 (Token Economy) are closed; Phase 33 closed 2026-09-16 with
+6/6 plans, verification `passed` 25/25, code review 0 critical / 3 warnings (advisory, see
+`33-REVIEW.md`), and the Phase 29 release gates re-sealed on evidence head `69500c9b` (`33-CI-EVIDENCE.md`,
+corpus audit §11 with one unticked human-only box). Next: `/gsd-secure-phase 33` (security enforcement is
+active, no `33-SECURITY.md` yet), `/gsd-verify-work 33` (UAT; the maintainer ticks audit §11's tag box),
+then `/gsd-complete-milestone v0.10.0`. The CI `coverage` and `publish-dry-run` jobs supply the two
+gates that could not run locally (no Docker; `main`-push only).
 
-**Progress:** [███████████████████░] v0.10.0 — 12 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32); Phase 33 remains (Token Economy, added 2026-09-14); 152/152 plans (100%)
+**Progress:** [████████████████████] v0.10.0 — 13 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33); 158/158 plans (100%)
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -55,10 +57,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 33 (Commissary In-Tree Adoption) — EXECUTING
-Plan: 1 of 6
-Status: Executing Phase 33
-Last activity: 2026-09-16 — Phase 33 execution started
+Phase: 33
+Plan: Not started
+Status: All phases complete
+Last activity: 2026-09-16 — Phase 33 complete
 Previous: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
@@ -66,7 +68,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 
 **Velocity:**
 
-- Total plans completed: 339
+- Total plans completed: 345
 - Average duration: —
 - Total execution time: —
 
@@ -105,6 +107,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | 30 | 3 | - | - |
 | 31 | 7 | - | - |
 | 32 | 5 | - | - |
+| 33 | 6 | - | - |
 
 *Updated after each plan completion*
 
@@ -991,14 +994,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 33 planned — 6 plans in 5 waves, plan-checker passed (iteration 2); next: /gsd-execute-phase 33
+**Stopped at:** Phase 33 complete — 6/6 plans, verification passed 25/25, code review 0 critical / 3 warnings (advisory); next: /gsd-secure-phase 33, then /gsd-verify-work 33 (UAT + human sign-off of audit §11), then /gsd-complete-milestone v0.10.0
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-16T15:46:39.775Z
-Resume file: .planning/phases/33-commissary-in-tree-adoption/33-01-PLAN.md
+Last session: 2026-09-16T19:18:37.396Z
+Resume file: .planning/phases/33-commissary-in-tree-adoption/33-VERIFICATION.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

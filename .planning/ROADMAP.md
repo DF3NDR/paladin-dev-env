@@ -209,7 +209,7 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 - [x] **Phase 30: Token-Economy Vocabulary & Commissary Anchoring** - Record the units-plain / roles-medieval vocabulary rule, anchor `Commissary` with an ADR and an mdBook page, reserve `Treasurer` with its downstream guardrail, document the four `max_tokens` meanings, purge the orphan `Quartermaster` references, and record the clean-break versioning decision as an ADR (docs only) (completed 2026-09-14)
 - [x] **Phase 31: Lossless Token Accounting** - Carry the full `TokenUsage` prompt/completion split (plus optional cache/reasoning fields) from the LLM port to `RunFinished` and a herald, remove the `from_total` zeroing from the battalion path, and prove streaming usage parity per adapter (keystone; breaking) (completed 2026-09-15)
 - [x] **Phase 32: Unified Token Primitives** - One counting contract (`TokenCounterPort::is_exact`, `Commissary::new` drops `is_exact_counter`, legacy `TokenCounter`/`TokenCounterFactory` retired) and one shared context-window resolver with a strict mode consumed by both `HistoryTrimmer` and `Commissary` (breaking) (completed 2026-09-16)
-- [ ] **Phase 33: Commissary In-Tree Adoption** - Route RAG truncation through `Commissary::dispense` with shed records and a truncation marker, closing the last silent-truncation path with an integration-tested production caller, then re-seal the Phase 29 release gates on the final commit
+- [x] **Phase 33: Commissary In-Tree Adoption** - Route RAG truncation through `Commissary::dispense` with shed records and a truncation marker, closing the last silent-truncation path with an integration-tested production caller, then re-seal the Phase 29 release gates on the final commit (completed 2026-09-16)
 
 ## Phase Details
 
@@ -943,7 +943,7 @@ Plans:
 | 30. Token-Economy Vocabulary & Commissary Anchoring | v0.10.0 | 3/3 | Complete    | 2026-09-14 |
 | 31. Lossless Token Accounting | v0.10.0 | 7/7 | Complete    | 2026-09-15 |
 | 32. Unified Token Primitives | v0.10.0 | 5/5 | Complete    | 2026-09-16 |
-| 33. Commissary In-Tree Adoption | v0.10.0 | 0/0 | Not started | — |
+| 33. Commissary In-Tree Adoption | v0.10.0 | 6/6 | Complete    | 2026-09-16 |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

@@ -446,12 +446,12 @@ Source PRD: `prd-commissary-in-tree-adoption.md` (D-7; F6, F4 completes). Verifi
 the Phase 26 D-13 deferral); `Commissary` has no in-tree caller outside `paladin-llm` and the
 facade re-export.
 
-- [ ] **COMM-01**: RAG truncation goes through `Commissary::dispense` over a `Consignment` built
+- [x] **COMM-01**: RAG truncation goes through `Commissary::dispense` over a `Consignment` built
   from the retrieved memories with priority derived from relevance score and budget
   `rag.max_tokens`; a property test proves the retained total is ≤ the budget and the
   highest-scoring memories are retained (PRD R1; D-7)
 
-- [ ] **COMM-02**: The `ShedItem` list is surfaced through the RAG result path and a truncation
+- [x] **COMM-02**: The `ShedItem` list is surfaced through the RAG result path and a truncation
   marker is emitted when content was shed; tests assert both present when the budget is exceeded
   and both absent when everything fits (PRD R2; D-7)
 
@@ -459,7 +459,7 @@ facade re-export.
   (the F4 production-caller evidence), and no silent token-based truncation remains in-tree,
   grep-provable (PRD §5, §6; F4, F6)
 
-- [ ] **COMM-04**: The Phase 29 release gates are re-sealed on this phase's final commit —
+- [x] **COMM-04**: The Phase 29 release gates are re-sealed on this phase's final commit —
   `MIGRATION.md` no-TBD with §9.2 matching the allowlist row-for-row, `v0_9_config_boot` and the
   OpenAPI golden diff passing, `cargo semver-checks` and MSRV green, `cargo publish --dry-run`
   green in dependency order — and the `CHANGELOG.md` `[0.10.0]` section carries the RAG
@@ -571,10 +571,10 @@ Which phases cover which requirements. Populated during roadmap creation.
 | PRIM-03 | Phase 32 | Complete |
 | PRIM-04 | Phase 32 | Complete |
 | PRIM-05 | Phase 32 | Complete |
-| COMM-01 | Phase 33 | Not started |
-| COMM-02 | Phase 33 | Not started |
-| COMM-03 | Phase 33 | Not started |
-| COMM-04 | Phase 33 | Not started |
+| COMM-01 | Phase 33 | Complete |
+| COMM-02 | Phase 33 | Complete |
+| COMM-03 | Phase 33 | Complete |
+| COMM-04 | Phase 33 | Complete |
 
 **Coverage:**
 

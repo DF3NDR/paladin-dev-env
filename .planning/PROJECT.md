@@ -109,6 +109,26 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 33 complete (2026-09-16)** — commissary-in-tree-adoption, the last Token Economy phase
+(COMM-01…04; one clean signature break under ADR-0051): `RagRetrievalService::retrieve_context` returns a
+`RagRetrievalResult` (retained memories with post-dispense bodies and `truncated` flags, `shed: Vec<ShedItem>`
+labelled by memory UUID, Stockpile accounting) produced by a synchronous `ration` seam over
+`Commissary::dispense` with rank-order priorities and a per-call Commissary over synthetic capabilities for
+`rag.max_tokens`; `RagRetrievalError` wraps Sanctum/Commissary errors plus a no-clamp `BudgetTooLarge`;
+`paladin-memory` takes `paladin-llm` (`default-features = false`) as the workspace's first unconditional
+production lateral adapter edge; one shared `rag_omission_marker` is emitted by both renderers with a
+counts-only `shed=` log field; a `proptest` over the seam, four named edge tests and the ungated
+`rag_commissary` integration test are the F4 production-caller evidence, and both D-19 exit greps are empty
+(F6 closed — the Phase 26 D-13 deferral is retired). Release bookkeeping: six empirical semver runs fired
+zero lints (tool-coverage gap confirmed for return/parameter-type changes), two `N/A` MIGRATION §9.2 rows,
+CHANGELOG `[0.10.0]` entries with the stray `[Unreleased]` bullets folded in, API baseline regenerated. The
+Phase 29 release gates were re-run green on evidence head `69500c9b` (`33-CI-EVIDENCE.md`, corpus audit §11
+with one unticked human-only tag box; coverage CI-attributed, `cargo doc` 73 pre-existing warnings carried).
+6 plans in 5 waves; verification `passed` 25/25; code review 0 critical / 3 warnings / 1 info (advisory,
+`33-REVIEW.md`: `ShedItem` missing from the memory prelude, duplicate-id overwrite in `ration` undocumented,
+`prompt_tokens` edge undisclosed); `make test` 3704/0. `/gsd-secure-phase 33` and `/gsd-verify-work 33`
+remain before `/gsd-complete-milestone v0.10.0`.
+
 **Phase 32 complete (2026-09-16)** — unified-token-primitives (PRIM-01…05, breaking under
 ADR-0051): `TokenCounterPort::is_exact` (doc-tested `false` default; `TiktokenCounter` `true`, heuristic inherits)
 replaces `Commissary::new`/`from_port`'s caller-supplied exactness flag, with `Stockpile.exact_tally` read live from
@@ -385,7 +405,10 @@ Security Paladin repo's token-economy systems analysis, findings F1-F8 / decisio
   resolver with a strict mode (`PRIM-01…05`, breaking) — **complete 2026-09-16**: `paladin_llm::window`,
   legacy pair removed, two §9.2 rows + allowlist entries, verification 5/5, review WR-01/IN-01 advisory
 - Phase 33 — RAG rations through `Commissary::dispense` with shed records and a truncation
-  marker; Phase 29's release gates re-sealed on the final commit (`COMM-01…04`)
+  marker; Phase 29's release gates re-sealed on the final commit (`COMM-01…04`, one clean break) —
+  **complete 2026-09-16**: `RagRetrievalResult`/`RagRetrievalError`, `paladin-memory` → `paladin-llm` edge,
+  proptest + ungated integration test, two N/A §9.2 rows, gates re-sealed on `69500c9b`, verification 25/25,
+  review 3 warnings advisory
 
 **Locked by the corpus overview §0 (operator-confirmed 2026-09-14):** the two-officer model —
 `Commissary` (input-side, per-call window rationing; keep, do not rename) and `Treasurer`
@@ -762,6 +785,11 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
   with re-exports narrowed, `paladin_llm::window::resolve_context_window` behind both `Commissary` and
   `HistoryTrimmer` with pre-refactor equivalence fixtures, MIGRATION §9.2 + allowlist rows, CHANGELOG `[0.10.0]`
   entries (Milestone 13 Epic 3)
+- [x] **COMM-01 … COMM-04** (✓ Phase 33, 2026-09-16) — RAG rationed through `Commissary::dispense` with
+  rank-order priorities over `rag.max_tokens`, `ShedItem` record and shared omission marker in both renderers,
+  proptest + named edge tests + ungated `rag_commissary` integration test (F4 evidence, F6 closed), MIGRATION §9.2
+  N/A rows + CHANGELOG `[0.10.0]` + API baseline, Phase 29 release gates re-sealed on `69500c9b` with corpus audit §11
+  (Milestone 13 Epic 4)
 
 *(The long-form forward-scope listing that previously lived here — the 90 ingest-derived
 requirements across Phases 5-16 plus Phase 17's `PROV-*` additions — shipped with v0.8.0 and is
@@ -1765,3 +1793,7 @@ next: `/gsd-secure-phase 31` then `/gsd-discuss-phase 32` Unified Token Primitiv
 contract on `TokenCounterPort::is_exact`, legacy counter pair removed, `paladin_llm::window` shared resolver, migration
 register; 12 of 13 phases, 152/152 plans; next: `/gsd-secure-phase 32` then `/gsd-discuss-phase 33` Commissary In-Tree
 Adoption).*
+
+*Last updated: 2026-09-16 after Phase 33 completion (v0.10.0 milestone; COMM-01…04 validated — RAG rations
+through `Commissary::dispense`, silent truncation retired, Phase 29 release gates re-sealed on `69500c9b`; 13 of 13
+phases, 158/158 plans; next: `/gsd-secure-phase 33`, `/gsd-verify-work 33`, then `/gsd-complete-milestone v0.10.0`).*

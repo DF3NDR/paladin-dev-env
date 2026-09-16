@@ -1388,6 +1388,172 @@ Verdict: PASS
 
 ---
 
+## 11. Re-seal after Phases 30-33 (Phase 33, COMM-04)
+
+Phases 31, 32 and 33 changed public API after Phase 29 sealed the release gates above (Phase 31:
+`TokenUsage` and the token-carrier types; Phase 32: `Commissary::new`/`from_port`, the legacy
+`TokenCounter`/`TokenCounterFactory` removal, the shared window resolver; Phase 33: `RagRetrievalService`'s
+result and error types). This section re-runs the same gate list on Phase 33's final commit, because
+that is the precondition ADR-0051 sets for cutting the `v0.10.0` tag — the tag itself is cut on the
+`main` merge commit by `release.yml`, outside this phase and outside this audit.
+
+**Head SHA the gates below were measured on: `69500c9b51a37f11215037c49318d76ea017dab3`** — the tip
+of `feature/phase-33` at dispatch of this plan (plans 33-01 through 33-05 plus the wave-4 tracking
+commit). This plan's own two commits (this section, and `33-CI-EVIDENCE.md`) are docs-only and touch
+no source file, so the measured tree is identical to the phase's actual final shipped state. Full
+verbatim command output lives in `.planning/phases/33-commissary-in-tree-adoption/33-CI-EVIDENCE.md`;
+this section cites that record rather than re-deriving it, per this plan's own instruction.
+
+### F6 exit grep (COMM-03 closure)
+
+```bash
+grep -rn 'truncate_to_token_budget' crates src docs examples benches   # empty
+grep -rnE '\.len\(\) */ *4' crates/paladin-memory/src                  # empty
+```
+
+Both empty at head `69500c9b`, 2026-09-16. **Verdict: PASS** — the RAG silent-truncation path (F6,
+Phase 26 D-13's deferral) is closed; `RagRetrievalService::retrieve_context` now rations through
+`Commissary::dispense`.
+
+### `MIGRATION.md` no-TBD and §9.2 row-level set-equality
+
+```bash
+grep -c TBD MIGRATION.md              # 0
+make check-migration-allowlist        # 15 crate|type pairs, set-equal in both directions
+```
+
+Head `69500c9b`, 2026-09-16. **Verdict: PASS.**
+
+### SHIP-02 proofs — both frozen compat tests
+
+```bash
+cargo test --features web-server --test v0_9_config_boot     # 9 passed, 0 failed
+cargo test -p paladin-web --test openapi_golden_v0_9          # 7 passed, 0 failed
+```
+
+Head `69500c9b`, 2026-09-16. `openapi_golden_v0_9`'s count is one higher than §9's own 6 (a test
+added since Phase 29, unrelated to Phase 33 — this phase touches no OpenAPI surface). **Verdict: PASS.**
+
+### `cargo semver-checks` — 11/11 publishable crates vs the `v0.9.0` baseline
+
+```bash
+cargo semver-checks check-release --package <pkg> --default-features --baseline-version 0.9.0
+```
+
+Run for `paladin-ai`, `paladin-ai-core`, `paladin-ports`, `paladin-battalion`, `paladin-herald`,
+`paladin-llm`, `paladin-memory`, `paladin-storage`, `paladin-notifications`, `paladin-content`,
+`paladin-web` (the CI `semver` job's exact package list, `paladin-eval` deliberately excluded per
+its own no-baseline rationale). Every crate: `Checking <pkg> v0.9.0 -> v0.10.0 (major change)` /
+`0 checks: 0 pass, 254 skip` / `Summary no semver update required` — identical to `29-CI-EVIDENCE.md`
+row 10's own recorded shape at the same version boundary; `paladin-memory`'s RAG retrieval API break
+produces the same "major change, 0 checks evaluated" result plan 33-05's own `--release-type minor`
+discovery runs already explained as a tool-coverage gap (no lint checks an inherent method's or free
+function's return-type or parameter-type change). Head `69500c9b`, 2026-09-16. **Verdict: PASS
+(11/11).**
+
+### MSRV: `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --all-features --all-targets --locked`
+
+`Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 4m 50s` — zero errors, zero
+warnings. Head `69500c9b`, 2026-09-16. **Verdict: PASS.**
+
+### `make publish-dry-run`
+
+`release-check` prerequisite (clean-code + full workspace test suite + doctests + `cargo audit` +
+`build-release`) reports zero failed tests across every `test result:` line; `cargo publish
+--workspace --dry-run` packages and verifies **twelve** crates in dependency order, each ending
+`warning: aborting upload due to dry run`; `paladin-doc-examples` (`publish = false`) correctly
+absent. Head `69500c9b`, 2026-09-16. **Verdict: PASS (12/12, non-empty, dependency order).**
+
+### `make api-surface`
+
+`✅ API surface extracted... (3959 items)` / `✅ API surface unchanged` — zero drift against the
+baseline plan 33-05 regenerated in the same commit as its CHANGELOG edit. Head `69500c9b`,
+2026-09-16. **Verdict: PASS.**
+
+### `make clean-code`
+
+`fmt` + `clippy --workspace --all-targets -- -D warnings` + `lint-shell` + `cargo check
+--workspace --all-targets`, all exit 0, zero warnings. Head `69500c9b`, 2026-09-16. **Verdict: PASS.**
+
+### `make security`
+
+`cargo audit`: 10 allowed pre-existing unmaintained/yanked-transitive warnings (none introduced by
+this phase's two new dependency-graph edges — `paladin-llm` as a `paladin-memory` production
+dependency, `proptest` as a dev-dependency). `cargo deny check`: `advisories ok, bans ok, licenses
+ok, sources ok`. Head `69500c9b`, 2026-09-16. **Verdict: PASS.**
+
+### 82% coverage floor — CI-attributed, not a local pass
+
+Docker is absent from this devcontainer (`docker: command not found`) and no Redis/MinIO endpoint
+(compose-network or localhost fallback) is reachable, so `make coverage`
+(`cargo llvm-cov --workspace --features integration-tests,llm-all --lcov --output-path lcov.info
+--fail-under-lines 82 -- --test-threads=1`) cannot complete locally — attempted and hung past 60s in
+the service-probe chain before being terminated. **This gate is CI-attributed to the CI `coverage`
+job**, to be read once `feature/phase-33` is pushed, exactly as `33-CI-EVIDENCE.md` records in full.
+The folded todo (`2026-08-13-verify-local-coverage-reproduction.md`) is answered there: the local run
+cannot reproduce CI's figure for a structural reason (no Docker here), and the todo's own cited
+target (82.39%, a v0.8.0-era figure) is itself stale against every measurement recorded since (Phase
+28: 90.28%, Phase 31: ~90.3%, Phase 32: 90.25%) — the todo keeps its pending, no-`resolves_phase`
+status. **Verdict: CI-ATTRIBUTED, not claimed as a local pass.**
+
+### `CHANGELOG.md` `[0.10.0]` register grep
+
+```bash
+grep -c '^## \[Unreleased\]' CHANGELOG.md                                   # 0
+awk '/^## \[0.10.0\]/,/^## \[0.9/' CHANGELOG.md | grep -ci 'rag'            # 17
+awk '/^## \[0.10.0\]/,/^## \[0.9/' CHANGELOG.md | grep -c 'TokenUsage'      # 4
+awk '/^## \[0.10.0\]/,/^## \[0.9/' CHANGELOG.md | grep -c 'Commissary'      # 15
+grep -c 'v0[.]11[.]0' CHANGELOG.md MIGRATION.md                              # 0, 0 (the withheld next version string)
+```
+
+Head `69500c9b`, 2026-09-16. The RAG note and the Phase 31 (`TokenUsage`)/Phase 32 (`Commissary`)
+entries are all present. **Verdict: PASS.**
+
+### D-20 regression check (Phase 32 PRIM-04 — no code change this phase)
+
+```bash
+cargo test -p paladin-ai --lib limit_resolution                              # 3 passed, 0 failed
+cargo test -p paladin-ai --lib kept_set_equivalence_snapshot_pre_resolver    # 1 passed, 0 failed
+```
+
+Head `69500c9b`, 2026-09-16. Both non-zero passed counts (the acceptance bar D-20 sets, since a
+zero-selecting filter would still exit 0). **Verdict: PASS.**
+
+### `cargo doc --workspace --no-deps` — carried condition, not a gate
+
+**73** `warning:` lines (up from this audit's own §8 measurement of 72, same calendar day) — grepped
+against every symbol this phase introduced (`RagRetrievalResult`, `RagRetrievalError`, `ShedItem`,
+`rag_omission_marker`, `with_token_counter`, `Commissary`): the only hit is a single pre-existing
+warning in `crates/paladin-llm/src/services/commissary.rs:89`, a Phase 30-vintage doc comment no
+Phase 33 plan touches. Zero of the 73 warnings originate in a file this phase created or modified.
+Per §8 above and the Phase 32 `32-05-SUMMARY.md` precedent, this condition is recorded, not fixed,
+and remains explicitly **not a gate** — SHIP-04's own text asks only for "no NEW broken intra-doc
+links" plus green semver/MSRV, both true.
+
+Verdict: PASS with one carried condition
+
+**Findings:**
+- `cargo doc --workspace --no-deps` remains red at 73 warnings (up from 72 at §8's measurement),
+  pre-existing, zero attributable to this phase — not a Phase 33 regression and not required to reach
+  zero by SHIP-04's text.
+- The 82% coverage floor could not be measured locally (no Docker in this devcontainer) — recorded as
+  CI-attributed rather than a claimed local pass; the CI `coverage` job is the evidence source once
+  this branch is pushed.
+- `feature/phase-33` has never been pushed at the time of this sweep — no CI run exists yet for any
+  Phase 33 commit. The orchestrator supplies the real pre-merge and post-merge run tables afterward,
+  exactly as Phase 29 D-21's two-SHA rule requires (`33-CI-EVIDENCE.md`'s own CI-run table cites the
+  most recent green run on the pre-Phase-33 base instead).
+
+**The `v0.10.0` tag may be cut once a human reads this section and the linked evidence:**
+
+- [ ] **The `v0.10.0` tag may be cut** — evidence: this section (§11) in full, plus
+  `.planning/phases/33-commissary-in-tree-adoption/33-CI-EVIDENCE.md`'s complete Local sweep and
+  CI-run tables. Unticked, as designed — this box is closed by a human at the phase's UAT /
+  `/gsd-verify-work` step, never by this audit or any agent (Phase 29 D-17).
+
+---
+
 *Corpus document: `.project/v0.10.0/09-program-acceptance-audit.md`*
 *Phase: 29-program-gates-release*
 *Sections 1-5 by plan 29-04; sections 6-9 by plan 29-07; section 10 by plan 29-09.*
+*Section 11 by Phase 33 plan 33-06 (COMM-04 re-seal after Phases 30-33).*

@@ -18,3 +18,12 @@ sign-off) and the pre-existing 72-warning `cargo doc --workspace --no-deps` cond
 `29-CI-EVIDENCE.md` row 16 — not a Phase 29 blocker per SHIP-04's own requirement text). The seven
 maintainer sign-off checkboxes (§10's "Maintainer sign-off" section) remain unticked, as designed —
 they are closed by a human at the phase's UAT / `/gsd-verify-work` step, never by this audit.
+
+**Re-sealed on `69500c9b51a37f11215037c49318d76ea017dab3`, 2026-09-16.** Phases 31, 32 and 33
+changed public API after this audit's ten sections were sealed above, so Phase 33 (COMM-04)
+re-ran the full release-gate list on its own final commit and appended the result as a new
+`## 11. Re-seal after Phases 30-33 (Phase 33, COMM-04)` section to the corpus document — this
+pointer's ten-section scope is otherwise unchanged. Full verbatim evidence lives in
+`.planning/phases/33-commissary-in-tree-adoption/33-CI-EVIDENCE.md`. This is the precondition
+ADR-0051 sets for cutting the `v0.10.0` tag; §11 adds one further unticked, human-only sign-off box
+for that decision, alongside — never in place of — the seven boxes named above.

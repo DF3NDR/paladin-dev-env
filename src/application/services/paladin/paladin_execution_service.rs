@@ -60,7 +60,9 @@ use crate::application::services::paladin::vault_confined::ConfinedVault;
 use crate::application::services::sanctum::memory_extraction_service::{
     MemoryExtractionService, MemoryExtractionStrategy,
 };
-use crate::application::services::sanctum::rag_retrieval_service::RagRetrievalService;
+use crate::application::services::sanctum::rag_retrieval_service::{
+    RagRetrievalResult, RagRetrievalService,
+};
 use crate::config::agent_runtime::{ToolErrorConfig, ToolErrorMode};
 use crate::core::base::entity::node::Node;
 use crate::core::platform::container::arsenal::{ArmamentCall, ArsenalError};
@@ -1925,7 +1927,7 @@ impl PaladinExecutionService {
         paladin: &Paladin,
         query: &str,
         execution_id: uuid::Uuid,
-    ) -> Result<Vec<paladin_ports::output::sanctum_port::SanctumSearchResult>, PaladinError> {
+    ) -> Result<RagRetrievalResult, PaladinError> {
         if let Some(ref rag_service) = self.rag_retrieval_service {
             let paladin_id = paladin.uuid.to_string();
 
@@ -1966,21 +1968,18 @@ impl PaladinExecutionService {
     }
 
     /// Formats retrieved search results into a context string for injection
-    fn format_retrieved_context(
-        &self,
-        results: &[paladin_ports::output::sanctum_port::SanctumSearchResult],
-    ) -> String {
+    fn format_retrieved_context(&self, results: &RagRetrievalResult) -> String {
         if results.is_empty() {
             return String::new();
         }
 
         let mut context = String::new();
-        for (i, result) in results.iter().enumerate() {
+        for (i, m) in results.memories.iter().enumerate() {
             context.push_str(&format!(
                 "{}. [Score: {:.2}] {}\n",
                 i + 1,
-                result.score,
-                result.entry.memory.content
+                m.result.score,
+                m.body
             ));
         }
         context
@@ -4461,13 +4460,36 @@ mod tests {
         SanctumSearchResult { entry, score }
     }
 
+    /// Wraps already-retrieved `SanctumSearchResult`s directly into a
+    /// `RagRetrievalResult` for renderer tests that do not go through a real
+    /// Commissary dispense.
+    fn wrap_rag_result(results: Vec<SanctumSearchResult>) -> RagRetrievalResult {
+        use crate::application::services::sanctum::rag_retrieval_service::RagRetainedMemory;
+
+        let memories = results
+            .into_iter()
+            .map(|result| {
+                let body = result.entry.memory.content.clone();
+                RagRetainedMemory {
+                    result,
+                    body,
+                    truncated: false,
+                }
+            })
+            .collect();
+        RagRetrievalResult {
+            memories,
+            ..RagRetrievalResult::default()
+        }
+    }
+
     #[tokio::test]
     async fn test_format_retrieved_context() {
         // Arrange
-        let results = vec![
+        let results = wrap_rag_result(vec![
             create_mock_search_result("First memory", 0.95),
             create_mock_search_result("Second memory", 0.85),
-        ];
+        ]);
 
         let llm_port: Arc<dyn LlmPort> = Arc::new(MockLlmPort);
         let circuit_breaker = Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60)));
@@ -4489,7 +4511,7 @@ mod tests {
         let service = PaladinExecutionService::new(llm_port, circuit_breaker, None, None);
 
         // Act
-        let formatted = service.format_retrieved_context(&[]);
+        let formatted = service.format_retrieved_context(&RagRetrievalResult::default());
 
         // Assert
         assert!(formatted.is_empty());

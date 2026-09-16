@@ -40,6 +40,11 @@
 //! | `content-processing` | `TiktokenCounter` (depends on `tiktoken-rs`) |
 //!
 //! No features are enabled by default.
+//!
+//! This crate depends unconditionally on `paladin-llm` (`default-features = false`) so
+//! [`services::RagRetrievalService`] can ration its RAG injection budget through
+//! `paladin_llm::services::commissary::Commissary::dispense` — the workspace's first
+//! unconditional production lateral adapter dependency (Phase 33, COMM-01).
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]

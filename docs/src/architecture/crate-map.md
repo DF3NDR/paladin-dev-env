@@ -50,6 +50,7 @@ graph TD
     llm --> ports
     mem --> core
     mem --> ports
+    mem --> llm
     stor --> core
     stor --> ports
     notif --> core
@@ -167,7 +168,12 @@ src/
 
 **Directory:** `crates/paladin-memory/`
 **Layer:** Infrastructure (memory adapters)
-**External deps:** `paladin-ai-core`, `paladin-ports`, optionally sqlx, qdrant-client, tiktoken-rs
+**External deps:** `paladin-ai-core`, `paladin-ports`, `paladin-llm` (unconditional,
+`default-features = false`), optionally sqlx, qdrant-client, tiktoken-rs
+
+`paladin-memory` depends on `paladin-llm` so `RagRetrievalService` can ration its RAG
+injection budget through `Commissary::dispense` — this is the workspace's first
+unconditional production lateral adapter dependency (Phase 33, COMM-01).
 
 **Feature flags:**
 

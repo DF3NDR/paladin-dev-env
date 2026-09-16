@@ -56,9 +56,21 @@ pub struct RagRetrievalResult {
     /// dropped — every shed memory is recorded here labelled by its memory UUID (D-09).
     pub shed: Vec<ShedItem>,
     /// The final measured token tally of the rendered context.
+    ///
+    /// Usually `<= allotted_tokens`, but not strictly bounded: in the D-10(a)
+    /// single-truncated-survivor edge (exactly one oversized memory retained and
+    /// truncated), `Commissary::dispense`'s `n == 1` branch returns without
+    /// re-checking the byte budget, so this may exceed `allotted_tokens` by up to
+    /// `truncation_marker.len()` bytes' worth of tokens. This rarely manifests with the
+    /// default [`crate::token_counter::HeuristicTokenCounter`] but has no such margin
+    /// with a stricter injected counter (e.g. a byte-oriented or exact BPE counter close
+    /// to 1:1) — see [`Commissary::dispense`]'s own `n == 1` note.
     pub prompt_tokens: u32,
     /// The token allowance this retrieval was dispensed against (`rag.max_tokens`,
     /// converted to `u32`).
+    ///
+    /// See [`RagRetrievalResult::prompt_tokens`]'s doc comment: `prompt_tokens` is not
+    /// strictly bounded by this value in the D-10(a) single-truncated-survivor edge.
     pub allotted_tokens: u32,
     /// `true` if `prompt_tokens` is an exact tally (read live from the injected
     /// [`TokenCounterPort::is_exact`]), `false` if it is a deliberately over-counting

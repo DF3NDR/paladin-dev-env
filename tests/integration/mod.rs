@@ -74,6 +74,7 @@ pub mod paladin_integration_test;
 pub mod provider_switching_test;
 #[cfg(feature = "qdrant")]
 pub mod qdrant_sanctum_tests;
+pub mod rag_commissary_test;
 #[cfg(feature = "qdrant")]
 pub mod rag_integration_tests;
 pub mod reasoning_agent_test;

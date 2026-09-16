@@ -193,6 +193,10 @@ check-workflow-triggers: ## Verify every workflow's trigger surface matches the 
 check-codeql-dismissals: ## Verify CODEQL-DISMISSALS.md is schema-complete, non-drifted, non-stale and self-consistent
 	@./scripts/check-codeql-dismissals.sh
 
+.PHONY: check-migration-allowlist
+check-migration-allowlist: ## Verify MIGRATION.md §9.2 register is set-equal to .cargo/semver-checks-allowlist.toml (row-level, PRIM-05)
+	@./scripts/check-migration-allowlist.sh
+
 .PHONY: check-release-consistency
 # Deliberately NOT part of check-gates: every sibling guard above is a
 # no-argument offline check runnable against the current tree as-is: this
@@ -208,7 +212,7 @@ check-release-consistency: ## Verify a release tag's version matches every publi
 	@./scripts/check-release-consistency.sh --tag "$(RELEASE_TAG)"
 
 .PHONY: check-gates
-check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals ## Run all offline release-gate guards
+check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist ## Run all offline release-gate guards
 
 .PHONY: test-shell-guards
 # Loops over every tests/scripts/*_test.sh rather than a hardcoded list, so

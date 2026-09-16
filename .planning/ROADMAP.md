@@ -900,8 +900,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2; 33-03 and 33-04 run in parallel)*
 
-- [ ] 33-03-PLAN.md — the `proptest` over the rationing seam plus the four named edge tests: oversized-single-memory, non-clamping budget conversion, equal-score tie order, budget boundary (COMM-01)
-- [ ] 33-04-PLAN.md — the ungated `rag_commissary` integration test (F4 evidence), the Commissary module-doc retirement and the D-19 exit greps (COMM-03)
+- [x] 33-03-PLAN.md — the `proptest` over the rationing seam plus the four named edge tests: oversized-single-memory, non-clamping budget conversion, equal-score tie order, budget boundary (COMM-01)
+- [x] 33-04-PLAN.md — the ungated `rag_commissary` integration test (F4 evidence), the Commissary module-doc retirement and the D-19 exit greps (COMM-03)
 
 **Wave 4** *(blocked on Wave 3)*
 

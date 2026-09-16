@@ -40,6 +40,15 @@ resolution and `HistoryTrimmer::resolve_limit` now call the same shared
 walks. See [`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
 for the full per-type register.
 
+Separately, in v0.10.0 (Phase 33, COMM-01…03), `RagRetrievalService::retrieve_context`
+and `retrieve_context_with_timeout` change their return type to a result struct
+carrying the Commissary's shed record, and `format_for_prompt` changes its parameter
+to that struct; a new `with_token_counter` builder mirrors
+`PaladinExecutionService::with_token_counter`. Read `.memories` and `.shed` off the
+returned result rather than the old `Vec`. See the `paladin-memory | RagRetrievalService`
+and `paladin-memory | retrieve_context_with_timeout` rows in
+[`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
+
 ## Table of Contents
 
 - [Upgrading to v0.10.0 (from v0.9.x)](#upgrading-to-v0100-from-v09x)

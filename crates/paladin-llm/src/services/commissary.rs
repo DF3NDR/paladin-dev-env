@@ -19,10 +19,10 @@
 //!   material, it returns a [`Stockpile`]: every retained item clamped to a per-item
 //!   share (with a visible truncation marker when a cut was needed) and every shed item
 //!   recorded with its label, priority, and original size. Nothing is dropped silently
-//!   — the explicit anti-pattern this module rejects is
-//!   `paladin_memory::services::rag_retrieval_service::RagRetrievalService::
-//!   truncate_to_token_budget`, which drops lowest-scoring items with no marker and no
-//!   record.
+//!   — the anti-pattern this module was built to replace was the RAG retrieval
+//!   service's own inline byte-length budget estimate, which dropped lowest-scoring
+//!   memories with no marker and no record. That silent drop was retired in v0.10.0
+//!   when RAG became this module's first production caller (Phase 33).
 //!
 //! **Framework owns measurement and enforcement; callers own policy.** The Commissary
 //! never decides WHICH material matters more — that is the caller-supplied `priority`

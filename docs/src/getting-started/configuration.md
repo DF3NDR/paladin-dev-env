@@ -280,7 +280,10 @@ sanctum:
 rag:
   top_k: 5                         # Results to retrieve
   min_similarity: 0.7              # Score threshold (0.0-1.0)
-  max_tokens: 2000                 # Max tokens to inject from RAG
+  max_tokens: 2000                 # Max tokens to inject from RAG -- enforced by the
+                                    # Commissary (Phase 33): shed memories are recorded
+                                    # and a marker naming the omitted count and the
+                                    # budget is appended to the injected context.
   timeout_seconds: 5
 
 memory_extraction:
@@ -410,7 +413,7 @@ Paladin uses `max_tokens` in four independent, non-overlapping senses:
 | Meaning | Config key / type | Owner |
 | --- | --- | --- |
 | Garrison store cap | `garrison.max_tokens` | `src/config/` (Garrison config) |
-| RAG injection cap | `rag.max_tokens` | `src/config/` (RAG config) |
+| RAG injection cap | `rag.max_tokens` | `src/config/` (RAG config) — enforced by the Commissary (Phase 33): shed memories are recorded and a marker naming the omitted count and the budget is appended to the injected context |
 | Per-request completion cap | `LlmRequest` metadata `"max_tokens"` (OpenAI/DeepSeek fallback-override); `ANTHROPIC_MAX_TOKENS` env var, read by `AnthropicConfig::from_env()` (Anthropic, required, env-only — no YAML key) | provider adapters (`crates/paladin-llm/src/openai/adapter.rs`, `crates/paladin-llm/src/anthropic/adapter.rs`) |
 | Run-level budget cap | `agent_runtime.token_budget.max_tokens` | `src/application/services/paladin/middleware/limits.rs` |
 

@@ -61,7 +61,7 @@ use crate::application::services::sanctum::memory_extraction_service::{
     MemoryExtractionService, MemoryExtractionStrategy,
 };
 use crate::application::services::sanctum::rag_retrieval_service::{
-    RagRetrievalResult, RagRetrievalService,
+    RagRetrievalResult, RagRetrievalService, rag_omission_marker,
 };
 use crate::config::agent_runtime::{ToolErrorConfig, ToolErrorMode};
 use crate::core::base::entity::node::Node;
@@ -1318,8 +1318,11 @@ impl PaladinExecutionService {
                     };
 
                     info!(
-                        "RAG retrieval succeeded: execution_id={}, memories={}, latency_ms={}",
-                        execution_id, _memories_retrieved_count, _retrieval_latency_ms
+                        "RAG retrieval succeeded: execution_id={}, memories={}, shed={}, latency_ms={}",
+                        execution_id,
+                        _memories_retrieved_count,
+                        results.shed.len(),
+                        _retrieval_latency_ms
                     );
                     Some(context)
                 }
@@ -1968,6 +1971,11 @@ impl PaladinExecutionService {
     }
 
     /// Formats retrieved search results into a context string for injection
+    ///
+    /// When `results.shed` is non-empty, appends the shared RAG omission marker
+    /// (`rag_omission_marker`, D-15) so this renderer and
+    /// `RagRetrievalService::format_for_prompt` can never emit a byte-different line
+    /// for the same result.
     fn format_retrieved_context(&self, results: &RagRetrievalResult) -> String {
         if results.is_empty() {
             return String::new();
@@ -1982,6 +1990,14 @@ impl PaladinExecutionService {
                 m.body
             ));
         }
+
+        if !results.shed.is_empty() {
+            context.push_str(&rag_omission_marker(
+                results.shed.len(),
+                results.allotted_tokens,
+            ));
+        }
+
         context
     }
 
@@ -4515,6 +4531,56 @@ mod tests {
 
         // Assert
         assert!(formatted.is_empty());
+    }
+
+    /// Byte-identity assertion (Phase 33, COMM-02, D-15): the facade renderer's
+    /// omission marker must be produced by the same shared helper the crate renderer
+    /// uses, sourced from the same `allotted_tokens` on the result, so the two
+    /// renderers can never drift for the same result.
+    #[tokio::test]
+    async fn test_format_retrieved_rag_context_ends_with_shared_omission_marker() {
+        use crate::application::services::sanctum::rag_retrieval_service::ShedItem;
+
+        // Arrange
+        let mut results = wrap_rag_result(vec![
+            create_mock_search_result("First memory", 0.95),
+            create_mock_search_result("Second memory", 0.85),
+        ]);
+        results.shed = vec![ShedItem {
+            label: Uuid::new_v4().to_string(),
+            priority: 2,
+            original_bytes: 256,
+        }];
+        results.allotted_tokens = 1_234;
+
+        let llm_port: Arc<dyn LlmPort> = Arc::new(MockLlmPort);
+        let circuit_breaker = Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60)));
+        let service = PaladinExecutionService::new(llm_port, circuit_breaker, None, None);
+
+        // Act
+        let formatted = service.format_retrieved_context(&results);
+
+        // Assert: ends with exactly what the shared helper renders for the same inputs
+        assert!(formatted.ends_with(&rag_omission_marker(1, 1_234)));
+    }
+
+    #[tokio::test]
+    async fn test_format_retrieved_rag_context_no_marker_when_shed_empty() {
+        // Arrange
+        let results = wrap_rag_result(vec![create_mock_search_result("Kept memory", 0.9)]);
+        assert!(results.shed.is_empty());
+
+        let llm_port: Arc<dyn LlmPort> = Arc::new(MockLlmPort);
+        let circuit_breaker = Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60)));
+        let service = PaladinExecutionService::new(llm_port, circuit_breaker, None, None);
+
+        // Act
+        let formatted = service.format_retrieved_context(&results);
+
+        // Assert: exactly the per-memory line, nothing appended after it — an empty
+        // shed means no marker text of any kind (D-15). Byte-exact rather than a
+        // substring check so this file never needs to re-type the marker's wording.
+        assert_eq!(formatted, "1. [Score: 0.90] Kept memory\n");
     }
 
     #[tokio::test]

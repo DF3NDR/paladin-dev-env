@@ -892,7 +892,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 33-01-PLAN.md — the `paladin-memory` → `paladin-llm` production edge plus the tracer slice: result struct, error enum, the sync `ration` seam and the first `Commissary::dispense` call, with every consumer migrated in one commit (COMM-01)
+- [x] 33-01-PLAN.md — the `paladin-memory` → `paladin-llm` production edge plus the tracer slice: result struct, error enum, the sync `ration` seam and the first `Commissary::dispense` call, with every consumer migrated in one commit (COMM-01)
 
 **Wave 2** *(blocked on Wave 1)*
 

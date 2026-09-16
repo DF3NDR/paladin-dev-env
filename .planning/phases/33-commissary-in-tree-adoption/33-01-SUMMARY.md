@@ -167,3 +167,12 @@ This plan's `type="tracer" tdd="true"` task did not follow a literal RED-then-GR
 ---
 *Phase: 33-commissary-in-tree-adoption*
 *Completed: 2026-09-16*
+
+## Self-Check: PASSED
+
+Appended by the orchestrator from post-merge evidence on the merged `feature/phase-33` tree
+(merge commit `6e40457a`, 2026-09-16): every `key-files.modified` path exists on disk; the three
+task commits (`dbd8c378`, `574ee36a`, `ee3c334d`) are in `git log`; the repo pre-commit hook
+(`cargo fmt --check` + workspace `cargo clippy -D warnings`) passed on the merged tree;
+`make build` passed (35 s); `make test` (`cargo test --workspace --lib --bins`) passed —
+3,691 tests, 0 failures.

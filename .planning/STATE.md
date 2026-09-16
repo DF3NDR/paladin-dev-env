@@ -6,9 +6,9 @@ current_phase: 33
 current_phase_name: Commissary In-Tree Adoption
 status: executing
 stopped_at: "Phase 33 planned — 6 plans in 5 waves, plan-checker passed (iteration 2); next: /gsd-execute-phase 33"
-last_updated: "2026-09-16T15:46:39.863Z"
+last_updated: "2026-09-16T15:49:24.178Z"
 last_activity: 2026-09-16
-last_activity_desc: "Phase 32 closed: UAT 22/22 passed, verification passed, security verified; ready to plan Phase 33"
+last_activity_desc: Phase 33 execution started
 progress:
   total_phases: 13
   completed_phases: 12
@@ -55,10 +55,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 33 — Commissary In-Tree Adoption
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-16 — Phase 32 closed: UAT 22/22 passed, verification passed, security verified; ready to plan Phase 33
+Phase: 33 (Commissary In-Tree Adoption) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 33
+Last activity: 2026-09-16 — Phase 33 execution started
 Previous: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 

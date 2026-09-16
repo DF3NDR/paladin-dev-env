@@ -495,6 +495,7 @@ mod tests {
     use paladin_ports::output::sanctum_port::{
         SanctumError, SanctumFilter, SanctumPort, SanctumQuery, SanctumSearchResult,
     };
+    use proptest::prelude::*;
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -897,5 +898,79 @@ mod tests {
 
         let formatted = service.format_for_prompt(&result);
         assert!(!formatted.contains("omitted to fit"));
+    }
+
+    // ── Property test: the rationing seam (Phase 33, COMM-01, D-17) ─────────────
+
+    proptest! {
+        /// For random `(content, score)` pairs and random budgets, driving the SYNC
+        /// `ration` seam directly (D-14) — never `retrieve_context`, so no async runtime
+        /// is needed inside this proptest closure — this proves the three COMM-01
+        /// invariants hold over generated input, not just the single fixed example in
+        /// `commissary_rations_rag_retrieval_end_to_end`: (i) the retained total never
+        /// exceeds the budget; (ii) no shed memory outscores a retained one; (iii)
+        /// retained union shed equals the input by id — nothing is lost.
+        #[test]
+        fn ration_respects_budget_and_rank_order(
+            items in prop::collection::vec((".{1,600}", 0.0f32..=1.0f32), 0..=20),
+            budget in 1u32..=2_000u32,
+        ) {
+            let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+            let embedding = Arc::new(MockEmbeddingPort);
+            let config = RagConfig {
+                max_tokens: budget as usize,
+                ..RagConfig::default()
+            };
+            let service = RagRetrievalService::new(sanctum, embedding, config);
+
+            // Deliberately unsorted input — `rank_by_relevance` does the sorting, and
+            // the rank-order property below is exercised against this unsorted start.
+            let mut score_by_id: HashMap<String, f32> = HashMap::with_capacity(items.len());
+            let mut unranked = Vec::with_capacity(items.len());
+            for (content, score) in &items {
+                let entry = create_test_entry("paladin-1", content, 0.5, *score);
+                let id = entry.entry.memory.id.to_string();
+                score_by_id.insert(id, *score);
+                unranked.push(entry);
+            }
+            let input_ids: HashSet<String> = score_by_id.keys().cloned().collect();
+
+            let ranked = service.rank_by_relevance(unranked);
+            let result = service
+                .ration(ranked)
+                .expect("a budget in 1..=2_000 over an empty fixed section never fails to dispense");
+
+            // (i) the retained total never exceeds the budget.
+            prop_assert!(
+                result.prompt_tokens <= budget,
+                "prompt_tokens ({}) exceeded budget ({budget})",
+                result.prompt_tokens
+            );
+
+            // (ii) no shed memory outscores a retained one.
+            for shed in &result.shed {
+                let shed_score = *score_by_id
+                    .get(&shed.label)
+                    .expect("every shed label must resolve back to a generated input score");
+                for retained in &result.memories {
+                    prop_assert!(
+                        shed_score <= retained.result.score,
+                        "shed memory (score {shed_score}) outscored a retained memory (score {})",
+                        retained.result.score
+                    );
+                }
+            }
+
+            // (iii) retained ∪ shed equals the input by id — nothing lost.
+            let mut output_ids: HashSet<String> = result
+                .memories
+                .iter()
+                .map(|m| m.result.entry.memory.id.to_string())
+                .collect();
+            for shed in &result.shed {
+                output_ids.insert(shed.label.clone());
+            }
+            prop_assert_eq!(output_ids, input_ids);
+        }
     }
 }

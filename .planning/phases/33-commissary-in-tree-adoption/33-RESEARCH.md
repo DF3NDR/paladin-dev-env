@@ -782,9 +782,15 @@ D-13 deferral this phase closes.
 installed tool versions, or `ci.yml`/`Makefile`/`MIGRATION.md`/`CHANGELOG.md` content on
 2026-09-16 — none are `[ASSUMED]`.**
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All three questions below were settled at planning time (2026-09-16); the `RESOLVED:` line
+> under each names the plan or orchestrator decision that closed it.
 
 1. **Exact name of the new result struct, error enum, and `ration` seam**
+   - RESOLVED: plan 33-01 names them `RagRetrievalResult` (result struct), `RagRetrievalError`
+     (error enum) and `ration` (the sync seam) — plain descriptive names per Phase 30 D-01, not
+     Commissary vocabulary.
    - What we know: shape is fully locked (D-12/D-13/D-14); names are Claude's Discretion.
    - What's unclear: nothing blocking — this is genuinely open by design.
    - Recommendation: something in the Medieval Military ubiquitous-language register consistent
@@ -794,6 +800,9 @@ installed tool versions, or `ci.yml`/`Makefile`/`MIGRATION.md`/`CHANGELOG.md` co
      itself).
 
 2. **Whether `[Unreleased]` CHANGELOG bullets should fold into `[0.10.0]` (Pitfall 4)**
+   - RESOLVED: yes — plan 33-05 Task 3 folds the two `[Unreleased]` bullets into `[0.10.0]`'s
+     `### Added` block and deletes the then-empty header (orchestrator resolution 2: Phase 29
+     D-18/D-21 puts nothing above `[0.10.0]` mid-cycle).
    - What we know: the mechanical grep gate (D-24) passes either way; the plain-language success
      criterion reads more naturally if they're under `[0.10.0]`.
    - What's unclear: whether this is in scope for COMM-04's plan or an unrelated pre-existing
@@ -804,6 +813,9 @@ installed tool versions, or `ci.yml`/`Makefile`/`MIGRATION.md`/`CHANGELOG.md` co
 
 3. **Whether to name the `paladin-memory | RagRetrievalService`/`retrieve_context_with_timeout`
    §9.2 rows as one row or two**
+   - RESOLVED: two rows as D-22 says (`RagRetrievalService`, `retrieve_context_with_timeout`),
+     with `format_for_prompt`'s break folded under the `RagRetrievalService` row — plan 33-05
+     Task 2 (orchestrator resolution 3: rows are keyed `crate | Type`, Phase 29 D-04).
    - What we know: D-22 names them as two separate rows (one per `crate | Type` pair per Phase 29
      D-04's keying rule — `RagRetrievalService` the struct/its methods, and
      `retrieve_context_with_timeout` the free function).

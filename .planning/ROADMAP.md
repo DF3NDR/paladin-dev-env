@@ -905,7 +905,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 33-05-PLAN.md — empirical semver discovery, the two `MIGRATION.md` §9.2 rows with row-matched allowlist entries, the `CHANGELOG.md` `[0.10.0]` entries with the `[Unreleased]` fold, and the regenerated API baseline (COMM-04)
+- [x] 33-05-PLAN.md — empirical semver discovery, the two `MIGRATION.md` §9.2 rows with row-matched allowlist entries, the `CHANGELOG.md` `[0.10.0]` entries with the `[Unreleased]` fold, and the regenerated API baseline (COMM-04)
 
 **Wave 5** *(blocked on Wave 4 — runs on the phase's final commit)*
 

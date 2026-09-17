@@ -476,6 +476,11 @@ name = "node_result_cache"
 path = "examples/node_result_cache.rs"
 required-features = ["redis-cache"]
 
+[[example]]
+name = "observability_otel_export"
+path = "examples/observability_otel_export.rs"
+required-features = ["otel"]
+
 [[bin]]
 name = "paladin"
 path = "src/main.rs"

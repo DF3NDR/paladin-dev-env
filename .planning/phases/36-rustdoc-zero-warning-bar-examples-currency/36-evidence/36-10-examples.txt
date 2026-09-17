@@ -128,3 +128,41 @@ $ cargo fmt --all -- --check
 exit 0
 $ cargo check --workspace --all-targets --all-features
 exit 0
+
+
+Task 2 (part 2): examples/observability_otel_export.rs (EX-103, gated otel, build-only)
+------------------------------------------------------------------------------------------------
+
+Files: examples/observability_otel_export.rs, Cargo.toml
+
+observability_otel_export.rs -- gated on `otel`, build-only:
+  Constructs an OtelConfig{enabled: true, ..default} (endpoint
+  http://localhost:4318/v1/traces), builds an OtelTraceSink from it, wires it onto a WarEngine
+  and runs the same one-Function-node graph shape. This program needs a REACHABLE OTLP/HTTP
+  collector, absent from this devcontainer and CI, so per D-16 it is BUILD-VERIFIED ONLY -- never
+  executed by any automated check. The header comment states this explicitly and names the three
+  telemetry crates the feature pulls in (opentelemetry, opentelemetry_sdk, opentelemetry-otlp).
+
+$ cargo build --example observability_otel_export --features "otel"
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.52s
+exit 0
+
+BUILT, NOT RUN -- no OTLP collector is reachable in this devcontainer or in CI.
+
+$ cargo build --examples
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.61s
+exit 0
+(both gated targets, node_result_cache and observability_otel_export, are skipped by the bulk
+selector -- confirmed no attempt to build either was made)
+
+$ grep -cE '\.unwrap\(\)|\.expect\(' examples/observability_otel_export.rs
+0
+$ git diff --stat HEAD -- src/ crates/
+(empty)
+
+$ cargo fmt --all -- --check
+exit 0
+$ cargo check --workspace --all-targets --all-features
+exit 0
+$ ./scripts/check-api-surface.sh .project/current-exports.txt
+✅ API surface unchanged

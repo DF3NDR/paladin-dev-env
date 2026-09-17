@@ -16,11 +16,14 @@ Common issues, diagnostic procedures, and solutions for Paladin deployments.
 
 ### Check Application Status
 
-**Corrected 2026-08-24:** there is no `/metrics` endpoint in this codebase — `prometheus` and
-`opentelemetry` are not dependencies anywhere in the workspace and no `/metrics` route is
-registered (see `monitoring.md`'s scope note). Port `8081` was also fabricated; `Dockerfile:68`
-exposes `8080` (app) and `9090` (reserved for metrics, unused). Only `/health` and `/ready`
-exist (`crates/paladin-web/src/health.rs`).
+There is no `/metrics` endpoint in this codebase — `prometheus` is not a dependency anywhere in
+the workspace and no `/metrics` route is registered (see `monitoring.md`'s scope note).
+`opentelemetry` **is** a real, optional workspace dependency behind the `otel` Cargo feature (off
+by default) — it exports OTLP trace spans, not Prometheus metrics, so it does not change this
+page's no-`/metrics`-route conclusion; see [Distributed Tracing](monitoring.md#distributed-tracing)
+and [Observability](observability.md) for that shipped path. A port `8081` claim was also
+previously fabricated here; `Dockerfile:68` exposes `8080` (app) and `9090` (reserved for
+metrics, unused). Only `/health` and `/ready` exist (`crates/paladin-web/src/health.rs`).
 
 ```bash
 # Check liveness

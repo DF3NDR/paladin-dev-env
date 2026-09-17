@@ -174,4 +174,8 @@ None — no external service configuration required.
 ---
 *Phase: 34-documentation-currency-audit*
 *Completed: 2026-09-17*
-</content>
+
+## Self-Check: PASSED
+
+Both created/modified evidence artifacts found on disk (`34-evidence/34-03-mdbook-build.txt`,
+`34-03-SUMMARY.md`); all three commits (`a35e309a`, `48931bc2`, `e8d40dfc`) found in `git log`.

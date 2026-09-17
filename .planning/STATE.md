@@ -5,8 +5,8 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 34
 current_phase_name: documentation-currency-audit
 status: executing
-stopped_at: Completed 34-07-PLAN.md
-last_updated: "2026-09-17T06:01:38.642Z"
+stopped_at: Completed 34-08-PLAN.md
+last_updated: "2026-09-17T06:21:33.922Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 34 execution started
 progress:
@@ -59,7 +59,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 34 (documentation-currency-audit) — EXECUTING
-Plan: 8 of 9
+Plan: 9 of 9
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 34 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -145,6 +145,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 34 P05 | ~60min | 2 tasks | 2 files |
 | Phase 34 P06 | ~18min | 2 tasks | 5 files |
 | Phase 34 P07 | 16min | 2 tasks | 16 files |
+| Phase 34 P08 | ~90min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -480,6 +481,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: 34-07: per-crate all-features sweep is the true rustdoc floor - 77 content errors across 8 red crates, not 14 (paladin-ai-core alone) or 17 (workspace partial view); 63-item undersizing corrected for Phase 36
 - [Phase ?]: 34-07: extended 34-rustdoc-rows.sh with a crate-override argument since a single-crate -p <crate> capture never prints the summary line the default attribution pass depends on
 - [Phase ?]: 34-07: entry-point # Examples-heading gate scope drift (76->101) and its 19 violations routed to deferred-items.md per D-00e, not fixed or minted as RD-nn/EX-nn/MB-nn rows
+- [Phase ?]: Examples build/currency sweep (plan 34-08): all 60 examples/doc-examples programs build green under the exact CI feature sets; zero obsolete-API hits; two http_service_host rows marked stale on a server-router-parity claim; examples/README.md carries two new stale findings (11 undocumented programs, stale PaladinResult code-snippet fields); 59-row capability gap list for Phase 22-33 items no example demonstrates
 
 ### Pending Todos
 
@@ -1046,8 +1048,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T06:01:25.654Z
-**Stopped at:** Completed 34-07-PLAN.md
+**Last session:** 2026-09-17T06:21:33.812Z
+**Stopped at:** Completed 34-08-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

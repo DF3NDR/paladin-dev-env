@@ -966,7 +966,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 34-08-PLAN.md — Examples build status under the four CI feature sets, currency verdicts and the capability gap list
+- [x] 34-08-PLAN.md — Examples build status under the four CI feature sets, currency verdicts and the capability gap list
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

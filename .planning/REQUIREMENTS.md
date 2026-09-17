@@ -492,6 +492,26 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
 - [x] **CURR-05**: The audit is read-only against the tree: the phase's commits touch only
   `.planning/` (ROADMAP Phase 34 SC5; D-00c, D-22, D-23)
 
+- [ ] **CURR-06**: Every item in the Phase 34 mdBook work list is closed by a page edit or a new
+  page, and `docs/src/SUMMARY.md` links each new page from the nav position the audit assigned
+  (ROADMAP Phase 35 SC1; D-00a, D-01, D-07)
+
+- [ ] **CURR-07**: `mdbook build docs/` with the `linkcheck` backend passes with zero broken
+  links — the exact `docs.yml` command sequence, including `mdbook-mermaid install`
+  (ROADMAP Phase 35 SC2; D-00e)
+
+- [ ] **CURR-08**: No touched page names a type, function, config key, route or CLI flag the
+  v0.10.0 tree does not export; snippets meant to run are compile-verified in
+  `crates/doc-examples`, and illustrative snippets are marked as such
+  (ROADMAP Phase 35 SC3; D-11, D-12, D-13, D-14, D-20, D-22)
+
+- [ ] **CURR-09**: The book's vocabulary matches the three ubiquitous-language lists: no
+  `Quartermaster`, and no bare token total where the prompt / completion split shipped in
+  Phase 31 (ROADMAP Phase 35 SC4; D-00d, D-17, D-18, D-21)
+
+- [ ] **CURR-10**: `CHANGELOG.md` `[0.10.0]` carries a Documentation entry summarising the pages
+  added and corrected (ROADMAP Phase 35 SC5; D-25)
+
 ## v2 Requirements
 
 Deferred beyond this program (named out of scope by the corpus; tracked, not roadmapped):
@@ -605,16 +625,22 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CURR-03 | Phase 34 | Complete |
 | CURR-04 | Phase 34 | Complete |
 | CURR-05 | Phase 34 | Complete |
+| CURR-06 | Phase 35 | Pending |
+| CURR-07 | Phase 35 | Pending |
+| CURR-08 | Phase 35 | Pending |
+| CURR-09 | Phase 35 | Pending |
+| CURR-10 | Phase 35 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 71 total (45 from the `.project/v0.10.0/` corpus, complete; 21 added
-  2026-09-14 from `.project/Milestone_13-Token-Economy/`; 5 added 2026-09-17 for Phases 34-36)
+- v1 requirements: 76 total (45 from the `.project/v0.10.0/` corpus, complete; 21 added
+  2026-09-14 from `.project/Milestone_13-Token-Economy/`; 10 added 2026-09-17 for Phases 34-36)
 
-- Mapped to phases: 71
+- Mapped to phases: 76
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-01*
 *Last updated: 2026-09-01 after initial definition from the `.project/v0.10.0/` design corpus*
-*Extended: 2026-09-14 — VOCAB-01…07, ACCT-01…05, PRIM-01…05, COMM-01…04 added for Phases 30-33 from `.project/Milestone_13-Token-Economy/`; X-03 supersession for Phases 31-33 recorded above; FUT-08/FUT-09 now owned by the reserved Milestone 14; CURR-01…05 added 2026-09-17 for Phase 34 (Release Readiness)*
+*Extended: 2026-09-14 — VOCAB-01…07, ACCT-01…05, PRIM-01…05, COMM-01…04 added for Phases 30-33 from `.project/Milestone_13-Token-Economy/`; X-03 supersession for Phases 31-33 recorded above; FUT-08/FUT-09 now owned by the reserved Milestone 14; CURR-01…05 added 2026-09-17 for Phase 34 (Release Readiness); CURR-06…10 added 2026-09-17 for
+Phase 35 (mdBook Currency)*

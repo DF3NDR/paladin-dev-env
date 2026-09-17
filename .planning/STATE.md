@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
 milestone: v0.10.0
-milestone_name: Durable Agent Execution Runtime
+milestone_name: Crate Release
 current_phase: 33
-status: completed
-stopped_at: "Phase 33 verified — UAT 23/23 passed (33-UAT.md, 22 coverage-mode automated + 1 human sign-off of audit §11), security verified threats_open: 0, validation validated; v0.10.0 milestone 13/13 phases; next: /gsd-complete-milestone v0.10.0 (push feature/phase-33 first so the CI coverage job and a real pre-merge run land in 33-CI-EVIDENCE.md)"
-last_updated: "2026-09-17T01:47:13.398Z"
+status: ready_to_plan
+stopped_at: Phase 34 context gathered
+last_updated: "2026-09-17T02:23:16.427Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 33 verified (UAT 23/23) — milestone ready to close
+last_activity_desc: Phase 33 complete
 progress:
-  total_phases: 13
+  total_phases: 17
   completed_phases: 13
   total_plans: 158
   completed_plans: 158
-current_phase_name: Commissary In-Tree Adoption
+current_phase_name: Documentation Currency Audit
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-17 after Phase 33 verification)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** v0.10.0 milestone close-out — every phase verified
+**Current focus:** v0.10.0 release readiness — Phases 34-37 added 2026-09-17 (documentation currency audit → mdBook / rustdoc + examples → crate release); every earlier phase verified
 `0.10.0` tag is not yet cut. Phases 30-33 (Token Economy) are closed. Phase 33 was verified 2026-09-17:
 `33-UAT.md` 23/23 passed (22 coverage-mode automated passes + the maintainer's human acceptance of corpus
 audit §11 and `33-CI-EVIDENCE.md`), `33-SECURITY.md` `verified` with `threats_open: 0`, `33-VALIDATION.md`
@@ -35,7 +35,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [████████████████████] v0.10.0 — 13 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33); 158/158 plans (100%)
+**Progress:** [███████████████░░░░░] v0.10.0 — 13 of 17 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33); 158/158 plans of the 13 closed phases; Phases 34-37 (Release Readiness) added 2026-09-17, not yet planned
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -144,15 +144,20 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 
 **Phase 33 (closed 2026-09-16, verified 2026-09-17) — recorded as D-01 … D-20 in `33-CONTEXT.md`; the ones
 later phases most need:**
+
 - D-01/D-03: `paladin-memory` takes `paladin-llm` (`default-features = false`) as an unconditional production
   dependency — the workspace's first lateral adapter-to-adapter edge; `reqwest` never enters the normal graph.
+
 - D-12: `RagRetrievalService::retrieve_context` / `format_for_prompt` break their published return type to
   `RagRetrievalResult` with no forwarding shim (ADR-0051 clean break); `retrieve_context_with_timeout` follows.
+
 - D-08/D-09: `ConsignmentItem` priority is rank order (`u8::try_from(rank)`), label is the memory UUID —
   never content — so "highest score retained" is structural and no memory body reaches a shed record or log.
+
 - D-15/D-16: one shared `rag_omission_marker` helper in `paladin-memory` is the only place the omission line
   is built; both renderers read the budget from `RagRetrievalResult::allotted_tokens`; the facade's
   RAG-success `info!` gains only `shed=`.
+
 - D-10(a)/D-05: a single memory larger than the whole budget is retained truncated (never dropped);
   `rag.max_tokens` beyond `u32::MAX` is a typed `BudgetTooLarge` error, never an `as` cast or clamp.
 
@@ -927,6 +932,10 @@ requirement.
 - Phase 31 added: Lossless Token Accounting — full `TokenUsage` carried port→`RunFinished`→herald, optional cache/reasoning fields, `from_total` removed from the battalion path, streaming parity (ACCT-01..05, twenty-eighth prefix; keystone; clean break under the X-03 supersession)
 - Phase 32 added: Unified Token Primitives — `TokenCounterPort::is_exact`, `Commissary::new` without `is_exact_counter`, legacy `TokenCounter`/`TokenCounterFactory` retired, one shared window resolver with strict mode (PRIM-01..05, twenty-ninth prefix; clean break)
 - Phase 33 added: Commissary In-Tree Adoption — RAG through `Commissary::dispense` with shed records + marker, integration-tested production caller, Phase 29 release gates re-sealed (COMM-01..04, thirtieth prefix). Milestone 14 Treasurer (`.project/Milestone_14-Treasurer/`) reserved, not roadmapped.
+- Phase 34 added: Documentation Currency Audit — read-only inventory of mdBook / rustdoc / examples gaps against Phases 22-33 (and any v0.9.0 leftovers); scopes Phases 35-36 (2026-09-17, pre-tag release readiness)
+- Phase 35 added: mdBook Currency — close every Phase 34 mdBook gap; `mdbook build` + linkcheck green (2026-09-17)
+- Phase 36 added: Rustdoc Zero-Warning Bar & Examples Currency — `cargo doc` 73→0 warnings so CI "Check documentation" is green, 14 `--all-features` intra-doc links resolved, `examples/` + `doc-examples` current (2026-09-17)
+- Phase 37 added: v0.10.0 Crate Release — re-seal the Phase 29 gates on the final commit, merge to `main`, `release.yml` tags `v0.10.0`, all publishable crates on crates.io at `0.10.0` (2026-09-17)
 
 ## Deferred Items
 
@@ -1020,14 +1029,13 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17
-**Stopped at:** Phase 33 verified — UAT 23/23 passed (33-UAT.md, 22 coverage-mode automated + 1 human sign-off of audit §11), security verified threats_open: 0, validation validated; v0.10.0 milestone 13/13 phases; next: /gsd-complete-milestone v0.10.0 (push feature/phase-33 first so the CI coverage job and a real pre-merge run land in 33-CI-EVIDENCE.md)
-**Resume file:** None
+**Last session:** 2026-09-17T02:23:16.315Z
+**Stopped at:** Phase 34 context gathered
+**Resume file:** .planning/phases/34-documentation-currency-audit/34-CONTEXT.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
-
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

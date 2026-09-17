@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36
 current_phase_name: Rustdoc Zero-Warning Bar & Examples Currency
 status: executing
-stopped_at: Completed 36-09-PLAN.md
-last_updated: "2026-09-17T22:35:46.030Z"
+stopped_at: Completed 36-10-PLAN.md
+last_updated: "2026-09-17T23:07:04.731Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 36 execution started
 progress:
   total_phases: 18
   completed_phases: 15
   total_plans: 190
-  completed_plans: 186
+  completed_plans: 187
 ---
 
 # Project State
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36 (Rustdoc Zero-Warning Bar & Examples Currency) — EXECUTING
-Plan: 10 of 13
+Plan: 11 of 13
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 36 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -161,6 +161,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36 P07 | ~55min | 2 tasks | 3 files |
 | Phase 36 P08 | ~2h10min | 3 tasks | 4 files |
 | Phase 36 P09 | ~1h30min | 3 tasks | 6 files |
+| Phase 36 P10 | ~1h50min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -516,6 +517,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: http_service_host.rs/doc-examples: mount ThreadApiState/RunApiState unwired (matches server's off-by-default behavior) rather than wiring a working backend, closing EX-33/EX-55 without duplicating platform_api_client.rs's demonstration
 - [Phase ?]: platform_api_client.rs bypasses build_run_api (which needs a real provider credential via paladin_port_from_settings) and hand-wires the same collaborators with a local MockEnginePort, using paladin_storage in-memory adapters for every store
 - [Phase ?]: Thread state/resume/history and the dev-ui inspector are demonstrated against a Waypoint-less thread (Agent-kind assistant never touches the waypoint store) and documented as a scope deviation rather than building a full Workflow-based paused-thread demo
+- [Phase ?]: Phase 36 plan 36-10: closed EX-81/82 (node-result cache + enable toggle, gated redis-cache, build-only), EX-100/101/102/108 (trace envelope, TraceConfig via build_run_sink, PALADIN_TRACE_OTEL_ENABLED toggle, persisted trace history), EX-103 (OTLP export sink, gated otel, build-only) and EX-105/106/107 (eval scenario declaration, PALADIN_EVAL_LIVE toggle via check_live_mode's typed refusal, CLI eval-run form) -- ten more of the fifty-nine Phase 34 gap rows closed, fifty-four of fifty-nine now closed; zero make api-surface drift across four commits
 
 ### Pending Todos
 
@@ -1083,8 +1085,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T22:35:45.954Z
-**Stopped at:** Completed 36-09-PLAN.md
+**Last session:** 2026-09-17T23:06:52.750Z
+**Stopped at:** Completed 36-10-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

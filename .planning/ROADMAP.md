@@ -1055,7 +1055,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 36-10-PLAN.md — Examples: node-result cache, observability & OTel export, eval scenarios
+- [x] 36-10-PLAN.md — Examples: node-result cache, observability & OTel export, eval scenarios
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

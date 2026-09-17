@@ -33,7 +33,7 @@ Add the `paladin-ai` crate and enable any desired feature flags:
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5.0", features = ["llm-openai"] }
+paladin-ai = { version = "0.10.0", features = ["llm-openai"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -246,15 +246,11 @@ let paladin = PaladinBuilder::new(llm_port)
 ### Agent Handoffs
 
 A Paladin can delegate sub-tasks to specialist agents at runtime using the Arsenal handoff tool.
-Register specialist agents on the builder:
+Register specialist agents on the builder via `with_handoffs`, which takes the whole
+`Vec<Arc<Paladin>>` at once — there is no per-call chainable specialist-registration method:
 
 ```rust,ignore
-let paladin = PaladinBuilder::new(llm_port.clone())
-    .system_prompt("Routing coordinator. Delegate to specialists.")
-    .with_specialist(Arc::new(code_reviewer_paladin))
-    .with_specialist(Arc::new(security_auditor_paladin))
-    .build()
-    .await?;
+{{#include ../../../crates/doc-examples/src/paladin_agents.rs:attach_garrison}}
 ```
 
 Delegation records appear in `PaladinResult.handoff_history`.
@@ -263,20 +259,11 @@ Delegation records appear in `PaladinResult.handoff_history`.
 
 ## Memory — Garrison
 
-Attach a Garrison adapter to give the Paladin persistent conversation memory.
+Attach a Garrison adapter to give the Paladin persistent conversation memory. `InMemoryGarrison`
+takes a required `GarrisonConfig` argument — there is no zero-argument constructor:
 
 ```rust,ignore
-use paladin_memory::garrison::in_memory_garrison::InMemoryGarrison;
-use paladin_ports::output::garrison_port::GarrisonPort;
-use std::sync::Arc;
-
-let garrison: Arc<dyn GarrisonPort> = Arc::new(InMemoryGarrison::new());
-
-let paladin = PaladinBuilder::new(llm_port)
-    .system_prompt("You are a memory-enabled assistant.")
-    .with_garrison(garrison)
-    .build()
-    .await?;
+{{#include ../../../crates/doc-examples/src/paladin_agents.rs:attach_garrison}}
 ```
 
 Available Garrison adapters (in `crates/paladin-memory/`):

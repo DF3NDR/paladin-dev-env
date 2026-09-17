@@ -3461,6 +3461,7 @@ dependencies = [
  "paladin-battalion",
  "paladin-content",
  "paladin-llm",
+ "paladin-memory",
  "paladin-ports",
  "paladin-storage",
  "reqwest 0.12.28",

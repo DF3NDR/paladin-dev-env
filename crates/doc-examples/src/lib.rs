@@ -14,6 +14,7 @@ pub mod deployment_topologies;
 pub mod fault_tolerance;
 pub mod http_service_host;
 pub mod orchestration;
+pub mod paladin_agents;
 pub mod queue_worker;
 pub mod readme;
 pub mod sidecar;

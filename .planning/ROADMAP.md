@@ -102,7 +102,7 @@ frozen at 311 lines that two milestones made invisible.
 | **Milestone 9-12 + Deferred-QA close-out** | 12-16 | ✅ **Shipped v0.8.0 (2026-08-24)** — [archive](milestones/v0.8.0-ROADMAP.md) | Ingest run 5 (FINAL) — `.project/Milestone_9-Classic-Orchestrator-Completion` + `.project/Milestone_10-CI-Hardening-Release-Automation` + `.project/Milestone_11-Documentation-Overhaul-Publish` + `.project/Milestone_12-Web-API` + `.project/Deferred-QA-CICD-Completion` + `.project/project-management` (46 docs) |
 | **Provider Expansion** | 17 | ✅ **Shipped v0.8.0 (2026-08-24)** — [archive](milestones/v0.8.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-15 per *Roadmap Extension Protocol* item 1. |
 | **Security Tooling** | 18-21 | ✅ **Shipped v0.9.0 (2026-09-01)** — [archive](milestones/v0.9.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-24 per *Roadmap Extension Protocol* item 1, closing the Rust-SAST gap the v0.8.0 milestone audit left as its one genuinely open item; extended 2026-08-25 with Phases 19-21 (publish credential, publish operations, release artifacts). |
-| **Durable Agent Execution Runtime** | 22-33 | 🔄 **In progress** — Phases 22-29 complete 2026-09-10 (`0.10.0` bumped on the feature branch, tag not yet cut); Phases 30-33 added 2026-09-14 | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. **Extended 2026-09-14** with Phases 30-33 (Token Economy — Commissary anchoring, lossless accounting, primitive unification, Commissary adoption), sourced from `.project/Milestone_13-Token-Economy/` (overview + Epics 1-4). Milestone 14 (Treasurer, `.project/Milestone_14-Treasurer/`) is reserved, not roadmapped. |
+| **Durable Agent Execution Runtime** | 22-37 | 🔄 **In progress** — Phases 22-29 complete 2026-09-10 (`0.10.0` bumped on the feature branch, tag not yet cut); Phases 30-33 added 2026-09-14, complete 2026-09-16; Phases 34-37 added 2026-09-17 (documentation currency + the crate release) | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. **Extended 2026-09-14** with Phases 30-33 (Token Economy — Commissary anchoring, lossless accounting, primitive unification, Commissary adoption), sourced from `.project/Milestone_13-Token-Economy/` (overview + Epics 1-4). Milestone 14 (Treasurer, `.project/Milestone_14-Treasurer/`) is reserved, not roadmapped. **Extended 2026-09-17** with Phases 34-37 (Release Readiness — documentation currency audit, mdBook currency, rustdoc zero-warning bar & examples currency, the crate release) — operator-instructed pre-tag work, not corpus-sourced. |
 
 **The ingest is complete.** All 263 documents in `.project/` are covered — 199 classified across
 five runs and 64 `tasks-*.md` measured deterministically by `intel/task-completion-state.md`. There
@@ -210,6 +210,13 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 - [x] **Phase 31: Lossless Token Accounting** - Carry the full `TokenUsage` prompt/completion split (plus optional cache/reasoning fields) from the LLM port to `RunFinished` and a herald, remove the `from_total` zeroing from the battalion path, and prove streaming usage parity per adapter (keystone; breaking) (completed 2026-09-15)
 - [x] **Phase 32: Unified Token Primitives** - One counting contract (`TokenCounterPort::is_exact`, `Commissary::new` drops `is_exact_counter`, legacy `TokenCounter`/`TokenCounterFactory` retired) and one shared context-window resolver with a strict mode consumed by both `HistoryTrimmer` and `Commissary` (breaking) (completed 2026-09-16)
 - [x] **Phase 33: Commissary In-Tree Adoption** - Route RAG truncation through `Commissary::dispense` with shed records and a truncation marker, closing the last silent-truncation path with an integration-tested production caller, then re-seal the Phase 29 release gates on the final commit (completed 2026-09-16)
+
+**Release Readiness — documentation currency & the crate release** (added 2026-09-17, still v0.10.0 — the `0.10.0` tag is not yet cut; Phase 37 cuts it)
+
+- [ ] **Phase 34: Documentation Currency Audit** - Audit the mdBook, the rustdoc corpus and the `examples/` / `doc-examples` programs against everything Phases 22-33 changed (and anything v0.9.0 left unwritten), producing one classified gap inventory that scopes Phases 35-36 (read-only; no docs change)
+- [ ] **Phase 35: mdBook Currency** - Close every mdBook gap the Phase 34 inventory records so the book describes the v0.10.0 tree — new pages where a capability shipped without one, corrected pages where the API or vocabulary changed, and `mdbook build` + linkcheck green
+- [ ] **Phase 36: Rustdoc Zero-Warning Bar & Examples Currency** - Take `cargo doc --workspace --no-deps` from 73 carried warnings to zero so CI's "Check documentation" step is green, resolve the 14 `--all-features` intra-doc links, and bring every `examples/` and `doc-examples` program current with the Phase 22-33 API
+- [ ] **Phase 37: v0.10.0 Crate Release** - Re-seal the Phase 29 release gates on the post-documentation final commit, merge to `main`, cut the `v0.10.0` tag through `release.yml`, and confirm every publishable crate is on crates.io at `0.10.0`
 
 ## Phase Details
 
@@ -911,6 +918,91 @@ Plans:
 
 - [x] 33-06-PLAN.md — the full Phase 29 gate re-seal with the PRIM-04 regression check, `33-CI-EVIDENCE.md`, and audit §11 with one unticked human-only tag box (COMM-04)
 
+### Phase 34: Documentation Currency Audit
+
+**Goal**: The documentation debt is measured before it is paid — one inventory records, per mdBook page under `docs/src/`, per crate's rustdoc, and per `examples/` / `crates/doc-examples` program, what Phases 22-33 changed that the docs do not yet say (plus any v0.9.0-era gap the Phase 16 currency pass and the Phase 28-17 / 29-06 docs plans left open), with every finding classified as *missing page*, *stale content*, *rustdoc warning or broken intra-doc link*, or *non-compiling / obsolete example*, so that Phases 35 and 36 are scoped by evidence rather than by guess.
+**Depends on**: Phase 33 (the tree the docs must describe is final — all 13 phases of the milestone are verified)
+**Requirements**: TBD — assigned at planning; one new prefix is needed per protocol item 3 (`DOCS-*` is spent)
+**Source**: Operator instruction 2026-09-17 (pre-tag readiness review); `33-CI-EVIDENCE.md` row 26 (73 carried `cargo doc` warnings); STATE.md Phase 32 close (14 unresolved intra-doc links under `--all-features`); `WINDOWS.md` #36
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. A single audit document in the phase directory lists every mdBook page under `docs/src/` with a currency verdict (current / stale / missing) against the Phase 22-33 shipped surface, and every stale or missing verdict cites the phase and the shipped item (type, route, config key, CLI subcommand) the page fails to describe
+  2. The rustdoc failures are enumerated, not summarised: every `warning:` line from `cargo doc --workspace --no-deps` and every unresolved intra-doc link from the `RUSTDOCFLAGS="-D warnings" … --all-features` run is listed with crate, file and line, and the `ci.yml` lint-job "Check documentation" command is quoted verbatim as the bar Phase 36 must clear
+  3. Every program under `examples/` and every module of `crates/doc-examples` is recorded with its build status under the feature sets the CI `cargo build --examples` step splits on, and a currency verdict — which Phase 22-33 API it should demonstrate but does not, or which removed / renamed API it still names
+  4. The inventory is partitioned into the Phase 35 (mdBook) and Phase 36 (rustdoc + examples) work lists with each item sized, and anything found that is neither documentation nor an example is routed to the deferred register rather than absorbed into either phase
+  5. No documentation, rustdoc or example is changed in this phase — the audit is read-only against the tree, and the phase's commits touch only `.planning/`
+
+**Plans**: 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 34 to break down)
+
+### Phase 35: mdBook Currency
+
+**Goal**: The mdBook describes the v0.10.0 tree — every gap the Phase 34 inventory records for `docs/src/` is closed: a page exists for each Phase 22-33 capability that shipped without one, every stale page is corrected to the shipped API and vocabulary (the superstep engine, Parley, Aegis, the platform API, the `TokenUsage` split, `Commissary`), the Upgrading page and migration pointers agree with `MIGRATION.md`, and `mdbook build` with the linkcheck backend is green.
+**Depends on**: Phase 34 (the mdBook work list); independent of Phase 36 and may run in parallel with it
+**Requirements**: TBD — assigned at planning under the Phase 34 prefix
+**Source**: Phase 34 audit inventory (mdBook partition); `.github/workflows/docs.yml`
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. Every item in the Phase 34 mdBook work list is closed by a page edit or a new page, and `docs/src/SUMMARY.md` links each new page from the nav position the audit assigned
+  2. `mdbook build docs/` with the `linkcheck` backend passes with zero broken links — the exact `docs.yml` command sequence, including `mdbook-mermaid install`
+  3. No touched page names a type, function, config key, route or CLI flag the v0.10.0 tree does not export; snippets meant to run are compile-verified in `crates/doc-examples`, and illustrative snippets are marked as such
+  4. The book's vocabulary matches the three ubiquitous-language lists (Phase 30 VOCAB-02): no `Quartermaster`, and no bare token total where the prompt / completion split shipped in Phase 31
+  5. `CHANGELOG.md` `[0.10.0]` carries a Documentation entry summarising the pages added and corrected
+
+**Plans**: 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 35 to break down)
+
+### Phase 36: Rustdoc Zero-Warning Bar & Examples Currency
+
+**Goal**: The rustdoc corpus clears the bar CI already enforces and the examples demonstrate the tree that ships — `cargo doc --workspace --no-deps` emits zero `warning:` lines so the lint job's "Check documentation" step is green rather than carried, the 14 unresolved intra-doc links under `--all-features` are resolved, every public item Phases 22-33 added or changed has rustdoc (with a doc test where the project's public-API rule applies), and every `examples/` program and `crates/doc-examples` module builds against and demonstrates the v0.10.0 API.
+**Depends on**: Phase 34 (the rustdoc + examples work list); independent of Phase 35 and may run in parallel with it
+**Requirements**: TBD — assigned at planning under the Phase 34 prefix
+**Source**: Phase 34 audit inventory (rustdoc + examples partition); `33-CI-EVIDENCE.md` row 26; `WINDOWS.md` #36; `.github/workflows/ci.yml` lint job and the `cargo build --examples` feature-set split
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. `cargo doc --workspace --no-deps` emits zero `warning:` lines under the exact `ci.yml` lint-job command, and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` exits 0, closing `WINDOWS.md` #36
+  2. Every Phase 34 rustdoc finding is closed at its cited crate / file / line, and both rustdoc commands are added to the pre-push gate or `make clean-code` so the warning count cannot silently regrow
+  3. `cargo build --examples` passes under each feature set the CI step splits on, and `cargo test --workspace --doc` is green — run explicitly, because the coverage and `--tests` gates skip doctests
+  4. Every Phase 34 example finding is closed: obsolete examples are updated to the shipped API or deleted with a `CHANGELOG.md` note, and each Phase 22-33 capability the audit flagged as undemonstrated has a runnable example listed in `examples/README.md`
+  5. `make api-surface` reports no change — docs and examples do not move the public surface; if a fix genuinely requires a public change it is recorded in `MIGRATION.md` §9.2 and the semver allowlist per the Phase 29 / 33 pattern
+
+**Plans**: 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 36 to break down)
+
+### Phase 37: v0.10.0 Crate Release
+
+**Goal**: v0.10.0 is released, not merely releasable — the Phase 29 gates are re-sealed on the final post-documentation commit, the feature branch merges to `main`, `release.yml` cuts the `v0.10.0` tag on the merge commit per the Phase 29 two-SHA rule, every publishable crate is on crates.io at `0.10.0`, and the release evidence is recorded so the milestone can close.
+**Depends on**: Phase 35, Phase 36 (all documentation and example work landed); Phase 33 (the gate re-seal this phase repeats)
+**Requirements**: TBD — assigned at planning; may extend SHIP-04 in place per protocol item 3 rather than minting a near-duplicate
+**Source**: Phase 29 D-17 / D-18 / D-21 (human-only §11 sign-off box; `0.10.0` bumped without a tag; tag cut on the `main` merge commit by `release.yml`); the v0.9.0 post-close release record in MILESTONES.md
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. The Phase 29 gate set — `MIGRATION.md` with no "TBD" and its §9.2 register matching the semver-checks allowlist row-for-row, `v0_9_config_boot`, the OpenAPI golden diff, `cargo semver-checks`, the MSRV job, `make publish-dry-run` in dependency order, and a complete `CHANGELOG.md` `[0.10.0]` — is re-run green on the final commit, with the evidence appended to the Phase 29 acceptance audit and the §11 human sign-off box ticked by the maintainer
+  2. The CI `coverage` job on the pre-merge run reports at or above the ADR-0006 floor and the run is recorded in the CI-evidence table — the one gate this devcontainer cannot measure locally
+  3. The feature branch is merged to `main`, `release.yml` runs green, and the `v0.10.0` tag sits on the merge commit
+  4. Every publishable crate resolves on crates.io at `0.10.0` (the `publish = false` `doc-examples` crate excluded), verified against the registry index and recorded in MILESTONES.md alongside the v0.9.0 entry
+  5. The milestone is closed after the tag via `/gsd-complete-milestone v0.10.0`: the `## Milestones` row flips to Shipped, phase detail archives to `milestones/v0.10.0-ROADMAP.md`, and the next milestone starts at Phase 38
+
+**Plans**: 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 37 to break down)
+
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -944,6 +1036,10 @@ Plans:
 | 31. Lossless Token Accounting | v0.10.0 | 7/7 | Complete    | 2026-09-15 |
 | 32. Unified Token Primitives | v0.10.0 | 5/5 | Complete    | 2026-09-16 |
 | 33. Commissary In-Tree Adoption | v0.10.0 | 6/6 | Complete    | 2026-09-16 |
+| 34. Documentation Currency Audit | v0.10.0 | 0/0 | Not started | — |
+| 35. mdBook Currency | v0.10.0 | 0/0 | Not started | — |
+| 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 0/0 | Not started | — |
+| 37. v0.10.0 Crate Release | v0.10.0 | 0/0 | Not started | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see
@@ -1272,3 +1368,17 @@ so it lives once, in Phase 32 (PRIM-04), with Phase 33 keeping only the regressi
 not roadmapped** — operator-confirmed deferral; it depends on Phase 31 and is the natural first
 phase of the next milestone. Phases 1-29 unchanged and unrenumbered; every `### Phase N:` header
 is verbatim.*
+
+*Extended: 2026-09-17 — **v0.10.0 extended with Phases 34-37 "Release Readiness"** before the
+`0.10.0` tag is cut. Operator-instructed, not corpus-sourced: with all 13 phases verified, the
+pre-tag review found the mdBook not updated for the milestone's changes, the rustdoc corpus failing
+CI's zero-tolerance "Check documentation" step (73 carried `cargo doc` warnings per
+`33-CI-EVIDENCE.md` row 26; 14 unresolved intra-doc links under `--all-features`, `WINDOWS.md`
+#36), and the examples likely stale against the Phase 22-33 API — with the gap possibly reaching
+back into v0.9.0. Phase order: 34 audits first (read-only, producing the inventory that scopes 35
+and 36); 35 (mdBook) and 36 (rustdoc + examples) are independent siblings that both depend on 34
+and may run in parallel; 37 (release) depends on both and repeats the Phase 33 gate re-seal on the
+final commit before the merge, the tag and the crates.io publish. Requirement IDs are deferred to
+planning — one new prefix will be needed (the thirty-first; `DOCS-*` is spent) — and Phase 37 may
+extend SHIP-04 in place per protocol item 3. Phases 1-33 unchanged and unrenumbered; every
+`### Phase N:` header is verbatim.*

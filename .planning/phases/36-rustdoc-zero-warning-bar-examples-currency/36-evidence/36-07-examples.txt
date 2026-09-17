@@ -65,3 +65,87 @@ release withheld" vs. the mainline's "act: release deployed"), satisfying the pl
 "replay ... and print the divergent result" must-have without needing `fork`'s edit-merge
 (which would have required a graph shape where the fork point precedes the routing decision,
 not the Gate's own resolution -- the Gate is the routing edge's own source here).
+
+## Task 2: examples/graceful_shutdown.rs
+
+Command: `timeout 120 env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY cargo run --example graceful_shutdown`
+Exit code: 0 (program terminates on its own well within the 120s bound -- actual wall time ~1.4s)
+
+Full stdout:
+```
+Graceful Shutdown: Drain, Grace Period, Toggle
+
+1. Drain in-flight work (EX-74)
+
+   (In a deployed server, ShutdownCoordinator::cancel_and_wait is driven by the
+    process's SIGTERM/SIGINT handler -- this program triggers it directly so it
+    terminates on its own, never waiting on a real signal.)
+
+   coordinator drain outcome = Drained
+   run outcome               = Halted, waypoint 01a0b142-8ca5-7291-b06d-f788324dc49a
+   checkpoint durable at the cut: 2 completed record(s), vanguard re-lists [NodeId("slow")] for resume
+     node fast -> Succeeded
+     node slow -> Skipped { reason: "shutdown" }
+   fast_result = Some("fast finished") (finished before the grace deadline)
+   slow_result = None (still None -- aborted, never merged)
+
+2. Configure the grace period (EX-75)
+
+   before APP_ENGINE_SHUTDOWN_GRACE_SECS: shutdown_grace_secs = 30
+   after  APP_ENGINE_SHUTDOWN_GRACE_SECS: shutdown_grace_secs = 1
+
+   running the drain again with the overridden grace wired into the engine:
+
+   coordinator drain outcome = Drained
+   run outcome               = Halted after 1.03s (bounded by the overridden 1s grace, not the default 30s)
+   slow_result = None (still None -- aborted at the new, shorter grace)
+
+3. Toggle graceful shutdown off and on (EX-76)
+
+   APP_ENGINE_GRACEFUL_SHUTDOWN=false -> graceful_shutdown = false
+   disabled -> exits immediately without waiting: TimedOut (in_flight = 1)
+
+   APP_ENGINE_GRACEFUL_SHUTDOWN=true  -> graceful_shutdown = true
+   enabled  -> waits for in-flight work to drain: Drained (in_flight = 0)
+
+Done -- fully offline, no provider API key was read.
+```
+
+Also verified:
+- `cargo build --example graceful_shutdown` -- exit 0, no `--features` flag.
+- `cargo build --examples` -- exit 0; both `human_in_the_loop_gate` and `graceful_shutdown`
+  binaries present under `target/debug/examples/`.
+- `cargo fmt --all -- --check` -- exit 0.
+- `cargo clippy --example graceful_shutdown --all-features -- -D warnings` -- exit 0.
+- `cargo check --workspace --all-targets --all-features` -- exit 0.
+- `./scripts/check-api-surface.sh .project/current-exports.txt` -- "API surface unchanged" (3959 items).
+- `grep -cE 'signal::ctrl_c|SignalKind|signal_hook' examples/graceful_shutdown.rs` -- 0 (no real
+  signal handler installed; `ShutdownCoordinator::cancel_and_wait` is triggered directly).
+- `grep -cE '\.unwrap\(\)|\.expect\(' examples/graceful_shutdown.rs` -- 0.
+- `grep -cE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY' examples/graceful_shutdown.rs` -- 0.
+- `grep -c 'Quartermaster' examples/graceful_shutdown.rs` -- 0.
+- `git diff --stat HEAD -- src/ crates/` -- empty (no library source changed).
+
+Design note: Part 1 fans out two entry nodes ("fast", "slow") in one superstep so the Halted
+Waypoint's own `completed` records show both outcomes side by side (`Succeeded` for the node
+that finished inside the grace window, `Skipped { reason: "shutdown" }` for the one aborted
+past it) -- confirmed against `over_grace_node_is_aborted_and_recorded_skipped`'s documented
+behavior (`crates/paladin-battalion/src/engine/superstep.rs` test module). Part 2 reuses the
+same fan-out graph with `EngineConfig::shutdown_grace_secs` wired straight into
+`WarEngine::with_shutdown_grace`, and measures wall-clock elapsed time to prove the abort
+happened at the overridden 1s bound, not the unmodified 30s default. Part 3 mirrors
+`paladin-server.rs`'s own `graceful_shutdown ? shutdown_grace_secs : 0` derivation to make the
+toggle's documented behavior ("exits immediately without waiting" vs. "waits up to
+shutdown_grace_secs for in-flight runs to drain") concretely observable through the same
+`ShutdownCoordinator` API Part 1 used, rather than only printing two config values.
+
+## D-24 closure table
+
+| ID | capability | program | commit |
+|----|------------|---------|--------|
+| EX-71 | Pause at a Gate | examples/human_in_the_loop_gate.rs | fdbd57a5 |
+| EX-72 | Resume with typed responses (total validation) | examples/human_in_the_loop_gate.rs | fdbd57a5 |
+| EX-73 | Replay the thread onto a new branch | examples/human_in_the_loop_gate.rs | fdbd57a5 |
+| EX-74 | Drain in-flight work | examples/graceful_shutdown.rs | (this commit) |
+| EX-75 | Configure the grace period from the environment | examples/graceful_shutdown.rs | (this commit) |
+| EX-76 | Toggle graceful shutdown off and on | examples/graceful_shutdown.rs | (this commit) |

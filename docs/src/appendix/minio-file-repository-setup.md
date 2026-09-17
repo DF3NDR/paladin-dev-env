@@ -19,7 +19,7 @@ We use the `rust-s3` crate instead of the `minio` crate because:
 ## Prerequisites
 
 - Docker and Docker Compose
-- Rust 1.75 or later
+- Rust 1.88 or later
 - MinIO server (via Docker - works perfectly with rust-s3)
 - Redis 7.0 or later (if running locally)
 

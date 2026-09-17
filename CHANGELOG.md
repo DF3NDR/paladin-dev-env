@@ -418,6 +418,44 @@ fifth (RAG rationing, below) results from the signature break registered in
      Anthropic actually billed. See
      [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
 
+### Documentation
+
+- **New guide: WarEngine — Battlefield State & Superstep Execution.** Covers `Battlefield` state
+  and superstep merge semantics, `Waypoint` full-snapshot checkpointing after every superstep and
+  its `(ThreadId, WaypointId)` addressing scheme, the three `WaypointPort` backends,
+  `EngineConfig`/`EngineLimits` (`max_supersteps`, `max_node_visits`, `run_timeout_secs`,
+  `waypoint_durability`, `max_muster_tasks`) with their `APP_ENGINE_*` environment overrides, and
+  the graph-fingerprint scheme that invalidates a resumed run's checkpoints when its structure
+  changes. Linked from the User Guides nav, with runnable, compile-verified examples.
+- **Getting Started and API Reference brought current with the v0.10.0 tree.** Every dependency
+  pin and MSRV statement now reads v0.10.0 / Rust 1.88; the feature-flag and crate inventories are
+  regenerated from the workspace `Cargo.toml` manifests (previously-undocumented flags such as
+  `otel`, `dev-ui`, `redis-cache` and `storage-postgres` are now listed); the stable-API catalogue
+  is rerooted onto the live crate paths.
+- **User Guides and Architecture pages corrected against the shipped API.** Constructor and trait
+  samples that no longer compiled (Garrison attachment, Arsenal armament results, the Herald
+  trait, Commander construction, RAG retrieval) now run through compile-verified examples; the
+  domain-model page documents the engine's new state entities (`Battlefield`, `Waypoint`, `Aegis`,
+  `TraceRecord`) alongside the existing ones.
+- **Deployment and Operations pages rebuilt on the real CI/CD and tracing surface.** The CI/CD
+  guide now tables every job the live workflows actually run instead of an illustrative sample; the
+  monitoring and troubleshooting pages point at the tracing export the release ships (an optional
+  OpenTelemetry OTLP sink behind the `otel` feature) rather than a dependency that does not exist.
+- **Contributing gained an Architecture Decisions index.** A new page tables the ADRs that change
+  what a crate consumer or operator sees, linked directly after the retitled Adapter Development
+  Guide (previously mislabeled "Architecture Decisions" although it was always an adapter
+  walkthrough).
+- **Appendix pages rebuilt from live output and corrected import paths.** The CLI reference pages
+  now carry verbatim `--help` captures of the shipped `paladin-cli` binary in place of hand-written
+  command syntax; the port and adapter import paths used across the appendix's setup and migration
+  guides are corrected to the paths that actually compile against the workspace crates.
+- **Five appendix pages recorded as historical rather than corrected.** The doc-coverage report,
+  the Milestone 7 build-baseline snapshot, the legacy contributing guide, and the `paladin user`
+  CLI/REST pages describe surfaces the shipped v0.10.0 binary no longer has (or, for the coverage
+  report and build baseline, describe a point-in-time measurement rather than a maintained page).
+  Each now carries a banner naming its live replacement — none was deleted; every existing link to
+  these pages still resolves.
+
 ### Known limitations
 
 - **Tracing overhead exceeds the ≤3% bar (Phase 28, PRD 07 acceptance criterion 6).** Measured

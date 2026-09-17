@@ -55,7 +55,7 @@ Validates core system requirements:
 ```
 System:
   ✓ Paladin CLI: v0.1.0
-  ✓ Rust Toolchain: 1.75.0 (stable)
+  ✓ Rust Toolchain: 1.88.0 (stable)
 ```
 
 **What's checked:**
@@ -69,7 +69,7 @@ System:
   ✓ Paladin CLI: v0.1.0
     Build: 2026-02-09 10:30:00 UTC
     Features: redis-queue, s3-storage, qdrant-vector
-  ✓ Rust Toolchain: rustc 1.75.0 (82e1608df 2023-12-21)
+  ✓ Rust Toolchain: rustc 1.88.0 (6b00bc388 2025-06-23)
     Host: x86_64-unknown-linux-gnu
 ```
 
@@ -215,7 +215,7 @@ Default terminal-friendly output with colors and Unicode symbols:
 
 System:
   ✓ Paladin CLI: v0.1.0
-  ✓ Rust Toolchain: 1.75.0
+  ✓ Rust Toolchain: 1.88.0
 
 Environment:
   ✓ .env file: Found
@@ -255,7 +255,7 @@ System:
     Features: redis-queue, s3-storage, qdrant-vector
 
   ✓ Rust Toolchain
-    Version: rustc 1.75.0 (82e1608df 2023-12-21)
+    Version: rustc 1.88.0 (6b00bc388 2025-06-23)
     Host: x86_64-unknown-linux-gnu
     LLVM: 17.0.6
 

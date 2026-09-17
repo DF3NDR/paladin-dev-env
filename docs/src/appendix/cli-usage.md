@@ -224,7 +224,7 @@ paladin setup-check --quiet
 
 System:
   ✓ Paladin CLI: v0.1.0
-  ✓ Rust Toolchain: 1.75.0
+  ✓ Rust Toolchain: 1.88.0
 
 Environment:
   ✓ .env file: Found

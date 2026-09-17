@@ -143,3 +143,61 @@ own header and stdout), not populated with a genuinely paused thread -- a Workfl
 assistant (a WarGraph with a human-in-the-loop node) would be needed for that, which is a
 separate, substantial demonstration (see `human_in_the_loop_gate.rs`,
 `war_engine_configuration.rs`).
+
+Task 3: examples/webhook_receiver.rs (EX-96, EX-97)
+------------------------------------------------------------------------------------------------
+
+Reuses the SAME `sign_webhook_body` function and the SAME `hmac`/`sha2` crates the shipped
+`WebhookDeliveryService` signs with (never a hand-rolled construction); the receiver handler
+captures the raw request body via axum's `Bytes` extractor (before any deserialization) and
+verifies in constant time via `hmac::Mac::verify_slice` (never a plain `==` on digest bytes).
+The signing secret is generated in-process from 32 random bytes and is never printed --
+only "valid"/"invalid" and the constant-time-verified/rejected narration are printed.
+
+$ cargo build --example webhook_receiver --features "web-server"
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.70s
+exit 0
+
+$ timeout 60 env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY \
+    cargo run --example webhook_receiver --features "web-server"
+webhook_receiver (example) listening on http://127.0.0.1:33341/webhook
+sending a genuine delivery (signature computed once, over these exact bytes)...
+  receiver: signature verified (recomputed digest matched)
+genuine delivery -> 200 OK valid
+sending the SAME signature over a tampered (mutated) body...
+  receiver: rejected (recomputed digest did not match)
+tampered delivery -> 401 Unauthorized invalid
+APP_WEBHOOKS_ALLOW_PRIVATE = false (unset defaults to false)
+  relaxes: loopback and private-range (RFC1918/link-local/unique-local) delivery destinations, for local development and internal-network testing only.
+  does NOT relax: the cloud metadata address 169.254.169.254 is rejected regardless of this override -- it is never a legitimate webhook receiver.
+  known, documented limitation (not an oversight): neither the write-time nor the send-time SSRF check pins the resolved address between the check and the actual connection, so DNS rebinding (a hostname that answers a public address at check time and a private/metadata address at connect time) is not caught by this guard alone.
+  SsrfGuard::check_url(http://127.0.0.1:33341/webhook) -> rejected (loopback address rejected) -- this program's own loopback receiver is exactly the kind of destination the guard rejects by default; set APP_WEBHOOKS_ALLOW_PRIVATE=true to allow it
+  SsrfGuard::check_addrs([169.254.169.254]) -> rejected (cloud metadata address (169.254.169.254) rejected) (checked regardless of allow_private, never dispatched over the network)
+exit 0
+
+$ cargo build --examples   (bare, no features -- confirms all three gated targets are skipped)
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.69s
+exit 0
+
+$ cargo fmt --all -- --check
+exit 0
+
+$ cargo check --workspace --all-targets --all-features
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.45s
+exit 0
+
+$ ./scripts/check-api-surface.sh .project/current-exports.txt
+✅ API surface extracted (3959 items)
+✅ API surface unchanged
+exit 0
+
+Acceptance-criteria greps:
+  grep -cE 'println!.*(secret|signing_key|SIGNING_KEY)' examples/webhook_receiver.rs -> 0
+  grep -c 'X-Paladin-Signature' examples/webhook_receiver.rs                        -> 1
+  grep -cE '\.unwrap\(\)|\.expect\(' examples/webhook_receiver.rs                   -> 0
+  Constant-time comparison confirmed by reading webhook_handler: `hmac::Mac::verify_slice`,
+  never a plain `==` on the digest bytes.
+  git diff --stat HEAD~1 -- src/ crates/                                            -> empty
+
+All three tasks in this plan are now committed. `make api-surface` reports the surface
+unchanged across every commit in this plan (3959 items, stable).

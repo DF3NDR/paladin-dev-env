@@ -452,9 +452,12 @@ arsenal:
 **Solutions:**
 - Verify `scheduler.enabled: true` in config
 - Check cron expression is valid: use [crontab.guru](https://crontab.guru/)
-- Ensure scheduler port is wired in application (no TODO at line 297)
+- Check the schedule's status through the Platform API's `/v1/schedules*` route family (Phase 27)
+  — `GET /v1/schedules/{schedule_id}` reports `last_tick`/`next_tick`/`skipped_ticks`, which shows
+  whether the tick is firing and whether runs are being skipped because a `fixed_thread` is busy;
+  see [Platform API — Schedules](../api-reference/platform-api.md#schedules)
 - Review scheduler logs for errors
-- Verify tokio-cron-scheduler is initialized
+- Verify `APP_SCHEDULES_ENABLED` and `APP_SCHEDULES_TICK_INTERVAL_MS` are set as expected
 
 #### Invalid Cron Expression
 

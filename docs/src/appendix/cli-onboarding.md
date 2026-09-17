@@ -13,6 +13,9 @@ The `paladin onboarding` command provides a step-by-step wizard that:
 
 ## Quick Start
 
+The `paladin-cli` binary carries `required-features = ["cli"]` and is not produced by a default
+`cargo build`; build it once with `cargo build --release --features cli --bin paladin-cli`.
+
 ```bash
 # Run the wizard
 paladin onboarding
@@ -23,6 +26,20 @@ paladin onboarding
 # ✓ Real-time validation
 # ✓ Configuration file creation
 # ✓ Sample generation
+```
+
+The `onboarding` subcommand takes no flags beyond the two global ones:
+
+```text
+$ paladin-cli onboarding --help
+Interactive onboarding wizard for initial setup
+
+Usage: paladin-cli onboarding [OPTIONS]
+
+Options:
+      --quiet    Enable quiet mode (minimal output)
+      --verbose  Enable verbose mode (detailed output)
+  -h, --help     Print help
 ```
 
 ## Wizard Flow
@@ -303,19 +320,7 @@ paladin onboarding
 # Will skip key input, validate, and proceed
 ```
 
-### Custom Output Path
-
-```bash
-# Generate .env in custom location
-PALADIN_ENV_FILE=./config/.env paladin onboarding
-```
-
-### Skip Validation
-
-```bash
-# For offline development (not recommended)
-PALADIN_SKIP_VALIDATION=1 paladin onboarding
-```
+The wizard takes no arguments and reads no dedicated environment variable of its own.
 
 ## Related Commands
 

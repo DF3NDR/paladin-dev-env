@@ -8,7 +8,7 @@ This document contains baseline performance measurements for all Battalion orche
 
 - **Date**: January 25, 2026
 - **Platform**: Linux x86_64
-- **Rust Version**: 1.85+ (2024 edition)
+- **Rust Version**: 1.88+ (2024 edition)
 - **Criterion**: v0.5.1
 - **Mock Latency**: 0μs (zero) or 100μs per Paladin execution
 

@@ -79,7 +79,8 @@
 
 - [Development Setup](contributing/development-setup.md)
 - [Testing Guide](contributing/testing-guide.md)
-- [Architecture Decisions](contributing/architecture-decisions.md)
+- [Adapter Development Guide](contributing/architecture-decisions.md)
+- [Architecture Decisions](contributing/adr-index.md)
 - [Contributing Providers](contributing/contributing-providers.md)
 - [Branching Model](contributing/branching-model.md)
 

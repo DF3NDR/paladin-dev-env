@@ -37,7 +37,8 @@
 //! different subsystem). Consequently neither this evaluator's error paths
 //! nor its memoized state ever interpolate the rendered prompt or the
 //! model's raw response body -- an evaluator failure names only this
-//! evaluator and a short, fixed failure class (see [`llm_error_class`]).
+//! evaluator and a short, fixed failure class (see the crate-private
+//! `llm_error_class` helper).
 
 use std::sync::Arc;
 

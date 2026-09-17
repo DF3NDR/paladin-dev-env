@@ -1,13 +1,19 @@
 //! War Engine — Superstep Execution Engine
 //!
-//! This module implements the execution engine for [`WarGraph`]s: typed,
-//! potentially-cyclic graphs of [`StateNode`]s whose shared state is a
-//! [`Battlefield`] (`paladin-core`), automatically checkpointed as a
-//! [`Waypoint`] after every superstep through a [`WaypointPort`]
+//! This module implements the execution engine for
+//! [`WarGraph`](crate::engine::graph::WarGraph)s: typed,
+//! potentially-cyclic graphs of
+//! [`StateNode`](crate::engine::node::StateNode)s whose shared state is a
+//! [`Battlefield`](paladin_core::platform::container::battlefield::Battlefield)
+//! (`paladin-core`), automatically checkpointed as a
+//! [`Waypoint`](paladin_core::platform::container::waypoint::Waypoint) after
+//! every superstep through a
+//! [`WaypointPort`](paladin_ports::output::waypoint_port::WaypointPort)
 //! (`paladin-ports`).
 //!
 //! Phase 22 Plan 01 proved the tracer: a single-entry, single-`Function`-node,
-//! zero-edge graph, run through [`WarEngine::start`], checkpointed as exactly
+//! zero-edge graph, run through
+//! [`WarEngine::start`](crate::engine::WarEngine::start), checkpointed as exactly
 //! one `Waypoint`, and resumed by a freshly constructed `WarEngine` with zero
 //! re-execution. Plan 05 expands this into the real superstep engine
 //! (`engine::superstep`): the general multi-node loop with cycles, snapshot
@@ -17,23 +23,23 @@
 //! expansion does not require changing these signatures.
 //!
 //! Submodules:
-//! - [`bridges`] — `WarGraph::from_formation`/`from_phalanx`/`from_campaign`
+//! - [`bridges`](crate::engine::bridges) — `WarGraph::from_formation`/`from_phalanx`/`from_campaign`
 //!   (ENG-FR-19, X-03): additive legacy bridges reproducing
 //!   `FormationExecutionService`/`PhalanxExecutionService`/
 //!   `CampaignExecutionService`'s data flow byte for byte, without touching
 //!   any of those legacy services.
-//! - [`graph`] — `WarGraph`, `NodeSpec`, `EdgeSpec`, `EngineLimits`, and
+//! - [`graph`](crate::engine::graph) — `WarGraph`, `NodeSpec`, `EdgeSpec`, `EngineLimits`, and
 //!   `WarGraph::validate`/`fingerprint`.
-//! - [`directive_parser`] — `DirectiveParser`, `OnParseError`: how a
+//! - [`directive_parser`](crate::engine::directive_parser) — `DirectiveParser`, `OnParseError`: how a
 //!   `NodeSpec::Paladin` node's raw string output becomes a routing
 //!   `Directive` (CF-02, D-11). `PlainOutput` is the backward-compatible
 //!   default; `StructuredDirective` parses a documented JSON envelope.
-//! - [`input_mapping`] — `InputMapping`, `InputMappingError`: the X-03
+//! - [`input_mapping`](crate::engine::input_mapping) — `InputMapping`, `InputMappingError`: the X-03
 //!   string bridge a `NodeSpec::Paladin` node renders its input through.
-//! - [`node`] — `StateNode`, `NodeContext`, `StateNodeError`.
-//! - [`dispatch_registry`] — `DispatchRegistry`, the engine-owned
+//! - [`node`](crate::engine::node) — `StateNode`, `NodeContext`, `StateNodeError`.
+//! - [`dispatch_registry`](crate::engine::dispatch_registry) — `DispatchRegistry`, the engine-owned
 //!   `DispatchRule::Custom` name -> closure registration (ENG-FR-09).
-//! - [`hooks`] — `TraceDispatcher` (ENG-FR-21's bounded, drop-oldest
+//! - [`hooks`](crate::engine::hooks) — `TraceDispatcher` (ENG-FR-21's bounded, drop-oldest
 //!   `TraceSink` forwarder), `NodeInterceptor`/`InterceptDecision`
 //!   (ENG-FR-22's ordered, empty-by-default chain). Both are seams with no
 //!   consumer yet (Docs 05, 07); ENG-FR-23's cancellation-to-`Halted` path
@@ -740,8 +746,9 @@ pub enum EngineError {
     /// deserialise as a `StateDelta` naming only fields declared in the
     /// graph's own schema -- an undeclared field rejects THIS response,
     /// never the run and never a partial edit (T-24-13). Checked through
-    /// the SAME per-kind validator
-    /// [`graph::validate_parley_value_for_kind`] a Gate's own `on_expire`
+    /// the SAME per-kind validator -- the crate-private
+    /// `graph::validate_parley_value_for_kind` helper --
+    /// a Gate's own `on_expire`
     /// default (`WarGraph::validate`, 24-02) and a Directive's raise-time
     /// default (`DirectiveParser::parse`, 24-03) are checked against
     /// (T-24-06) -- never a second, weaker check for the same structural
@@ -1082,7 +1089,7 @@ pub enum EngineError {
     /// [`WarEngine::replay`] or [`WarEngine::fork`] named a `from` Waypoint
     /// id that does not exist on `thread` (HITL-03, D-16): the SAME
     /// "missing is `None`, not an error" contract
-    /// [`WaypointPort::get`](paladin_ports::output::waypoint_port::WaypointPort::get)
+    /// [`WaypointPort::get`]
     /// documents is here turned into a typed engine error, mirroring how
     /// [`EngineError::ThreadNotFound`] turns [`WaypointPort::latest`]'s own
     /// `None` into a typed error at THIS layer. Nothing is persisted when
@@ -1420,7 +1427,8 @@ pub struct ResumeOptions {
 }
 
 /// Executes [`WarGraph`]s: runs nodes, merges their deltas into the shared
-/// [`Battlefield`], and automatically checkpoints a [`Waypoint`] after every
+/// [`Battlefield`], and automatically checkpoints a
+/// [`Waypoint`](paladin_core::platform::container::waypoint::Waypoint) after every
 /// superstep through `W: WaypointPort` (ENG-FR-11).
 pub struct WarEngine<W: WaypointPort> {
     paladin_port: Arc<dyn PaladinPort>,
@@ -2683,7 +2691,8 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
     /// [`EngineError::WaypointNotFound`]), checks `graph.fingerprint()`
     /// against the loaded Waypoint's own (mismatch -> [`EngineError::GraphMismatch`],
     /// ENG-FR-14) -- BEFORE anything else, mirroring `resume_with_options`'s
-    /// own guard order -- then re-enters [`superstep::run_with_namespace`]
+    /// own guard order -- then re-enters the crate-private
+    /// `superstep::run_with_namespace`
     /// with `parent_waypoint_id = Some(from)`, `fork_of = Some(from)` and
     /// superstep numbering continuing at `from`'s own `superstep + 1`
     /// (the SAME `from.superstep` when `from` carries a mid-muster

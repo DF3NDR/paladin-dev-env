@@ -20,7 +20,8 @@
 //! - **node id**: one entry per node, and -- together with the fingerprint
 //!   coming first in the rendered key -- what lets
 //!   `NodeCachePort::invalidate(prefix)` target one graph
-//!   ([`graph_prefix`]) or one node ([`node_prefix`]).
+//!   ([`graph_prefix`](crate::engine::cache_key::graph_prefix)) or one node
+//!   ([`node_prefix`](crate::engine::cache_key::node_prefix)).
 //! - **input component**: the rendered `InputMapping` string for a
 //!   `NodeSpec::Paladin` node; for a `NodeSpec::Function` node under
 //!   `CacheKeySpec::Default` a canonical hash of the FULL Battlefield

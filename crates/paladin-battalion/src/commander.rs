@@ -32,7 +32,8 @@ use paladin_ports::output::paladin_registry::PaladinRegistry;
 ///
 /// Off by default: a `Commander` built without calling
 /// [`CommanderBuilder::strategy_selection`] uses [`StrategySelection::Heuristic`]
-/// -- today's keyword-based [`Commander::analyze_and_select`], unchanged. No
+/// -- today's keyword-based crate-private `Commander::analyze_and_select`
+/// routine, unchanged. No
 /// `APP_*` environment variable, cargo feature, or config-struct field can
 /// reach [`StrategySelection::Semantic`] (D-26); a workflow author reaches it
 /// only by constructing one in code.
@@ -46,8 +47,8 @@ use paladin_ports::output::paladin_registry::PaladinRegistry;
 /// ```
 #[derive(Clone, Default)]
 pub enum StrategySelection {
-    /// Today's keyword-based heuristic ([`Commander::analyze_and_select`]),
-    /// unchanged. The default.
+    /// Today's keyword-based heuristic (the crate-private
+    /// `Commander::analyze_and_select` routine), unchanged. The default.
     #[default]
     Heuristic,
     /// Prompt `llm` with the strategy catalog and the run's input, parse the

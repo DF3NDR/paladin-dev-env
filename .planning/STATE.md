@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 35
 current_phase_name: mdBook Currency
-status: planning
+status: executing
 stopped_at: Phase 35 context gathered
-last_updated: "2026-09-17T12:13:37.837Z"
+last_updated: "2026-09-17T13:08:12.572Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 35 context gathered (35-CONTEXT.md, 35 decisions), ready to plan
+last_activity_desc: Phase 35 planned — 10 plans in 3 waves (35-01 … 35-10), plan checker passed, ready to execute
 progress:
   total_phases: 17
   completed_phases: 14
-  total_plans: 167
+  total_plans: 177
   completed_plans: 167
 ---
 
@@ -63,8 +63,8 @@ names. See MILESTONES.md.
 
 Phase: 35 — mdBook Currency
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-09-17 — Phase 34 complete, transitioned to Phase 35
+Status: Ready to execute
+Last activity: 2026-09-17 — Phase 35 planned: 10 plans in 3 waves, plan checker passed first pass, decision coverage 35/35
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)

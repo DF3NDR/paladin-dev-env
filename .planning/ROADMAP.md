@@ -1086,7 +1086,7 @@ Plans:
 | 32. Unified Token Primitives | v0.10.0 | 5/5 | Complete    | 2026-09-16 |
 | 33. Commissary In-Tree Adoption | v0.10.0 | 6/6 | Complete    | 2026-09-16 |
 | 34. Documentation Currency Audit | v0.10.0 | 9/9 | Complete    | 2026-09-17 |
-| 35. mdBook Currency | v0.10.0 | 0/0 | Not started | — |
+| 35. mdBook Currency | v0.10.0 | 0/10 | Planned | — |
 | 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 0/0 | Not started | — |
 | 37. v0.10.0 Crate Release | v0.10.0 | 0/0 | Not started | — |
 

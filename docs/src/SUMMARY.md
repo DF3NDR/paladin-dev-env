@@ -22,6 +22,7 @@
 - [Sanctum Vector Memory](user-guides/sanctum-vector-memory.md)
 - [Herald Output](user-guides/herald-output.md)
 - [Maneuver Flow DSL](user-guides/maneuver-flow-dsl.md)
+- [WarEngine: Battlefield State & Superstep Execution](user-guides/superstep-engine.md)
 - [Control Flow: Dynamic Routing & Subgraphs](user-guides/control-flow.md)
 - [Parley & Chronicle: Pause, Resume, History and Graceful Shutdown](user-guides/parley-and-chronicle.md)
 - [Aegis: Retry, Timeout, Error Handlers, Model Fallback and Node Caching](user-guides/fault-tolerance.md)

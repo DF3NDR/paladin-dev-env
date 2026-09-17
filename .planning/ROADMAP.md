@@ -936,15 +936,40 @@ Plans:
 **Plans**: 9 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 34-01-PLAN.md — Tracer: mint CURR-01…05, build the 34-AUDIT.md spine, prove one worked row per table
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 34-02-PLAN.md — Shipped-surface checklist (§1) compiled from CHANGELOG / MIGRATION / REQUIREMENTS
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 34-03-PLAN.md — mdBook build + linkcheck + vocabulary baseline, and the 18 root/getting-started/architecture/api-reference verdicts
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 34-04-PLAN.md — mdBook verdicts for the 20 user-guides and the 20 deployment/topologies/operations/contributing pages
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 34-05-PLAN.md — mdBook verdicts for the 34 remaining appendix pages; the 93-page partition closes
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 34-06-PLAN.md — Rustdoc default-feature enumeration against the ci.yml bar, plus the workspace all-features record
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 34-07-PLAN.md — Per-crate all-features sweep, doctest baseline, public-API example-heading gate record
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [ ] 34-08-PLAN.md — Examples build status under the four CI feature sets, currency verdicts and the capability gap list
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
 - [ ] 34-09-PLAN.md — Phase 35 / Phase 36 work lists, deferred register, and the phase-range read-only proof
 
 ### Phase 35: mdBook Currency
@@ -1009,7 +1034,6 @@ Plans:
 Plans:
 
 - [ ] TBD (run /gsd-plan-phase 37 to break down)
-
 
 ## Progress
 

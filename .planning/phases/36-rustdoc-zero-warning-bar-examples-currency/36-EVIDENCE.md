@@ -82,3 +82,20 @@ RD-128 (paladin-storage). Adds: EX-109, EX-111, EX-112, EX-113, EX-114, EX-115 v
   binary, the README section, or a `.planning/` evidence artifact.
 - The example prints no API key and hard-codes none; its header states it needs no
   provider key and no external service.
+
+## Orchestrator — wave 3 post-merge gate: `openapi.json` regeneration
+
+- **Trigger:** after plans 36-04 and 36-05 landed, the post-merge `make test` gate failed exactly one
+  test: `paladin-web` `openapi::tests::openapi_matches_committed_baseline` (225 passed, 1 failed).
+- **Cause:** `crates/paladin-web/openapi.json` is generated from the route handlers' doc comments
+  (utoipa uses rustdoc text as `summary`/`description`). Plan 36-04's D-05/D-06 fixes in
+  `thread_controller.rs` reworded two doc sentences (the `[`MAX_HISTORY_LIMIT`]` private-item
+  de-link and the `[`resume_thread`]`-adjacent text), so the generated document drifted from the
+  committed baseline by those two `description` strings.
+- **Fix:** `UPDATE_OPENAPI=1 cargo test -p paladin-web openapi_matches_committed_baseline` →
+  `git diff --stat crates/paladin-web/openapi.json` = `1 file changed, 2 insertions(+), 2 deletions(-)`;
+  `git diff -U0 … | grep -oE '"[a-zA-Z_]+":' | sort | uniq -c` = `4 "description":` — no path, method,
+  schema, or response-code key changed. Consumers checked: the `sdk-smoke` CI job (`ci.yml:1156-1201`)
+  generates clients from the file and is indifferent to description text; no `docs/src` page embeds it.
+- **Result:** the single test passes after regeneration (`1 passed; 0 failed`); the rest of the suite was
+  already green on the failing run (3706 passed). Committed as the wave-3 post-merge fix.

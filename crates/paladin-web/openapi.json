@@ -2634,7 +2634,7 @@
           "threads"
         ],
         "summary": "`GET /threads/{id}/history` -- paginated Chronicle history.",
-        "description": "Authenticated, any role (D-24) -- see [`get_thread_state`]'s docs on why\nreads are not admin-gated the way [`resume_thread`] is.\n\n`limit` (at most [`MAX_HISTORY_LIMIT`]) and an opaque `cursor` whose\ncontent is the last returned item's `waypoint_id` (D-27). Returns\n`400 Bad Request` for `limit > 100` or an unparseable `cursor`.",
+        "description": "Authenticated, any role (D-24) -- see [`get_thread_state`]'s docs on why\nreads are not admin-gated the way [`resume_thread`] is.\n\n`limit` (capped by the crate-private history limit) and an opaque `cursor` whose\ncontent is the last returned item's `waypoint_id` (D-27). Returns\n`400 Bad Request` for `limit > 100` or an unparseable `cursor`.",
         "operationId": "get_thread_history",
         "parameters": [
           {
@@ -2725,7 +2725,7 @@
           "threads"
         ],
         "summary": "`POST /threads/{id}/resume` -- deliver parley responses.",
-        "description": "Requires an admin principal ([`require_admin`]) -- see the module-level\n\"Authorization\" docs: this narrows D-24's \"any role\" default for the one\n*mutating* thread route (CR-01, 24-REVIEW.md), pending PLAT-06's real\nper-thread ownership scoping.\n\nValidates synchronously through [`ParleyPort::resume_with`] and returns\n`202 Accepted` immediately; the run itself continues on a background task\n(D-25) -- a client polls `GET .../state` to observe the outcome. Maps\n[`ParleyError`] per [`map_parley_error`].",
+        "description": "Requires an admin principal ([`require_admin`]) -- see the module-level\n\"Authorization\" docs: this narrows D-24's \"any role\" default for the one\n*mutating* thread route (CR-01, 24-REVIEW.md), pending PLAT-06's real\nper-thread ownership scoping.\n\nValidates synchronously through [`ParleyPort::resume_with`] and returns\n`202 Accepted` immediately; the run itself continues on a background task\n(D-25) -- a client polls `GET .../state` to observe the outcome. Maps\n[`ParleyError`] per the crate-private `map_parley_error` mapping.",
         "operationId": "resume_thread",
         "parameters": [
           {

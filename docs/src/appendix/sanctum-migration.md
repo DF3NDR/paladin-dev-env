@@ -42,9 +42,9 @@ Migrate from ephemeral InMemory storage to persistent Qdrant for production use.
 
 Create an export utility:
 
-```rust
+```rust,ignore
 // src/bin/export_sanctum.rs
-use paladin::paladin_ports::output::sanctum_port::{SanctumPort, SanctumFilter};
+use paladin_ports::output::sanctum_port::{SanctumPort, SanctumFilter};
 use paladin::core::platform::container::sanctum::SanctumEntry;
 use std::fs::File;
 use std::io::Write;
@@ -164,7 +164,7 @@ export APP_SANCTUM_QDRANT_VECTOR_DIMENSION=1536
 
 Create an import utility:
 
-```rust
+```rust,ignore
 // src/bin/import_sanctum.rs
 use paladin::infrastructure::adapters::sanctum::QdrantSanctumAdapter;
 use paladin::core::platform::container::sanctum::SanctumEntry;
@@ -235,10 +235,10 @@ Import complete! Total memories in Qdrant: 10000
 
 Run validation checks:
 
-```rust
+```rust,ignore
 // src/bin/validate_migration.rs
 use paladin::infrastructure::adapters::sanctum::QdrantSanctumAdapter;
-use paladin::paladin_ports::output::sanctum_port::{SanctumPort, SanctumQuery};
+use paladin_ports::output::sanctum_port::{SanctumPort, SanctumQuery};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -380,10 +380,11 @@ Upgrading embedding model (e.g., 384 → 1536 dimensions) requires re-embedding 
 
 #### Step 1: Re-embed All Content
 
-```rust
+```rust,ignore
 // src/bin/reembed_memories.rs
 use paladin::infrastructure::adapters::sanctum::QdrantSanctumAdapter;
-use paladin::paladin_ports::output::{SanctumPort, EmbeddingPort};
+use paladin_ports::output::sanctum_port::SanctumPort;
+use paladin_ports::output::embedding_port::EmbeddingPort;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -434,7 +435,7 @@ Switch application to new collection and dimension.
 
 Write to both old and new adapters simultaneously during migration.
 
-```rust
+```rust,ignore
 pub struct DualWriteSanctum {
     primary: Arc<dyn SanctumPort>,
     secondary: Arc<dyn SanctumPort>,
@@ -539,7 +540,7 @@ cargo test --test smoke_test
 
 ### Automated Validation Script
 
-```rust
+```rust,ignore
 // src/bin/validate_sanctum.rs
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

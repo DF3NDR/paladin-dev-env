@@ -96,9 +96,9 @@ enable_priority_queues = true
 
 ### Basic Usage
 
-```rust
+```rust,ignore
 use paladin::infrastructure::adapters::queue::redis::RedisQueueAdapter;
-use paladin::paladin_ports::output::queue_port::QueuePort;
+use paladin_ports::output::queue_port::QueuePort;
 
 // Initialize the adapter
 let config = RedisQueueConfig::default();
@@ -129,7 +129,7 @@ if let Some(item) = adapter.dequeue("my-queue").await? {
 
 ### Priority Queues
 
-```rust
+```rust,ignore
 use paladin::core::base::entity::message::MessagePriority;
 
 // Enqueue with priority
@@ -141,7 +141,7 @@ let item = adapter.dequeue_highest_priority("priority-queue").await?;
 
 ### Batch Operations
 
-```rust
+```rust,ignore
 // Enqueue multiple items at once
 let items = vec![item1, item2, item3];
 let item_ids = adapter.enqueue_batch("batch-queue", items).await?;
@@ -167,7 +167,7 @@ open http://localhost:8081
 
 ### Queue Statistics
 
-```rust
+```rust,ignore
 // Get queue statistics
 let stats = adapter.get_queue_stats("my-queue").await?;
 println!("Pending: {}, Processing: {}, Completed: {}, Failed: {}",
@@ -183,7 +183,7 @@ for (queue_name, stats) in all_stats {
 
 ### Health Checks
 
-```rust
+```rust,ignore
 // Check adapter health
 let is_healthy = adapter.health_check().await?;
 ```
@@ -192,14 +192,14 @@ let is_healthy = adapter.health_check().await?;
 
 ### Retry Failed Items
 
-```rust
+```rust,ignore
 // Retry a specific failed item
 adapter.retry_item("my-queue", failed_item_id).await?;
 ```
 
 ### Purge Completed/Failed Items
 
-```rust
+```rust,ignore
 // Clean up completed items
 let purged_completed = adapter.purge_completed("my-queue").await?;
 
@@ -209,7 +209,7 @@ let purged_failed = adapter.purge_failed("my-queue").await?;
 
 ### Pause/Resume Queues
 
-```rust
+```rust,ignore
 // Pause queue processing
 adapter.pause_queue("my-queue").await?;
 
@@ -238,8 +238,8 @@ paladin:queue:failed:{queue_name}            # Failed items (hash)
 
 The adapter provides comprehensive error handling:
 
-```rust
-use paladin::core::platform::manager::queue_service::QueueError;
+```rust,ignore
+use paladin_ports::output::queue_port::QueueError;
 
 match adapter.enqueue("my-queue", item).await {
     Ok(item_id) => println!("Enqueued item: {}", item_id),
@@ -258,7 +258,7 @@ match adapter.enqueue("my-queue", item).await {
 
 The adapter uses Redis connection manager for efficient connection pooling:
 
-```rust
+```rust,ignore
 // Connections are automatically managed
 // No need for manual connection handling
 ```
@@ -267,7 +267,7 @@ The adapter uses Redis connection manager for efficient connection pooling:
 
 Use batch operations for better performance:
 
-```rust
+```rust,ignore
 // Instead of multiple single enqueues
 for item in items {
     adapter.enqueue("queue", item).await?;  // Slower

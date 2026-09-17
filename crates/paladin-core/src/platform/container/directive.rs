@@ -1,6 +1,6 @@
 //! Directive — Node-Authored Routing (CF-02)
 //!
-//! [`StateNode::run`] (`paladin-battalion::engine::node`) returns a
+//! `StateNode::run` (`paladin-battalion::engine::node`) returns a
 //! [`Directive`] instead of a bare `StateDelta`: the partial state update a
 //! node contributes, plus how the superstep engine should route control
 //! after this node completes ([`NextStep`]).

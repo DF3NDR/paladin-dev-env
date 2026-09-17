@@ -1,10 +1,11 @@
 //! # The authoritative trace model (OBS-01; PRD 07 §2.1, D-01/D-02)
 //!
-//! [`TraceEvent`] is the twelve-variant, `#[non_exhaustive]` set of
-//! observability events the superstep engine and its below-the-engine
-//! producers (`FallbackLlmAdapter`, the facade's middleware chain,
-//! `PaladinExecutionService`) emit. [`TraceRecord`] is the envelope every
-//! sink actually receives: `thread_id`, an optional `run_id`, a per-run
+//! [`TraceEvent`](crate::platform::container::trace::TraceEvent) is the
+//! twelve-variant, `#[non_exhaustive]` set of observability events the
+//! superstep engine and its below-the-engine producers (`FallbackLlmAdapter`,
+//! the facade's middleware chain, `PaladinExecutionService`) emit.
+//! [`TraceRecord`](crate::platform::container::trace::TraceRecord) is the
+//! envelope every sink actually receives: `thread_id`, an optional `run_id`, a per-run
 //! monotonic `seq`, `at` (when the event happened, stamped at enqueue time —
 //! not when a sink observes it) and the event itself, `#[serde(flatten)]`ed
 //! so one record serializes to a single flat JSON object (OBS-FR-04).
@@ -14,15 +15,19 @@
 //! variant. This module is its authoritative home (D-01: ADR-0016 has core
 //! own port value types, with ports re-exporting them) and its extension to
 //! PRD 07 §2.1's twelve variants (D-02): the per-variant `thread_id` fields
-//! are gone — the [`TraceRecord`] envelope carries it once.
+//! are gone — the [`TraceRecord`](crate::platform::container::trace::TraceRecord)
+//! envelope carries it once.
 //!
 //! ## `TraceEvent` carries field NAMES, not field VALUES (D-05)
 //!
-//! [`TraceEvent::DeltaMerged`] reports which fields changed via
-//! [`FieldChange`] — `field`, `dispatch`, `writers` and `value_bytes`
+//! [`TraceEvent::DeltaMerged`](crate::platform::container::trace::TraceEvent::DeltaMerged)
+//! reports which fields changed via
+//! [`FieldChange`](crate::platform::container::trace::FieldChange) —
+//! `field`, `dispatch`, `writers` and `value_bytes`
 //! (the serialized size of the new value) — **never** the value itself,
 //! unless `trace.state_values` is explicitly enabled, in which case
-//! [`FieldChange::value`] carries the serialized value passed through the
+//! [`FieldChange::value`](crate::platform::container::trace::FieldChange::value)
+//! carries the serialized value passed through the
 //! redaction helper (`crates/paladin-llm/src/redaction.rs`) **before**
 //! truncation to the configured cap — redact-then-truncate, never the
 //! reverse, per `.github/instructions/security.instructions.md`'s ordering
@@ -33,16 +38,22 @@
 //!
 //! ## A note on the one field name deviation from the PRD prose (D-02)
 //!
-//! PRD 07's prose names [`TraceEvent::NodeProgress`]'s payload field `kind`
-//! and [`TraceEvent::ParleyRaised`]'s payload field `kind` — but
+//! PRD 07's prose names
+//! [`TraceEvent::NodeProgress`](crate::platform::container::trace::TraceEvent::NodeProgress)'s
+//! payload field `kind` and
+//! [`TraceEvent::ParleyRaised`](crate::platform::container::trace::TraceEvent::ParleyRaised)'s
+//! payload field `kind` — but
 //! `TraceEvent` itself is internally tagged `#[serde(tag = "kind")]`, so a
 //! variant whose own struct payload also declares a field literally named
 //! `kind` would collide with the enum's own discriminant key when
 //! serialized (the same JSON key emitted twice: once as the variant tag,
 //! once as the payload field, defeating the flat-envelope contract this
 //! module exists to provide). This is resolved here, not deferred, by
-//! naming the two payload fields [`TraceEvent::NodeProgress`]'s `progress`
-//! and [`TraceEvent::ParleyRaised`]'s `parley_kind` — the DATA these two
+//! naming the two payload fields
+//! [`TraceEvent::NodeProgress`](crate::platform::container::trace::TraceEvent::NodeProgress)'s
+//! `progress` and
+//! [`TraceEvent::ParleyRaised`](crate::platform::container::trace::TraceEvent::ParleyRaised)'s
+//! `parley_kind` — the DATA these two
 //! variants carry is unchanged from the PRD's intent, only the JSON key
 //! avoids the collision. A round-trip test
 //! (`record_serializes_as_one_flat_object` and

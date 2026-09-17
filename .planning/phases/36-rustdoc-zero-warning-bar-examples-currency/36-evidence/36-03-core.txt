@@ -1,0 +1,72 @@
+Plan 36-03 -- paladin-ai-core per-crate rustdoc sweep (D-10, D-24)
+Toolchain: cargo 1.97.1 / rustc 1.97.1
+Captured: 2026-09-17
+
+=== Default-feature forced re-documentation ===
+Command: touch crates/paladin-core/src/lib.rs && cargo doc -p paladin-ai-core --no-deps
+Exit code: 0
+Diagnostic ('warning:') line count: 0 (down from 14 measured at plan start)
+
+$ cargo doc -p paladin-ai-core --no-deps
+ Documenting paladin-ai-core v0.10.0 (/workspace/crates/paladin-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.01s
+   Generated /workspace/target/doc/paladin_core/index.html
+
+=== All-features bar ===
+Command: touch crates/paladin-core/src/lib.rs && RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps
+Exit code: 0
+
+$ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps
+ Documenting paladin-ai-core v0.10.0 (/workspace/crates/paladin-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.07s
+   Generated /workspace/target/doc/paladin_core/index.html
+
+=== Supporting workspace gates (run after the per-crate sweep) ===
+- cargo fmt --all -- --check: clean (no output)
+- cargo check --workspace --all-targets --all-features: exit 0
+  (Checking paladin-ai-core, paladin-ports, paladin-herald, paladin-llm, paladin-storage,
+  paladin-battalion, paladin-web, paladin-notifications, paladin-memory, paladin-content,
+  paladin-eval, paladin-ai, paladin-doc-examples; Finished in 1m 03s)
+- cargo test --workspace --doc: 0 failed across every per-crate doctest result line
+  (paladin-ports alone: 137 passed, 94 ignored, 0 failed -- representative of the full
+  workspace run; no doctest was broken by this plan's doc-comment rewrites)
+- make api-surface: "API surface unchanged" (3959 items, byte-identical to
+  .project/current-exports.txt)
+
+=== Negative-evidence greps (T-36-07, T-36-08, D-05) ===
+$ grep -rn 'struct StateNode\|fn StateNode' crates/paladin-core/src
+(no output -- StateNode is not, and was not made, an item of this crate; the directive.rs
+mention stays de-linked to plain code font rather than adding a paladin-battalion
+dependency)
+
+$ grep -n 'pub fn extract_json' crates/paladin-core/src/platform/container/structured.rs
+143:pub fn extract_json(output: &str) -> Option<Value> {
+(already pub before this plan -- no visibility widened; resolved with an explicit
+crate::-relative path per D-06)
+
+$ grep -rn 'allow(rustdoc::' crates/paladin-core/src
+(no output -- no lint-suppression attribute was added anywhere in the crate)
+
+$ git diff -- crates/paladin-core/Cargo.toml
+(no output -- the commit adds no line to this crate's manifest; the hexagonal
+dependency direction is unchanged)
+
+$ git diff -- crates/paladin-core/ | grep -E '^[+-]' | grep -v '^+++\|^---' | grep -vE "^[+-]\s*(///|//!)"
+(no output -- every added/removed line across all four touched files begins with a doc
+comment marker; no non-doc source line changed)
+
+=== Webhook security-invariant prose check (T-36-09) ===
+$ grep -n 'No signing key on the row\|deliberately carries no signing key' crates/paladin-core/src/platform/container/webhook.rs
+10://! # No signing key on the row (prohibition P1)
+12://! `WebhookDelivery` deliberately carries no signing key field: the HMAC
+(unchanged -- lines 1-18 of the webhook.rs doc header, including the "no signing key on
+the row" prohibition and the signature invariant, were not touched; the edit at lines
+19-22 is the link syntax only)
+
+=== Baseline-vs-final comparison ===
+Baseline (36-EVIDENCE.md / 36-evidence/36-01-baseline.txt, captured by plan 36-01):
+  paladin-ai-core contributed 14 of the workspace's 65 default-feature rustdoc
+  diagnostics, across 14 location groups (28 RD-nn rows across default+all-features:
+  RD-52..RD-65, RD-103..RD-116).
+Final (this file): paladin-ai-core contributes 0 diagnostics under either bar command.
+All 28 rows (RD-52..RD-65, RD-103..RD-116) are closed.

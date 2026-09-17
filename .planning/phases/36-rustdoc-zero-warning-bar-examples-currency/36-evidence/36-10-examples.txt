@@ -166,3 +166,91 @@ $ cargo check --workspace --all-targets --all-features
 exit 0
 $ ./scripts/check-api-surface.sh .project/current-exports.txt
 ✅ API surface unchanged
+
+
+Task 3: examples/eval_scenarios_demo.rs (EX-105, EX-106, EX-107)
+------------------------------------------------------------------------------------------------
+
+Files: examples/eval_scenarios_demo.rs (no Cargo.toml change -- paladin-eval is an
+unconditional dev-dependency of the root package, confirmed at Cargo.toml:318)
+
+Program: builds a one-Paladin-node WarGraph (built with a mock-adapter-backed Paladin, never
+actually called -- ScenarioRunner substitutes its own scripted PaladinPort at run time, keyed by
+Paladin name) and registers it under ScenarioRunner via register_graph.
+  Part 1 (EX-105): declares a two-case Scenario directly in Rust (the same Scenario/Case/
+    Assertion types a .eval.yaml file deserializes into -- paladin_eval::eval_scenarios! itself
+    expands to a fn main() incompatible with this program's own main(), so this program drives
+    the SAME types and the SAME ScenarioRunner::run_case the macro's expansion drives), and runs
+    both cases, printing each case name and PASSED/FAILED.
+  Part 2 (EX-106): prints PALADIN_EVAL_LIVE's current value and what enabling it changes (a real
+    provider call instead of the scripted mock text), then calls check_live_mode(false) and
+    matches on the typed refusal (Err(FlagNotSet)) rather than propagating it -- proving the
+    non-live gate refuses immediately without ever reading a provider key.
+  Part 3 (EX-107): writes a real .eval.yaml scenario file to a tempfile::tempdir(), prints the
+    exact `paladin eval run "<glob>"` CLI command line, then drives the SAME glob pattern through
+    ScenarioRunner::trials (proving 1 trial resolves) and Scenario::from_path + run_case
+    in-process, printing the resulting case's PASSED/FAILED -- so the printed command and the
+    demonstrated behaviour are the same thing. The workspace's own CLI binary is never spawned as
+    a subprocess (it is gated behind the `cli` feature).
+
+$ cargo build --example eval_scenarios_demo
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.55s
+exit 0
+
+$ env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY cargo run --example eval_scenarios_demo
+=== eval_scenarios_demo: EX-105, EX-106, EX-107 ===
+
+--- Part 1: declaring scenarios and running them (EX-105) ---
+  case 'answers_the_question': PASSED
+  case 'answers_a_second_question': PASSED
+
+--- Part 2: the live-mode toggle (EX-106) ---
+PALADIN_EVAL_LIVE=None -- enabling it (together with the CLI's --live flag and a configured provider credential) would make every scenario call a REAL provider instead of this program's scripted mock text above. This program deliberately stays in the default non-live mode throughout, so it needs no provider key.
+check_live_mode(false) -> Err(live mode requires --live) -- refused immediately, exactly as this program's own non-live intent expects.
+
+--- Part 3: the command-line form (EX-107) ---
+Wrote a scenario file to /tmp/.tmpUkfySg/demo.eval.yaml.
+The equivalent CLI form:
+  cargo run --bin paladin --features cli -- eval run "/tmp/.tmpUkfySg/*.eval.yaml"
+
+Driving the same glob through ScenarioRunner::trials in-process resolves 1 trial(s) -- the same discovery `paladin eval run` and the `evals` test harness both use.
+  case 'cli_form_case' (from the written file): PASSED
+
+=== eval_scenarios_demo complete ===
+exit 0
+
+$ cargo build --examples
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.56s
+exit 0
+
+$ grep -c 'eval_scenarios' examples/eval_scenarios_demo.rs
+7
+$ grep -cE 'Command::new|process::Command' examples/eval_scenarios_demo.rs
+0
+$ grep -cE '\.unwrap\(\)|\.expect\(' examples/eval_scenarios_demo.rs
+0
+$ grep -cE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY' examples/eval_scenarios_demo.rs
+0
+$ git diff --stat HEAD -- src/ crates/ Cargo.toml
+(empty -- no manifest declaration was needed)
+
+
+Whole-plan verification (after all three tasks committed)
+------------------------------------------------------------------------------------------------
+
+$ cargo fmt --all -- --check
+exit 0
+
+$ cargo check --workspace --all-targets --all-features
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.82s
+exit 0
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.88s
+exit 0
+
+$ ./scripts/check-api-surface.sh .project/current-exports.txt
+🔍 Checking API surface for changes...
+✅ API surface extracted to /tmp/tmp.HjRgbC0VGc (3959 items)
+✅ API surface unchanged
+exit 0

@@ -9,7 +9,6 @@ Generate production-ready Battalion configurations from natural language descrip
 - [Command Syntax](#command-syntax)
 - [Generation Workflow](#generation-workflow)
 - [Configuration Options](#configuration-options)
-- [Output Formats](#output-formats)
 - [Best Practices](#best-practices)
 - [Examples](#examples)
 - [Troubleshooting](#troubleshooting)
@@ -18,10 +17,12 @@ Generate production-ready Battalion configurations from natural language descrip
 
 The `muster` command leverages LLM intelligence to:
 - **Translate** natural language descriptions into Battalion configurations
-- **Suggest** optimal orchestration patterns (Formation, Phalanx, Campaign, Chain of Command)
-- **Generate** complete YAML/JSON configurations with validation
-- **Preview** the generated configuration before saving
-- **Validate** configuration against Paladin schema
+- **Recommend** an orchestration pattern (Formation, Phalanx, Campaign, Chain of Command,
+  Conclave, Maneuver) based on the task description
+- **Generate** a complete YAML configuration
+- **Review** the generated configuration before saving (accept, edit, or cancel), unless
+  `--no-review` skips the step
+- **Execute** the battalion immediately after generation, when `--execute` is given
 
 ### When to Use Muster
 
@@ -29,10 +30,10 @@ The `muster` command leverages LLM intelligence to:
 - Creating complex multi-agent workflows from scratch
 - Prototyping new orchestration patterns
 - Need AI suggestions for optimal agent coordination
-- Want validated, production-ready configurations quickly
+- Want a ready-to-edit configuration quickly
 
 ❌ **Don't use muster when:**
-- You have existing configurations (use `paladin run` instead)
+- You have existing configurations (use `paladin battalion run` instead)
 - Need precise manual control over every parameter
 - Working with sensitive/proprietary orchestration logic
 
@@ -42,116 +43,76 @@ The `muster` command leverages LLM intelligence to:
 
 ```bash
 # Generate a simple sequential workflow
-paladin muster "Create a data analysis pipeline: fetch data, clean it, analyze patterns, generate report"
+paladin muster --task "Create a data analysis pipeline: fetch data, clean it, analyze patterns, generate report"
 
 # Generate a parallel processing workflow
-paladin muster "Process customer reviews in parallel: sentiment analysis, topic extraction, summary generation"
+paladin muster --task "Process customer reviews in parallel: sentiment analysis, topic extraction, summary generation"
 
-# Generate with specific pattern
-paladin muster --pattern formation "Three-step research workflow"
-
-# Generate and save directly
-paladin muster "Code review workflow" --output code_review.yaml --yes
+# Generate and save to a specific path, skipping the interactive review
+paladin muster --task "Code review workflow" --output code_review.yaml --no-review
 ```
 
 ## Command Syntax
 
-```bash
-paladin muster [OPTIONS] <DESCRIPTION>
+The `muster` subcommand takes no positional argument; the task description is passed with
+`--task` (or supplied interactively if omitted). Build the binary with the `cli` feature before
+capturing this output yourself: `cargo build --release --features cli --bin paladin-cli` (the
+binary carries `required-features = ["cli"]` and is not produced by a default `cargo build`).
 
-Arguments:
-  <DESCRIPTION>
-      Natural language description of the desired Battalion workflow
-      Can be a sentence, paragraph, or detailed specification
+```text
+$ paladin-cli muster --help
+Generate battalion configuration from task description
+
+Usage: paladin-cli muster [OPTIONS]
 
 Options:
-  -p, --pattern <PATTERN>
-      Preferred orchestration pattern (formation, phalanx, campaign, chain_of_command)
-      If not specified, LLM will suggest the best pattern
-
-  -o, --output <FILE>
-      Output file path (YAML or JSON based on extension)
-      If not specified, displays configuration without saving
-
-  -f, --format <FORMAT>
-      Output format: yaml (default) or json
-
-  -y, --yes
-      Auto-confirm and save without preview
-
-  --provider <PROVIDER>
-      LLM provider to use for generation (openai, deepseek, anthropic)
-      Default: Uses default provider from configuration
-
-  --model <MODEL>
-      Specific LLM model to use
-      Example: gpt-4, deepseek-chat, claude-3-opus
-
-  --temperature <TEMP>
-      Generation temperature (0.0-2.0)
-      Lower = more focused, Higher = more creative
-      Default: 0.7
-
-  --validate
-      Validate the generated configuration against schema
-      Enabled by default, use --no-validate to skip
-
-  --interactive
-      Interactive mode - refine the generated config through conversation
-
-  -v, --verbose
-      Show detailed generation process
+      --task <TASK>          Task description
+  -o, --output <OUTPUT>      Output file path
+      --execute              Execute immediately after generation
+      --provider <PROVIDER>  LLM provider to use
+      --model <MODEL>        Model to use
+      --no-review            Skip review step
+      --quiet                Enable quiet mode (minimal output)
+      --verbose              Enable verbose mode (detailed output)
+  -h, --help                 Print help
 ```
+
+`--quiet` and `--verbose` are global flags shared by every subcommand. The orchestration pattern
+is chosen by the LLM analysis rather than a flag, output is always YAML, and the only interactive
+step is the accept/edit/cancel review prompt (skipped with `--no-review`); there is no separate
+flag to force a pattern, pick an output format, auto-confirm, tune generation temperature, toggle
+schema validation, or enter a conversational refinement mode.
 
 ## Generation Workflow
 
 ### 1. Analysis Phase
 
 ```bash
-paladin muster "Build a content moderation system"
+paladin muster --task "Build a content moderation system"
 ```
 
 ```
-🧠 Analyzing workflow requirements...
+🏰 Muster - Battalion Configuration Generator
 
-Requirements Analysis:
-- Task Type: Sequential processing with decision points
-- Agents Required: 3-4 specialized Paladins
-- Suggested Pattern: Campaign (graph-based workflow)
-- Estimated Complexity: Medium
+Analyzing task requirements with AI...
+
+📋 Analysis Results
+Pattern: campaign
+Battalion: content_moderation_system
+Reasoning: ...
+Agents: 4 recommended
 ```
 
 ### 2. Configuration Generation
 
 ```
-⚙️  Generating Battalion configuration...
-
-Generating:
-  ✓ Paladin definitions (4 agents)
-  ✓ Orchestration pattern (Campaign)
-  ✓ Dependencies and data flow
-  ✓ Configuration parameters
+Generating battalion configuration...
 ```
 
-### 3. Validation Phase
+### 3. Review Phase (skipped with `--no-review`)
 
 ```
-✅ Validating configuration...
-
-Validation Results:
-  ✓ Schema validation passed
-  ✓ All Paladin references valid
-  ✓ No circular dependencies
-  ✓ Resource requirements satisfied
-```
-
-### 4. Preview & Confirmation
-
-```yaml
-# Generated Battalion Configuration
-# Pattern: Campaign
-# Paladins: 4
-# Estimated Duration: 30-60 seconds
+📄 Generated Configuration
 
 name: content_moderation_system
 description: Automated content moderation with classification and review
@@ -187,108 +148,54 @@ paladins:
     temperature: 0.3
   # ... additional paladins
 
-Save configuration? [Y/n]:
+Accept this configuration? [Y/n]:
 ```
+
+### 4. Save (and optional Execute)
+
+The configuration is written to `--output` (or a timestamped default,
+`muster_<battalion_name>_<timestamp>.yaml`, if `--output` is omitted). If `--execute` was given,
+the battalion runs immediately after saving; otherwise the command prints the follow-up
+`paladin battalion run -c <path>` invocation.
 
 ## Configuration Options
 
 ### Orchestration Patterns
 
-#### Formation (Sequential)
-```bash
-paladin muster --pattern formation "Data processing pipeline"
-```
-- Best for: Linear workflows, step-by-step processing
-- Use when: Output of one step feeds into the next
-- Example: Extract → Transform → Load
+The LLM analysis recommends one of six patterns based on the task description — there is no flag
+to force a pattern:
 
-#### Phalanx (Parallel)
-```bash
-paladin muster --pattern phalanx "Analyze documents from multiple perspectives"
-```
-- Best for: Independent parallel tasks
-- Use when: Tasks don't depend on each other
-- Example: Multiple AI models processing same input
+| Pattern | Best for |
+|---------|----------|
+| **Formation** (Sequential) | Linear workflows, step-by-step processing (extract → transform → load) |
+| **Phalanx** (Parallel) | Independent parallel tasks — multiple perspectives on the same input |
+| **Campaign** (Graph/DAG) | Complex workflows with branching or conditional logic |
+| **Chain of Command** (Hierarchical) | Manager-worker patterns, dynamic task distribution |
+| **Conclave** | Expert-panel discussion with voting, for consensus decisions |
+| **Maneuver** | Dynamic workflow adaptation at runtime |
 
-#### Campaign (Graph/DAG)
-```bash
-paladin muster --pattern campaign "Complex workflow with conditional branches"
-```
-- Best for: Complex workflows with branching logic
-- Use when: Need conditional execution or task dependencies
-- Example: Approval workflows, decision trees
+Describe the dependency shape you want in `--task` to steer the recommendation, for example:
 
-#### Chain of Command (Hierarchical)
 ```bash
-paladin muster --pattern chain_of_command "Hierarchical task delegation"
+paladin muster --task "Data processing pipeline: extract, then transform, then load"
+
+paladin muster --task "Analyze documents from multiple independent perspectives in parallel"
+
+paladin muster --task "Complex workflow with conditional branches based on review outcome"
 ```
-- Best for: Manager-worker patterns
-- Use when: Need dynamic task distribution
-- Example: Project management, ticket routing
 
 ### Provider Selection
 
 ```bash
-# Use specific provider
-paladin muster --provider openai "Customer support workflow"
+# Use a specific provider
+paladin muster --task "Customer support workflow" --provider openai
 
-# Use specific model
-paladin muster --provider anthropic --model claude-3-opus "Research synthesis"
-
-# High creativity
-paladin muster --temperature 1.5 "Creative brainstorming workflow"
-
-# High precision
-paladin muster --temperature 0.2 "Code analysis workflow"
+# Use a specific model
+paladin muster --task "Research synthesis" --provider anthropic --model claude-3-opus
 ```
 
-## Output Formats
-
-### YAML (Default)
-
-```bash
-paladin muster "Simple workflow" -o workflow.yaml
-```
-
-```yaml
-name: simple_workflow
-description: Generated by paladin muster
-
-battalion:
-  type: formation
-  sequence:
-    - analyzer
-    - processor
-    - reporter
-
-paladins:
-  analyzer:
-    system_prompt: "Analyze input data..."
-    model: gpt-4
-```
-
-### JSON
-
-```bash
-paladin muster "Simple workflow" -o workflow.json -f json
-```
-
-```json
-{
-  "name": "simple_workflow",
-  "description": "Generated by paladin muster",
-  "battalion": {
-    "type": "formation",
-    "sequence": ["analyzer", "processor", "reporter"]
-  },
-  "paladins": {
-    "analyzer": {
-      "system_prompt": "Analyze input data...",
-      "model": "gpt-4"
-    }
-  }
-}
-```
+There is no `--temperature` flag on `muster` — generation temperature is not user-configurable
+for this subcommand.
 
 ## Best Practices
 
@@ -296,21 +203,21 @@ paladin muster "Simple workflow" -o workflow.json -f json
 
 ✅ **Good:**
 ```bash
-paladin muster "Create a 3-stage content pipeline:
+paladin muster --task "Create a 3-stage content pipeline:
 1. Extract key information from articles
-2. Summarize findings into bullet points  
+2. Summarize findings into bullet points
 3. Generate social media posts from summaries"
 ```
 
 ❌ **Avoid:**
 ```bash
-paladin muster "do content stuff"
+paladin muster --task "do content stuff"
 ```
 
 ### 2. Specify Requirements
 
 ```bash
-paladin muster "
+paladin muster --task "
 Research workflow that:
 - Searches multiple sources in parallel
 - Synthesizes findings sequentially
@@ -319,38 +226,31 @@ Research workflow that:
 "
 ```
 
-### 3. Iterate with Interactive Mode
+### 3. Use the Review Step to Confirm or Cancel
+
+The review prompt (skipped with `--no-review`) lets you accept the generated configuration or
+cancel the run before anything is saved:
 
 ```bash
-paladin muster --interactive "Customer onboarding workflow"
+paladin muster --task "Customer onboarding workflow"
+# Review the printed YAML, then answer the "Accept this configuration?" prompt
 ```
 
-Then refine through conversation:
-```
-You: Add a validation step after data collection
-Assistant: Adding validation paladin between collector and processor...
-You: Make the welcome message more friendly
-Assistant: Updating welcome_agent system prompt...
-```
-
-### 4. Validate Before Production
+### 4. Review Before Production
 
 ```bash
-# Always validate generated configs
-paladin muster "Workflow" -o config.yaml
+# Generate, then review the saved file
+paladin muster --task "Workflow" --output config.yaml
 
-# Test before deploying
-paladin run -c config.yaml --dry-run
-
-# Test with sample input
-paladin run -c config.yaml -i "test input"
+# Test before relying on it
+paladin battalion run -c config.yaml
 ```
 
 ### 5. Use Version Control
 
 ```bash
 # Save with descriptive names
-paladin muster "v2 with retry logic" -o workflow_v2.yaml
+paladin muster --task "v2 with retry logic" --output workflow_v2.yaml
 
 # Track changes
 git add workflow_v2.yaml
@@ -362,66 +262,66 @@ git commit -m "feat: add retry logic to workflow"
 ### Example 1: Data Analysis Pipeline
 
 ```bash
-paladin muster "
+paladin muster --output data_pipeline.yaml --task "
 Sequential data analysis:
 1. Fetch data from API
 2. Clean and validate data
 3. Perform statistical analysis
 4. Generate visualization recommendations
 5. Create final report
-" -o data_pipeline.yaml
+"
 ```
 
 ### Example 2: Parallel Content Processing
 
 ```bash
-paladin muster --pattern phalanx "
+paladin muster --output content_processor.yaml --task "
 Process a blog post in parallel:
 - Generate SEO keywords
 - Create social media summaries
 - Extract key quotes
 - Suggest related topics
 - Analyze sentiment
-" -o content_processor.yaml
+"
 ```
 
 ### Example 3: Approval Workflow
 
 ```bash
-paladin muster --pattern campaign "
-Document approval workflow:
+paladin muster --output approval_workflow.yaml --task "
+Document approval workflow with conditional branching:
 1. Initial review checks format and completeness
 2. If incomplete, request revisions
 3. If complete, route to appropriate reviewer based on category
 4. Technical docs go to tech reviewer
 5. Business docs go to business reviewer
 6. Final approval from manager
-" -o approval_workflow.yaml
+"
 ```
 
 ### Example 4: Customer Support Routing
 
 ```bash
-paladin muster --pattern chain_of_command "
-Customer support ticket routing:
+paladin muster --output support_routing.yaml --task "
+Hierarchical customer support ticket routing:
 - Manager paladin receives all tickets
 - Routes technical questions to tech support team
 - Routes billing questions to billing team
 - Routes general inquiries to customer service
 - Escalates complex issues to senior support
-" -o support_routing.yaml
+"
 ```
 
 ### Example 5: Research & Synthesis
 
 ```bash
-paladin muster --interactive "
+paladin muster --output research_workflow.yaml --task "
 Research workflow:
 1. Parallel search across academic papers, news, and blogs
 2. Collect and filter relevant information
 3. Synthesize findings into coherent summary
 4. Generate citation list
-" -o research_workflow.yaml
+"
 ```
 
 ## Troubleshooting
@@ -432,95 +332,72 @@ Research workflow:
 
 **Solution:**
 ```bash
-# Provide more detailed description
-paladin muster "Detailed workflow with specific steps: ..." --verbose
+# Provide a more detailed description
+paladin muster --task "Detailed workflow with specific steps: ..." --verbose
 
-# Use higher temperature for more creativity
-paladin muster "..." --temperature 1.2
-
-# Try interactive mode to refine
-paladin muster --interactive "..."
+# Describe the dependency shape you want more explicitly
+paladin muster --task "..."
 ```
 
-#### Issue: Wrong orchestration pattern suggested
+#### Issue: Wrong orchestration pattern recommended
 
 **Solution:**
 ```bash
-# Explicitly specify the pattern
-paladin muster --pattern campaign "..."
-
-# Provide clearer requirements about dependencies
-paladin muster "Workflow where step B depends on step A, and step C depends on step B"
-```
-
-#### Issue: Validation fails
-
-**Solution:**
-```bash
-# Check validation errors
-paladin muster "..." --verbose
-
-# Fix common issues:
-# - Invalid Paladin names (use lowercase with underscores)
-# - Circular dependencies in Campaign graphs
-# - Missing required fields
-
-# Generate again with corrections
-paladin muster "corrected description" -o fixed.yaml
+# Describe the dependency shape explicitly — the LLM analysis picks the
+# pattern, there is no flag to force one
+paladin muster --task "Workflow where step B depends on step A, and step C depends on step B"
 ```
 
 #### Issue: Configuration doesn't match expectations
 
 **Solution:**
 ```bash
-# Use interactive mode to refine
-paladin muster --interactive "..."
+# Use the review step to reject and regenerate
+paladin muster --task "..."
+# Answer "n" at the "Accept this configuration?" prompt, then retry with a clearer task
 
 # Or iterate manually
-paladin muster "..." -o v1.yaml
+paladin muster --output v1.yaml --task "..."
 # Edit v1.yaml as needed
-paladin run -c v1.yaml  # Test
-paladin muster "improved description" -o v2.yaml
+paladin battalion run -c v1.yaml  # Test
+paladin muster --output v2.yaml --task "improved description"
 ```
 
 #### Issue: LLM provider errors
 
 **Solution:**
 ```bash
-# Check API keys
+# Check API keys and provider configuration
 paladin setup-check
 
-# Try different provider
-paladin muster --provider deepseek "..."
+# Try a different provider
+paladin muster --task "..." --provider deepseek
 
-# Reduce complexity
-paladin muster "simplified version of workflow"
+# Simplify the task description
+paladin muster --task "simplified version of workflow"
 ```
 
 ### Getting Help
 
 ```bash
 # View all muster options
-paladin muster --help
+paladin-cli muster --help
 
 # Check provider status
 paladin setup-check
 
 # Enable verbose output for debugging
-paladin muster --verbose "..."
-
-# Test generated config
-paladin run -c generated.yaml --dry-run
+paladin muster --task "..." --verbose
 ```
 
 ## Advanced Usage
 
 ### Custom System Prompts
 
-While `muster` generates system prompts, you can provide hints:
+While `muster` generates system prompts, you can provide hints in the task description:
 
 ```bash
-paladin muster "
+paladin muster --task "
 Code review workflow:
 - Use technical, professional tone
 - Focus on security and performance
@@ -530,10 +407,10 @@ Code review workflow:
 
 ### Resource Requirements
 
-Specify computational constraints:
+Specify computational constraints in the task description:
 
 ```bash
-paladin muster "
+paladin muster --task "
 Fast processing workflow:
 - Each step should complete in under 5 seconds
 - Use lighter models (gpt-3.5-turbo)
@@ -545,7 +422,7 @@ Fast processing workflow:
 
 ```bash
 # Generate a new component
-paladin muster "Add retry logic component" -o retry_component.yaml
+paladin muster --output retry_component.yaml --task "Add retry logic component"
 
 # Manually integrate into existing config
 # Or use as reference for manual updates
@@ -556,7 +433,7 @@ paladin muster "Add retry logic component" -o retry_component.yaml
 - [CLI Usage Guide](cli-usage.md) - Overview of all CLI commands
 - [Battalion Documentation](../user-guides/battalion-patterns.md) - Understanding orchestration patterns
 - [Paladin Configuration](../getting-started/quickstart.md) - Manual configuration guide
-- [Council Command](council.md) - Quick group discussions
+- [Council Command](cli-council.md) - Quick group discussions
 - [Examples Directory](https://github.com/DF3NDR/paladin-dev-env/tree/main/examples) - Sample configurations
 
 ## Support

@@ -57,6 +57,36 @@ stays a pointer only. `34-AUDIT.md` §7 (assembled by plan 34-09) links back to 
    which file was added since the comment was last true) the next time `ci.yml`'s examples step is
    touched.
 
+## Plan 34-09, Task 2
+
+1. **PROJECT.md's "no crate under `crates/` ships its own `examples/` directory" claim is
+   contradicted by the tree.** PROJECT.md's Phase 4 amendment (line 31, dated 2026-08-03, citing
+   `04-release-measurement.md`) states plainly: "no crate under `crates/` ships its own `examples/`
+   directory." `test -f crates/paladin-llm/examples/live_vendor_smoke.rs` → **exists**;
+   `find crates -maxdepth 2 -type d -name examples` → `crates/paladin-llm/examples` — the directory
+   the sentence says does not exist, does. This is a **planning-corpus fact**, not a `docs/src` page
+   and not an `examples/` program in its own right (the file itself is audited on its own terms as
+   part of §4's build/currency sweep, under its own build invocation per D-16 — that is a distinct,
+   correct finding, not this one). The error is specifically in PROJECT.md's own summary prose, which
+   this phase does not edit (Success Criterion 5, read-only) and which has no `MB-nn`/`RD-nn`/`EX-nn`
+   slot per D-19's "neither documentation nor an example" category — PROJECT.md is the planning
+   corpus, not the audited surface. Remains open for whichever future phase or quick task next
+   touches PROJECT.md's Phase 4 amendment to correct the sentence (e.g. "no crate other than
+   `paladin-llm` ships its own `examples/` directory").
+2. **The object-store (MinIO → RustFS) evaluation itself is infrastructure work, distinct from the
+   documentation slice plan 34-03 closed.** `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md`
+   (2026-09-13, score 0.6) asks to evaluate RustFS as the dev/test object store. Plan 34-03's
+   object-store currency sweep (34-AUDIT.md §2, "Object-store currency sweep" subsection) settled
+   the documentation-currency half of that todo: `grep -rniE 'minio|dl\.min\.io|quay\.io' docs/src
+   examples` found 247 hits across 27 files, every actual image-pin occurrence already carrying the
+   current `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772` form (9 occurrences
+   across 6 files), zero hits naming the retired Docker Hub image or the `dl.min.io` host that
+   returns 410 — yielding **zero `MB-nn` items** from that slice. What remains open is the
+   evaluation itself — whether RustFS should actually replace MinIO as the project's dev/test object
+   store — which is an infrastructure/tooling decision, not a documentation gap: no `docs/src` page
+   or `examples/` program is stale because of it, so D-19's taxonomy has no slot for it. The pending
+   todo file already tracks this, unchanged by this phase; remains the maintainer's item.
+
 ---
 
 *Phase: 34-documentation-currency-audit*

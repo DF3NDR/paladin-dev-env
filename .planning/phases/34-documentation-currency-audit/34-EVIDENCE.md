@@ -404,3 +404,33 @@ only transcribes §2/§3/§4 rows into §5/§6, so no new HEAD is captured.
 | 182 | `bash 34-check.sh --seed` (post-fix re-run) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
 | 183 | `bash 34-check.sh --final` (post-fix re-run, before §7/deferred-items.md are populated — Task 2's own job) | `PASS` on assertions (a)-(d), (f), (g); assertion (e) PASS (no seeded placeholder remains, closed by plan 34-05); exit 0 | ✅ PASS — every cited ID is already routed to §5 or §6 before Task 2 even starts, since no `MB-nn`/`RD-nn`/`EX-nn` is deferred (D-19: only non-documentation, non-example findings go to `deferred-items.md`) |
 | 184 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+
+## Plan 34-09, Task 2 — deferred register, audit close-out, phase-range read-only proof
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 185 | `deferred-items.md` extended with a new `## Plan 34-09, Task 2` heading, two entries: the PROJECT.md "no crate ships its own examples/" contradiction (`test -f crates/paladin-llm/examples/live_vendor_smoke.rs`), and the object-store (MinIO→RustFS) evaluation remainder distinct from plan 34-03's zero-`MB-nn` documentation-currency slice | both entries written with concrete command+result evidence and an explicit "neither MB nor RD/EX" disposition sentence per D-19 | ✅ RECORDED |
+| 186 | `grep -c '^## Plan 34-0' deferred-items.md` | `4` | ✅ PASS — meets Task 2's own `<verify>` `-ge 3` bar |
+| 187 | `34-AUDIT.md` §7 written: one pointer line per deferred-items.md entry (5 total across 4 headings), naming the register heading and lead-in phrase, no evidence duplicated | 5 pointer lines, count row confirms 5 entries / 4 plans | ✅ PASS |
+| 188 | Close-out counted totals: `sed -n '/^## §2/,/^## §3/p' 34-AUDIT.md \| grep -E '^\| [0-9]+ \| docs/src/' \| awk -F'\|' '{...}' \| sort \| uniq -c` (verdict tally) | `38 current, 1 missing, 55 stale` — sums to 94 (93 on-disk + 1 proposed missing page) | ✅ PASS — matches plan 34-05's own recorded closure count (row 104) exactly |
+| 189 | Close-out counted totals: RD-nn run tally via the parsed `run` field (`'workspace --no-deps'` vs `'all-features --no-deps'` substring match) | `65` default-feature, `78` per-crate all-features, sum `143` | ✅ PASS — 65 matches plan 34-06's own reconciliation (row 114); 78 = 143 − 65 |
+| 190 | Close-out counted totals: EX-nn build-status and currency tallies (parsed `build_status`/`currency` fields, 63 Program/module rows) | build status: `59` green, `1` green-built-not-run, `3` n/a; currency: `58` current, `5` stale | ✅ PASS |
+| 191 | `git diff --stat ee1fb160f8e743e638b32beb6c4e32be4ede9325..HEAD -- .planning/WINDOWS.md` (D-00d verification) | (empty) | ✅ PASS — no WINDOWS.md row touched anywhere in this phase's range |
+| 192 | `git diff --stat ee1fb160f8e743e638b32beb6c4e32be4ede9325..HEAD -- . ':!.planning'` (SC5 phase-range proof, D-22) | (empty) | ✅ PASS |
+| 193 | `git status --porcelain -- . ':!.planning'` (SC5 phase-range proof, D-22) | (empty) | ✅ PASS |
+| 194 | `bash 34-check.sh --final` (phase close-out run) | see full verbatim output below | ✅ PASS — exit 0 |
+
+**Row 194 full verbatim output:**
+
+```
+$ bash .planning/phases/34-documentation-currency-audit/34-check.sh --final
+PASS: (a) every docs/src/*.md path appears in a §2 row
+PASS: (b) every MB-/RD-/EX- ID is unique at mint time (§1-§4)
+PASS: (c) no settled verdict row has an empty/seeded findings cell
+PASS: (d1) git status --porcelain -- . ':!.planning' is empty
+PASS: (d2) git diff --stat ee1fb160f8e743e638b32beb6c4e32be4ede9325..HEAD -- . ':!.planning' is empty
+PASS: (e) no §2 row still carries the seeded placeholder
+PASS: (f) every examples/*.rs and doc-examples/src/*.rs (non-lib.rs) appears in §4
+PASS: (g) every cited MB-/RD-/EX- ID is routed to §5, §6 or deferred-items.md
+--- 34-check.sh --final: all assertions PASSED ---
+```

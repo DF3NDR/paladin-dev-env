@@ -2272,8 +2272,102 @@ No file outside `.planning/` was created, modified or deleted by this task.
 
 ## §7 Deferred routing
 
-Empty. Assembled by plan 34-09 from `deferred-items.md` — pointers only, per D-19 ("nothing is
-absorbed into 35 or 36 by convenience").
+Per D-19, every finding this phase surfaced that is neither a documentation gap (`MB-nn`) nor a
+rustdoc/example gap (`RD-nn`/`EX-nn`) is recorded once, in `deferred-items.md`, with its
+out-of-scope rationale — this section is a pointer list into that register, not a second copy of
+the evidence (the register is the record).
+
+- **`deferred-items.md` § "Plan 34-04, Task 2"** — the Docker-machine `make coverage` reproduction
+  walk (the non-documentation remainder of the folded coverage-verification todo; the documentation
+  slice closed as MB-36).
+- **`deferred-items.md` § "Plan 34-07, Task 2"** — `scripts/check-public-api-examples.sh`'s
+  76→101 entry-point scope drift and its current RED result (19 MISSING items, no CI/`make` job
+  wired); a finding about the rule's own apparatus, not about any one page, rustdoc diagnostic or
+  example.
+- **`deferred-items.md` § "Plan 34-08, Task 1"** — `ci.yml:538`'s example-file-count comment,
+  stale by one (47 vs the live 48), a CI workflow comment rather than documentation or an example.
+- **`deferred-items.md` § "Plan 34-09, Task 2"**, item 1 — PROJECT.md's "no crate under `crates/`
+  ships its own `examples/` directory" claim, contradicted by `crates/paladin-llm/examples/`; a
+  planning-corpus fact, not a `docs/src` page.
+- **`deferred-items.md` § "Plan 34-09, Task 2"**, item 2 — the object-store (MinIO → RustFS)
+  evaluation itself, distinct from the documentation slice plan 34-03 closed at zero `MB-nn` items;
+  an infrastructure/tooling decision, not a documentation gap.
+
+**Count:** 5 deferred entries across 4 contributing plans. Every `MB-nn`/`RD-nn`/`EX-nn` ID is
+already accounted for in §5/§6 (the Task 1 reconciliation above proves this exhaustively) — none of
+the five entries above carries an ID, by construction, since D-19's register is reserved for
+findings the phase's own ID taxonomy has no slot for.
+
+## Phase close-out (plan 34-09, Task 2)
+
+**HEAD SHA measured throughout this phase:** `ee1fb160f8e743e638b32beb6c4e32be4ede9325` — the
+Phase 34 start SHA (D-23), recorded before plan 34-01's first commit. Every commit in this phase
+touches only `.planning/` (proven per commit throughout, and over the whole range below), so the
+source tree every row in this file measures is identical at every Phase 34 commit including this
+one. **D-23 re-run rule for Phases 35/36:** if the branch moves for any reason before those phases
+plan (a rebase, a maintainer commit on `feature/phase-33`), re-run the D-12/D-16 commands this
+audit ran (`34-EVIDENCE.md`) and diff against the rows recorded here rather than trusting the
+counts unchanged.
+
+**Counted totals, every figure derived by counting rows in this file, not recalled:**
+
+| Table | Breakdown | Count |
+|---|---|---|
+| §2 mdBook pages, by verdict | current | 38 |
+| §2 mdBook pages, by verdict | stale | 55 |
+| §2 mdBook pages, by verdict | missing | 1 |
+| §2 mdBook pages, total | | **94** rows (93 on-disk pages + 1 proposed missing page) |
+| §3 rustdoc rows, by run | default-feature workspace (D-12/D-13) | 65 |
+| §3 rustdoc rows, by run | per-crate all-features (D-12/D-14) | 78 |
+| §3 rustdoc rows, total | | **143** |
+| §4 example rows, by build status (Program/module table) | green (exit 0) | 59 |
+| §4 example rows, by build status | green (exit 0), built not run (doc-examples Layer 1) | 1 |
+| §4 example rows, by build status | n/a (documentation page, not a compiled program) | 3 |
+| §4 example rows, by currency verdict (Program/module table) | current | 58 |
+| §4 example rows, by currency verdict | stale | 5 |
+| §4 example rows, gap-list table | candidate new examples (all `L`) | 59 |
+| §4 example rows, total | | **122** (63 Program/module + 59 gap-list) |
+| §5 Phase 35 work list | missing page | 1 |
+| §5 Phase 35 work list | stale content | 59 |
+| §5 Phase 35 work list, total | | **60** |
+| §6 Phase 36 work list | rustdoc warning or broken intra-doc link | 143 |
+| §6 Phase 36 work list | non-compiling or obsolete example (work items) | 64 |
+| §6 Phase 36 work list | confirmed current (not a work item, ID-completeness only) | 58 |
+| §6 Phase 36 work list, total (work items) | | **207** |
+| §7 / `deferred-items.md` | deferred entries | 5 |
+
+**WINDOWS.md verification (D-00d) — verified by diff, not asserted:**
+
+```
+$ git diff --stat ee1fb160f8e743e638b32beb6c4e32be4ede9325..HEAD -- .planning/WINDOWS.md
+(empty)
+```
+
+No `.planning/WINDOWS.md` row was added, edited or deleted by this phase. Rows 36 and 37 (the
+rustdoc findings) stay `open`, exactly as they were before this phase began — this phase's own
+§3/§6 enumeration is Phase 36's closure surface for both, per the D-00d rule that rows move to
+`fixed`/`waived` only when the underlying finding is actually closed, never as a side effect of
+being catalogued.
+
+**Success Criterion 5 — the phase-range read-only proof (D-22), run once over the whole range
+rather than per-commit, as the phase's own close-out:**
+
+```
+$ git diff --stat ee1fb160f8e743e638b32beb6c4e32be4ede9325..HEAD -- . ':!.planning'
+(empty)
+$ git diff --stat ee1fb160f8e743e638b32beb6c4e32be4ede9325..HEAD -- .planning/WINDOWS.md
+(empty)
+$ git status --porcelain -- . ':!.planning'
+(empty)
+```
+
+All three empty. No file outside `.planning/` was created, modified or deleted across any commit
+in this phase's whole range, and `.planning/WINDOWS.md` was not touched. Per this task's
+`reversibility="one-way"` rating (D-22): this is the mechanical proof the phase's entire premise —
+that Phases 35-37 can plan and build against a read-only inventory — rests on. No blocking human
+checkpoint precedes this proof; the run was unattended throughout, and this diff is itself the only
+verification a human checkpoint could offer, re-run here one final time over the complete range
+rather than trusted from the per-task runs alone.
 
 ---
 

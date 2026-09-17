@@ -48,3 +48,83 @@ $ cargo fmt --all -- --check
 exit 0
 $ cargo check --workspace --all-targets --all-features
 exit 0
+
+
+Task 2 (part 1): examples/observability_tracing.rs (EX-100, EX-101, EX-102, EX-108)
+------------------------------------------------------------------------------------------------
+
+Files: examples/observability_tracing.rs
+
+observability_tracing.rs -- default features, fully runnable offline:
+  Part 1 (EX-100): runs a small Function-node graph with a custom in-process RecordingSink
+    (a TraceSink) attached via a CompositeSink, and prints every captured TraceRecord's
+    envelope (seq/at/thread_id/run_id) plus the real TraceEvent variant name it carried.
+  Part 2 (EX-101): constructs a TraceConfig and prints its resolved log_sink/persist/
+    state_values/otel.enabled fields, then calls the facade's own sink-composition function
+    (paladin::infrastructure::telemetry::build_run_sink) twice -- once with log_sink=false (no
+    sink attached at all) and once with only that field flipped to true (a sink attaches) --
+    showing the changed field's effect directly through the same function production code uses.
+  Part 3 (EX-102): sets PALADIN_TRACE_OTEL_ENABLED=true in-process, reloads the config via
+    apply_env_overrides, and shows config.otel.enabled flips true -- but states that export
+    additionally requires the `otel` Cargo feature, which THIS build lacks, so build_run_sink's
+    OTel branch is compiled out and nothing observable changes even with the flag on. Points at
+    the sibling observability_otel_export program.
+  Part 4 (EX-108): reads the persisted run_traces rows back from the same run (flushed via a
+    PersistingTraceSink over an InMemoryRunTraceStore) through RunTracePort::read, printing
+    run_id/seq/event name per row.
+
+$ cargo build --example observability_tracing
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s
+exit 0
+
+$ env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY cargo run --example observability_tracing
+=== observability_tracing: EX-100, EX-101, EX-102, EX-108 ===
+
+--- Part 1: consuming the trace envelope (EX-100) ---
+Captured 7 TraceRecord(s) for run 01a0b199-8f4e-78f2-811d-21432b614298 (thread 'observability-tracing-demo'):
+  seq=1 at=2026-09-17 23:00:26.062551500 UTC thread_id=observability-tracing-demo run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") event=RunStarted
+  seq=2 at=2026-09-17 23:00:26.062656880 UTC thread_id=observability-tracing-demo run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") event=SuperstepStarted
+  seq=3 at=2026-09-17 23:00:26.062769909 UTC thread_id=observability-tracing-demo run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") event=NodeStarted
+  seq=4 at=2026-09-17 23:00:26.062826120 UTC thread_id=observability-tracing-demo run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") event=NodeFinished
+  seq=5 at=2026-09-17 23:00:26.062885667 UTC thread_id=observability-tracing-demo run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") event=DeltaMerged
+  seq=6 at=2026-09-17 23:00:26.062981453 UTC thread_id=observability-tracing-demo run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") event=WaypointSaved
+  seq=7 at=2026-09-17 23:00:26.063013820 UTC thread_id=observability-tracing-demo run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") event=RunFinished
+Distinct event variants observed: {"DeltaMerged", "NodeFinished", "NodeStarted", "RunFinished", "RunStarted", "SuperstepStarted", "WaypointSaved"}
+
+--- Part 2: configuring tracing via TraceConfig (EX-101) ---
+TraceConfig defaults: log_sink=true, persist=false, state_values=false, otel.enabled=false
+log_sink=false, no bus sink, no persist backend -> build_run_sink resolves to: no sink attached (the untraced fast path)
+log_sink=true (only this field changed) -> build_run_sink resolves to: a sink is attached (the built-in log sink)
+
+--- Part 3: toggling OTLP export from the environment (EX-102) ---
+Before: PALADIN_TRACE_OTEL_ENABLED unset -> config.otel.enabled=false
+After: PALADIN_TRACE_OTEL_ENABLED=true -> config.otel.enabled=true
+Exporting still additionally requires the `otel` Cargo feature -- this build was compiled without it, so build_run_sink's OTel branch is compiled out entirely and no exporter attaches even with the flag on. See the sibling `observability_otel_export` example (built under --features "otel") for the export sink itself.
+PALADIN_TRACE_OTEL_ENABLED restored to unset.
+
+--- Part 4: querying the persisted trace history (EX-108) ---
+Persisted 7 row(s) for thread 'observability-tracing-demo':
+  run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") seq=1 event=RunStarted
+  run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") seq=2 event=SuperstepStarted
+  run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") seq=3 event=NodeStarted
+  run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") seq=4 event=NodeFinished
+  run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") seq=5 event=DeltaMerged
+  run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") seq=6 event=WaypointSaved
+  run_id=Some("01a0b199-8f4e-78f2-811d-21432b614298") seq=7 event=RunFinished
+
+=== observability_tracing complete ===
+exit 0
+
+$ grep -c 'PALADIN_TRACE_OTEL_ENABLED' examples/observability_tracing.rs
+6
+$ grep -c 'TraceRecord' examples/observability_tracing.rs
+6
+$ grep -cE '\.unwrap\(\)|\.expect\(' examples/observability_tracing.rs
+0
+$ git diff --stat HEAD -- src/ crates/
+(empty)
+
+$ cargo fmt --all -- --check
+exit 0
+$ cargo check --workspace --all-targets --all-features
+exit 0

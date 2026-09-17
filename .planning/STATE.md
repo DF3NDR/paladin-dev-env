@@ -4,10 +4,10 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 33
 status: completed
-stopped_at: "Phase 33 complete — 6/6 plans, verification passed 25/25, code review 0 critical / 3 warnings (advisory); next: /gsd-secure-phase 33, then /gsd-verify-work 33 (UAT + human sign-off of audit §11), then /gsd-complete-milestone v0.10.0"
-last_updated: "2026-09-16T19:18:37.473Z"
-last_activity: 2026-09-16
-last_activity_desc: Phase 33 complete
+stopped_at: "Phase 33 verified — UAT 23/23 passed (33-UAT.md, 22 coverage-mode automated + 1 human sign-off of audit §11), security verified threats_open: 0, validation validated; v0.10.0 milestone 13/13 phases; next: /gsd-complete-milestone v0.10.0 (push feature/phase-33 first so the CI coverage job and a real pre-merge run land in 33-CI-EVIDENCE.md)"
+last_updated: "2026-09-17T01:47:13.398Z"
+last_activity: 2026-09-17
+last_activity_desc: Phase 33 verified (UAT 23/23) — milestone ready to close
 progress:
   total_phases: 13
   completed_phases: 13
@@ -20,19 +20,20 @@ current_phase_name: Commissary In-Tree Adoption
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-16 after Phase 33)
+See: .planning/PROJECT.md (updated 2026-09-17 after Phase 33 verification)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 33 closed — v0.10.0 milestone close-out
-`0.10.0` tag is not yet cut. Phases 30-33 (Token Economy) are closed; Phase 33 closed 2026-09-16 with
-6/6 plans, verification `passed` 25/25, code review 0 critical / 3 warnings (advisory, see
-`33-REVIEW.md`), and the Phase 29 release gates re-sealed on evidence head `69500c9b` (`33-CI-EVIDENCE.md`,
-corpus audit §11 with one unticked human-only box). Next: `/gsd-secure-phase 33` (security enforcement is
-active, no `33-SECURITY.md` yet), `/gsd-verify-work 33` (UAT; the maintainer ticks audit §11's tag box),
-then `/gsd-complete-milestone v0.10.0`. The CI `coverage` and `publish-dry-run` jobs supply the two
-gates that could not run locally (no Docker; `main`-push only).
+**Current focus:** v0.10.0 milestone close-out — every phase verified
+`0.10.0` tag is not yet cut. Phases 30-33 (Token Economy) are closed. Phase 33 was verified 2026-09-17:
+`33-UAT.md` 23/23 passed (22 coverage-mode automated passes + the maintainer's human acceptance of corpus
+audit §11 and `33-CI-EVIDENCE.md`), `33-SECURITY.md` `verified` with `threats_open: 0`, `33-VALIDATION.md`
+`validated`, `33-VERIFICATION.md` `passed`. The §11 sign-off box itself stays unticked in the corpus file
+until the maintainer ticks it by hand at tag time (Phase 29 D-17). Next: `/gsd-complete-milestone v0.10.0`.
+Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job supplies the one gate this
+devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
+the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
 **Progress:** [████████████████████] v0.10.0 — 13 of 13 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33); 158/158 plans (100%)
 
@@ -60,7 +61,7 @@ names. See MILESTONES.md.
 Phase: 33
 Plan: Not started
 Status: All phases complete
-Last activity: 2026-09-16 — Phase 33 complete
+Last activity: 2026-09-17 — Phase 33 complete
 Previous: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
@@ -140,6 +141,20 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 ## Accumulated Context
 
 ### Decisions
+
+**Phase 33 (closed 2026-09-16, verified 2026-09-17) — recorded as D-01 … D-20 in `33-CONTEXT.md`; the ones
+later phases most need:**
+- D-01/D-03: `paladin-memory` takes `paladin-llm` (`default-features = false`) as an unconditional production
+  dependency — the workspace's first lateral adapter-to-adapter edge; `reqwest` never enters the normal graph.
+- D-12: `RagRetrievalService::retrieve_context` / `format_for_prompt` break their published return type to
+  `RagRetrievalResult` with no forwarding shim (ADR-0051 clean break); `retrieve_context_with_timeout` follows.
+- D-08/D-09: `ConsignmentItem` priority is rank order (`u8::try_from(rank)`), label is the memory UUID —
+  never content — so "highest score retained" is structural and no memory body reaches a shed record or log.
+- D-15/D-16: one shared `rag_omission_marker` helper in `paladin-memory` is the only place the omission line
+  is built; both renderers read the budget from `RagRetrievalResult::allotted_tokens`; the facade's
+  RAG-success `info!` gains only `shed=`.
+- D-10(a)/D-05: a single memory larger than the whole budget is retained truncated (never dropped);
+  `rag.max_tokens` beyond `u32::MAX` is a typed `BudgetTooLarge` error, never an `as` cast or clamp.
 
 **Phase 32 (closed 2026-09-16) — recorded as D-01 … D-16 in `32-CONTEXT.md`; the ones later
 phases must honor:**
@@ -449,6 +464,17 @@ Entering them here would fabricate authority the corpus does not contain.
 - `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md` — evaluate RustFS as the dev/test object store; the quay.io MinIO pin from quick task 260913-15w is terminal (no newer community tags will exist).
 
 ### Blockers/Concerns
+
+**Phase 33 close (verified 2026-09-17): no blockers.** 6 plans in 4 waves; verification `passed`; UAT 23/23
+(`33-UAT.md`: 22 coverage-mode automated passes + one human acceptance of corpus audit §11 /
+`33-CI-EVIDENCE.md`); `33-SECURITY.md` `verified`, `threats_open: 0`; `33-VALIDATION.md` `validated`;
+`33-REVIEW.md` 0 critical / 3 advisory warnings, IN-01 fixed in `33-REVIEW-FIX.md`. Carried, pre-existing,
+none introduced here: (a) `cargo doc --workspace --no-deps` at 73 warnings (up 1 from Phase 32's 72, zero in
+files this phase touched) — not a gate per SHIP-04; (b) the 82 % coverage floor is CI-attributed, not locally
+measurable (no Docker) — read from the CI `coverage` job once `feature/phase-33` is pushed; (c) the
+`cargo-semver-checks` 0.50.0 coverage gap for inherent-method return-type changes (`33-05-SUMMARY.md`),
+covered by `MIGRATION.md` §9.2 rows instead. Note for milestone close: the corpus audit §11 tag box is
+deliberately still unticked — the maintainer ticks it by hand at tag time (Phase 29 D-17).
 
 **Phase 32 close (2026-09-16): no blockers.** 5 plans in 4 waves; verification `passed` 5/5
 roadmap truths; UAT 22/22 (`32-UAT.md`: 21 coverage-mode automated passes + one human confirmation
@@ -994,14 +1020,14 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 33 complete — 6/6 plans, verification passed 25/25, code review 0 critical / 3 warnings (advisory); next: /gsd-secure-phase 33, then /gsd-verify-work 33 (UAT + human sign-off of audit §11), then /gsd-complete-milestone v0.10.0
+**Last session:** 2026-09-17
+**Stopped at:** Phase 33 verified — UAT 23/23 passed (33-UAT.md, 22 coverage-mode automated + 1 human sign-off of audit §11), security verified threats_open: 0, validation validated; v0.10.0 milestone 13/13 phases; next: /gsd-complete-milestone v0.10.0 (push feature/phase-33 first so the CI coverage job and a real pre-merge run land in 33-CI-EVIDENCE.md)
+**Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
 
-Last session: 2026-09-16T19:18:37.396Z
-Resume file: .planning/phases/33-commissary-in-tree-adoption/33-VERIFICATION.md
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**

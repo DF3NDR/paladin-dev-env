@@ -1794,6 +1794,7 @@ contract on `TokenCounterPort::is_exact`, legacy counter pair removed, `paladin_
 register; 12 of 13 phases, 152/152 plans; next: `/gsd-secure-phase 32` then `/gsd-discuss-phase 33` Commissary In-Tree
 Adoption).*
 
-*Last updated: 2026-09-16 after Phase 33 completion (v0.10.0 milestone; COMM-01…04 validated — RAG rations
-through `Commissary::dispense`, silent truncation retired, Phase 29 release gates re-sealed on `69500c9b`; 13 of 13
-phases, 158/158 plans; next: `/gsd-secure-phase 33`, `/gsd-verify-work 33`, then `/gsd-complete-milestone v0.10.0`).*
+*Last updated: 2026-09-17 after Phase 33 verification (v0.10.0 milestone; COMM-01…04 validated — RAG rations
+through `Commissary::dispense`, silent truncation retired, Phase 29 release gates re-sealed on `69500c9b`; UAT 23/23,
+security `threats_open: 0`; 13 of 13 phases, 158/158 plans; next: push `feature/phase-33` for the CI coverage run,
+then `/gsd-complete-milestone v0.10.0`).*

@@ -8,7 +8,7 @@ This section describes how to set up and use the Redis queue adapter for the pal
 ## Prerequisites
 
 - Docker and Docker Compose
-- Rust 1.75 or later
+- Rust 1.88 or later
 - Redis 7.0 or later (if running locally)
 
 ## Quick Start

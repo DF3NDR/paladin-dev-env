@@ -425,18 +425,27 @@ expression: output
 
 ### CI/CD Integration
 
-Snapshot tests run automatically in CI:
+Snapshot tests run automatically in CI as the dedicated `cli-tests` job in `ci.yml` (see the job
+table in [CI/CD Guide](../deployment/cicd.md#ci-pipeline) — required, not advisory):
 
 ```yaml
-# .github/workflows/test.yml
-- name: Run snapshot tests
-  run: NO_COLOR=1 cargo test --test cli
-
-- name: Check for pending snapshots
-  run: cargo insta test --test cli --check
+# excerpt: .github/workflows/ci.yml — job: cli-tests
+- name: Run CLI snapshot tests
+  shell: bash
+  run: |
+    set -o pipefail
+    cargo test -p paladin-ai --features cli --test cli 2>&1 | tee cli-test-output.log
+    executed=$(grep -oE '[0-9]+ passed' cli-test-output.log | tail -1 | grep -oE '[0-9]+')
+    if [ -z "$executed" ] || [ "$executed" -eq 0 ]; then
+      echo "::error::cli-tests reported zero executed tests. This usually means --features cli was dropped, causing Cargo to silently skip the required-features-gated cli test target."
+      exit 1
+    fi
+    echo "cli-tests executed $executed test(s)"
 ```
 
-**Note:** CI will fail if snapshots need review. Use `cargo insta accept` locally and commit changes.
+**Note:** the job asserts at least one test actually ran (guarding against `--features cli` being
+silently dropped) rather than checking for pending `insta` snapshots. Run `cargo insta review`
+locally before committing a snapshot change so CI sees an already-accepted `.snap` file.
 
 ### Example Test Categories
 

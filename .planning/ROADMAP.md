@@ -942,11 +942,11 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 34-02-PLAN.md — Shipped-surface checklist (§1) compiled from CHANGELOG / MIGRATION / REQUIREMENTS
+- [x] 34-02-PLAN.md — Shipped-surface checklist (§1) compiled from CHANGELOG / MIGRATION / REQUIREMENTS
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 34-03-PLAN.md — mdBook build + linkcheck + vocabulary baseline, and the 18 root/getting-started/architecture/api-reference verdicts
+- [x] 34-03-PLAN.md — mdBook build + linkcheck + vocabulary baseline, and the 18 root/getting-started/architecture/api-reference verdicts
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

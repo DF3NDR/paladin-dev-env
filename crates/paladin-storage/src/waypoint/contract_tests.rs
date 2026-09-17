@@ -670,7 +670,7 @@ fn muster_progress_fixture() -> MusterProgress {
 }
 
 /// A `Waypoint` whose `muster_progress` is `Some` with a fully populated
-/// [`muster_progress_fixture`] (two completed tasks with distinct keys and
+/// `muster_progress_fixture` (two completed tasks with distinct keys and
 /// non-trivial deltas, plus a pending task) round-trips through
 /// `save` -> `latest` -> `get`, byte-identical after a serde round trip and
 /// equal field-for-field (CF-FR-12, D-14).

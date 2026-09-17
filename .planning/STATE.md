@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 34
-current_phase_name: documentation-currency-audit
-status: verifying
-stopped_at: Completed 34-09-PLAN.md (Phase 34 execution complete, ready for verification)
-last_updated: "2026-09-17T06:44:00.977Z"
+current_phase: 35
+current_phase_name: mdBook Currency
+status: planning
+stopped_at: "Phase 34 complete 2026-09-17 — 9/9 plans, 34-VERIFICATION.md passed 5/5 (34-AUDIT.md: 94 mdBook rows 38 current/55 stale/1 missing, 143 RD rows, 122 EX rows; Phase 35 list 60 items, Phase 36 list 207 items; deferred register 5 entries; SC5 read-only proven over ee1fb160..HEAD); next: /gsd-discuss-phase 35 --auto (Phase 35 mdBook Currency consumes 34-AUDIT.md §5)"
+last_updated: "2026-09-17T06:55:03.024Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 34 execution started
+last_activity_desc: Phase 34 complete, transitioned to Phase 35
 progress:
   total_phases: 17
-  completed_phases: 13
+  completed_phases: 14
   total_plans: 167
-  completed_plans: 166
+  completed_plans: 167
 ---
 
 # Project State
@@ -58,10 +58,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 34 (documentation-currency-audit) — EXECUTING
-Plan: 9 of 9
-Status: Phase complete — ready for verification
-Last activity: 2026-09-17 — Phase 34 execution started
+Phase: 35 — mdBook Currency
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-17 — Phase 34 complete, transitioned to Phase 35
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
@@ -70,7 +70,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 
 **Velocity:**
 
-- Total plans completed: 345
+- Total plans completed: 354
 - Average duration: —
 - Total execution time: —
 
@@ -110,6 +110,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | 31 | 7 | - | - |
 | 32 | 5 | - | - |
 | 33 | 6 | - | - |
+| 34 | 9 | - | - |
 
 *Updated after each plan completion*
 

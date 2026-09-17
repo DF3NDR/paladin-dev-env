@@ -1040,7 +1040,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 36-04-PLAN.md — Rustdoc: paladin-llm and paladin-web (24 rows, 17 location groups)
+- [x] 36-04-PLAN.md — Rustdoc: paladin-llm and paladin-web (24 rows, 17 location groups)
 - [ ] 36-05-PLAN.md — Rustdoc: the paladin-ai facade (12 rows, 7 location groups)
 
 **Wave 4** *(blocked on Wave 3 completion)*

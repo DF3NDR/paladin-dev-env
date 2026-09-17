@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36
 current_phase_name: Rustdoc Zero-Warning Bar & Examples Currency
 status: executing
-stopped_at: Completed 36-03-PLAN.md
-last_updated: "2026-09-17T20:15:10.878Z"
+stopped_at: Completed 36-04-PLAN.md
+last_updated: "2026-09-17T20:30:17.221Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 36 execution started
 progress:
   total_phases: 18
   completed_phases: 15
   total_plans: 190
-  completed_plans: 180
+  completed_plans: 181
 ---
 
 # Project State
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36 (Rustdoc Zero-Warning Bar & Examples Currency) — EXECUTING
-Plan: 4 of 13
+Plan: 5 of 13
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 36 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -155,6 +155,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36 P01 | ~45min | 2 tasks | 9 files |
 | Phase 36 P02 | ~55min | 3 tasks | 10 files |
 | Phase 36 P03 | ~20min | 2 tasks | 5 files |
+| Phase 36 P04 | ~25min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -495,6 +496,8 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 36 plan 36-01: proved the bare-shorthand intra-doc link technique -- rustdoc resolves a //! module doc's link scope to the CRATE ROOT, not the enclosing submodule, so a same-file pub-use re-export needs the full crate-relative path (crate::token_counter::heuristic::HeuristicTokenCounter), not a bare shorthand or self::-prefixed path; closed RD-01/66/126 (paladin-memory), RD-51/127 (paladin-ports), RD-46/128 (paladin-storage) via D-05/D-06; added examples/token_economy_commissary.rs (EX-109,111,112,113,114,115) and its README section; seeded 36-EVIDENCE.md + 36-evidence/ for the rest of the phase; zero drift against the 73-line/65-diagnostic default baseline and the 101-exit all-features bar; make api-surface unchanged across all 6 commits
 - [Phase ?]: Phase 36 plan 36-02: closed all 72 paladin-battalion rustdoc rows (34 location groups) -- confirmed the 36-01 crate-root //! link-scope finding generalizes to engine/mod.rs (a non-leaf mod.rs, not just a leaf submodule); zero visibility widened, zero lint suppressions, one atomic commit 9994eed5
 - [Phase ?]: Phase 36 plan 36-03: closed all 28 paladin-ai-core rustdoc rows (14 location groups) -- confirmed a cross-crate unresolved link (directive.rs's StateNode::run, owned by paladin-battalion) is a D-05 de-link situation, not a D-06 dependency-adding one; trace.rs's ten-target //! header confirmed the crate-root link-scope rule at its densest single doc block; webhook.rs's security-invariant prose verified byte-identical; one atomic commit 71a47dc9
+- [Phase ?]: 36-04: http_status.rs unclosed-HTML-tag pair fixed by reflowing the code span onto one source line -- a code span crossing a //! doc-comment line break is not treated as continuous by rustdoc's HTML-tag scanner even when backticks balance across the two lines
+- [Phase ?]: 36-04: dev_ui_controller.rs's RunInspectorPort/InspectorView::supersteps/dev_ui_inspector_page links resolved with explicit crate-relative paths (D-06), not de-linked -- all three are public and reachable
 
 ### Pending Todos
 
@@ -1062,8 +1065,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T20:15:10.777Z
-**Stopped at:** Completed 36-03-PLAN.md
+**Last session:** 2026-09-17T20:30:17.115Z
+**Stopped at:** Completed 36-04-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

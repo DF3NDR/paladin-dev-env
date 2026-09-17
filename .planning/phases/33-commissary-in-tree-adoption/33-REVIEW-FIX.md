@@ -1,24 +1,24 @@
 ---
 phase: 33-commissary-in-tree-adoption
-fixed_at: 2026-09-16T20:34:17Z
+fixed_at: 2026-09-17T00:45:00Z
 review_path: .planning/phases/33-commissary-in-tree-adoption/33-REVIEW.md
-iteration: 1
-findings_in_scope: 3
-fixed: 3
-skipped: 1
+iteration: 2
+findings_in_scope: 4
+fixed: 4
+skipped: 0
 status: all_fixed
 ---
 
 # Phase 33: Code Review Fix Report
 
-**Fixed at:** 2026-09-16T20:34:17Z
+**Fixed at:** 2026-09-17T00:45:00Z (iteration 2; iteration 1 was 2026-09-16T20:34:17Z)
 **Source review:** .planning/phases/33-commissary-in-tree-adoption/33-REVIEW.md
-**Iteration:** 1
+**Iteration:** 2 — iteration 1 ran with `fix_scope: critical_warning` (WR-01..03); iteration 2 ran with `--all` and closed IN-01
 
 **Summary:**
-- Findings in scope (critical_warning): 3 (WR-01, WR-02, WR-03)
-- Fixed: 3
-- Skipped: 1 (IN-01 — out of scope per `fix_scope: critical_warning`, not attempted)
+- Findings in scope (all): 4 (WR-01, WR-02, WR-03, IN-01)
+- Fixed: 4
+- Skipped: 0
 
 All work was performed in an isolated git worktree (`gsd-reviewfix/33-812734`, based on
 `feature/phase-33`), per the fixer's transactional worktree protocol. The worktree's commits
@@ -92,24 +92,48 @@ clean) + doctest run (`cargo test -p paladin-memory --doc rag_retrieval_service`
 confirming the intra-doc links `[Commissary::dispense]` / `[RagRetrievalResult::prompt_tokens]`
 resolve without warnings under clippy).
 
+### IN-01: `ration()`'s empty-input short-circuit reports `allotted_tokens: 0` regardless of the configured budget
+
+**Files modified:** `crates/paladin-memory/src/services/rag_retrieval_service.rs`
+**Commit:** `3b332967`
+**Applied fix:** Took the reviewer's second option (populate the field, rather than special-case
+the log line). The `u32::try_from(self.config.max_tokens)` budget conversion now runs BEFORE the
+`ranked.is_empty()` short-circuit, and the empty path returns
+`RagRetrievalResult { allotted_tokens: budget, ..Default::default() }` instead of a bare
+`Default::default()`. Two consequences, both intended: (1) the trailing `RAG rationing:
+... allotted_tokens={}` log line now reports the configured budget on the "no candidates reached
+rationing" path, so it no longer reads as "the budget was configured to zero"; (2) an over-large
+`rag.max_tokens` (beyond `u32::MAX`) now returns the typed `RagRetrievalError::BudgetTooLarge`
+even when no candidates were retrieved — previously the empty short-circuit skipped the
+conversion entirely, so a mis-configured budget was only reported once something was actually
+retrieved. `prompt_tokens` stays `0` and `exact_tally` stays `false` on the empty path (unchanged).
+The timeout-degradation path in `retrieve_context_with_timeout` still returns a bare
+`RagRetrievalResult::default()` — it never reaches `ration()` and was not in the finding's scope.
+
+Process note: a first fixer subagent for this iteration (worktree `gsd-reviewfix/33-871197`,
+started 2026-09-16T20:55:52Z) wrote the two failing tests and then died before implementing;
+its worktree, branch and `.review-fix-recovery-pending.json` sentinel were found orphaned on
+resume, the test diff was applied to the main tree, and the implementation was completed
+in-process by the orchestrator. Red was established by inspection rather than re-measured: the
+pre-fix code returned `Ok(RagRetrievalResult::default())` for any empty input, so
+`allotted_tokens == 2_000` and `Err(BudgetTooLarge)` both fail against it by construction.
+**Verification:** `cargo test -p paladin-memory --lib rag_retrieval_service` — 23 passed (21 prior
++ `empty_ranked_reports_configured_budget_as_allotted_tokens` +
+`empty_ranked_with_budget_beyond_u32_returns_typed_error`); full crate `--lib` 122 passed, `--doc`
+10 passed; `cargo fmt --all --check` clean; `cargo clippy -p paladin-memory --all-targets -- -D
+warnings` clean with and without default features; `cargo test --test rag_commissary` 3 passed
+(the facade-level Commissary integration tests). `cargo test --test rag_integration` was NOT run:
+it requires the `qdrant` feature and a live Qdrant service. The pre-commit hook's workspace
+clippy (`--workspace --all-targets --all-features -D warnings`) passed on the commit.
+
 ## Skipped Issues
 
-### IN-01: `ration()`'s empty-input short-circuit reports `allotted_tokens: 0` regardless of configured budget
-
-**File:** `crates/paladin-memory/src/services/rag_retrieval_service.rs:239-241, 330-345`
-**Reason:** Out of scope. `fix_scope` for this run is `critical_warning`, which covers only
-`CR-*`/`BL-*`/`WR-*` findings; `IN-01` is an Info-severity finding and was not attempted. No
-code was read or modified for this finding.
-**Original issue:** When no candidate memories survive filtering/dedup,
-`RagRetrievalResult::default()` reports `allotted_tokens: 0` even if `rag.max_tokens` is
-configured higher, and the trailing `log::info!` line fires unconditionally on this path,
-which can read as "budget was configured to zero" during on-call debugging rather than "no
-candidates reached rationing."
+None — all four findings in the review are fixed.
 
 ## Verification Command Output (tail)
 
-All commands run against the phase-33 worktree at HEAD `6cd77888` (now fast-forwarded onto
-`feature/phase-33`):
+Iteration 1 commands ran against HEAD `6cd77888`; iteration 2 (IN-01) commands ran against the
+main tree at HEAD `3b332967` — see the IN-01 entry above for its per-command results:
 
 ```
 $ cargo test -p paladin-memory

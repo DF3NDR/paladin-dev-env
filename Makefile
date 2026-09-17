@@ -164,6 +164,11 @@ check-doc-examples: ## Compile doc examples (paladin-doc-examples crate) + synta
 	@echo "$(CYAN)Checking doc code examples...$(NC)"
 	@./scripts/check-doc-examples.sh
 
+.PHONY: check-examples
+check-examples: ## Build every examples/ target under CI's feature-split matrix (D-14; mirrors the Example Muster job). Not in clean-code or pre-push -- several full builds are too slow for a push hook.
+	@echo "$(CYAN)Checking all examples build (CI feature-split mirror)...$(NC)"
+	@./scripts/check-all-examples.sh
+
 .PHONY: check-doc-config
 check-doc-config: ## Validate fenced YAML config snippets in docs/src parse correctly
 	@echo "$(CYAN)Checking doc config snippets...$(NC)"

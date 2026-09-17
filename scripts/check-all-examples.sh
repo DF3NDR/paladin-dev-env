@@ -1,58 +1,94 @@
-#!/bin/bash
-# Script to check that all examples compile successfully
-# Usage: ./scripts/check-all-examples.sh
+#!/usr/bin/env bash
+# check-all-examples.sh
+#
+# Rewritten (D-14) to mirror the `.github/workflows/ci.yml` "Example Muster"
+# job's feature-split invocations exactly, in the same order, so a green
+# local run and a green CI run mean the same thing.
+#
+# The previous version of this script ran a per-file `cargo check`, naming
+# one example and enabling every workspace feature at once. Enabling every
+# feature always includes whatever feature a target is gated on, so that
+# form silently satisfies every `required-features` gate in Cargo.toml and
+# can therefore never reproduce the exact gap CI's feature split exists to
+# catch: a bare `cargo build --examples` selector SILENTLY SKIPS any target
+# whose required-features are unmet (exit 0, no warning, no error). This
+# script never checks a single example with every feature enabled; each
+# gated target gets its own explicit `cargo build --example ... --features
+# "..."` invocation instead, matching `Cargo.toml`'s `[[example]]`
+# `required-features` lists verbatim.
+#
+# This is intentionally NOT wired into the pre-push hook: several full
+# example builds are too slow for a push hook (D-14). It is invoked via
+# `make check-examples`.
+#
+# Usage:  ./scripts/check-all-examples.sh
+# Exit:   0 if every invocation succeeds and every expected binary was produced.
 
-set -e
+set -euo pipefail
 
-EXAMPLES_DIR="examples"
-FAILED_EXAMPLES=()
-SUCCESS_COUNT=0
-TOTAL_COUNT=0
+WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$WORKSPACE_ROOT"
 
-echo "=========================================="
-echo "Checking all examples in $EXAMPLES_DIR"
-echo "=========================================="
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+echo -e "${CYAN}==========================================${NC}"
+echo -e "${CYAN}Example Muster (local mirror of CI)${NC}"
+echo -e "${CYAN}==========================================${NC}"
 echo ""
 
-# Find all .rs files in examples directory
-for example in "$EXAMPLES_DIR"/*.rs; do
-    if [ -f "$example" ]; then
-        TOTAL_COUNT=$((TOTAL_COUNT + 1))
-        example_name=$(basename "$example" .rs)
+# --- 1. Default features: every auto-discovered target (no required-features) -
+echo -e "${CYAN}[1/7] Build examples (default features -- auto-discovered targets)${NC}"
+cargo build --examples --offline
 
-        echo -n "[$TOTAL_COUNT] Checking $example_name... "
+# --- 2. vision: vision_analysis, vision_battalion ------------------------------
+echo -e "${CYAN}[2/7] Build examples (vision -- vision_analysis, vision_battalion)${NC}"
+cargo build --example vision_analysis --example vision_battalion --features "vision,llm-openai" --offline
 
-        # Try to compile the example
-        if cargo check --example "$example_name" --all-features 2>&1 | grep -q "error"; then
-            echo "❌ FAILED"
-            FAILED_EXAMPLES+=("$example_name")
-        else
-            echo "✅ OK"
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-        fi
+# --- 3. content-processing: document_processing --------------------------------
+echo -e "${CYAN}[3/7] Build examples (content-processing -- document_processing)${NC}"
+cargo build --example document_processing --features "content-processing" --offline
+
+# --- 4. web-server: http_service_host, webhook_receiver ------------------------
+echo -e "${CYAN}[4/7] Build examples (web-server -- http_service_host, webhook_receiver)${NC}"
+cargo build --example http_service_host --example webhook_receiver --features "web-server" --offline
+
+# --- 5. web-server,dev-ui: platform_api_client ----------------------------------
+echo -e "${CYAN}[5/7] Build examples (web-server,dev-ui -- platform_api_client)${NC}"
+cargo build --example platform_api_client --features "web-server,dev-ui" --offline
+
+# --- 6. redis-cache: node_result_cache ------------------------------------------
+echo -e "${CYAN}[6/7] Build examples (redis-cache -- node_result_cache)${NC}"
+cargo build --example node_result_cache --features "redis-cache" --offline
+
+# --- 7. otel: observability_otel_export -----------------------------------------
+echo -e "${CYAN}[7/7] Build examples (otel -- observability_otel_export)${NC}"
+cargo build --example observability_otel_export --features "otel" --offline
+
+# --- Binary-count assertion ------------------------------------------------------
+# Derives the expected count from the .rs files under examples/ (self-correcting),
+# and matches on basenames rather than raw `ls` since cargo also emits `.d`
+# dependency files and hash-suffixed duplicates into target/debug/examples.
+echo ""
+echo -e "${CYAN}Asserting every example binary was produced...${NC}"
+EXPECTED=$(find examples -name '*.rs' | wc -l)
+FOUND=0
+MISSING=""
+for f in examples/*.rs; do
+    name=$(basename "$f" .rs)
+    if [ -x "target/debug/examples/$name" ] && [ ! -d "target/debug/examples/$name" ]; then
+        FOUND=$((FOUND + 1))
+    else
+        MISSING="$MISSING $name"
     fi
 done
+echo "Expected: $EXPECTED example binaries; found: $FOUND"
+if [ "$FOUND" -ne "$EXPECTED" ]; then
+    echo -e "${RED}Missing:$MISSING${NC}" >&2
+    exit 1
+fi
 
 echo ""
-echo "=========================================="
-echo "Summary"
-echo "=========================================="
-echo "Total examples: $TOTAL_COUNT"
-echo "Successful: $SUCCESS_COUNT"
-echo "Failed: ${#FAILED_EXAMPLES[@]}"
-
-if [ ${#FAILED_EXAMPLES[@]} -gt 0 ]; then
-    echo ""
-    echo "Failed examples:"
-    for failed in "${FAILED_EXAMPLES[@]}"; do
-        echo "  - $failed"
-    done
-    echo ""
-    echo "To see detailed errors for a specific example:"
-    echo "  cargo check --example <example_name> --all-features"
-    exit 1
-else
-    echo ""
-    echo "✅ All examples compile successfully!"
-    exit 0
-fi
+echo -e "${GREEN}All $EXPECTED example binaries present.${NC}"

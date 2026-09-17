@@ -351,6 +351,182 @@ including `appendix/` and any file not linked from `SUMMARY.md` (D-05). 92 rows 
 (`docs/src/appendix/doc-coverage-report.md`) is fully worked here to prove the row schema
 end-to-end (D-06/D-07), per this task's method self-test.
 
+### Build baseline (D-11) — measured by plan 34-03, Task 1
+
+**Run window:** 2026-09-17T04:02:42Z – 2026-09-17T04:02:57Z (mdBook build + linkcheck); the full
+sequence including `check-doc-examples.sh`/`check-doc-config.sh` completed by 2026-09-17T04:03:05Z.
+Raw capture: `34-evidence/34-03-mdbook-build.txt`.
+
+**Toolchain versions (verbatim), each annotated against its `docs.yml` pin (repeats the
+Measurement Header block above for this subsection's self-containment):**
+
+```
+$ mdbook --version
+mdbook v0.4.40
+$ mdbook-linkcheck --version
+mdbook-linkcheck 0.7.7
+$ mdbook-mermaid --version
+mdbook-mermaid 0.13.0
+```
+Compared against `docs.yml:46,50,54` (`mdbook --version 0.4.40`, `mdbook-mermaid --version
+0.13.0`, `mdbook-linkcheck --version 0.7.7`) — **all three match exactly**, no drift.
+
+**`mdbook-mermaid install docs/` mutation check (D-22, T-34-01):** `mdbook-mermaid install docs/`
+was run first, then `git status --porcelain -- docs` was run immediately after. **It printed
+nothing — the mermaid install did NOT mutate `docs/mermaid.min.js` / `docs/mermaid-init.js` this
+run.** No `git checkout -- docs/` restoration was needed; there is no drift to route to Phase 35.
+
+**`mdbook build docs/` (with the linkcheck backend active, `warning-policy = "error"` per
+`docs/book.toml`):** exit code **0**, wall time **3s**. The html backend and the linkcheck backend
+both ran. Linkcheck scanned **1006 links (0 incomplete)**; the verbatim summary line is:
+
+```
+[2026-09-17T04:02:57Z INFO  mdbook_linkcheck] No broken links found
+```
+
+515 lines in the capture are `WARN linkcheck::validation … because fragment resolution isn't
+implemented` — a documented `mdbook-linkcheck` limitation (it does not resolve `{{#include}}`d
+anchor fragments across pages), not link failures; `warning-policy = "error"` governs true
+linkcheck failures (broken links), and the build still exited 0. One further benign line appears:
+`Warning: The mdbook-mermaid preprocessor was built against version 0.4.36 of mdbook, but we're
+being called from version 0.4.40` — a pre-existing preprocessor/mdbook version-skew notice, not a
+build failure (mdBook and mdbook-mermaid are independently pinned in `docs.yml` and both pins were
+confirmed above). No red step this run.
+
+**`bash scripts/check-doc-examples.sh`:** exit code **0**. Layer 1 (`cargo check` on
+`crates/doc-examples`) — "All included examples compile." Layer 1b (README quick-example mirror) —
+"README Quick Example is in sync." Layer 2 (inline fenced-block scan across `docs/src`) — **0
+checked, 616 skipped, 0 failed** (every inline ```rust block found is either illustrative,
+`{{#include}}`-backed, or otherwise marked as non-standalone; none failed validation).
+
+**`bash scripts/check-doc-config.sh`:** exit code **0**. **154 YAML blocks checked, 0 failed** —
+every fenced ` ```yaml ` block under `docs/src/**/*.md` parses as valid YAML.
+
+No red step in the whole `docs.yml` sequence this run; nothing routes to a Phase 35 `MB-nn` or a
+Phase 36 `EX-nn` from the build baseline itself.
+
+### Orphan check (D-05)
+
+`docs/src/SUMMARY.md`'s markdown link targets were extracted and compared against every `.md` file
+on disk under `docs/src/`.
+
+- On-disk page count: `find docs/src -name '*.md' | sort | wc -l` → **93**
+- Nav-reachable count (pages linked from `SUMMARY.md`, plus `SUMMARY.md` itself, which is not an
+  orphan by definition): **93**
+- `comm -23 <(find docs/src -name '*.md' | sort) <(nav-reachable set)` → **(empty)**
+
+**The orphan set is empty.** Every one of the 93 on-disk pages is reachable from `SUMMARY.md`'s
+nav. This confirms 34-RESEARCH.md's "zero orphans" claim by direct measurement rather than
+carrying it forward unproven (D-00b) — the command above is the proof, not the prior claim.
+
+### Vocabulary sweep (D-10, D-00f)
+
+`grep -rniE '\bQuartermaster\b' docs/src` — **1 hit**:
+
+```
+docs/src/architecture/commissary.md:7:Quartermaster→Commissary rename rationale, and the rejected-name list are in ADR-0049
+```
+
+This is the RESEARCH.md P-07 finding: a sentence pointing at the ADR-0049 rename rationale — a
+legitimate historical pointer, not a stray leftover — but it is a literal match for the D-10 grep,
+which CONTEXT.md and ROADMAP require to be empty. Recorded as its own row below, classified
+*stale content*, citing Phase 30 — `Quartermaster` purge, zero in-tree references (VOCAB-06,
+SS-71). Whether an ADR-pointer sentence is an intentional exception to the must-be-empty rule is
+**Phase 35's call, not this audit's** (D-00c: recorded, never fixed) — the page is not edited here.
+
+| MB ID | Location | Classification | Note | Size |
+|---|---|---|---|---|
+| MB-02 | `docs/src/architecture/commissary.md:7` | stale content | Literal `Quartermaster` match inside a sentence pointing at the ADR-0049 rename rationale (historical pointer, not a stray leftover); D-10's grep requires the corpus to be empty regardless of intent — Phase 35 decides whether this sentence is an intentional exception | S |
+
+**Phase 31 D-29 `token_count` hit-list re-check** — for each of the 10 pages, a grep for the bare
+token (`token_count`) and the split type (`TokenUsage`) was run and compared:
+
+| Page | `token_count` hits | `TokenUsage` hits | Disposition |
+|---|---|---|---|
+| `docs/src/getting-started/quickstart.md` | none | line 118 (`usage` \| `TokenUsage` \| prompt/completion split) | clean |
+| `docs/src/operations/observability.md` | none | lines 38, 43 (`NodeFinished`/`RunFinished` `usage: TokenUsage`) | clean |
+| `docs/src/user-guides/battalion-patterns.md` | none | lines 313-314 (`usage: TokenUsage`, `per_paladin_tokens: HashMap<String, TokenUsage>`) | clean |
+| `docs/src/user-guides/output-formatting.md` | none | line 170 (full `TokenUsage` split) | clean |
+| `docs/src/user-guides/agent-orchestrator-bridge.md` | none | line 111 (`usage` — the full `TokenUsage` split) | clean |
+| `docs/src/appendix/conclave-pattern.md` | none | line 726 (full `TokenUsage`) | clean |
+| `docs/src/architecture/domain-model.md` | **line 102: `pub token_count: usize,`** | line 35 (prose, vocabulary-rule context only, not adjacent to the struct) | **offending — see the row minted below** |
+| `docs/src/user-guides/herald-output.md` | none | line 55 (full `TokenUsage` split, six-key object) | clean |
+| `docs/src/user-guides/memory-management.md` | 18 hits, all `GarrisonEntry.token_count: Option<u32>` usage (fields, SQL column, builder calls) | none | clean — see disposition note below |
+| `docs/src/user-guides/paladin-agents.md` | none | line 161 (`usage` \| `TokenUsage` \| prompt/completion split) | clean |
+
+**Disposition for `memory-management.md`:** its `token_count` occurrences all describe
+`GarrisonEntry.token_count`, a Garrison memory-entry field distinct from the `PaladinResult` /
+`StreamingResponse` / `TokenUsageResponse` carriers Phase 31 (ACCT-01…05) changed — the page's own
+line 158 comment states this explicitly ("Token counting is a separate concern from
+`GarrisonConfig`"). The page's type (`Option<u32>`, line 46) matches the live
+`crates/paladin-core/src/platform/container/garrison.rs` field exactly (verified below). This page
+was never an ACCT-01…05 target and is correctly clean, not a false negative.
+
+**Disposition for `domain-model.md`, the offending row above:** the page's `GarrisonEntry` snippet (lines 96-104)
+shows `token_count: usize` with no `id`, `timestamp` or `is_summary` field, and names the role
+field's type `MessageRole`. The live struct at
+`crates/paladin-core/src/platform/container/garrison.rs:57-75` is:
+
+```rust
+pub struct GarrisonEntry {
+    pub id: Uuid,
+    pub role: ConversationRole,
+    pub content: String,
+    pub timestamp: DateTime<Utc>,
+    pub metadata: HashMap<String, Value>,
+    pub token_count: Option<u32>,
+    pub is_summary: bool,
+}
+```
+
+`token_count` is `Option<u32>` in the tree, not `usize`; the role field's live type is
+`ConversationRole`, not `MessageRole`; and the struct is missing `id`, `timestamp` and — the
+Phase 26 (RT-03/RT-FR-12, D-17) addition — `is_summary`, which the live rustdoc's own
+"X-10 release note (v0.10.0, RT-03/RT-FR-12, D-17)" comment documents as load-bearing for the
+effective-history definition the `HistoryTrimmer`/`SummarizationMiddleware` (SS-38) both read.
+
+| MB ID | Location | Classification | Note | Size |
+|---|---|---|---|---|
+| MB-03 | `docs/src/architecture/domain-model.md:96-104` | stale content | `GarrisonEntry` snippet is stale on four counts: `token_count: usize` should be `Option<u32>`; `role: MessageRole` should be `ConversationRole`; missing `id: Uuid` and `timestamp: DateTime<Utc>` fields; missing the Phase 26 `is_summary: bool` field (`is_summary` is the effective-history marker `HistoryTrimmer`/`SummarizationMiddleware` depend on) | Phase 26 — `GarrisonEntry.is_summary` (RT-03, SS-38) | M |
+
+This row is cross-referenced, not duplicated, when `domain-model.md`'s own §2 verdict is
+settled below (Task 2) — per this task's action text, "do not mint a second row for the same
+line" (the pattern already established for `commissary.md`'s vocabulary-hit row above).
+
+### Object-store currency sweep (CONTEXT.md Folded Todos — MinIO slice)
+
+`grep -rniE 'minio|dl\.min\.io|quay\.io' docs/src examples` — **247 hits** across 27 files (full
+verbatim hit list: `34-evidence/34-03-mdbook-build.txt`, "object-store currency sweep" section).
+Every hit was checked against the pin quick task 260913-15w introduced (Docker Hub community
+images retired, 404 since 2026-09-12; `dl.min.io` returns 410; current form is a `quay.io` image
+pin plus the `mc` client from an archived GitHub release asset):
+
+- `grep -rniE 'dl\.min\.io' docs/src examples` → **(none)** — no page or example names the retired
+  download host.
+- `grep -rniE '(^|[^./])minio/minio' docs/src examples | grep -v 'quay.io/minio/minio'` →
+  **(none)** — no page or example names the bare Docker Hub community image form.
+- Every actual container-image reference already uses the pinned form,
+  `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772` — **9 occurrences across 6
+  files** (`docs/src/contributing/testing-guide.md` ×2, `docs/src/contributing/branching-model.md`
+  ×1 in prose, `docs/src/deployment/cicd.md` ×1, `docs/src/appendix/integration-tests.md` ×1,
+  `docs/src/deployment/docker.md` ×1, `docs/src/appendix/minio-file-repository-setup.md` ×4) — all
+  byte-identical to the pin.
+
+**Verdict: zero MB-nn items from this slice.** No page or example under `docs/src` or `examples`
+names a retired Docker Hub image or a `dl.min.io` URL; every image-pin occurrence already carries
+the current `quay.io` form. The remaining 238 hits are the word "MinIO" naming the service, the
+`s3-storage` feature flag, config keys (`minio_endpoint` etc.) and environment variables
+(`APP_MINIO_*`, `MINIO_*`) — none of these name a retired image or URL, so none qualify for an
+`MB-nn` under this slice's own scope. The RustFS evaluation itself stays out of scope, deferred to
+plan 34-09's deferred register (`todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md`
+already tracks it as a pending todo, unchanged by this phase).
+
+### SC5 read-only proof (Task 1 close)
+
+`git status --porcelain -- . ':!.planning'` → **(empty)**. No file outside `.planning/` was
+created, modified or deleted by this task, including `docs/mermaid.min.js` / `docs/mermaid-init.js`
+(confirmed separately above).
+
 | # | Page | Verdict | Findings (signal class → cmd → result) | Cites (Phase N — item (REQ)) | MB ID(s) | Size |
 |---|------|---------|------------------------------------------|-------------------------------|----------|------|
 | 1 | docs/src/SUMMARY.md | pending | pending — not yet swept (no signal class run) | — | — | — |

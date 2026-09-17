@@ -61,6 +61,29 @@ mdbook-mermaid 0.13.0
 | 24 | `bash 34-check.sh --seed` (post-§1-write re-run) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS — completeness/read-only gate still green after this plan's edits |
 | 25 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this plan's commit) | (empty) | ✅ PASS — no file outside `.planning/` modified, created or deleted |
 
+## Plan 34-03, Task 1 — build baseline, orphan check, vocabulary sweep, object-store sweep
+
+**HEAD SHA at sweep time:** `7ed822b13fbf1ffbfcf7ef6c5f682d7e9f589cde` — Phase 34 has advanced since
+plan 34-01's SHA (`ee1fb160f8e743e638b32beb6c4e32be4ede9325`) through the intervening plan 34-01/
+34-02 commits, all `.planning/`-only per D-23's invariance argument; the source tree these rows
+measure is unchanged from the recorded Phase 34 start SHA.
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 26 | `mdbook --version && mdbook-linkcheck --version && mdbook-mermaid --version` (D-11 precondition) | `mdbook v0.4.40` / `mdbook-linkcheck 0.7.7` / `mdbook-mermaid 0.13.0` | ✅ PASS — all three match `docs.yml` pins exactly |
+| 27 | `mdbook-mermaid install docs/` then `git status --porcelain -- docs` (D-22, T-34-01) | (empty) | ✅ PASS — mermaid install did not mutate `docs/`; no `git checkout -- docs/` restoration needed |
+| 28 | `mdbook build docs/` (linkcheck backend active, `warning-policy = "error"`) teed to `34-evidence/34-03-mdbook-build.txt` | exit 0, 3s wall time; `Found 1006 links (0 incomplete links)`; `No broken links found` | ⚠️ CARRIED baseline (not a gate this plan enforces) — green this run; 515 fragment-resolution WARN lines are a documented mdbook-linkcheck limitation, not failures |
+| 29 | `bash scripts/check-doc-examples.sh` teed to the same evidence file | exit 0; Layer 1 "All included examples compile"; Layer 1b "README Quick Example is in sync"; Layer 2 "0 checked, 616 skipped, 0 failed" | ✅ PASS |
+| 30 | `bash scripts/check-doc-config.sh` teed to the same evidence file | exit 0; "154 YAML block(s) checked, 0 failed" | ✅ PASS |
+| 31 | Orphan check: extract `docs/src/SUMMARY.md` link targets, `comm -23` against `find docs/src -name '*.md' \| sort` | on-disk 93, nav-reachable 93 (incl. `SUMMARY.md` itself), `comm -23` output empty | ✅ PASS — zero orphans, confirms 34-RESEARCH.md's claim by direct measurement (D-00b) |
+| 32 | `grep -rniE '\bQuartermaster\b' docs/src` (D-10) | 1 hit: `docs/src/architecture/commissary.md:7` (ADR-0049 rename-rationale pointer sentence) | ⚠️ RECORDED — literal match per D-10's must-be-empty grep; classified stale content, MB-02 minted; Phase 35 decides if the ADR-pointer sentence is an intentional exception (D-00c) |
+| 33 | Phase 31 D-29 `token_count`/`TokenUsage` re-check, 10 pages: `grep -n 'token_count' <page>` and `grep -n 'TokenUsage' <page>` per page | 8/10 pages clean (TokenUsage present, no bare token_count); `domain-model.md` offending (bare `token_count: usize` at line 102, no adjacent split); `memory-management.md` clean (18 `GarrisonEntry.token_count: Option<u32>` hits, a page-confirmed separate concern from the ACCT carriers, type matches live code) | ⚠️ RECORDED — MB-03 minted for `domain-model.md`'s stale `GarrisonEntry` snippet (type mismatch + 3 missing fields incl. Phase 26 `is_summary`); `memory-management.md` recorded clean with its disposition note |
+| 34 | Live `GarrisonEntry` struct read: `sed -n '55,76p' crates/paladin-core/src/platform/container/garrison.rs` (proves MB-03's live-vs-doc diff) | 7 fields: `id: Uuid`, `role: ConversationRole`, `content: String`, `timestamp: DateTime<Utc>`, `metadata: HashMap<String, Value>`, `token_count: Option<u32>`, `is_summary: bool`; `#[non_exhaustive]` | ✅ RECORDED — feeds MB-03's Note cell |
+| 35 | `grep -rniE 'minio\|dl\.min\.io\|quay\.io' docs/src examples` (Folded Todos, MinIO slice) | 247 hits across 27 files, full list in `34-evidence/34-03-mdbook-build.txt` | ⚠️ RECORDED — every image-pin occurrence already `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772` (9 occurrences, 6 files); zero hits name a retired Docker Hub image or `dl.min.io` |
+| 36 | `grep -rniE 'dl\.min\.io' docs/src examples`; `grep -rniE '(^\|[^./])minio/minio' docs/src examples \| grep -v 'quay.io/minio/minio'` | both empty | ✅ PASS — confirms zero MB-nn items from the object-store slice; RustFS evaluation stays a pending todo, unchanged |
+| 37 | `bash 34-check.sh --seed` (post-Task-1 re-run) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS — completeness/read-only gate still green |
+| 38 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS — no file outside `.planning/` modified, created or deleted |
+
 ## Notes
 
 - Rows 7-8's raw captures are teed verbatim to `34-evidence/34-01-cargo-doc-default.txt` and

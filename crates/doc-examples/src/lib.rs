@@ -20,5 +20,6 @@ pub mod orchestration;
 pub mod paladin_agents;
 pub mod queue_worker;
 pub mod readme;
+pub mod sanctum_vector_memory;
 pub mod sidecar;
 pub mod superstep_engine;

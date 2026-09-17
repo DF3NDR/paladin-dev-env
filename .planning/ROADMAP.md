@@ -1060,7 +1060,7 @@ Plans:
 **Wave 7** *(blocked on Wave 6 completion)*
 
 - [x] 36-11-PLAN.md — examples/README.md: gallery index completion and currency fixes
-- [ ] 36-12-PLAN.md — Gate wiring: make doc-check, clean-code, pre-push, CI lint step, examples check, closing measurement
+- [x] 36-12-PLAN.md — Gate wiring: make doc-check, clean-code, pre-push, CI lint step, examples check, closing measurement
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

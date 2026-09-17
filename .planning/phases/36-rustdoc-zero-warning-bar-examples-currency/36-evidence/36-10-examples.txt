@@ -1,0 +1,50 @@
+Phase 36 Plan 10 -- Node-result cache, observability (tracing + OTLP export) & eval scenarios
+================================================================================================
+
+Task 1: examples/node_result_cache.rs (EX-81, EX-82, gated redis-cache, build-only)
+------------------------------------------------------------------------------------------------
+
+Files: examples/node_result_cache.rs, Cargo.toml
+
+Program: constructs a RedisNodeCache (RedisNodeCacheConfig::default(), localhost:6379) and
+wires it onto a WarEngine via with_node_cache (EX-81); runs a single-Function-node graph twice
+under different threads -- run 1 executes the node and stores the result (cache_hit=false), run
+2 is served from the cache (cache_hit=true, no re-execution, proven via a shared AtomicU64
+execution counter and the persisted Waypoint's own NodeExecutionRecord.cache_hit field); then
+toggles APP_NODE_CACHE_ENABLED off via NodeCacheConfig::apply_env_overrides, builds a THIRD
+graph with no CachePolicy attached and an engine with no cache backend wired (attaching a
+CachePolicy to a node whose engine has no backend is a typed validation error, never a silent
+no-op -- confirmed against crates/paladin-battalion/src/engine/mod.rs's own
+`a_cache_policy_without_an_engine_cache_fails_validation` test), and re-runs to show the node
+re-executes (EX-82). This program needs a running Redis server (`make services-up`), so per D-16
+it is BUILD-VERIFIED ONLY -- never executed by any automated check here or in CI. The header
+comment states this explicitly.
+
+$ cargo build --example node_result_cache --features "redis-cache"
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.92s
+exit 0
+
+BUILT, NOT RUN -- this devcontainer has no Redis server reachable at localhost:6379 (Docker is
+absent, RESEARCH.md Environment Availability), and D-16 forbids running a services-requiring
+program from any automated check. `cargo build` alone is the acceptance evidence for this
+program; a developer with `make services-up` running can `cargo run --example node_result_cache
+--features "redis-cache"` manually.
+
+$ cargo build --examples
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.58s
+exit 0
+(node_result_cache is skipped by the bulk selector, confirmed no attempt to build it was made)
+
+$ grep -c 'APP_NODE_CACHE_ENABLED' examples/node_result_cache.rs
+9
+$ grep -cE '\.unwrap\(\)|\.expect\(' examples/node_result_cache.rs
+0
+$ grep -cE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY' examples/node_result_cache.rs
+0
+$ git diff --stat HEAD -- src/ crates/
+(empty)
+
+$ cargo fmt --all -- --check
+exit 0
+$ cargo check --workspace --all-targets --all-features
+exit 0

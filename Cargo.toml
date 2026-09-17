@@ -471,6 +471,11 @@ name = "webhook_receiver"
 path = "examples/webhook_receiver.rs"
 required-features = ["web-server"]
 
+[[example]]
+name = "node_result_cache"
+path = "examples/node_result_cache.rs"
+required-features = ["redis-cache"]
+
 [[bin]]
 name = "paladin"
 path = "src/main.rs"

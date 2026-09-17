@@ -440,13 +440,22 @@ make coverage
 make coverage-html
 ```
 
-`make coverage` is a thin wrapper — this is the full underlying invocation, so you can see it is
-not a different measurement from what CI runs:
+`make coverage` and the CI `coverage` job both delegate to `scripts/coverage.sh` — that script,
+not this page, not `make coverage`'s recipe body, and not the CI job's inline YAML, is the single
+source of truth for the invocation. Reading it is the ground truth:
 
 ```bash
-cargo llvm-cov --workspace --features integration-tests --lcov --output-path lcov.info \
-  --fail-under-lines 82 -- --test-threads=1
+# excerpt: scripts/coverage.sh
+exec cargo llvm-cov --workspace --features integration-tests,llm-all \
+    --lcov --output-path lcov.info --fail-under-lines "$FLOOR" -- --test-threads=1
 ```
+
+`$FLOOR` defaults to `82`. The feature list is `integration-tests,llm-all`, not
+`integration-tests` alone: the workspace's default feature set (`llm-openai`, `llm-anthropic`,
+`llm-deepseek`) builds only three of the nine shipped LLM provider adapters, so a measurement
+without the aggregate `llm-all` feature silently excludes the other six adapters' lines from both
+the numerator and the denominator — see the full job table on
+[CI/CD Guide](../deployment/cicd.md) for where this invocation runs in CI.
 
 If `make coverage` fails with a Redis/MinIO connection error, that is `make coverage` itself
 telling you to run `make services-up` first — it fails loudly with a pointer rather than starting
@@ -454,10 +463,12 @@ containers for you.
 
 ### The scope, and why it is that scope
 
-The command above measures `--workspace --features integration-tests`, deliberately **not**
-`--all-features`. `qdrant` requires a live Qdrant service and the vision/embedding suites require
-real provider API keys — under `--all-features` that code would enter the denominator with
-nothing in CI able to exercise it, depressing the number for no signal.
+The command above measures `--workspace --features integration-tests,llm-all`, deliberately
+**not** `--all-features`. `qdrant` requires a live Qdrant service and the vision/embedding suites
+require real provider API keys — under `--all-features` that code would enter the denominator
+with nothing in CI able to exercise it, depressing the number for no signal. `llm-all` is the
+narrower aggregate that brings in every LLM provider adapter without pulling in `qdrant` or
+vision/embedding.
 
 The three `[[bin]]` targets (`paladin`, `paladin-cli`, `paladin-server`) are feature-gated behind
 `cli` and `web-server` respectively. `paladin` and `paladin-cli` sit outside the denominator by
@@ -627,62 +638,32 @@ pub fn test_config() -> ApplicationSettings {
 
 ## CI Integration
 
-### GitHub Actions Workflow
+### GitHub Actions Workflows
+
+There is no dedicated tests-only workflow file — an earlier version of this page invented one,
+alongside a deprecated third-party toolchain-install action the real CI does not use and a
+coverage step with no floor enforcement. Testing runs across several jobs inside the real
+workflows under
+`.github/workflows/`: `lint`, `test`, `examples`, `crate-isolation`, `integration-tests`,
+`docker-integration`, `cli-tests`, `bench-check` and `coverage` in `ci.yml`, plus the dedicated
+`codeql.yml` Rust SAST scan (advisory only — it does not gate a merge). The full job-by-job table,
+with each job's required-or-advisory status taken from the branch-protection ruleset, lives on the
+[CI/CD Guide](../deployment/cicd.md) — this page does not duplicate it.
+
+The one piece of that pipeline worth repeating here, because it is what this page's own
+[Test Coverage](#test-coverage) section walks through, is the exact `coverage` job step:
 
 ```yaml
-# .github/workflows/test.yml
-name: Tests
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        rust: [stable, beta]
-
-    services:
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-
-      minio:
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+# excerpt: .github/workflows/ci.yml — job: coverage
+      - name: Measure coverage
         env:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin
-        ports:
-          - 9000:9000
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ matrix.rust }}
-          override: true
-
-      - name: Run unit tests
-        run: cargo test --lib
-
-      - name: Run integration tests
-        run: cargo test --test '*' -- --test-threads=1
-
-      - name: Run doc tests
-        run: cargo test --doc
-
-      - name: Generate coverage
-        run: |
-          cargo install cargo-llvm-cov
-          cargo llvm-cov --lcov --output-path lcov.info
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          files: lcov.info
+          USE_EXTERNAL_TEST_SERVICES: "true"
+          TEST_REDIS_HOST: localhost
+          TEST_REDIS_PORT: 6380
+          TEST_MINIO_ENDPOINT: localhost:9010
+          TEST_MINIO_ACCESS_KEY: testuser
+          TEST_MINIO_SECRET_KEY: testpass123
+        run: bash scripts/coverage.sh
 ```
 
 ### Pre-commit Hooks

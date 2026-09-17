@@ -987,11 +987,28 @@ Plans:
   4. The book's vocabulary matches the three ubiquitous-language lists (Phase 30 VOCAB-02): no `Quartermaster`, and no bare token total where the prompt / completion split shipped in Phase 31
   5. `CHANGELOG.md` `[0.10.0]` carries a Documentation entry summarising the pages added and corrected
 
-**Plans**: 0 plans
+**Plans**: 10 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 35 to break down)
+**Wave 1**
+
+- [ ] 35-01-PLAN.md — Tracer: mint CURR-06…CURR-10, write the WarEngine superstep-engine guide with its compile-verified doc-examples module and nav entry, seed the deferred register (MB-30)
+
+**Wave 2** *(blocked on Wave 1 — eight plans with disjoint file sets)*
+
+- [ ] 35-02-PLAN.md — Five new `doc-examples` modules for the signature-level user-guide rows (MB-19, MB-20, MB-24, MB-27, MB-28)
+- [ ] 35-03-PLAN.md — Getting Started and User Guides version/MSRV/feature sweep plus the three line-pinned content fixes (MB-06, MB-07, MB-18, MB-21, MB-22, MB-23, MB-25, MB-26, MB-29)
+- [ ] 35-04-PLAN.md — Introduction and Architecture: vocabulary close-out, domain-model entities, crate and API-shape corrections (MB-02, MB-03, MB-04, MB-05, MB-08, MB-09, MB-10, MB-11, MB-12)
+- [ ] 35-05-PLAN.md — API Reference and Contributing: the ADR index retitle-and-add, both crate maps, feature flags, migration guide, stable API (MB-13, MB-14, MB-15, MB-16, MB-17, MB-35)
+- [ ] 35-06-PLAN.md — CI pages rebuilt on the real job inventory and the three superseded Operations callouts (MB-31, MB-32, MB-33, MB-34, MB-36)
+- [ ] 35-07-PLAN.md — The CLI family rebuilt from live `--help` captures (MB-40, MB-41, MB-42, MB-43, MB-44, MB-45, MB-46)
+- [ ] 35-08-PLAN.md — Appendix archive tier plus three correct-tier snapshot pages (MB-01, MB-37, MB-39, MB-47, MB-54, MB-55, MB-59, MB-60)
+- [ ] 35-09-PLAN.md — Appendix import-path family and the API-shape/inventory pages (MB-38, MB-48, MB-49, MB-50, MB-51, MB-52, MB-53, MB-56, MB-57, MB-58)
+
+**Wave 3** *(blocked on Wave 2 — runs on the phase's final commit)*
+
+- [ ] 35-10-PLAN.md — `35-EVIDENCE.md` with the sixty-row closure table and the full gate run, the `[0.10.0]` Documentation changelog entry, the D-21 exit greps and the deferred-register fold
 
 ### Phase 36: Rustdoc Zero-Warning Bar & Examples Currency
 

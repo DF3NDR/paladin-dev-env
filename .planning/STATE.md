@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36
 current_phase_name: Rustdoc Zero-Warning Bar & Examples Currency
 status: executing
-stopped_at: Completed 36-05-PLAN.md
-last_updated: "2026-09-17T20:39:39.181Z"
+stopped_at: Completed 36-06-PLAN.md
+last_updated: "2026-09-17T21:08:25.899Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 36 execution started
 progress:
   total_phases: 18
   completed_phases: 15
   total_plans: 190
-  completed_plans: 182
+  completed_plans: 183
 ---
 
 # Project State
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36 (Rustdoc Zero-Warning Bar & Examples Currency) — EXECUTING
-Plan: 6 of 13
+Plan: 7 of 13
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 36 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -157,6 +157,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36 P03 | ~20min | 2 tasks | 5 files |
 | Phase 36 P04 | ~25min | 2 tasks | 8 files |
 | Phase 36 P05 | 35min | 2 tasks | 8 files |
+| Phase 36 P06 | 30min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -501,6 +502,8 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: 36-04: dev_ui_controller.rs's RunInspectorPort/InspectorView::supersteps/dev_ui_inspector_page links resolved with explicit crate-relative paths (D-06), not de-linked -- all three are public and reachable
 - [Phase ?]: Every fix in plan 36-05 is a plain [`ident`] -> `ident` de-link; all seven targets are genuinely private (no pub/pub(crate)), confirmed by grep before editing each one
 - [Phase ?]: Both RD-137 (cli) and RD-142 (otel) feature-gated rows confirmed co-gated with their doc'd item before editing, closing D-07 in place with no gate annotation
+- [Phase ?]: war_engine_configuration.rs/control_flow_dynamic_routing.rs headers avoid literally naming provider-key env vars to satisfy the plan's own 0-count acceptance grep while still stating D-29's no-key-needed claim generically
+- [Phase ?]: control_flow_dynamic_routing.rs EX-70 runs an actual mustering graph against the overridden APP_ENGINE_MAX_MUSTER_TASKS limit, not just before/after prints, so the cap-in-force truth is independently verifiable from stdout
 
 ### Pending Todos
 
@@ -1068,8 +1071,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T20:39:39.091Z
-**Stopped at:** Completed 36-05-PLAN.md
+**Last session:** 2026-09-17T21:08:25.818Z
+**Stopped at:** Completed 36-06-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

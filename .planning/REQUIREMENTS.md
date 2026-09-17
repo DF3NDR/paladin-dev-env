@@ -524,7 +524,7 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
   pre-push hook, with the all-features command added to the CI lint job and proven by a real CI
   run (ROADMAP Phase 36 SC2; D-00b, D-09, D-11, D-12, D-13, D-24, D-26, D-27)
 
-- [ ] **CURR-13**: `cargo build --examples` passes under each of the four feature-set invocations
+- [x] **CURR-13**: `cargo build --examples` passes under each of the four feature-set invocations
   the CI "Example Muster" job splits on — including a dedicated invocation for every new
   `required-features` target — and `cargo test --workspace --doc` is green, run explicitly
   (ROADMAP Phase 36 SC3; D-00f, D-14, D-17, D-23)
@@ -660,7 +660,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CURR-10 | Phase 35 | Complete |
 | CURR-11 | Phase 36 | Complete |
 | CURR-12 | Phase 36 | Complete |
-| CURR-13 | Phase 36 | Pending |
+| CURR-13 | Phase 36 | Complete |
 | CURR-14 | Phase 36 | Complete |
 | CURR-15 | Phase 36 | Complete |
 

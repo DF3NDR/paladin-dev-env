@@ -938,7 +938,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 34-01-PLAN.md — Tracer: mint CURR-01…05, build the 34-AUDIT.md spine, prove one worked row per table
+- [x] 34-01-PLAN.md — Tracer: mint CURR-01…05, build the 34-AUDIT.md spine, prove one worked row per table
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

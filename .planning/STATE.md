@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 34
-status: ready_to_execute
-stopped_at: "Phase 34 planned 2026-09-17 — 9 plans (34-01…34-09) in 9 sequential waves (one canonical 34-AUDIT.md, CONTEXT D-01), plan-checker passed, decision coverage 30/30, CURR-01…05 minted by plan 34-01 at execution; next: /gsd-execute-phase 34 (auto-advancing from the --auto chain)"
-last_updated: "2026-09-17T02:23:16.427Z"
+current_phase_name: documentation-currency-audit
+status: executing
+stopped_at: Completed 34-01-PLAN.md
+last_updated: "2026-09-17T03:42:23.095Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 34 planning complete — 9 plans ready
+last_activity_desc: Phase 34 execution started
 progress:
   total_phases: 17
   completed_phases: 13
   total_plans: 167
-  completed_plans: 158
-current_phase_name: Documentation Currency Audit
+  completed_plans: 159
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-17 after Phase 33 verification)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** v0.10.0 release readiness — Phases 34-37 added 2026-09-17 (documentation currency audit → mdBook / rustdoc + examples → crate release); every earlier phase verified
+**Current focus:** Phase 34 — documentation-currency-audit
 `0.10.0` tag is not yet cut. Phases 30-33 (Token Economy) are closed. Phase 33 was verified 2026-09-17:
 `33-UAT.md` 23/23 passed (22 coverage-mode automated passes + the maintainer's human acceptance of corpus
 audit §11 and `33-CI-EVIDENCE.md`), `33-SECURITY.md` `verified` with `threats_open: 0`, `33-VALIDATION.md`
@@ -35,7 +35,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [███████████████░░░░░] v0.10.0 — 13 of 17 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33); 158/158 plans of the 13 closed phases; Phases 34-37 (Release Readiness) added 2026-09-17, not yet planned
+**Progress:** [██████████] 95%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -58,10 +58,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 34
-Plan: 0 of 9 executed (34-01 … 34-09, sequential waves 1-9)
+Phase: 34 (documentation-currency-audit) — EXECUTING
+Plan: 2 of 9
 Status: Ready to execute
-Last activity: 2026-09-17 — Phase 34 planning complete — 9 plans ready
+Last activity: 2026-09-17 — Phase 34 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
@@ -138,6 +138,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 12 P03 | ~20min | 2 tasks | 3 files |
 | Phase 12 P04 | ~25min | 2 tasks | 3 files |
 | Phase 20 P07 | 35min | 3 tasks | 3 files |
+| Phase 34 P01 | 17min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -464,6 +465,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 13 / ORCH-01 hand-off written carrying Milestone 10's verdict class in both halves: 100% complete and one acceptance criterion false, and as of 2026-08-08 no longer false
 - [Phase ?]: Recorded both v0.8.1-rc.3 and v0.8.1-rc.4 rehearsals in full — rc.4 is the only live proof of Phase 20's own gate and recovery scripts, and it found and fixed two real gate bugs (Findings 5, 6)
 - [Phase ?]: Assumption A3 (OIDC token exchange survives a same-tag re-run) proven twice, independently re-verified against crates.io trustpub_data.run_id rather than transcribed from workflow self-reports
+- [Phase ?]: CURR-01…05 minted 1:1 against ROADMAP Phase 34's five success criteria; SC5 read-only gate diffs against the fixed Phase 34 start SHA, not git merge-base HEAD main, since main is 7 phases behind
 
 ### Pending Todos
 
@@ -1030,9 +1032,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T02:23:16.315Z
-**Stopped at:** Phase 34 context gathered
-**Resume file:** .planning/phases/34-documentation-currency-audit/34-CONTEXT.md
+**Last session:** 2026-09-17T03:42:22.986Z
+**Stopped at:** Completed 34-01-PLAN.md
+**Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

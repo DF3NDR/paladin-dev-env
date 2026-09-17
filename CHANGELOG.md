@@ -455,6 +455,24 @@ fifth (RAG rationing, below) results from the signature break registered in
   report and build baseline, describe a point-in-time measurement rather than a maintained page).
   Each now carries a banner naming its live replacement — none was deleted; every existing link to
   these pages still resolves.
+- **The generated API documentation now builds warning-free, and stays that way.** `cargo doc`
+  previously emitted dozens of broken-link and malformed-markup warnings across the workspace
+  under both the default feature set and the full feature set; every one is fixed, and the
+  zero-warning bar is now enforced in three places so the count cannot silently regrow: locally
+  through the code-quality checks, at push time through a pre-push hook, and in CI as part of the
+  required lint job.
+- **The examples gallery grew fourteen new runnable programs**, covering engine configuration and
+  checkpointing, control flow and dynamic routing, human-in-the-loop gating and thread replay,
+  graceful shutdown, the agent runtime and its middleware hooks, schema-validated structured
+  output, the Platform API client and webhook signature verification, the node-result cache,
+  observability and distributed tracing (including OpenTelemetry export), and evaluation
+  scenarios. The gallery index now lists every program in the directory, with what it demonstrates
+  and how to run it.
+- **The two in-process HTTP host examples now mount the same routers the shipped server mounts**,
+  so they exercise the real request-handling surface rather than a partial stand-in.
+- **The examples gallery index is corrected against the current release**: the stated minimum Rust
+  version and the documented result-field names now match what the shipped crates actually
+  require and return.
 
 ### Known limitations
 

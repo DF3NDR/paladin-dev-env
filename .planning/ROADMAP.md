@@ -994,7 +994,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 35-01-PLAN.md — Tracer: mint CURR-06…CURR-10, write the WarEngine superstep-engine guide with its compile-verified doc-examples module and nav entry, seed the deferred register (MB-30)
+- [x] 35-01-PLAN.md — Tracer: mint CURR-06…CURR-10, write the WarEngine superstep-engine guide with its compile-verified doc-examples module and nav entry, seed the deferred register (MB-30)
 
 **Wave 2** *(blocked on Wave 1 — eight plans with disjoint file sets)*
 

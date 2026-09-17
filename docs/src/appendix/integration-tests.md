@@ -21,39 +21,65 @@ and is declared from `tests/integration/mod.rs`.
 
 | Test File | Crate Scope | Services Required | Feature Gate |
 |-----------|-------------|-------------------|--------------|
+| `aegis_retry_stress_test.rs` | `paladin`, `paladin-ports` | SQLite (temp file) | — |
 | `anthropic_provider_test.rs` | `paladin` | live-api (Anthropic key) | `llm-anthropic` |
+| `arsenal_bridge_regression_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `arsenal_execution_integration_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `arsenal_registry_integration_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `autonomous_planning_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `battalion_campaign_integration_test.rs` | `paladin`, `paladin-ports` | none | — |
+| `battalion_chain_of_command_herald_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `battalion_chain_of_command_integration_test.rs` | `paladin`, `paladin-ports` | none | — |
+| `battalion_herald_end_to_end_test.rs` | `paladin`, `paladin-ports` | none | `cli` |
 | `citadel_integration_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `cli_integration_test.rs` | `paladin` | live-api | `cli` |
 | `cli_real_providers_test.rs` | `paladin` | live-api | `cli` |
 | `cli_real_services_test.rs` | `paladin` | Redis, MinIO | `cli` |
+| `commander_error_paths_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `commander_integration_tests.rs` | `paladin`, `paladin-ports` | none | — |
 | `context_injection_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `deepseek_provider_test.rs` | `paladin` | live-api (DeepSeek key) | `llm-deepseek` |
+| `e2e_approval_gate_test.rs` | `paladin`, `paladin-ports` | SQLite (temp file) | — |
+| `e2e_compensation_chain_test.rs` | `paladin`, `paladin-ports` | SQLite (temp file) | — |
+| `e2e_crash_resume_test.rs` | `paladin`, `paladin-ports` | SQLite (temp file) | — |
+| `e2e_muster_defer_order_test.rs` | `paladin`, `paladin-ports` | SQLite (temp file) | — |
+| `e2e_platform_api_test.rs` | `paladin`, `paladin-ports` | none (mockito) | `web-server` |
 | `file_storage_integration_tests.rs` | `paladin`, `paladin-ports` | MinIO | `s3-storage` |
+| `golden_bridge_equivalence_test.rs` | `paladin` | none | — |
 | `herald_integration_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `in_memory_sanctum_tests.rs` | `paladin`, `paladin-ports` | none | — |
 | `llm_live_api_tests.rs` | `paladin`, `paladin-ports` | live-api | `live-api-tests` |
 | `mcp_stdio_test.rs` | `paladin` | none | — |
 | `mcp_streamable_http_test.rs` | `paladin` | none (hermetic, in-process rmcp server) | — |
 | `mcp_streamable_http_live_test.rs` | `paladin` | live-api (`ETHERSCAN_API_KEY`), `#[ignore]`'d | — |
+| `middleware_under_engine_test.rs` | `paladin`, `paladin-ports` | none | — |
+| `multi_parley_suspension_test.rs` | `paladin`, `paladin-ports` | SQLite (temp file) | — |
 | `notification_system_integration_test.rs` | `paladin`, `paladin-ports` | none | — |
+| `ollama_docker_test.rs` | `paladin`, `paladin-ports` | Ollama (Docker) | `integration-tests`+`llm-ollama` |
 | `openai_content_analysis_integration_test.rs` | `paladin`, `paladin-ports` | none (mock) | `llm-openai` |
 | `openai_embedding_tests.rs` | `paladin`, `paladin-ports` | none (mock) | `openai-embeddings` |
 | `openai_provider_test.rs` | `paladin` | live-api (OpenAI key) | `llm-openai` |
+| `orchestrator_workflow_lifecycle_test.rs` | `paladin` | none | — |
+| `otel_transport_test.rs` | `paladin`, `paladin-ports` | none (hermetic OTLP/HTTP) | `otel` |
 | `paladin_garrison_integration_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `paladin_integration_test.rs` | `paladin`, `paladin-ports` | none | — |
+| `parley_resume_stress_test.rs` | `paladin`, `paladin-ports` | SQLite (temp file) | — |
+| `provider_switching_test.rs` | `paladin`, `paladin-ports` | none (mockito) | — |
 | `qdrant_sanctum_tests.rs` | `paladin`, `paladin-ports` | Qdrant | `qdrant` |
+| `rag_commissary_test.rs` | `paladin`, `paladin-ports` | none (mock embedding) | — |
 | `rag_integration_tests.rs` | `paladin` | Qdrant | `qdrant` |
+| `reasoning_agent_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `redis_queue_integration_test.rs` | `paladin` | Redis | `redis-queue` |
 | `scheduler_integration_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `sqlite_garrison_integration_test.rs` | `paladin`, `paladin-ports` | SQLite (temp file) | — |
+| `structured_engine_node_test.rs` | `paladin`, `paladin-ports` | none | — |
+| `subgraph_formation_in_campaign_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `system_log_integration_test.rs` | `paladin`, `paladin-ports` | none | — |
+| `v0_9_config_boot_test.rs` | `paladin` | none | `web-server` |
+| `vault_confinement_test.rs` | `paladin`, `paladin-ports` | none | — |
 | `vision_integration_test.rs` | `paladin`, `paladin-ports` | live-api | `vision`+`llm-openai`+`llm-anthropic` |
+| `war_engine_tracer_test.rs` | `paladin`, `paladin-ports` | none | — |
+| `waypoint_retention_fault_injection_test.rs` | `paladin`, `paladin-ports` | none | — |
 
 ### Battalion sub-module (`tests/integration/battalion/`)
 

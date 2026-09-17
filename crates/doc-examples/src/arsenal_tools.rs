@@ -56,12 +56,14 @@ impl ArsenalPort for CalculatorTool {
     }
 
     fn validate_call(&self, call: &ArmamentCall) -> Result<(), ArsenalError> {
-        if call.arguments.contains_key("expression") {
-            Ok(())
-        } else {
-            Err(ArsenalError::InvalidArguments(
+        match call.arguments.get("expression") {
+            Some(v) if v.is_string() => Ok(()),
+            Some(_) => Err(ArsenalError::InvalidArguments(
+                "expression must be a string".into(),
+            )),
+            None => Err(ArsenalError::InvalidArguments(
                 "expression is required".into(),
-            ))
+            )),
         }
     }
 }

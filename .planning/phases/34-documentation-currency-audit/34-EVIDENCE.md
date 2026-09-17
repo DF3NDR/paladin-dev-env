@@ -341,3 +341,44 @@ measure is unchanged from the recorded Phase 34 start SHA.
   `pending - not yet assessed (plan 34-08 task 2)` in its Currency verdict, Obsolete-API hits and
   Claimed-capability cells, per this task's own acceptance criteria (the examples-table analogue
   of the §2 mdBook placeholder — an unswept row must never read as a clean one).
+
+## Plan 34-08, Task 2 — currency verdicts, doc-examples include map, capability gap list
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 159 | Obsolete-API target-set sweep: `grep -rn "TokenUsage::from_total\|\btoken_count\b\|Quartermaster\|\bTokenCounter\b\|TokenCounterFactory\|LimitSource\|memory\.content\|\.entry\.memory\.content" examples/ crates/doc-examples/src/ crates/paladin-llm/examples/` | 21 raw hits across 3 tokens (`token_count` 15, `TokenUsage::new`/`token_count` local-var 1, `memory.content` 6); 0 hits for `TokenUsage::from_total`, `Quartermaster`, `TokenCounterFactory`, `LimitSource`, bare `TokenCounter` | ✅ PASS — every hit individually resolved to a distinct, currently-shipped API (see §4 D-17(a) subsection); zero genuine obsolete-API references |
+| 160 | Spot check: `grep -n "fn token_count" crates/paladin-core/src/platform/container/herald.rs` | `328:    pub fn token_count(mut self, token_count: u32) -> Self {` — a `StreamChunk` builder method | ✅ PASS — confirms the 15 `herald_streaming.rs`/`herald_custom_formatter.rs` hits are a different, current API, not the removed `PaladinResult` field |
+| 161 | Spot check: `grep -n "pub fn new" crates/paladin-core/src/platform/container/token_usage.rs` and reading `commander_with_metadata_export.rs:61` | `TokenUsage::new(prompt_tokens: u32, completion_tokens: u32) -> Self` (2-arg, exact match); the example's `TokenUsage::new(token_count, 0)` call matches this signature exactly | ✅ PASS — confirms the example correctly demonstrates the post-Phase-31 `TokenUsage` shape, not an obsolete pattern |
+| 162 | Spot check: `grep -n "use paladin_ports::output::sanctum_port" examples/paladin_with_sanctum.rs examples/sanctum_basic_inmemory.rs` and `grep -n "RagRetrievalService\|retrieve_context" examples/paladin_with_sanctum.rs examples/sanctum_basic_inmemory.rs` | both files call `SanctumPort::search` directly; neither calls `RagRetrievalService::retrieve_context` | ✅ PASS — confirms the `.entry.memory.content` hits are `SanctumSearchResult`'s own untouched field path, not the pre-Phase-33 RAG rendering pattern MIGRATION.md warns against |
+| 163 | Capability-mapping spot check: `grep -n "agent_router\|thread_router\|run_router\|\.merge(" src/bin/paladin-server.rs` | lines 230-233: `agent_router(state).merge(thread_router(...)).merge(run_router(...))` — three routers merged | ⚠️ FOUND — `examples/http_service_host.rs` and `crates/doc-examples/src/http_service_host.rs` both claim to assemble the app "exactly as"/"the same router" the `paladin-server` binary uses, but both mount only `agent_router` — two `EX-nn` rows marked `stale` (server-parity claim, not an obsolete-API finding; both still build and correctly demonstrate the agent-router surface) |
+| 164 | `examples/README.md` listed-vs-on-disk cross-check: `grep -oE '^### \[[a-zA-Z0-9_]+\.rs\]' examples/README.md` (37 headers) diffed against `find examples -name '*.rs'` (48 files) via `comm -23`, then `grep -c <name> examples/README.md` run individually per candidate | 11 programs with zero mentions anywhere in the file: `commander_council.rs`, `commander_grove.rs`, `conclave_expert_panel.rs`, `council_discussion.rs`, `document_processing.rs`, `grove_routing.rs`, `http_service_host.rs`, `paladin_with_rag.rs`, `vision_analysis.rs`, `vision_battalion.rs`, `war_engine_memory_baseline.rs`; reverse direction (listed, not on disk) — 0 dangling listings | ⚠️ FOUND — one new `stale` `EX-nn` row for `examples/README.md` (11-program gallery gap); reverse direction clean |
+| 165 | `examples/README.md` code-snippet field-name check: `grep -n "response\.content\|response\.token_usage\|response\.execution_time" examples/README.md` vs. `grep -n "pub output\|pub usage\|pub execution_time_ms" crates/paladin-core/src/platform/container/execution_result.rs` | README lines 71, 1328, 1329 use `response.content`/`response.token_usage.total_tokens`/`response.execution_time`; the real `PaladinResult` struct fields are `output`, `usage: TokenUsage`, `execution_time_ms: u64` — none of the three README field names exist on the shipped type | ⚠️ FOUND — one new `stale` `EX-nn` row for `examples/README.md` (stale code-snippet field names); the real `basic_paladin.rs` build row already uses the correct current shape |
+| 166 | D-17(c) gap-list walk: all 91 §1 `SS-nn` rows' Grep-token column run as `grep -rlF '<token>' examples/ crates/doc-examples/src/`, filtered to the 62 rows carrying a requirement ID, then to the 59 with zero hits after excluding removed/tooling/governance items (see §4's own exclusion-rationale prose) | 59 requirement-attributed, requirement-ID-bearing capabilities with zero demonstrating example, spanning 8 of the 12 phases the checklist covers | ⚠️ FOUND — 59-row gap-list table, `EX-62..EX-120`, each sized `L` |
+| 167 | D-18 include map: `grep -roE '\{\{#include \.\./\.\./\.\./crates/doc-examples/src/[a-z_]+\.rs:[a-z_]+\}\}' docs/src/ -r`, cross-referenced against `ls crates/doc-examples/src/*.rs` (excl. `lib.rs`) | 10 of 11 modules matched to at least one page/anchor; `support.rs` matched to zero pages (confirmed as a shared Rust-module dependency of the other ten via `grep -rl 'mod support\|support::' crates/doc-examples/src/*.rs`, not itself an `{{#include}}` target) | ⚠️ FOUND — `support.rs` recorded as a D-18 finding (no page includes it) rather than omitted |
+| 168 | `grep -ci 'not yet assessed' 34-AUDIT.md` (post-fill check) | `0` | ✅ PASS |
+| 169 | `grep -oE 'EX-[0-9]+' 34-AUDIT.md \| sort \| uniq -d` (post-reword check, after fixing 21 literal-ID-collision cross-references — the same recurring false-positive class every prior plan in this phase has hit) | (empty) | ✅ PASS |
+| 170 | `git status --porcelain -- examples crates Cargo.toml` and `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | both empty | ✅ PASS |
+| 171 | `bash 34-check.sh --seed` (post-task) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+
+## Notes (plan 34-08, Task 2)
+
+- The obsolete-API sweep found zero genuine hits across all 60 programs/modules — every
+  coincidental grep match resolved to a distinct, currently-shipped API, confirmed by reading the
+  actual call site against the actual current type definition (`StreamChunk::token_count`,
+  `TokenUsage::new`'s 2-arg constructor, `SanctumPort::search`'s untouched result shape) rather
+  than trusting the grep count alone.
+- The two `stale` `http_service_host` rows are a capability-mapping (D-17 check b) finding, not an
+  obsolete-API (check a) finding — both programs build clean and correctly demonstrate the agent
+  API; the divergence is a claim about scope ("exactly"/"the same router") that Phase 24's
+  `thread_router` and Phase 27's `run_router` additions to `paladin-server.rs` made stale without
+  either example or `docs/src/deployment-topologies/http-service-host.md`'s including text being
+  updated.
+- `examples/README.md` now carries three findings total, each its own row: the pre-existing MSRV
+  mismatch (plan 34-01), the 11-program gallery gap, and the stale `PaladinResult` code-snippet
+  field names — the third is notable because it is the same shape MIGRATION.md's `ACCT-02` row
+  describes (`token_count: u32` → `usage: TokenUsage`) landing in illustrative prose rather than
+  compiled code, where no compiler catches the drift.
+- §4 is now fully closed: build status (plan 34-08 Task 1), currency verdicts and the
+  obsolete-API/capability-mapping/gap-list three-check method (this task), the `doc-examples`
+  include map (D-18), and a counted-totals close subsection — 122 total `EX-nn` rows, every one
+  ending in a real Currency verdict (no seeded placeholder survives), no duplicate ID.

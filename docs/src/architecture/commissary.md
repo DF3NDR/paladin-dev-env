@@ -3,8 +3,8 @@
 The `Commissary` is the input-side, per-call window-rationing officer — "what fits in this
 sortie's pack". It ships in `paladin-llm` (`crates/paladin-llm/src/services/commissary.rs`) and
 is re-exported unconditionally from the facade, so it is available at the top-level `paladin::`
-path alongside the framework's other domain services. The design record, the
-Quartermaster→Commissary rename rationale, and the rejected-name list are in ADR-0049
+path alongside the framework's other domain services. The design record, the rename rationale,
+and the rejected-name list are in ADR-0049
 (`.planning/decisions/0049-commissary-design-and-rename.md`).
 
 ## Concept

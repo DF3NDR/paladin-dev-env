@@ -259,15 +259,25 @@ impl RagRetrievalService {
         &self,
         ranked: Vec<SanctumSearchResult>,
     ) -> Result<RagRetrievalResult, RagRetrievalError> {
-        if ranked.is_empty() {
-            return Ok(RagRetrievalResult::default());
-        }
-
+        // The budget conversion runs BEFORE the empty short-circuit (IN-01): an
+        // over-large `rag.max_tokens` is a configuration error regardless of whether
+        // any candidate reached rationing, and the empty result below must still
+        // report the budget it ran under.
         let budget = u32::try_from(self.config.max_tokens).map_err(|_| {
             RagRetrievalError::BudgetTooLarge {
                 max_tokens: self.config.max_tokens,
             }
         })?;
+
+        if ranked.is_empty() {
+            // Nothing to dispense, but `allotted_tokens` still reflects the configured
+            // budget so an operator reading the rationing log sees "no candidates
+            // reached rationing", not "the budget was configured to zero" (IN-01).
+            return Ok(RagRetrievalResult {
+                allotted_tokens: budget,
+                ..RagRetrievalResult::default()
+            });
+        }
         let commissary = self.commissary(budget)?;
 
         let mut consignment = Consignment::new();
@@ -1124,6 +1134,58 @@ mod tests {
             other => panic!(
                 "expected Err(RagRetrievalError::DuplicateMemoryId {{ .. }}), got {other:?} -- \
                  a duplicate memory id must never be silently overwritten in index_by_label"
+            ),
+        }
+    }
+
+    /// IN-01 edge: an empty `ranked` (no candidates survived filtering/dedup) still
+    /// reports `allotted_tokens` from the configured budget, not zero -- the field
+    /// always reflects "what budget this retrieval ran under," never "0 unless
+    /// something was actually dispensed."
+    #[test]
+    fn empty_ranked_reports_configured_budget_as_allotted_tokens() {
+        let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+        let embedding = Arc::new(MockEmbeddingPort);
+        let config = RagConfig {
+            max_tokens: 2_000,
+            ..RagConfig::default()
+        };
+        let service = RagRetrievalService::new(sanctum, embedding, config);
+
+        let result = service
+            .ration(vec![])
+            .expect("an empty ranked list must never fail to ration");
+
+        assert!(result.memories.is_empty());
+        assert!(result.shed.is_empty());
+        assert_eq!(result.prompt_tokens, 0);
+        assert_eq!(
+            result.allotted_tokens, 2_000,
+            "allotted_tokens must reflect the configured budget even when nothing was \
+             dispensed"
+        );
+    }
+
+    /// IN-01 edge: a budget beyond `u32::MAX` with an empty `ranked` must still return
+    /// the typed `BudgetTooLarge` error, never a clamped/zero `Ok` result -- the budget
+    /// conversion must run before the empty short-circuit, not be skipped by it.
+    #[test]
+    fn empty_ranked_with_budget_beyond_u32_returns_typed_error() {
+        let sanctum = Arc::new(MockSanctumPort { results: vec![] });
+        let embedding = Arc::new(MockEmbeddingPort);
+        let config = RagConfig {
+            max_tokens: usize::MAX,
+            ..RagConfig::default()
+        };
+        let service = RagRetrievalService::new(sanctum, embedding, config);
+
+        match service.ration(vec![]) {
+            Err(RagRetrievalError::BudgetTooLarge { max_tokens }) => {
+                assert_eq!(max_tokens, usize::MAX);
+            }
+            other => panic!(
+                "expected Err(RagRetrievalError::BudgetTooLarge {{ .. }}), got {other:?} -- \
+                 an empty ranked list must not bypass the budget conversion check"
             ),
         }
     }

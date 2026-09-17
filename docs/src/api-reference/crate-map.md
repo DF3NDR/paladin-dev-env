@@ -9,12 +9,12 @@ boundaries, "adding a new crate"), see
 [Architecture → Crate Map](../architecture/crate-map.md). For the canonical
 per-flag default table, see [Feature Flags](feature-flags.md).
 
-> All versions on this page target the **current published workspace, v0.5.0**.
+> All versions on this page target the **current published workspace, v0.10.0**.
 
 ## Workspace Crate Table
 
 The workspace is a single umbrella crate (`paladin-ai`, published lib name
-`paladin`) plus nine member crates under `crates/`. Note that `paladin-core`'s
+`paladin`) plus eleven member crates under `crates/`. Note that `paladin-core`'s
 **published package name is `paladin-ai-core`** (the directory is
 `crates/paladin-core` and the `lib` name is `paladin_core`).
 
@@ -25,10 +25,12 @@ The workspace is a single umbrella crate (`paladin-ai`, published lib name
 | `paladin-battalion` | `crates/paladin-battalion` | Application services | Multi-agent orchestration runtime | `FormationExecutionService`, `PhalanxExecutionService`, `CampaignExecutionService`, `ChainOfCommandExecutionService`, `Commander`, `CommanderBuilder`, `ConclaveExecutionService`, `CouncilExecutionService`, `GroveExecutionService`, `ManeuverExecutionService` |
 | `paladin-llm` | `crates/paladin-llm` | Infrastructure | LLM provider adapters | `OpenAIAdapter`, `AnthropicAdapter`, `DeepSeekAdapter`, `MockLlmAdapter`, `LlmProviderFactory` |
 | `paladin-memory` | `crates/paladin-memory` | Infrastructure | Garrison (history) + Sanctum (vector) adapters | `InMemoryGarrison`, `SqliteGarrison`, `InMemorySanctum`, `QdrantSanctumAdapter` |
-| `paladin-storage` | `crates/paladin-storage` | Infrastructure | SQL repository adapters (SQLite / MySQL) | `SqliteContentRepository`, `SqliteUserRepository`, `SqliteWorkflowRepository`, `MysqlContentRepository` |
+| `paladin-storage` | `crates/paladin-storage` | Infrastructure | SQL repository adapters (SQLite / MySQL / Postgres) | `SqliteContentRepository`, `SqliteUserRepository`, `SqliteWorkflowRepository`, `MysqlContentRepository` |
 | `paladin-content` | `crates/paladin-content` | Infrastructure | Content ingestion & processing pipeline | `PdfExtractor`, `HttpContentFetcher`, `NewsApiFetcher`, `AggregateContent`, `ContentSummarizer`, `LlmContentAnalyzer`, `DeliverContentUseCase` |
 | `paladin-notifications` | `crates/paladin-notifications` | Infrastructure | Notification delivery adapters | `EmailNotificationAdapter`, `PushNotificationAdapter`, `SystemNotificationAdapter` |
 | `paladin-web` | `crates/paladin-web` | Infrastructure | HTTP server layer (actix-web / axum) | `UserController`, auth middleware, content-delivery endpoints |
+| `paladin-eval` | `crates/paladin-eval` | Composition (dev-dependency) | Deterministic evaluation harness for agent graphs | scenario file format, scripted `LlmPort`, trace-based assertions |
+| `paladin-herald` | `crates/paladin-herald` | Infrastructure | Herald output-formatter adapters | JSON, Markdown, Table formatters |
 
 The root umbrella crate **`paladin-ai`** (lib name `paladin`) re-exports the most
 common types and gates every infrastructure crate behind feature flags — most
@@ -38,8 +40,11 @@ applications depend on `paladin-ai` rather than wiring the member crates by hand
 
 Every member crate depends only inward — on `paladin-ai-core` (domain) and/or
 `paladin-ports` (contracts). No infrastructure crate depends on another
-infrastructure crate, with one optional exception: `paladin-content` can pull in
-`paladin-llm` (behind its `llm` feature) for AI content analysis.
+infrastructure crate, with two exceptions: `paladin-content` can pull in
+`paladin-llm` (behind its `llm` feature) for AI content analysis, and
+`paladin-memory` depends unconditionally on `paladin-llm` so
+`RagRetrievalService` can ration its RAG injection budget through
+`Commissary::dispense` (Phase 33, COMM-01).
 
 ```mermaid
 graph TD
@@ -61,6 +66,7 @@ graph TD
     llm --> ports
     mem --> core
     mem --> ports
+    mem --> llm
     stor --> core
     stor --> ports
     cont --> core
@@ -181,7 +187,7 @@ the in-memory/SQLite garrison — enough to build and run a single Paladin.
 
 ```toml
 [dependencies]
-paladin-ai = "0.5.0"   # default features: ["llm-openai"]
+paladin-ai = "0.10.0"   # default features: ["llm-openai"]
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -189,7 +195,7 @@ tokio = { version = "1", features = ["full"] }
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5.0", features = [
+paladin-ai = { version = "0.10.0", features = [
     "llm-anthropic",   # add Anthropic alongside the default OpenAI
     "llm-deepseek",    # add DeepSeek
     "storage-sqlite",  # SQLite SQL repositories
@@ -203,7 +209,7 @@ tokio = { version = "1", features = ["full"] }
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5.0", features = ["full"] }
+paladin-ai = { version = "0.10.0", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -218,11 +224,11 @@ For consumers who want to avoid the umbrella crate and wire only what they need
 
 ```toml
 [dependencies]
-paladin-core = { package = "paladin-ai-core", version = "0.5.0" }
-paladin-ports = "0.5.0"
-paladin-battalion = "0.5.0"
-paladin-llm = { version = "0.5.0", features = ["openai", "anthropic"] }
-paladin-memory = { version = "0.5.0", features = ["sqlite"] }
+paladin-core = { package = "paladin-ai-core", version = "0.10.0" }
+paladin-ports = "0.10.0"
+paladin-battalion = "0.10.0"
+paladin-llm = { version = "0.10.0", features = ["openai", "anthropic"] }
+paladin-memory = { version = "0.10.0", features = ["sqlite"] }
 tokio = { version = "1", features = ["full"] }
 ```
 

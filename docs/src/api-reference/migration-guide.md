@@ -1,6 +1,6 @@
 # Migration Guide
 
-This guide covers all breaking changes since v0.1.0 up to the current **v0.5.0** release.
+This guide covers all breaking changes since v0.1.0 up to the current **v0.10.0** release.
 
 ## Upgrading to v0.10.0 (from v0.9.x)
 
@@ -509,7 +509,8 @@ Use this checklist to track your migration:
 | Version | Status | Default Features |
 |---------|--------|------------------|
 | < 0.1.0 | Old | `redis-queue`, `s3-storage`, `openai-embeddings` |
-| 0.1.0 | **Current** | `llm-openai` only |
+| 0.1.0 | Released | `llm-openai` only |
+| 0.10.0 | **Current** | `llm-openai`, `llm-anthropic`, `llm-deepseek` |
 | Future | Planned | May add more granular LLM provider features |
 
 ## Feedback

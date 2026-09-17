@@ -1,6 +1,7 @@
 # Adapter Development Guide
 
-Guide for creating custom adapters for Paladin's ports (interfaces).
+Guide for creating custom adapters for Paladin's ports (interfaces). For the project's
+architecture decision records, see [Architecture Decisions](adr-index.md).
 
 ## Table of Contents
 

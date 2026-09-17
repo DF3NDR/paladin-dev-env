@@ -1,6 +1,6 @@
 # Stable Public API Contract
 
-**Version:** 0.5.0
+**Version:** 0.10.0
 **Last Updated:** 2026-06-02
 **Status:** Active
 
@@ -9,6 +9,11 @@
 > **v0.5.0 API Note**: The canonical import path for all port traits is `crates/paladin-ports/`. Short-path aliases (`paladin::<Type>`) have been removed from `src/lib.rs`. Use full crate-level import paths (e.g. `use paladin_ports::output::llm_port::LlmPort`). The `application::use_cases` module path was renamed to `application::services` in a prior release.
 >
 > See [CHANGELOG](https://github.com/DF3NDR/paladin-dev-env/blob/main/CHANGELOG.md) for the complete migration tables.
+
+> **Illustrative fragments:** every ```` ```rust ```` code block on this page is a catalogue
+> fragment — a shortened, illustrative signature or usage snippet, not a compiled or
+> doctested example. Fences are marked ` ```rust,ignore ` for this reason; do not copy them
+> verbatim into a project without checking the type's real definition.
 
 ---
 
@@ -486,7 +491,7 @@ A: **Yes!** Propose new ports via GitHub issue. New stable ports require:
 
 ### Port Traits (Output Ports)
 
-Port traits are the **primary stable API** and define extension points for integrating external systems. All output ports are located in `src/application/ports/output/`.
+Port traits are the **primary stable API** and define extension points for integrating external systems. All output ports are located in `crates/paladin-ports/src/output/` (`paladin_ports::output`).
 
 | Type | Fully Qualified Path | Tier | Description | Documentation |
 |------|---------------------|------|-------------|---------------|
@@ -507,7 +512,7 @@ Port traits are the **primary stable API** and define extension points for integ
 
 ### Port Traits (Input Ports)
 
-Input ports define use case interfaces for application entry points. Located in `src/application/ports/input/`.
+Input ports define use case interfaces for application entry points. Located in `crates/paladin-ports/src/input/` (`paladin_ports::input`).
 
 | Type | Fully Qualified Path | Tier | Description | Documentation |
 |------|---------------------|------|-------------|---------------|
@@ -517,16 +522,16 @@ Input ports define use case interfaces for application entry points. Located in 
 
 ### Domain Entities
 
-Core business domain types that represent the framework's entities. Located in `src/core/platform/container/`.
+Core business domain types that represent the framework's entities. Located in `crates/paladin-core/src/platform/container/` (`paladin_core::platform::container`).
 
 #### Paladin (Agent) Types
 
 | Type | Fully Qualified Path | Tier | Description | Documentation |
 |------|---------------------|------|-------------|---------------|
-| `Paladin` | `paladin::core::platform::container::paladin::Paladin` | 🟢 Stable | Autonomous AI agent entity (Node<PaladinData>) | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/paladin/type.Paladin.html) |
-| `PaladinData` | `paladin::core::platform::container::paladin::PaladinData` | 🟢 Stable | Paladin configuration and state data | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/paladin/struct.PaladinData.html) |
-| `PaladinConfig` | `paladin::core::platform::container::paladin::PaladinConfig` | 🟢 Stable | Runtime execution configuration | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/paladin/struct.PaladinConfig.html) |
-| `PaladinStatus` | `paladin::core::platform::container::paladin::PaladinStatus` | 🟢 Stable | Agent execution status enum | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/paladin/enum.PaladinStatus.html) |
+| `Paladin` | `paladin_core::platform::container::paladin::Paladin` | 🟢 Stable | Autonomous AI agent entity (Node<PaladinData>) | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/paladin/type.Paladin.html) |
+| `PaladinData` | `paladin_core::platform::container::paladin::PaladinData` | 🟢 Stable | Paladin configuration and state data | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/paladin/struct.PaladinData.html) |
+| `PaladinConfig` | `paladin_core::platform::container::paladin::PaladinConfig` | 🟢 Stable | Runtime execution configuration | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/paladin/struct.PaladinConfig.html) |
+| `PaladinStatus` | `paladin_core::platform::container::paladin::PaladinStatus` | 🟢 Stable | Agent execution status enum | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/paladin/enum.PaladinStatus.html) |
 | `PaladinResult` | `paladin_ports::output::paladin_port::PaladinResult` | 🟢 Stable | Agent execution result with metadata | [Docs](https://docs.rs/paladin/latest/paladin/application/ports/output/paladin_port/struct.PaladinResult.html) |
 | `StopReason` | `paladin_ports::output::paladin_port::StopReason` | 🟢 Stable | Why agent execution terminated | [Docs](https://docs.rs/paladin/latest/paladin/application/ports/output/paladin_port/enum.StopReason.html) |
 
@@ -534,31 +539,31 @@ Core business domain types that represent the framework's entities. Located in `
 
 | Type | Fully Qualified Path | Tier | Description | Documentation |
 |------|---------------------|------|-------------|---------------|
-| `Battalion` | `paladin::core::platform::container::battalion::Battalion` | 🟢 Stable | Multi-agent coordination entity | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/battalion/type.Battalion.html) |
-| `BattalionData` | `paladin::core::platform::container::battalion::BattalionData` | 🟢 Stable | Battalion configuration and state | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/battalion/struct.BattalionData.html) |
-| `BattalionResult` | `paladin::core::platform::container::battalion::BattalionResult` | 🟢 Stable | Orchestration execution result | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/battalion/struct.BattalionResult.html) |
-| `BattalionStatus` | `paladin::core::platform::container::battalion::BattalionStatus` | 🟢 Stable | Orchestration status enum | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/battalion/enum.BattalionStatus.html) |
-| `Formation` | `paladin::core::platform::container::battalion::formation::Formation` | 🟢 Stable | Sequential execution pattern | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/battalion/formation/struct.Formation.html) |
-| `Phalanx` | `paladin::core::platform::container::battalion::phalanx::Phalanx` | 🟢 Stable | Parallel execution pattern | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/battalion/phalanx/struct.Phalanx.html) |
-| `Campaign` | `paladin::core::platform::container::battalion::campaign::Campaign` | 🟢 Stable | Graph/DAG execution pattern | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/battalion/campaign/struct.Campaign.html) |
-| `ChainOfCommand` | `paladin::core::platform::container::battalion::chain_of_command::ChainOfCommand` | 🟢 Stable | Hierarchical delegation pattern | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/battalion/chain_of_command/struct.ChainOfCommand.html) |
+| `Battalion` | `paladin_core::platform::container::battalion::Battalion` | 🟢 Stable | Multi-agent coordination entity | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/battalion/type.Battalion.html) |
+| `BattalionData` | `paladin_core::platform::container::battalion::BattalionData` | 🟢 Stable | Battalion configuration and state | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/battalion/struct.BattalionData.html) |
+| `BattalionResult` | `paladin_core::platform::container::battalion::BattalionResult` | 🟢 Stable | Orchestration execution result | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/battalion/struct.BattalionResult.html) |
+| `BattalionStatus` | `paladin_core::platform::container::battalion::BattalionStatus` | 🟢 Stable | Orchestration status enum | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/battalion/enum.BattalionStatus.html) |
+| `Formation` | `paladin_core::platform::container::battalion::formation::Formation` | 🟢 Stable | Sequential execution pattern | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/battalion/formation/struct.Formation.html) |
+| `Phalanx` | `paladin_core::platform::container::battalion::phalanx::Phalanx` | 🟢 Stable | Parallel execution pattern | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/battalion/phalanx/struct.Phalanx.html) |
+| `Campaign` | `paladin_core::platform::container::battalion::campaign::Campaign` | 🟢 Stable | Graph/DAG execution pattern | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/battalion/campaign/struct.Campaign.html) |
+| `ChainOfCommand` | `paladin_core::platform::container::battalion::chain_of_command::ChainOfCommand` | 🟢 Stable | Hierarchical delegation pattern | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/battalion/chain_of_command/struct.ChainOfCommand.html) |
 
 #### Memory (Garrison) Types
 
 | Type | Fully Qualified Path | Tier | Description | Documentation |
 |------|---------------------|------|-------------|---------------|
-| `Garrison` | `paladin::core::platform::container::garrison::Garrison` | 🟢 Stable | Memory storage entity | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/garrison/type.Garrison.html) |
-| `Memory` | `paladin::core::platform::container::garrison::Memory` | 🟢 Stable | Individual memory record | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/garrison/struct.Memory.html) |
+| `Garrison` | `paladin_core::platform::container::garrison::Garrison` | 🟢 Stable | Memory storage entity | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/garrison/type.Garrison.html) |
+| `Memory` | `paladin_core::platform::container::garrison::Memory` | 🟢 Stable | Individual memory record | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/garrison/struct.Memory.html) |
 | `GarrisonStats` | `paladin_ports::output::garrison_port::GarrisonStats` | 🟢 Stable | Memory storage statistics | [Docs](https://docs.rs/paladin/latest/paladin/application/ports/output/garrison_port/struct.GarrisonStats.html) |
 
 #### Tool (Arsenal) Types
 
 | Type | Fully Qualified Path | Tier | Description | Documentation |
 |------|---------------------|------|-------------|---------------|
-| `Arsenal` | `paladin::core::platform::container::arsenal::Arsenal` | 🟢 Stable | Tool registry entity | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/arsenal/type.Arsenal.html) |
-| `Armament` | `paladin::core::platform::container::arsenal::Armament` | 🟢 Stable | Individual tool/capability metadata | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/arsenal/struct.Armament.html) |
-| `ArmamentCall` | `paladin::core::platform::container::arsenal::ArmamentCall` | 🟢 Stable | Tool invocation request | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/arsenal/struct.ArmamentCall.html) |
-| `ArmamentResult` | `paladin::core::platform::container::arsenal::ArmamentResult` | 🟢 Stable | Tool execution result | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/arsenal/struct.ArmamentResult.html) |
+| `Arsenal` | `paladin_core::platform::container::arsenal::Arsenal` | 🟢 Stable | Tool registry entity | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/arsenal/type.Arsenal.html) |
+| `Armament` | `paladin_core::platform::container::arsenal::Armament` | 🟢 Stable | Individual tool/capability metadata | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/arsenal/struct.Armament.html) |
+| `ArmamentCall` | `paladin_core::platform::container::arsenal::ArmamentCall` | 🟢 Stable | Tool invocation request | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/arsenal/struct.ArmamentCall.html) |
+| `ArmamentResult` | `paladin_core::platform::container::arsenal::ArmamentResult` | 🟢 Stable | Tool execution result | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/arsenal/struct.ArmamentResult.html) |
 
 ### Builder Types
 
@@ -589,9 +594,9 @@ All error enums follow `thiserror` patterns for consistent error handling. Locat
 | Type | Fully Qualified Path | Tier | Description | Documentation |
 |------|---------------------|------|-------------|---------------|
 | `PaladinError` | `paladin::application::services::paladin::error::PaladinError` | 🟢 Stable | Paladin execution errors | [Docs](https://docs.rs/paladin/latest/paladin/application/services/paladin/error/enum.PaladinError.html) |
-| `BattalionError` | `paladin::core::platform::container::battalion::BattalionError` | 🟢 Stable | Battalion orchestration errors | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/battalion/enum.BattalionError.html) |
+| `BattalionError` | `paladin_core::platform::container::battalion::BattalionError` | 🟢 Stable | Battalion orchestration errors | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/battalion/enum.BattalionError.html) |
 | `GarrisonError` | `paladin_ports::output::garrison_port::GarrisonError` | 🟢 Stable | Memory storage errors | [Docs](https://docs.rs/paladin/latest/paladin/application/ports/output/garrison_port/enum.GarrisonError.html) |
-| `ArsenalError` | `paladin::core::platform::container::arsenal::ArsenalError` | 🟢 Stable | Tool execution errors | [Docs](https://docs.rs/paladin/latest/paladin/core/platform/container/arsenal/enum.ArsenalError.html) |
+| `ArsenalError` | `paladin_core::platform::container::arsenal::ArsenalError` | 🟢 Stable | Tool execution errors | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/arsenal/enum.ArsenalError.html) |
 | `CitadelError` | `paladin::application::errors::citadel_error::CitadelError` | 🟢 Stable | State persistence errors | [Docs](https://docs.rs/paladin/latest/paladin/application/errors/citadel_error/enum.CitadelError.html) |
 | `LlmError` | `paladin_ports::output::llm_port::LlmError` | 🟢 Stable | LLM provider errors | [Docs](https://docs.rs/paladin/latest/paladin/application/ports/output/llm_port/enum.LlmError.html) |
 | `EmbeddingError` | `paladin_ports::output::embedding_port::EmbeddingError` | 🟢 Stable | Embedding generation errors | [Docs](https://docs.rs/paladin/latest/paladin/application/ports/output/embedding_port/enum.EmbeddingError.html) |
@@ -602,14 +607,14 @@ All error enums follow `thiserror` patterns for consistent error handling. Locat
 
 ### Base Types
 
-Generic framework primitives and patterns. Located in `src/core/base/`.
+Generic framework primitives and patterns. Located in `crates/paladin-core/src/base/` (`paladin_core::base`).
 
 | Type | Fully Qualified Path | Tier | Description | Documentation |
 |------|---------------------|------|-------------|---------------|
-| `Node<T>` | `paladin::core::base::entity::node::Node` | 🟢 Stable | Generic entity wrapper with UUID and metadata | [Docs](https://docs.rs/paladin/latest/paladin/core/base/entity/node/struct.Node.html) |
-| `Collection<T>` | `paladin::core::base::entity::collection::Collection` | 🟢 Stable | Generic collection type with metadata | [Docs](https://docs.rs/paladin/latest/paladin/core/base/entity/collection/struct.Collection.html) |
-| `Field` | `paladin::core::base::entity::field::Field` | 🟢 Stable | Field definition with type information | [Docs](https://docs.rs/paladin/latest/paladin/core/base/entity/field/struct.Field.html) |
-| `Message<T>` | `paladin::core::base::entity::message::Message` | 🟢 Stable | Generic message wrapper for events | [Docs](https://docs.rs/paladin/latest/paladin/core/base/entity/message/struct.Message.html) |
+| `Node<T>` | `paladin_core::base::entity::node::Node` | 🟢 Stable | Generic entity wrapper with UUID and metadata | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/base/entity/node/struct.Node.html) |
+| `Collection<T>` | `paladin_core::base::entity::collection::Collection` | 🟢 Stable | Generic collection type with metadata | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/base/entity/collection/struct.Collection.html) |
+| `Field` | `paladin_core::base::entity::field::Field` | 🟢 Stable | Field definition with type information | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/base/entity/field/struct.Field.html) |
+| `Message<T>` | `paladin_core::base::entity::message::Message` | 🟢 Stable | Generic message wrapper for events | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/base/entity/message/struct.Message.html) |
 
 ### Resilience Types
 
@@ -897,7 +902,7 @@ For questions about API stability:
 
 **Last Updated**: 2026-04-16
 **Document Version**: 1.1
-**Paladin Version: 0.5.0
+**Paladin Version**: 0.10.0
 **Maintainers**: @DF3NDR
 
 ---
@@ -913,13 +918,12 @@ This document defines how Paladin versions its workspace crates and what constit
 Paladin uses lockstep versioning for the initial release line.
 
 - Scope: all public crates in this workspace.
-- Current baseline: 0.5.0.
-- Milestone 7 target: 0.2.0 lockstep for publishable crates.
+- Current baseline: 0.10.0.
 - Rule: a single release version is applied to all public crates in the same release cycle.
 
 Public crates:
 
-- paladin
+- paladin (facade)
 - paladin-core
 - paladin-ports
 - paladin-battalion
@@ -929,6 +933,8 @@ Public crates:
 - paladin-notifications
 - paladin-content
 - paladin-storage
+- paladin-eval
+- paladin-herald
 
 ## Breaking Change Policy
 

@@ -71,15 +71,27 @@ Feature flags in Paladin follow these principles:
 
 ### Storage & Queue Flags
 
+> `paladin-storage`'s SQLite adapters are **always compiled** — the facade depends on
+> `paladin-storage` unconditionally with its `sqlite` feature enabled, so there is no
+> `storage-sqlite` facade flag to opt into.
+
 | Flag | Dependencies | Modules Gated | Description |
 |------|--------------|---------------|-------------|
-| `redis-queue` | `redis` | `infrastructure::adapters::queue::redis` | Redis-based async queue adapter |
-| `s3-storage` | `rust-s3` | `infrastructure::adapters::file_storage::minio` | S3/MinIO file storage adapter |
+| `redis-queue` | `redis` | `paladin-storage/redis-queue` | Redis-based async queue adapter |
+| `redis-cache` | `redis` | `paladin-storage/redis-cache` | Redis-backed `NodeCachePort` adapter. Shares the `redis-queue` dependency; not part of `default`, `storage`, or `full`. |
+| `s3-storage` | `rust-s3` | `paladin-storage/s3` | S3/MinIO file storage adapter |
 | `openai-embeddings` | None | Embedding generation utilities | OpenAI embedding model support |
 | `qdrant` | `qdrant-client` | Qdrant vector database adapter | Vector database for semantic search |
-| `storage-sqlite` | `sqlx` (sqlite) | `paladin-storage` SQLite adapters | SQLite-based persistent repository |
-| `storage-mysql` | `sqlx` (mysql) | `paladin-storage` MySQL adapters | MySQL-based persistent repository |
-| `storage` | `storage-sqlite`, `storage-mysql` | Both storage adapters | Convenience flag enabling both DB backends |
+| `storage-mysql` | `sqlx` (mysql) | `paladin-storage/mysql` | MySQL-based persistent repository |
+| `storage-postgres` | `sqlx` (postgres) | `paladin-storage/postgres` | PostgreSQL `WaypointPort` adapter. Not part of `default` or `full`'s implicit set beyond this explicit passthrough. |
+| `storage` | `storage-mysql`, `storage-postgres` | Both non-SQLite storage adapters | Convenience flag enabling MySQL and PostgreSQL backends (SQLite is always on) |
+
+### Observability & Admin Flags
+
+| Flag | Dependencies | Modules Gated | Description |
+|------|--------------|---------------|-------------|
+| `otel` | `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp` | OTLP trace export | Exports Paladin traces via OpenTelemetry OTLP. Not part of `default` or `full` — the default build must gain no OTel dependency. |
+| `dev-ui` | None | `paladin-web/dev-ui` | Admin-only `GET /v1/dev-ui/threads/{id}` run-inspector HTML page. Not part of `default` or `full` — the default build must gain no dev-ui HTML page. |
 
 ### Special Build Flags
 
@@ -109,7 +121,7 @@ cargo build --bin paladin-cli --features cli
 
 | Flag | Enables | Description |
 |------|---------|-------------|
-| `full` | `llm-all`, `content-processing`, `web-server`, `notifications`, `vision`, `redis-queue`, `s3-storage`, `openai-embeddings`, `qdrant`, `cli` | All optional features for development/testing |
+| `full` | `llm-all`, `content-processing`, `web-server`, `notifications`, `storage`, `vision`, `redis-queue`, `s3-storage`, `openai-embeddings`, `qdrant`, `cli` | All optional features for development/testing. Deliberately excludes `otel`, `dev-ui` and `redis-cache`, each of which must stay opt-in. |
 
 ## Default Configuration
 
@@ -117,7 +129,7 @@ cargo build --bin paladin-cli --features cli
 
 ```toml
 [dependencies]
-paladin-ai = "0.8"
+paladin-ai = "0.10.0"
 ```
 
 This enables:
@@ -142,7 +154,7 @@ No external LLM providers, storage, or queues:
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5", default-features = false }
+paladin-ai = { version = "0.10.0", default-features = false }
 ```
 
 **Use case**: Custom LLM integrations, library embedding, edge deployments
@@ -152,21 +164,21 @@ paladin-ai = { version = "0.5", default-features = false }
 **OpenAI Only** (default):
 ```toml
 [dependencies]
-paladin-ai = "0.5"
+paladin-ai = "0.10.0"
 # Or explicitly:
-paladin-ai = { version = "0.5", features = ["llm-openai"] }
+paladin-ai = { version = "0.10.0", features = ["llm-openai"] }
 ```
 
 **Anthropic Only**:
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5", default-features = false, features = ["llm-anthropic"] }
+paladin-ai = { version = "0.10.0", default-features = false, features = ["llm-anthropic"] }
 ```
 
 **DeepSeek Only**:
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5", default-features = false, features = ["llm-deepseek"] }
+paladin-ai = { version = "0.10.0", default-features = false, features = ["llm-deepseek"] }
 ```
 
 ### Multi-Provider Builds
@@ -174,13 +186,13 @@ paladin-ai = { version = "0.5", default-features = false, features = ["llm-deeps
 **All LLM Providers**:
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5", default-features = false, features = ["llm-all"] }
+paladin-ai = { version = "0.10.0", default-features = false, features = ["llm-all"] }
 ```
 
 **OpenAI + Anthropic**:
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5", default-features = false, features = ["llm-openai", "llm-anthropic"] }
+paladin-ai = { version = "0.10.0", default-features = false, features = ["llm-openai", "llm-anthropic"] }
 ```
 
 ### Orchestration Platform Build
@@ -189,7 +201,7 @@ Agents + web API + Redis queue + S3 storage:
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5", features = ["web-server", "redis-queue", "s3-storage"] }
+paladin-ai = { version = "0.10.0", features = ["web-server", "redis-queue", "s3-storage"] }
 ```
 
 ### Content Processing Build
@@ -198,7 +210,7 @@ Content ingestion + processing + all providers:
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5", features = ["llm-all", "content-processing", "qdrant", "s3-storage"] }
+paladin-ai = { version = "0.10.0", features = ["llm-all", "content-processing", "qdrant", "s3-storage"] }
 ```
 
 ### Full Development Build
@@ -207,7 +219,7 @@ All features enabled:
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5", features = ["full"] }
+paladin-ai = { version = "0.10.0", features = ["full"] }
 ```
 
 Or use the CLI:
@@ -223,7 +235,7 @@ Web server + notifications + OpenAI + storage:
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5", features = ["web-server", "notifications", "redis-queue", "s3-storage"] }
+paladin-ai = { version = "0.10.0", features = ["web-server", "notifications", "redis-queue", "s3-storage"] }
 ```
 
 ## Build Comparison
@@ -297,9 +309,10 @@ full
 use paladin::core::platform::container::paladin::Paladin;
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
 
-// Conditionally compiled
+// Conditionally compiled — the LLM adapters live in the paladin_llm crate;
+// the facade kept no shim for the old, now-removed infrastructure-adapter module path.
 #[cfg(feature = "llm-openai")]
-use paladin::infrastructure::adapters::llm::openai_adapter::OpenAIAdapter;
+use paladin_llm::openai::OpenAIAdapter;
 
 #[cfg(feature = "redis-queue")]
 use paladin::infrastructure::adapters::queue::redis::RedisQueueAdapter;
@@ -317,10 +330,10 @@ Begin with default features, add others only when required:
 ```toml
 # Start here
 [dependencies]
-paladin-ai = "0.5"
+paladin-ai = "0.10.0"
 
 # Add features as needed
-paladin-ai = { version = "0.5", features = ["redis-queue"] }
+paladin-ai = { version = "0.10.0", features = ["redis-queue"] }
 ```
 
 ### 2. Use `full` for Development Only
@@ -330,11 +343,11 @@ Enable all features during development, but specify exact features for productio
 ```toml
 [dependencies]
 # Production - explicit features
-paladin-ai = { version = "0.5", features = ["llm-anthropic", "s3-storage"] }
+paladin-ai = { version = "0.10.0", features = ["llm-anthropic", "s3-storage"] }
 
 [dev-dependencies]
 # Development - all features
-paladin-ai = { version = "0.5", features = ["full"] }
+paladin-ai = { version = "0.10.0", features = ["full"] }
 ```
 
 ### 3. Document Feature Requirements
@@ -346,7 +359,7 @@ If your application requires specific features, document them:
 //!
 //! **Required Features:**
 //! ```toml
-//! paladin-ai = { version = "0.5", features = ["llm-openai", "redis-queue", "s3-storage"] }
+//! paladin-ai = { version = "0.10.0", features = ["llm-openai", "redis-queue", "s3-storage"] }
 //! ```
 ```
 
@@ -375,7 +388,7 @@ Add feature requirements to example documentation:
 //!
 //! **Required Cargo Features:**
 //! ```toml
-//! paladin-ai = { version = "0.5", features = ["redis-queue"] }
+//! paladin-ai = { version = "0.10.0", features = ["redis-queue"] }
 //! ```
 //!
 //! Run with: `cargo run --example redis_queue --features redis-queue`
@@ -415,8 +428,9 @@ jobs:
 ### Docker Multi-Stage Builds
 
 ```dockerfile
-# Builder with only needed features
-FROM rust:1.75 as builder
+# Builder with only needed features. Base image kept in sync with the real
+# builder stage in `Dockerfile` — see that file for the authoritative pin.
+FROM rust:1.93-slim-bookworm as builder
 WORKDIR /app
 COPY . .
 RUN cargo build --release --features "llm-openai,redis-queue,s3-storage"

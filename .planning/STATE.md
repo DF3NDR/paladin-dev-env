@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-17 after Phase 34 completion)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 35 — mdBook Currency
+**Current focus:** Phase 36 — Rustdoc Zero-Warning Bar & Examples Currency (consumes `34-AUDIT.md` §6, the 207-item work list)
 Phase 34 was verified 2026-09-17: `34-UAT.md` 47/47 passed (all nine SUMMARYs coverage-mode, every
 deliverable automated and the list confirmed by the maintainer; `34-check.sh --final` 8/8 re-run at UAT
 time), `34-VERIFICATION.md` `passed` 5/5, `34-SECURITY.md` `verified` with `threats_open: 0`.
@@ -1056,8 +1056,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 ## Session Continuity
 
 **Last session:** 2026-09-17T12:13:37.688Z
-**Stopped at:** Phase 35 context gathered
-**Resume file:** .planning/phases/35-mdbook-currency/35-CONTEXT.md
+**Stopped at:** Phase 35 complete 2026-09-17 — 10/10 plans, 35-VERIFICATION.md passed 9/9 after one gap (engine example limits) was fixed by the code-review fix loop; 60/60 MB rows closed, docs.yml gate green, CHANGELOG Documentation entry written; next: /gsd-discuss-phase 36
+**Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

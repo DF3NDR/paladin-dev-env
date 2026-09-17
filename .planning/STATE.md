@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36
 current_phase_name: Rustdoc Zero-Warning Bar & Examples Currency
 status: executing
-stopped_at: Completed 36-04-PLAN.md
-last_updated: "2026-09-17T20:30:17.221Z"
+stopped_at: Completed 36-05-PLAN.md
+last_updated: "2026-09-17T20:39:39.181Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 36 execution started
 progress:
   total_phases: 18
   completed_phases: 15
   total_plans: 190
-  completed_plans: 181
+  completed_plans: 182
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 95%
+**Progress:** [██████████] 96%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36 (Rustdoc Zero-Warning Bar & Examples Currency) — EXECUTING
-Plan: 5 of 13
+Plan: 6 of 13
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 36 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -156,6 +156,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36 P02 | ~55min | 3 tasks | 10 files |
 | Phase 36 P03 | ~20min | 2 tasks | 5 files |
 | Phase 36 P04 | ~25min | 2 tasks | 8 files |
+| Phase 36 P05 | 35min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -498,6 +499,8 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 36 plan 36-03: closed all 28 paladin-ai-core rustdoc rows (14 location groups) -- confirmed a cross-crate unresolved link (directive.rs's StateNode::run, owned by paladin-battalion) is a D-05 de-link situation, not a D-06 dependency-adding one; trace.rs's ten-target //! header confirmed the crate-root link-scope rule at its densest single doc block; webhook.rs's security-invariant prose verified byte-identical; one atomic commit 71a47dc9
 - [Phase ?]: 36-04: http_status.rs unclosed-HTML-tag pair fixed by reflowing the code span onto one source line -- a code span crossing a //! doc-comment line break is not treated as continuous by rustdoc's HTML-tag scanner even when backticks balance across the two lines
 - [Phase ?]: 36-04: dev_ui_controller.rs's RunInspectorPort/InspectorView::supersteps/dev_ui_inspector_page links resolved with explicit crate-relative paths (D-06), not de-linked -- all three are public and reachable
+- [Phase ?]: Every fix in plan 36-05 is a plain [`ident`] -> `ident` de-link; all seven targets are genuinely private (no pub/pub(crate)), confirmed by grep before editing each one
+- [Phase ?]: Both RD-137 (cli) and RD-142 (otel) feature-gated rows confirmed co-gated with their doc'd item before editing, closing D-07 in place with no gate annotation
 
 ### Pending Todos
 
@@ -1065,8 +1068,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T20:30:17.115Z
-**Stopped at:** Completed 36-04-PLAN.md
+**Last session:** 2026-09-17T20:39:39.091Z
+**Stopped at:** Completed 36-05-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

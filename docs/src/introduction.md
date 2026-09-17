@@ -20,6 +20,12 @@ Learn how to build with Paladin:
 - **[Tool Integration (Arsenal)](user-guides/arsenal-tools.md)** - Integrate external tools via MCP protocol
 - **[Memory Management (Garrison)](user-guides/garrison-memory.md)** - Conversation context and persistence
 - **[Output Formatting (Herald)](user-guides/herald-output.md)** - Format and stream agent responses
+- **[WarEngine: Superstep Execution](user-guides/superstep-engine.md)** - Battlefield state, Waypoint checkpointing, and cyclic graph execution
+- **[Control Flow](user-guides/control-flow.md)** - Dynamic routing and subgraphs
+- **[Parley & Chronicle](user-guides/parley-and-chronicle.md)** - Pause, resume, history and graceful shutdown
+- **[Aegis: Fault Tolerance](user-guides/fault-tolerance.md)** - Retry, timeout, error handlers, model fallback and node caching
+- **[Agent Runtime](user-guides/agent-runtime.md)** - Middleware, context management, vault memory, structured output and the reasoning agent
+- **[Eval Harness](user-guides/eval-harness.md)** - Evaluate Paladin agent quality and catch regressions
 - **[CLI Usage Guide](appendix/cli-usage.md)** - Complete command-line interface reference
 
 ## 🏗️ Architecture
@@ -29,7 +35,14 @@ Understand Paladin's design:
 - **[Architecture Overview](architecture/overview.md)** - Three-layer hexagonal architecture
 - **[Hexagonal Design](architecture/hexagonal-design.md)** - Port/adapter pattern implementation
 - **[Domain Model](architecture/domain-model.md)** - DDD entities and relationships
+- **[Commissary](architecture/commissary.md)** - Input-side, per-call window-rationing officer
 - **[Design Patterns](architecture/design-patterns.md)** - Patterns used throughout Paladin
+
+## 🧭 Deployment Topologies
+
+Choose how to run Paladin:
+
+- **[Choosing a Topology](deployment-topologies/overview.md)** - Compare embedded library, orchestrated Battalion, HTTP service host, queue/worker and sidecar deployments
 
 ## 🚢 Deployment
 
@@ -39,6 +52,7 @@ Deploy Paladin to production:
 - **[Kubernetes](deployment/kubernetes.md)** - Cloud-native orchestration
 - **[CI/CD](deployment/cicd.md)** - Automated pipelines with GitHub Actions
 - **[Production Best Practices](deployment/production.md)** - Security, scaling, and reliability
+- **[Platform API](api-reference/platform-api.md)** - Runs, threads, assistants, schedules and webhooks REST surface
 - **[Versioning Policy](api-reference/stable-api.md)** - Lockstep versioning rules and transition criteria
 - **[Release Checklist](appendix/release-checklist.md)** - Dependency-aware release and publish workflow
 
@@ -46,6 +60,7 @@ Deploy Paladin to production:
 
 Monitor and maintain Paladin:
 
+- **[Observability](operations/observability.md)** - Traces, sinks and persistence
 - **[Logging](operations/logging.md)** - Structured logging configuration
 - **[Monitoring](operations/monitoring.md)** - Metrics and dashboards
 - **[Troubleshooting](operations/troubleshooting.md)** - Common issues and solutions
@@ -73,7 +88,9 @@ Or browse online at: [https://docs.rs/paladin](https://docs.rs/paladin) (when pu
 
 ### Medieval Military Theme
 
-Paladin uses a consistent Medieval Military naming convention:
+Paladin uses a consistent Medieval Military naming convention. This is a short excerpt — see
+[Domain Model](architecture/domain-model.md#medieval-military-naming-convention) for the
+complete ubiquitous-language table of every Medieval-Military term Paladin uses:
 
 | Term | Definition |
 |------|------------|
@@ -83,12 +100,8 @@ Paladin uses a consistent Medieval Military naming convention:
 | **Phalanx** | Concurrent Paladin execution |
 | **Campaign** | Graph-based orchestration |
 | **Chain of Command** | Hierarchical delegation |
-| **Maneuver** | Flow DSL declarative orchestration |
 | **Garrison** | Agent memory storage |
 | **Arsenal** | Tool and capability registry |
-| **Armament** | A single tool |
-| **Citadel** | State persistence system |
-| **Herald** | Output formatting |
 
 ### Architecture Layers
 

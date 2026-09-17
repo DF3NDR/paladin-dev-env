@@ -1046,7 +1046,7 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 36-06-PLAN.md — Examples: WarEngine configuration & checkpoints, control flow & dynamic routing
-- [ ] 36-07-PLAN.md — Examples: human-in-the-loop gate & resume, graceful shutdown
+- [x] 36-07-PLAN.md — Examples: human-in-the-loop gate & resume, graceful shutdown
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

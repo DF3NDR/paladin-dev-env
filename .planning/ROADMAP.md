@@ -962,7 +962,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 34-07-PLAN.md — Per-crate all-features sweep, doctest baseline, public-API example-heading gate record
+- [x] 34-07-PLAN.md — Per-crate all-features sweep, doctest baseline, public-API example-heading gate record
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

@@ -80,11 +80,13 @@ The Council pattern enables multiple Paladin agents to engage in structured deli
 
 ### Basic Council Example
 
-```rust
+```rust,ignore
 use paladin::core::platform::container::battalion::council::{
     CouncilBuilder, CouncilConfig, TurnStrategy, TerminationCondition
 };
 use paladin::application::services::battalion::council_service::CouncilExecutionService;
+use paladin_battalion::in_memory_registry::HashMapPaladinRegistry;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -105,27 +107,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "You are a security expert focusing on risks and compliance."
     );
 
+    // CouncilBuilder::add_participant takes a `paladin_id` string, not a Paladin -- register
+    // each Paladin under that same ID so the registry can resolve it at execution time.
+    let mut paladins = HashMap::new();
+    paladins.insert("technical_expert".to_string(), Arc::new(technical_expert));
+    paladins.insert("business_expert".to_string(), Arc::new(business_expert));
+    paladins.insert("security_expert".to_string(), Arc::new(security_expert));
+    let registry = Arc::new(HashMapPaladinRegistry::from_map(paladins));
+
     // Build council
     let council = CouncilBuilder::new()
         .name("Expert Panel Council")
-        .add_participant(technical_expert)
-        .add_participant(business_expert)
-        .add_participant(security_expert)
+        .add_participant("technical_expert")
+        .add_participant("business_expert")
+        .add_participant("security_expert")
         .turn_strategy(TurnStrategy::RoundRobin)
-        .termination_condition(TerminationCondition::MaxRounds(3))
+        .max_rounds(3)
+        .termination_condition(TerminationCondition::MaxRounds)
         .build()?;
 
     // Execute council discussion
     let service = CouncilExecutionService::new(
         Arc::new(paladin_port),
-        Some(Arc::new(garrison_port)) // Optional: store conversation history
+        Some(Arc::new(garrison_port)), // Optional: store conversation history
+        registry,
     );
 
     let topic = "Should we implement two-factor authentication for all users?";
     let result = service.convene(&council, topic).await?;
 
-    println!("Discussion Transcript:\n{}", result.conversation_history);
-    println!("\nFinal Recommendation:\n{}", result.final_output);
+    println!("Rounds completed: {}", result.rounds_completed);
+    println!("Termination reason: {:?}", result.termination_reason);
+    if let Some(conclusion) = &result.conclusion {
+        println!("\nConclusion:\n{}", conclusion);
+    }
+    for message in &result.transcript {
+        println!("{:?}", message);
+    }
 
     Ok(())
 }
@@ -192,7 +210,7 @@ Turn-taking strategies determine **who speaks next** in the council discussion.
 - Simple discussion structure
 
 **Example**:
-```rust
+```rust,ignore
 let council = CouncilBuilder::new()
     .add_participant(expert1)
     .add_participant(expert2)
@@ -228,7 +246,7 @@ Round 3:  [Expert1] → [Expert2] → [Expert3]
 - Senior oversight required
 
 **Example**:
-```rust
+```rust,ignore
 let moderator = create_paladin(
     "Moderator",
     "You moderate the council. Call on experts strategically and decide when to conclude."
@@ -244,7 +262,7 @@ let council = CouncilBuilder::new()
 ```
 
 **Moderator System Prompt Example**:
-```rust
+```rust,ignore
 let moderator_prompt = r#"
 You are the Chief Architect moderating a technical council.
 
@@ -297,8 +315,9 @@ Termination conditions determine **when the council discussion concludes**.
 - Simple topics not requiring extended debate
 
 **Configuration**:
-```rust
-.termination_condition(TerminationCondition::MaxRounds(5))
+```rust,ignore
+.max_rounds(5)
+    .termination_condition(TerminationCondition::MaxRounds)
 ```
 
 **Behavior**:
@@ -307,13 +326,14 @@ Termination conditions determine **when the council discussion concludes**.
 - May end prematurely if consensus not reached
 
 **Example**:
-```rust
+```rust,ignore
 let council = CouncilBuilder::new()
     .add_participant(expert1)
     .add_participant(expert2)
     .add_participant(expert3)
     .turn_strategy(TurnStrategy::RoundRobin)
-    .termination_condition(TerminationCondition::MaxRounds(3)) // 3 rounds
+    .max_rounds(3)
+    .termination_condition(TerminationCondition::MaxRounds) // 3 rounds
     .build()?;
 
 // 3 participants × 3 rounds = 9 total turns
@@ -331,7 +351,7 @@ let council = CouncilBuilder::new()
 - Sufficient budget for extended discussion
 
 **Configuration**:
-```rust
+```rust,ignore
 .termination_condition(TerminationCondition::Consensus {
     required_agreement_keywords: vec![
         "I agree".to_string(),
@@ -348,7 +368,7 @@ let council = CouncilBuilder::new()
 3. If `min_participants` threshold met → terminate
 
 **Example**:
-```rust
+```rust,ignore
 let council = CouncilBuilder::new()
     .add_participant(expert1)
     .add_participant(expert2)
@@ -379,7 +399,7 @@ let council = CouncilBuilder::new()
 - Complex topics requiring flexible stopping point
 
 **Configuration**:
-```rust
+```rust,ignore
 .termination_condition(TerminationCondition::ModeratorDecision)
 ```
 
@@ -392,7 +412,7 @@ The moderator indicates completion by including a termination phrase:
 ```
 
 **Detection Keywords** (configurable):
-```rust
+```rust,ignore
 pub const DEFAULT_MODERATOR_TERMINATION_KEYWORDS: &[&str] = &[
     "discussion complete",
     "conclude",
@@ -402,7 +422,7 @@ pub const DEFAULT_MODERATOR_TERMINATION_KEYWORDS: &[&str] = &[
 ```
 
 **Example**:
-```rust
+```rust,ignore
 let moderator = create_paladin("ChiefArchitect", moderator_prompt);
 
 let council = CouncilBuilder::new()
@@ -427,12 +447,12 @@ let council = CouncilBuilder::new()
 - Trigger-based termination
 
 **Configuration**:
-```rust
+```rust,ignore
 .termination_condition(TerminationCondition::Keyword("APPROVED".to_string()))
 ```
 
 **Example - Code Review Approval**:
-```rust
+```rust,ignore
 let council = CouncilBuilder::new()
     .add_participant(senior_dev)
     .add_participant(security_reviewer)
@@ -463,7 +483,7 @@ Council supports **conversation history storage** via Garrison (memory system), 
 
 ### Enabling Garrison
 
-```rust
+```rust,ignore
 use paladin::infrastructure::adapters::garrison::in_memory_garrison::InMemoryGarrison;
 
 // Create Garrison
@@ -472,7 +492,8 @@ let garrison = Arc::new(InMemoryGarrison::new());
 // Create Council service with Garrison
 let service = CouncilExecutionService::new(
     Arc::new(paladin_port),
-    Some(garrison.clone()) // Enable history storage
+    Some(garrison.clone()), // Enable history storage
+    registry,
 );
 
 // Execute council
@@ -504,7 +525,7 @@ println!("Full transcript: {}", history);
     }
   ],
   "termination_reason": "MaxRounds",
-  "final_output": "Synthesized recommendation: ..."
+  "conclusion": "Synthesized recommendation: ..."
 }
 ```
 
@@ -514,32 +535,28 @@ println!("Full transcript: {}", history);
 
 ### CouncilConfig
 
-```rust
+```rust,ignore
 pub struct CouncilConfig {
+    /// Maximum number of rounds before forced termination
+    pub max_rounds: u32,
+
     /// Turn-taking strategy (RoundRobin or ModeratorDirected)
     pub turn_strategy: TurnStrategy,
 
     /// Termination condition
     pub termination_condition: TerminationCondition,
 
-    /// Maximum rounds (safety limit)
-    pub max_rounds: u32,
-
-    /// Whether to store conversation history in Garrison
-    pub store_history: bool,
-
-    /// Timeout per participant turn (seconds)
-    pub turn_timeout: Duration,
+    /// Whether to include conversation history in each Paladin's context
+    pub include_history: bool,
 }
 
 impl Default for CouncilConfig {
     fn default() -> Self {
         Self {
-            turn_strategy: TurnStrategy::RoundRobin,
-            termination_condition: TerminationCondition::MaxRounds(5),
             max_rounds: 10,
-            store_history: true,
-            turn_timeout: Duration::from_secs(120),
+            turn_strategy: TurnStrategy::default(),
+            termination_condition: TerminationCondition::default(),
+            include_history: true,
         }
     }
 }
@@ -547,7 +564,7 @@ impl Default for CouncilConfig {
 
 ### Builder Pattern
 
-```rust
+```rust,ignore
 let council = CouncilBuilder::new()
     .name("Expert Panel")
     .add_participant(expert1)
@@ -555,9 +572,9 @@ let council = CouncilBuilder::new()
     .add_participant(expert3)
     .moderator(moderator) // Optional
     .turn_strategy(TurnStrategy::RoundRobin)
-    .termination_condition(TerminationCondition::MaxRounds(5))
+    .termination_condition(TerminationCondition::MaxRounds)
     .max_rounds(10)
-    .store_history(true)
+    .include_history(true)
     .build()?;
 ```
 
@@ -567,7 +584,7 @@ let council = CouncilBuilder::new()
 
 ### Example 1: Security Review Panel
 
-```rust
+```rust,ignore
 let security_expert = create_paladin("SecurityExpert",
     "Focus on security risks and controls");
 let legal_expert = create_paladin("LegalExpert",
@@ -581,7 +598,8 @@ let council = CouncilBuilder::new()
     .add_participant(legal_expert)
     .add_participant(technical_expert)
     .turn_strategy(TurnStrategy::RoundRobin)
-    .termination_condition(TerminationCondition::MaxRounds(3))
+    .max_rounds(3)
+    .termination_condition(TerminationCondition::MaxRounds)
     .build()?;
 
 let topic = "Evaluate the security implications of storing customer payment data";
@@ -590,7 +608,7 @@ let result = service.convene(&council, topic).await?;
 
 ### Example 2: Moderated Architecture Review
 
-```rust
+```rust,ignore
 let moderator = create_paladin("ChiefArchitect", MODERATOR_PROMPT);
 
 let council = CouncilBuilder::new()
@@ -610,7 +628,7 @@ let result = service.convene(&council, topic).await?;
 
 ### Example 3: Consensus-Based Decision
 
-```rust
+```rust,ignore
 let council = CouncilBuilder::new()
     .name("Product Launch Council")
     .add_participant(product_manager)
@@ -649,7 +667,7 @@ let result = service.convene(&council, topic).await?;
 ### 2. System Prompts
 
 ✅ **Do**:
-```rust
+```rust,ignore
 let prompt = r#"
 You are a security expert in a council discussion.
 
@@ -667,7 +685,7 @@ Discussion format:
 ```
 
 ❌ **Don't**:
-```rust
+```rust,ignore
 let prompt = "You are an expert."; // Too vague
 ```
 
@@ -720,7 +738,7 @@ With GPT-4o-mini: 15 × $0.005 = $0.075 per council
 5. **Summarization**: Have final turn synthesize discussion
 
 **Example high-quality topic**:
-```rust
+```rust,ignore
 let topic = r#"
 Should we implement two-factor authentication for all users?
 
@@ -744,7 +762,7 @@ Consider:
 
 ### Core Types
 
-```rust
+```rust,ignore
 // Council configuration
 pub struct Council {
     pub id: String,
@@ -760,29 +778,31 @@ pub enum TurnStrategy {
     ModeratorDirected,
 }
 
-// Termination conditions
+// Termination conditions -- the round count itself lives on CouncilConfig::max_rounds /
+// CouncilBuilder::max_rounds(), not on this enum; this enum only selects the strategy.
 pub enum TerminationCondition {
-    MaxRounds(u32),
-    Consensus {
-        required_agreement_keywords: Vec<String>,
-        min_participants: usize,
-    },
+    /// Stop after reaching maximum number of rounds
+    MaxRounds,
+    /// Detect consensus through keyword matching (e.g., "I agree", "consensus reached")
+    Consensus,
+    /// Moderator decides when to end (e.g., says "discussion concluded")
     ModeratorDecision,
+    /// Custom keyword triggers termination
     Keyword(String),
 }
 
-// Council result
+// Council result (crates/paladin-battalion/src/council_service.rs)
 pub struct CouncilResult {
-    pub final_output: String,
-    pub conversation_history: String,
+    pub transcript: Vec<CouncilMessage>,
+    pub conclusion: Option<String>,
     pub rounds_completed: u32,
-    pub termination_reason: String,
+    pub termination_reason: TerminationCondition,
 }
 ```
 
 ### Services
 
-```rust
+```rust,ignore
 // Council execution service
 pub struct CouncilExecutionService {
     paladin_port: Arc<dyn PaladinPort>,
@@ -805,7 +825,7 @@ impl CouncilExecutionService {
 
 ### Builder
 
-```rust
+```rust,ignore
 pub struct CouncilBuilder {
     // ...
 }

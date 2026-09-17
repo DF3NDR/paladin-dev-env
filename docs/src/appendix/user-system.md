@@ -1,5 +1,14 @@
 # User System Integration - Completion Summary
 
+> **Archived — historical document.** This page is a completion summary from an earlier
+> integration effort and is not maintained. The `paladin user` CLI subcommand family it describes
+> does not exist in the shipped `paladin-cli` binary — the live `Commands` enum has twelve
+> variants and none of them is a user command. The user domain, service and repository layers do
+> exist (`crates/paladin-core/src/platform/manager/user_service.rs`,
+> `crates/paladin-storage/src/sqlite_user_repository.rs`); a web-facing user API and CLI remain
+> forward scope, not yet shipped. This disposition is recorded in ADR-0047
+> (`.planning/decisions/0047-architecture-appendix-disposition.md`).
+
 ## Completed Tasks ✅
 
 ### 1. **Service Runner Integration**

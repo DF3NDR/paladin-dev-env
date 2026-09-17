@@ -14,7 +14,8 @@ Performance benchmarks for the Sanctum long-term memory system measuring vector 
 ## Performance Targets
 
 - **InMemory Adapter**: < 100ms search latency at 10,000 vectors
-- **Qdrant Adapter** (future): < 500ms search latency at 100,000 vectors
+- **Qdrant Adapter** (shipped, behind the `qdrant` feature; benchmark numbers not yet captured):
+  target < 500ms search latency at 100,000 vectors
 
 ## Benchmark Categories
 
@@ -209,9 +210,12 @@ Results will be populated after benchmark run
 - Memory mapping for larger-than-RAM datasets
 - Multi-threaded search for high concurrency
 
-## Qdrant Adapter (Future Benchmarks)
+## Qdrant Adapter (Benchmarks Not Yet Captured)
 
-When the Qdrant adapter is implemented, additional benchmarks will measure:
+The Qdrant adapter ships today (`crates/paladin-memory/src/sanctum/qdrant_adapter.rs`, behind the
+`qdrant` Cargo feature) — it is implemented, not future work. Its benchmark numbers have not been
+captured yet, which is a different claim from the adapter being unimplemented. Additional
+benchmarks will measure:
 
 - **Large Scale**: 10K, 50K, 100K, 1M vectors
 - **HNSW Performance**: Sub-100ms at 100K vectors

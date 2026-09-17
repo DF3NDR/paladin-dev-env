@@ -1,5 +1,10 @@
 # Contributing to Paladin
 
+> **Archived — historical document.** This page is an earlier draft of the contributing guide and
+> is not maintained. For the current, maintained contributing guide, see
+> [Development Setup](../contributing/development-setup.md). This disposition is recorded in
+> ADR-0047 (`.planning/decisions/0047-architecture-appendix-disposition.md`).
+
 Thank you for your interest in contributing to Paladin! This guide will help you get started with contributing code, documentation, or other improvements.
 
 ## Table of Contents
@@ -22,14 +27,14 @@ We follow the [Rust Code of Conduct](https://www.rust-lang.org/policies/code-of-
 ### Prerequisites
 
 ```bash
-# Install Rust 1.70+
+# Install Rust 1.88+
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Install development tools
 cargo install cargo-watch cargo-audit cargo-llvm-cov
 
 # Clone repository
-git clone https://github.com/your-org/paladin.git
+git clone https://github.com/DF3NDR/paladin-dev-env.git
 cd paladin
 
 # Start development services
@@ -44,6 +49,7 @@ src/
 ├── application/             # Use cases and port definitions
 └── infrastructure/          # Adapters for external systems
 
+crates/                      # Cargo workspace member crates (paladin-core, paladin-ports, …)
 docs/                        # Documentation
 tests/                       # Integration and functional tests
 examples/                    # Example code

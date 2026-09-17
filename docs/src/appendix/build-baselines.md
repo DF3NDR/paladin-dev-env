@@ -1,5 +1,10 @@
 # Build-Time Benchmark Report — Milestone 7 Epic 2
 
+> **Archived — historical document.** This page records a Milestone 7, dated build-time snapshot
+> (2026-05-27, 10-crate workspace) and is not maintained. For current build-performance
+> measurements, see [Performance Baseline](performance-baseline.md). This disposition is recorded
+> in ADR-0047 (`.planning/decisions/0047-architecture-appendix-disposition.md`).
+
 **Task:** 5.0 — Measure and document build baselines (FR-07)
 **Date:** 2026-05-27
 **Branch:** `feature/milestone_7-epic_2-build-infra`
@@ -24,7 +29,7 @@
 
 ## Structure Comparison
 
-| Aspect | M5 Baseline (6-crate) | M7 Current (10-crate) |
+| Aspect | M5 Baseline (6-crate) | M7 Snapshot (10-crate, this page's own count as of 2026-05-27, not today's tree) |
 |--------|----------------------|----------------------|
 | Workspace members | 6 | 10 |
 | Crates | `paladin-core`, `paladin-ports`, `paladin-llm`, `paladin-memory`, `paladin-battalion`, `paladin` | + `paladin-storage`, `paladin-notifications`, `paladin-content`, `paladin-web` |

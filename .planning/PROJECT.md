@@ -109,6 +109,25 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 34 complete (2026-09-17)** — documentation-currency-audit, the first Release Readiness phase
+(CURR-01…05; read-only, every commit `.planning/`-only, proven by `git diff --stat ee1fb160..HEAD -- . ':!.planning'`
+empty): one canonical `34-AUDIT.md` (2,377 lines) measures the documentation debt against the Phase 22-33
+shipped surface (§1: 91 `SS-nn` rows from the `v0.9.0..HEAD` exports diff, CHANGELOG `[0.10.0]`, MIGRATION §9
+and REQUIREMENTS). mdBook: 94 rows — 38 current, 55 stale, 1 missing (the Phase 22 superstep-engine guide,
+deferred in Phase 23 and never written); `mdbook build` + linkcheck green, zero orphans. Rustdoc: 143 `RD-nn`
+rows — 65 default-feature warnings under the verbatim `ci.yml:63` bar (36 locations recovered by snippet grep
+from `//!` module docs) plus 77 `-D warnings --all-features` errors across 8 of 12 crates, swept per crate because
+the workspace run aborts non-deterministically; the carried "14 unresolved links" figure was undersized 5.5×.
+Examples: 122 `EX-nn` rows — all 60 targets build under the four CI invocations, 5 stale (`http_service_host`
+claims the server's router shape; `examples/README.md` omits 11 programs and shows retired `PaladinResult`
+fields), 59 Phase 22-33 capabilities with no example. Doctests 462/0. Work lists: Phase 35 gets 60 `MB-nn`
+items (missing page first), Phase 36 gets 143 `RD-nn` + 64 `EX-nn` items, set-equality reconciled both ways;
+`deferred-items.md` holds 5 non-doc findings (coverage-walk, stale `ci.yml:538` count, the red and unwired
+`check-public-api-examples.sh`, PROJECT.md's stale "no crate ships `examples/`" claim, the RustFS evaluation).
+9 plans in 9 sequential waves (one canonical file, CONTEXT D-01); verification `passed` 5/5 with content-level
+spot-checks; code review skipped (no source files changed); `make test` 3707/0. `/gsd-secure-phase 34` and
+`/gsd-validate-phase 34` remain advisory follow-ups; next: `/gsd-discuss-phase 35`.
+
 **Phase 33 complete (2026-09-16)** — commissary-in-tree-adoption, the last Token Economy phase
 (COMM-01…04; one clean signature break under ADR-0051): `RagRetrievalService::retrieve_context` returns a
 `RagRetrievalResult` (retained memories with post-dispense bodies and `truncated` flags, `shed: Vec<ShedItem>`
@@ -409,6 +428,11 @@ Security Paladin repo's token-economy systems analysis, findings F1-F8 / decisio
   **complete 2026-09-16**: `RagRetrievalResult`/`RagRetrievalError`, `paladin-memory` → `paladin-llm` edge,
   proptest + ungated integration test, two N/A §9.2 rows, gates re-sealed on `69500c9b`, verification 25/25,
   review 3 warnings advisory
+- Phase 34 — documentation currency audit: one read-only inventory of the mdBook, rustdoc and
+  examples against the Phase 22-33 shipped surface, partitioned into the Phase 35/36 work lists
+  (`CURR-01…05`, `.planning/`-only) — **complete 2026-09-17**: `34-AUDIT.md` 94 mdBook rows
+  (38/55/1), 143 rustdoc rows (73→65 warnings + 77 all-features errors, not 14), 122 example rows
+  (60/60 build), 60 + 207 work-list items, 5 deferred entries, SC5 proven by git diff, verification 5/5
 
 **Locked by the corpus overview §0 (operator-confirmed 2026-09-14):** the two-officer model —
 `Commissary` (input-side, per-call window rationing; keep, do not rename) and `Treasurer`
@@ -790,6 +814,13 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
   proptest + named edge tests + ungated `rag_commissary` integration test (F4 evidence, F6 closed), MIGRATION §9.2
   N/A rows + CHANGELOG `[0.10.0]` + API baseline, Phase 29 release gates re-sealed on `69500c9b` with corpus audit §11
   (Milestone 13 Epic 4)
+- [x] **CURR-01 … CURR-05** (✓ Phase 34, 2026-09-17) — every `docs/src` page carries a content-settled
+  currency verdict citing the phase and shipped item it misses (CURR-01); every default-feature `warning:` and
+  every per-crate `-D warnings --all-features` error enumerated with crate/file/line under the verbatim `ci.yml:63`
+  bar (CURR-02); every `examples/`, `doc-examples` and `paladin-llm` example target recorded with CI-split build
+  status and a three-check currency verdict plus the undemonstrated-capability gap list (CURR-03); Phase 35/36
+  work lists sized and ordered with non-doc findings in `deferred-items.md` (CURR-04); commits `.planning/`-only
+  over the whole phase range (CURR-05) (Release Readiness, roadmap-time addition 2026-09-17)
 
 *(The long-form forward-scope listing that previously lived here — the 90 ingest-derived
 requirements across Phases 5-16 plus Phase 17's `PROV-*` additions — shipped with v0.8.0 and is
@@ -1798,3 +1829,8 @@ Adoption).*
 through `Commissary::dispense`, silent truncation retired, Phase 29 release gates re-sealed on `69500c9b`; UAT 23/23,
 security `threats_open: 0`; 13 of 13 phases, 158/158 plans; next: push `feature/phase-33` for the CI coverage run,
 then `/gsd-complete-milestone v0.10.0`).*
+
+*Last updated: 2026-09-17 after Phase 34 completion (v0.10.0 milestone extended with Release Readiness
+Phases 34-37 on 2026-09-17; CURR-01…05 validated — `34-AUDIT.md` inventory: 94 mdBook / 143 rustdoc / 122 example
+rows, Phase 35 list 60 items, Phase 36 list 207 items, 5 deferred; 14 of 17 phases, 167/167 plans; next:
+`/gsd-discuss-phase 35` mdBook Currency, `/gsd-secure-phase 34` advisory).*

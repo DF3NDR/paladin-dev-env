@@ -1444,13 +1444,140 @@ a figure carried from a phase that never re-ran the per-crate sweep.
 
 ## §4 Examples table
 
-Rows land in plan 34-08 (the four `ci.yml:548-558` build invocations, the `doc-examples` gate, and
-`live_vendor_smoke`). One row is fully worked here — `examples/README.md` audited as a page in its
-own right (D-17) — the second CONTEXT.md-named method self-test.
+One row is fully worked here — `examples/README.md` audited as a page in its own right (D-17) —
+the second CONTEXT.md-named method self-test. Plan 34-08 fills every remaining row: the four
+`ci.yml:548-558` build invocations, the `doc-examples` gate, and `live_vendor_smoke`.
+
+**Live surface re-count (D-16), never trusted from a comment:** `find examples -name '*.rs' |
+wc -l` → **48**; `ls crates/doc-examples/src/*.rs` excluding `lib.rs` → **11**
+(`agent_runtime.rs`, `bridge.rs`, `content.rs`, `deployment_topologies.rs`,
+`fault_tolerance.rs`, `http_service_host.rs`, `orchestration.rs`, `queue_worker.rs`, `readme.rs`,
+`sidecar.rs`, `support.rs`); `ls crates/paladin-llm/examples/*.rs` → **1**
+(`live_vendor_smoke.rs`). Total live program/module count: **60**.
+
+**Stale CI comment (routed, not an `EX-nn` finding, D-19):** `.github/workflows/ci.yml`'s own
+comment at line 538 reads "`examples/` holds 47 .rs files. Exactly 4 are declared `[[example]]`
+targets" — the live count above is **48**, one more than the comment states. A CI workflow
+comment is neither documentation nor an example (D-19), so this mismatch is not minted as an
+`EX-nn` row; it is routed to `deferred-items.md` under a new `## Plan 34-08, Task 1` heading, and
+`34-AUDIT.md` §7 (assembled by plan 34-09) will point to it from there.
+
+**The four `ci.yml:548-558` invocations, quoted byte-identical** (`.github/workflows/ci.yml`
+lines 548, 551, 554, 557 — the step names are at 547, 550, 553, 556):
+
+```
+cargo build --examples --offline
+cargo build --example vision_analysis --example vision_battalion --features "vision,llm-openai" --offline
+cargo build --example document_processing --features "content-processing" --offline
+cargo build --example http_service_host --features "web-server" --offline
+```
+
+**This run's measurement, live, re-run rather than copied from RESEARCH.md or any prior phase**
+(HEAD `e0c12333` at capture time — see the plan-34-08 §4 close subsection below for the exact SHA
+and the D-23 invariance argument): all four invocations exited **0** (green), each in ~1s
+(warm `target/`), teed verbatim to
+`34-evidence/34-08-examples-builds.txt`. Two extra targets D-16 also requires are captured in the
+same file: `bash scripts/check-doc-examples.sh` (Layer 1 `cargo check --manifest-path
+crates/doc-examples/Cargo.toml` — compiles all eleven `doc-examples` modules as one crate;
+Layer 1b the README quick-example mirror check; Layer 2 the inline fenced-block scan) — exit
+**0**, "All included examples compile.", "README Quick Example is in sync.", "Results: 0
+checked, 616 skipped, 0 failed" (every inline block in `docs/src` is either `{{#include}}`-backed,
+per plan 34-07's own note that a green doctest baseline already proves `{{#include}}` content
+compiles, or explicitly `,ignore`-tagged, so Layer 2 has nothing left to syntax-check directly) —
+and `cargo build -p paladin-llm --example live_vendor_smoke --features
+"kimi,qwen,grok,gemini"` (`crates/paladin-llm/Cargo.toml`'s `required-features` names all four
+vendor flags at once) — exit **0**, built only, **never run** (T-34-02: it reaches a live vendor
+and needs a credential; no `PALADIN_*`/vendor API-key environment variable was read or exported
+by any command this task ran).
+
+**`[[example]]` declaration cross-check, both directions (root `Cargo.toml` lines 444-462 plus
+`crates/paladin-llm/Cargo.toml` lines 60-62):** five `[[example]]` targets are declared workspace-wide
+(`vision_analysis`, `vision_battalion`, `document_processing`, `http_service_host` in the root
+manifest; `live_vendor_smoke` in `paladin-llm`'s own manifest) — every one of the five has a
+matching file on disk (zero declared-with-no-file). In the other direction, the remaining 43 of
+48 `examples/*.rs` files carry no `[[example]]` entry at all — this is **not** itself a finding:
+cargo auto-discovers any `examples/*.rs` file with no `required-features` as a build target
+without a manifest entry, and an explicit `[[example]]` block exists in this workspace only to
+attach `required-features` (confirmed: none of the 43 undeclared files needs a non-default
+feature, and all 43 build clean under the bare bulk selector, Invocation 1). Zero
+file-with-no-declaration findings that indicate an actual gap.
+
+**Build invocation coverage, resolved per program:** the four declared `required-features`
+targets (`vision_analysis`, `vision_battalion` → Invocation 2; `document_processing` →
+Invocation 3; `http_service_host` → Invocation 4) are skipped by the bulk selector and covered
+only by their named invocation; the remaining 44 `examples/*.rs` files (48 − 4) are covered by
+Invocation 1 alone. Every row below states its covering invocation in the Build invocation cell;
+none is uncovered by every invocation (the finding D-16 anticipates — "a program whose only
+coverage is the bulk selector while its `required-features` are unmet is not built at all" —
+does not occur in this tree: the manifest's four `required-features` declarations exactly track
+the four feature-gated files).
+
+Currency verdict, Obsolete-API hits and Claimed-capability cells are seeded below with the
+pending marker task 2 settles; Size is `n/a` until a row's verdict requires a fix.
 
 | EX ID | Program / module | Build invocation | Build status | Currency verdict | Obsolete-API hits | Claimed capability → tree check | Evidence anchor | Size |
 |-------|-------------------|-------------------|---------------|-------------------|--------------------|-----------------------------------|------------------|------|
 | EX-01 | examples/README.md | n/a — documentation page, not a compiled program | n/a | stale | none (not an API-obsolescence finding) | Line 24 states "Rust 1.70 or later" as the minimum Rust version; `Cargo.toml` `[workspace.package] rust-version = "1.88"` (line 18) is the measured, live MSRV floor — the two disagree | 34-EVIDENCE.md #8 | S |
+| EX-02 | examples/agent_handoffs.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-03 | examples/arsenal_stdio_tools.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-04 | examples/arsenal_streamable_http_tools.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-05 | examples/autonomous_full_config.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-06 | examples/autonomous_planning.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-07 | examples/autonomous_prompt_generation.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-08 | examples/basic_paladin.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-09 | examples/battalion_checkpoint_recovery.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-10 | examples/campaign_workflow.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-11 | examples/chain_of_command_delegation.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-12 | examples/citadel_autosave.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-13 | examples/citadel_restore.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-14 | examples/commander_auto.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-15 | examples/commander_basic.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-16 | examples/commander_council.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-17 | examples/commander_full_config.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-18 | examples/commander_grove.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-19 | examples/commander_with_metadata_export.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-20 | examples/conclave_expert_panel.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-21 | examples/council_discussion.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-22 | examples/document_processing.rs | `cargo build --example document_processing --features "content-processing" --offline (ci.yml:554)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 3) | n/a |
+| EX-23 | examples/dynamic_temperature.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-24 | examples/formation_sequential.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-25 | examples/garrison_in_memory.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-26 | examples/garrison_persistent.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-27 | examples/garrison_semantic_search.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-28 | examples/grove_routing.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-29 | examples/herald_custom_formatter.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-30 | examples/herald_json_output.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-31 | examples/herald_markdown_output.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-32 | examples/herald_streaming.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-33 | examples/http_service_host.rs | `cargo build --example http_service_host --features "web-server" --offline (ci.yml:557)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 4) | n/a |
+| EX-34 | examples/llm_provider_selection.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-35 | examples/maneuver_basic.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-36 | examples/maneuver_dynamic_flow.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-37 | examples/maneuver_nested_flow.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-38 | examples/muster_baseline.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-39 | examples/paladin_with_config.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-40 | examples/paladin_with_rag.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-41 | examples/paladin_with_sanctum.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-42 | examples/phalanx_parallel.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-43 | examples/sanctum_adapter_migration.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-44 | examples/sanctum_basic_inmemory.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-45 | examples/sanctum_configuration.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-46 | examples/sanctum_qdrant_production.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-47 | examples/vision_analysis.rs | `cargo build --example vision_analysis --example vision_battalion --features "vision,llm-openai" --offline (ci.yml:551)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 2) | n/a |
+| EX-48 | examples/vision_battalion.rs | `cargo build --example vision_analysis --example vision_battalion --features "vision,llm-openai" --offline (ci.yml:551)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 2) | n/a |
+| EX-49 | examples/war_engine_memory_baseline.rs | `cargo build --examples --offline (ci.yml:548, bulk selector)` | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Invocation 1) | n/a |
+| EX-50 | crates/doc-examples/src/agent_runtime.rs | `bash scripts/check-doc-examples.sh` (Layer 1: `cargo check --manifest-path crates/doc-examples/Cargo.toml`) | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) | n/a |
+| EX-51 | crates/doc-examples/src/bridge.rs | `bash scripts/check-doc-examples.sh` (Layer 1: `cargo check --manifest-path crates/doc-examples/Cargo.toml`) | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) | n/a |
+| EX-52 | crates/doc-examples/src/content.rs | `bash scripts/check-doc-examples.sh` (Layer 1: `cargo check --manifest-path crates/doc-examples/Cargo.toml`) | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) | n/a |
+| EX-53 | crates/doc-examples/src/deployment_topologies.rs | `bash scripts/check-doc-examples.sh` (Layer 1: `cargo check --manifest-path crates/doc-examples/Cargo.toml`) | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) | n/a |
+| EX-54 | crates/doc-examples/src/fault_tolerance.rs | `bash scripts/check-doc-examples.sh` (Layer 1: `cargo check --manifest-path crates/doc-examples/Cargo.toml`) | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) | n/a |
+| EX-55 | crates/doc-examples/src/http_service_host.rs | `bash scripts/check-doc-examples.sh` (Layer 1: `cargo check --manifest-path crates/doc-examples/Cargo.toml`) | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) | n/a |
+| EX-56 | crates/doc-examples/src/orchestration.rs | `bash scripts/check-doc-examples.sh` (Layer 1: `cargo check --manifest-path crates/doc-examples/Cargo.toml`) | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) | n/a |
+| EX-57 | crates/doc-examples/src/queue_worker.rs | `bash scripts/check-doc-examples.sh` (Layer 1: `cargo check --manifest-path crates/doc-examples/Cargo.toml`) | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) | n/a |
+| EX-58 | crates/doc-examples/src/readme.rs | `bash scripts/check-doc-examples.sh` (Layer 1: `cargo check --manifest-path crates/doc-examples/Cargo.toml`) | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) | n/a |
+| EX-59 | crates/doc-examples/src/sidecar.rs | `bash scripts/check-doc-examples.sh` (Layer 1: `cargo check --manifest-path crates/doc-examples/Cargo.toml`) | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) | n/a |
+| EX-60 | crates/doc-examples/src/support.rs | `bash scripts/check-doc-examples.sh` (Layer 1: `cargo check --manifest-path crates/doc-examples/Cargo.toml`) | green (exit 0) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) | n/a |
+| EX-61 | crates/paladin-llm/examples/live_vendor_smoke.rs | `cargo build -p paladin-llm --example live_vendor_smoke --features "kimi,qwen,grok,gemini"` (D-16; built only, never run — reaches a live vendor and needs a credential) | green (exit 0), built not run | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | pending - not yet assessed (plan 34-08 task 2) | 34-evidence/34-08-examples-builds.txt (Extra target 2) | n/a |
 
 ## §5 Phase 35 work list
 

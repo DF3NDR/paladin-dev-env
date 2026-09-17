@@ -313,3 +313,31 @@ measure is unchanged from the recorded Phase 34 start SHA.
 
 *Phase: 34-documentation-currency-audit*
 *Evidence recorded: 2026-09-17, plan 34-01*
+
+## Plan 34-08, Task 1 — examples build/currency sweep, build status
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 151 | `cargo build --examples --offline` (ci.yml:548, Invocation 1 — bulk selector), teed to `34-evidence/34-08-examples-builds.txt` | exit `0`; `Finished` in ~1s (warm `target/`); covers the 44 of 48 `examples/*.rs` files with no unmet `required-features` | ✅ PASS — green |
+| 152 | `cargo build --example vision_analysis --example vision_battalion --features "vision,llm-openai" --offline` (ci.yml:551, Invocation 2) | exit `0`; ~1s | ✅ PASS — green |
+| 153 | `cargo build --example document_processing --features "content-processing" --offline` (ci.yml:554, Invocation 3) | exit `0`; ~1s | ✅ PASS — green |
+| 154 | `cargo build --example http_service_host --features "web-server" --offline` (ci.yml:557, Invocation 4) | exit `0`; ~1s | ✅ PASS — green |
+| 155 | `bash scripts/check-doc-examples.sh` (D-16 extra target 1 — Layer 1 `cargo check --manifest-path crates/doc-examples/Cargo.toml`, Layer 1b README quick-example mirror, Layer 2 inline fenced-block scan) | exit `0`; "All included examples compile.", "README Quick Example is in sync.", "Results: 0 checked, 616 skipped, 0 failed"; ~6s | ✅ PASS — green, all three layers |
+| 156 | `cargo build -p paladin-llm --example live_vendor_smoke --features "kimi,qwen,grok,gemini" --offline` (D-16 extra target 2 — `required-features` names all four vendor flags at once) | exit `0`; built only, **not run** — no vendor credential env var read or exported | ✅ PASS — green, built-not-run confirmed |
+| 157 | Live surface re-count: `find examples -name '*.rs' \| wc -l` → 48; `ls crates/doc-examples/src/*.rs` excl. `lib.rs` → 11; `ls crates/paladin-llm/examples/*.rs` → 1 (total 60). Compared against `ci.yml:538`'s own comment ("holds 47 .rs files") | live count 48 vs. comment's stated 47 — one-file drift; comment is neither documentation nor an example (D-19), routed to `deferred-items.md` under `## Plan 34-08, Task 1`, no `EX-nn` minted | ⚠️ RECORDED — routed, not fixed |
+| 158 | `git status --porcelain -- examples crates Cargo.toml` and `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | both empty | ✅ PASS |
+
+## Notes (plan 34-08, Task 1)
+
+- All four `ci.yml:548-558` invocations plus both D-16 extra targets (`doc-examples` three-layer
+  gate, `live_vendor_smoke` build) are green at this HEAD — no example, module, or the
+  `paladin-llm`-crate example fails to build under the feature set CI actually splits on.
+- The `[[example]]` declaration cross-check (both directions, `34-AUDIT.md` §4) found zero
+  declared-with-no-file gaps and confirmed the 43 undeclared-but-present files need no
+  `required-features` (cargo auto-discovers them under the bulk selector) — not itself a finding.
+- `34-AUDIT.md` §4 now carries 60 new `EX-nn` rows (`EX-02..EX-61`) covering every
+  `examples/*.rs` file, every `crates/doc-examples/src/*.rs` module (excl. `lib.rs`), and
+  `crates/paladin-llm/examples/live_vendor_smoke.rs` — each seeded with the exact pending marker
+  `pending - not yet assessed (plan 34-08 task 2)` in its Currency verdict, Obsolete-API hits and
+  Claimed-capability cells, per this task's own acceptance criteria (the examples-table analogue
+  of the §2 mdBook placeholder — an unswept row must never read as a clean one).

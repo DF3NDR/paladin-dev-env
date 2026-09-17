@@ -42,6 +42,21 @@ stays a pointer only. `34-AUDIT.md` §7 (assembled by plan 34-09) links back to 
    with the current 101-item set as the new baseline, refreeze `16-DOCS-03-ENTRY-POINTS.md` at
    101, fix the 19 MISSING items, or some combination — none of which this phase decides.
 
+## Plan 34-08, Task 1
+
+1. **`ci.yml:538`'s example-file-count comment is stale by one (D-16, D-19).** The step comment
+   reads "`examples/` holds 47 .rs files. Exactly 4 are declared `[[example]]` targets in
+   Cargo.toml" — this plan's live re-count (`find examples -name '*.rs' | wc -l`) measures **48**,
+   not 47. The four declared `[[example]]` targets and their required-features are still correct
+   (`vision_analysis`/`vision_battalion` → `vision,llm-openai`; `document_processing` →
+   `content-processing`; `http_service_host` → `web-server`), and all four CI invocations still
+   cover every file on disk (the 44 undeclared files all build clean under the bare bulk selector,
+   confirmed in `34-AUDIT.md` §4's `[[example]]` cross-check). Only the comment's count is stale —
+   a CI workflow comment is neither documentation nor an example (D-19), so no `EX-nn` row was
+   minted for it. Remains open for a maintainer to bump the comment's "47" to "48" (and confirm
+   which file was added since the comment was last true) the next time `ci.yml`'s examples step is
+   touched.
+
 ---
 
 *Phase: 34-documentation-currency-audit*

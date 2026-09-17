@@ -1,0 +1,50 @@
+=== Invocation 1: cargo build --examples --offline (ci.yml:548) ===
+--- start: 2026-09-17T06:04:49Z ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.01s
+--- exit code: 0 ---
+--- wall time: 1s ---
+--- end: 2026-09-17T06:04:50Z ---
+
+=== Invocation 2: cargo build --example vision_analysis --example vision_battalion --features "vision,llm-openai" --offline (ci.yml:551) ===
+--- start: 2026-09-17T06:04:55Z ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.89s
+--- exit code: 0 ---
+--- wall time: 1s ---
+--- end: 2026-09-17T06:04:56Z ---
+
+=== Invocation 3: cargo build --example document_processing --features "content-processing" --offline (ci.yml:554) ===
+--- start: 2026-09-17T06:05:01Z ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.00s
+--- exit code: 0 ---
+--- wall time: 1s ---
+--- end: 2026-09-17T06:05:02Z ---
+
+=== Invocation 4: cargo build --example http_service_host --features "web-server" --offline (ci.yml:557) ===
+--- start: 2026-09-17T06:05:07Z ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.82s
+--- exit code: 0 ---
+--- wall time: 1s ---
+--- end: 2026-09-17T06:05:08Z ---
+
+=== Extra target 1: bash scripts/check-doc-examples.sh (Layer 1 compile, Layer 1b README sync, Layer 2 inline-block scan) ===
+--- start: 2026-09-17T06:05:13Z ---
+Compiling documentation examples (paladin-doc-examples crate)...
+All included examples compile.
+
+Checking README Quick Example matches crates/doc-examples/src/readme.rs ...
+README Quick Example is in sync.
+
+Checking doc code examples in /workspace/docs/src ...
+
+Results: 0 checked, 616 skipped, 0 failed
+All doc code examples pass validation.
+--- exit code: 0 ---
+--- wall time: 6s ---
+--- end: 2026-09-17T06:05:19Z ---
+
+=== Extra target 2: cargo build -p paladin-llm --example live_vendor_smoke --features "kimi,qwen,grok,gemini" (build only, NOT run — reaches a live vendor and needs a credential) ===
+--- start: 2026-09-17T06:05:25Z ---
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.51s
+--- exit code: 0 ---
+--- wall time: 0s ---
+--- end: 2026-09-17T06:05:25Z ---

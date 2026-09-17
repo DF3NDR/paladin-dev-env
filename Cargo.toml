@@ -461,6 +461,11 @@ name = "http_service_host"
 path = "examples/http_service_host.rs"
 required-features = ["web-server"]
 
+[[example]]
+name = "platform_api_client"
+path = "examples/platform_api_client.rs"
+required-features = ["web-server", "dev-ui"]
+
 [[bin]]
 name = "paladin"
 path = "src/main.rs"

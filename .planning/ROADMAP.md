@@ -1009,7 +1009,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 — runs on the phase's final commit)*
 
-- [ ] 35-10-PLAN.md — `35-EVIDENCE.md` with the sixty-row closure table and the full gate run, the `[0.10.0]` Documentation changelog entry, the D-21 exit greps and the deferred-register fold
+- [x] 35-10-PLAN.md — `35-EVIDENCE.md` with the sixty-row closure table and the full gate run, the `[0.10.0]` Documentation changelog entry, the D-21 exit greps and the deferred-register fold
 
 ### Phase 36: Rustdoc Zero-Warning Bar & Examples Currency
 

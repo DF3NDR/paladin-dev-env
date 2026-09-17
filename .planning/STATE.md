@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
 milestone: v0.10.0
-milestone_name: Crate Release
-current_phase: 33
-status: ready_to_plan
-stopped_at: Phase 34 context gathered
+milestone_name: Durable Agent Execution Runtime
+current_phase: 34
+status: ready_to_execute
+stopped_at: "Phase 34 planned 2026-09-17 — 9 plans (34-01…34-09) in 9 sequential waves (one canonical 34-AUDIT.md, CONTEXT D-01), plan-checker passed, decision coverage 30/30, CURR-01…05 minted by plan 34-01 at execution; next: /gsd-execute-phase 34 (auto-advancing from the --auto chain)"
 last_updated: "2026-09-17T02:23:16.427Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 33 complete
+last_activity_desc: Phase 34 planning complete — 9 plans ready
 progress:
   total_phases: 17
   completed_phases: 13
-  total_plans: 158
+  total_plans: 167
   completed_plans: 158
 current_phase_name: Documentation Currency Audit
 ---
@@ -58,11 +58,12 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 33
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-09-17 — Phase 33 complete
-Previous: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
+Phase: 34
+Plan: 0 of 9 executed (34-01 … 34-09, sequential waves 1-9)
+Status: Ready to execute
+Last activity: 2026-09-17 — Phase 34 planning complete — 9 plans ready
+Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
+Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics

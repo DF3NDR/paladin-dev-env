@@ -480,7 +480,7 @@ pub struct HistoryResponse {
 /// Query parameters for `GET /threads/{id}/history`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HistoryQuery {
-    /// Maximum number of items to return (at most [`MAX_HISTORY_LIMIT`]).
+    /// Maximum number of items to return (capped by the crate-private history limit).
     #[serde(default)]
     pub limit: Option<u32>,
     /// Opaque pagination cursor from a previous page's `next_cursor`.
@@ -683,7 +683,7 @@ pub async fn get_thread_state(
 /// Validates synchronously through [`ParleyPort::resume_with`] and returns
 /// `202 Accepted` immediately; the run itself continues on a background task
 /// (D-25) -- a client polls `GET .../state` to observe the outcome. Maps
-/// [`ParleyError`] per [`map_parley_error`].
+/// [`ParleyError`] per the crate-private `map_parley_error` mapping.
 #[utoipa::path(
     post,
     path = "/threads/{id}/resume",
@@ -754,7 +754,7 @@ pub async fn resume_thread(
 /// Authenticated, any role (D-24) -- see [`get_thread_state`]'s docs on why
 /// reads are not admin-gated the way [`resume_thread`] is.
 ///
-/// `limit` (at most [`MAX_HISTORY_LIMIT`]) and an opaque `cursor` whose
+/// `limit` (capped by the crate-private history limit) and an opaque `cursor` whose
 /// content is the last returned item's `waypoint_id` (D-27). Returns
 /// `400 Bad Request` for `limit > 100` or an unparseable `cursor`.
 #[utoipa::path(

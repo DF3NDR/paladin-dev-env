@@ -1,6 +1,7 @@
 //! Feature-gated (`dev-ui`, default off) admin developer tool (28-15, D-25/D-26):
 //! `GET /v1/dev-ui/threads/{id}` renders one thread's
-//! [`RunInspectorPort`] view as a single static HTML page -- the execution overlay
+//! [`RunInspectorPort`](paladin_ports::input::run_inspector_port::RunInspectorPort)
+//! view as a single static HTML page -- the execution overlay
 //! diagram, a per-node visits panel, a per-superstep fired-edge list and a superstep
 //! table with field-change NAMES only (never a Battlefield field value, T-28-14-01).
 //!
@@ -17,7 +18,8 @@
 //!
 //! ## Authorization (D-25)
 //!
-//! `crate::app::create_dev_ui_router` mounts [`dev_ui_inspector_page`] under the SAME
+//! `crate::app::create_dev_ui_router` mounts
+//! [`dev_ui_inspector_page`](crate::dev_ui_controller::dev_ui_inspector_page) under the SAME
 //! [`crate::auth_middleware::require_auth`] + [`crate::auth_middleware::require_admin`]
 //! middleware layers `create_app_router`'s admin routes already use -- this port neither
 //! performs nor implies an authorization boundary of its own (see
@@ -25,7 +27,8 @@
 //!
 //! ## No values-shown mode (T-28-15-03)
 //!
-//! [`InspectorView::supersteps`]'s `field_changes` is `Vec<FieldName>` by TYPE (28-14) --
+//! [`InspectorView::supersteps`](paladin_ports::input::run_inspector_port::InspectorView::supersteps)'s
+//! `field_changes` is `Vec<FieldName>` by TYPE (28-14) --
 //! there is nowhere on the view a Battlefield field VALUE could be placed even by
 //! mistake, and this module never introduces one.
 
@@ -66,8 +69,8 @@ const NOT_WIRED_MESSAGE: &str = "Inspector not available. This server was not bu
 ///
 /// Mirrors [`crate::thread_controller::ThreadApiState`]'s injection-only shape:
 /// [`Self::inspector`] is `None` until a [`RunInspectorPort`] backend is wired, at which
-/// point every request answers `501` through [`NOT_WIRED_MESSAGE`] rather than panicking
-/// or 404-ing.
+/// point every request answers `501` through the crate-private `NOT_WIRED_MESSAGE`
+/// constant rather than panicking or 404-ing.
 #[derive(Clone)]
 pub struct DevUiState {
     /// The facade this route renders. `None` when no inspector backend is configured.
@@ -128,7 +131,7 @@ fn map_inspector_error(id: &str, err: InspectorError) -> ApiError {
 /// inspector backend to `501`, both through the structured [`ApiError`] envelope; any
 /// other backend failure is `500`. On success, returns `200` with a `text/html` body
 /// embedding the serialized [`paladin_ports::input::run_inspector_port::InspectorView`]
-/// (escaped per [`escape_for_script`]) and the configured Mermaid URL.
+/// (escaped per the crate-private `escape_for_script` helper) and the configured Mermaid URL.
 pub async fn dev_ui_inspector_page(
     State(state): State<DevUiState>,
     Path(id): Path<String>,

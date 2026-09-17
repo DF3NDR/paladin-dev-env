@@ -83,3 +83,73 @@ EXIT=0
 
     $ git diff --stat HEAD~1 -- crates/ src/ (post-commit, restricted to crates/paladin-llm/)
     all changed lines are doc-comment lines only (verified via `git diff -- crates/paladin-llm/` before commit)
+
+
+## paladin-web
+
+### BEFORE (baseline, default features, forced re-documentation)
+
+    $ touch crates/paladin-web/src/lib.rs && cargo doc -p paladin-web --no-deps
+
+warning: public documentation for `limit` links to private item `MAX_HISTORY_LIMIT`
+   --> crates/paladin-web/src/thread_controller.rs:483:54
+warning: public documentation for `resume_thread` links to private item `map_parley_error`
+   --> crates/paladin-web/src/thread_controller.rs:686:27
+warning: public documentation for `get_thread_history` links to private item `MAX_HISTORY_LIMIT`
+   --> crates/paladin-web/src/thread_controller.rs:757:24
+warning: `paladin-web` (lib doc) generated 3 warnings
+
+### BEFORE (all-features, RUSTDOCFLAGS="-D warnings")
+
+    $ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps
+
+8 errors (11 rows across RD-07, RD-08, RD-09, RD-129..RD-136):
+- dev_ui_controller.rs:3   -- unresolved link `RunInspectorPort` (public, cross-crate, needs explicit path)
+- dev_ui_controller.rs:20  -- unresolved link `dev_ui_inspector_page` (public, same-crate, needs explicit path)
+- dev_ui_controller.rs:28  -- unresolved link `InspectorView::supersteps` (public, cross-crate, needs explicit path)
+- dev_ui_controller.rs:69  -- NOT_WIRED_MESSAGE (private)
+- dev_ui_controller.rs:131 -- escape_for_script (private)
+- thread_controller.rs:483 -- MAX_HISTORY_LIMIT (private)
+- thread_controller.rs:686 -- map_parley_error (private)
+- thread_controller.rs:757 -- MAX_HISTORY_LIMIT (private, second mention)
+error: could not document `paladin-web`
+
+### AFTER (default features, forced re-documentation)
+
+    $ touch crates/paladin-web/src/lib.rs && cargo doc -p paladin-web --no-deps
+
+ Documenting paladin-web v0.10.0 (/workspace/crates/paladin-web)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.22s
+   Generated /workspace/target/doc/paladin_web/index.html
+
+0 lines matching `warning:` (down from 3).
+
+### AFTER (all-features, RUSTDOCFLAGS="-D warnings")
+
+    $ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps
+
+ Documenting paladin-web v0.10.0 (/workspace/crates/paladin-web)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.38s
+   Generated /workspace/target/doc/paladin_web/index.html
+EXIT=0
+
+### Workspace-level checks (post-fix, paladin-web)
+
+    $ cargo fmt --all -- --check          -> clean (no output)
+    $ cargo check --workspace --all-targets --all-features   -> Finished, exit 0
+    $ cargo test --workspace --doc        -> 0 failed (paladin_web doctests: 0 passed / 0 failed -- crate carries no doctests)
+    $ make api-surface                    -> "API surface unchanged" (3959 items)
+
+### Negative-evidence greps
+
+    $ grep -rn 'allow(rustdoc::' crates/paladin-web/src
+    (no output)
+
+    $ grep -rn 'cfg_attr(docsrs' crates/paladin-web/src
+    (no output)
+
+    $ grep -rn 'pub const MAX_HISTORY_LIMIT\|pub const NOT_WIRED_MESSAGE\|pub fn escape_for_script\|pub fn map_parley_error' crates/paladin-web/src
+    (no output)
+
+    $ git diff -- crates/paladin-web/ (pre-commit)
+    all changed lines are doc-comment lines only

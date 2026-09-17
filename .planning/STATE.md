@@ -5,8 +5,8 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 34
 current_phase_name: documentation-currency-audit
 status: executing
-stopped_at: Completed 34-01-PLAN.md
-last_updated: "2026-09-17T03:42:23.095Z"
+stopped_at: Completed 34-02-PLAN.md
+last_updated: "2026-09-17T03:58:10.250Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 34 execution started
 progress:
@@ -59,7 +59,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 34 (documentation-currency-audit) — EXECUTING
-Plan: 2 of 9
+Plan: 3 of 9
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 34 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -139,6 +139,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 12 P04 | ~25min | 2 tasks | 3 files |
 | Phase 20 P07 | 35min | 3 tasks | 3 files |
 | Phase 34 P01 | 17min | 2 tasks | 9 files |
+| Phase 34 P02 | 15min | 1 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -466,6 +467,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Recorded both v0.8.1-rc.3 and v0.8.1-rc.4 rehearsals in full — rc.4 is the only live proof of Phase 20's own gate and recovery scripts, and it found and fixed two real gate bugs (Findings 5, 6)
 - [Phase ?]: Assumption A3 (OIDC token exchange survives a same-tag re-run) proven twice, independently re-verified against crates.io trustpub_data.run_id rather than transcribed from workflow self-reports
 - [Phase ?]: CURR-01…05 minted 1:1 against ROADMAP Phase 34's five success criteria; SC5 read-only gate diffs against the fixed Phase 34 start SHA, not git merge-base HEAD main, since main is 7 phases behind
+- [Phase ?]: Compiled the D-08 shipped-surface checklist (91 SS-nn rows, 13 phase tables) into 34-AUDIT.md §1 before any mdBook/rustdoc/examples page is judged; confirmed the three D-10 ubiquitous-language lists by line-anchored grep and recorded a genuine fourth partial list at docs/src/introduction.md for a later sweep
 
 ### Pending Todos
 
@@ -1032,8 +1034,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T03:42:22.986Z
-**Stopped at:** Completed 34-01-PLAN.md
+**Last session:** 2026-09-17T03:58:10.150Z
+**Stopped at:** Completed 34-02-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

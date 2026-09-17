@@ -167,6 +167,12 @@ None - no external service configuration required.
 - No deferred observations were made on any page the audit settled `current` — nothing to fold into `deferred-items.md` for plan 35-10.
 - Plan 35-10 (CHANGELOG + exit greps + `35-EVIDENCE.md`) can cite this plan's nine commits directly via `git log --oneline --grep 'MB-'`.
 
+## Self-Check: PASSED
+
+All 9 modified pages plus this SUMMARY.md file confirmed present on disk; all 9 task commit
+hashes (`aa2e1883`, `700c2588`, `926fd5f1`, `d75783a5`, `ddd79c33`, `3bdc862d`, `778bc53d`,
+`d2156c0e`, `35630a85`) confirmed present in `git log --oneline`.
+
 ---
 *Phase: 35-mdbook-currency*
 *Completed: 2026-09-17*

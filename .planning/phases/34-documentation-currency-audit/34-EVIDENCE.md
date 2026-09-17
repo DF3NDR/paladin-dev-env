@@ -193,6 +193,36 @@ measure is unchanged from the recorded Phase 34 start SHA.
   row) and class 9's degrade path closes as row 21 proves — no row here retroactively edits the
   plan 34-01 verdict on rows 1-13, which were correctly `SKIPPED` at the time they were captured.
 
+## Plan 34-06, Task 1 — default-feature rustdoc enumeration
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 109 | Precondition check: `cargo --version && rustc --version`, compared against `rust-toolchain.toml`'s `channel = "1.97.1"` | `cargo 1.97.1 (c980f4866 2026-06-30)`, `rustc 1.97.1 (8bab26f4f 2026-07-14)` — matches exactly | ✅ PASS — precondition met, measurement trusted |
+| 110 | The `lint` job's "Check documentation" step, quoted byte-identical from `.github/workflows/ci.yml:62-63`, teed to `34-evidence/34-06-cargo-doc-default.txt` instead of `/tmp`: `cargo doc --workspace --no-deps 2>&1 \| tee 34-evidence/34-06-cargo-doc-default.txt && ! grep -q "warning:" 34-evidence/34-06-cargo-doc-default.txt` | `cargo doc` exit `0`; trailing negation exit `1` (composite gate RED); wall time 6s (warm `target/`); 578-line capture | ⚠️ RECORDED — carried baseline per ADR-0033, not a gate this phase enforces (SHIP-04 precedent) |
+| 111 | `grep -c '^warning:' 34-evidence/34-06-cargo-doc-default.txt` | `73` total `warning:`-prefixed lines | ✅ RECORDED — matches Phase 33's carried figure exactly (unchanged since Phase 33 close, +1 vs Phase 29's 72) |
+| 112 | Per-crate summary-line count: `grep -cE '^warning: \`[a-zA-Z0-9_-]+\` \(lib doc\) generated [0-9]+ warnings?$' 34-evidence/34-06-cargo-doc-default.txt`, and the 8 lines' own stated counts summed | `8` summary lines; `paladin-ai` 5, `paladin-web` 3, `paladin-battalion` 36, `paladin-storage` 1, `paladin-llm` 4, `paladin-ports` 1, `paladin-ai-core` 14, `paladin-memory` 1 — sum `65` | ✅ PASS — 73 total − 8 summaries = 65 content diagnostics, matching the sum of the 8 crates' own counts exactly |
+| 113 | `diff 34-evidence/34-01-cargo-doc-default.txt 34-evidence/34-06-cargo-doc-default.txt` (independent re-run of the identical command, 6 days apart in session terms, same HEAD-tree per D-23) | Differs only in `Documenting <crate>` progress-line presence/order (cargo's own incremental-cache artifact); `grep -c '^warning:'` is `73` in both captures; no diagnostic content, location, or message differs | ✅ PASS — reproducibility confirmed independently of plan 34-01's own capture |
+| 114 | `bash 34-rustdoc-rows.sh 34-evidence/34-06-cargo-doc-default.txt default` (new script, this plan) | 65 pipe-table rows printed to stdout; stderr: `RECONCILED: 65 content diagnostics == 65 rows emitted`; exit `0` | ✅ PASS — content-diagnostic count and emitted-row count reconcile exactly |
+| 115 | Kind-classification tally over the 65 emitted rows (`awk -F' \| ' '{print $4}' \| sort \| uniq -c`, column re-verified positionally against the header) | `24` private intra-doc link, `36` unresolved link, `3` redundant explicit link, `2` unclosed HTML tag, `0` missing docs, `0` other | ✅ RECORDED — every row's Kind cell holds a named D-13 class; nothing fell through to `other` |
+| 116 | Location-source split: `grep -c 'rustdoc span' \| grep -c 'grep recovery'` over the emitted rows | `29` rustdoc span, `36` grep recovery (34 `unresolved link` + 2 `unclosed HTML tag`) | ✅ PASS — the P-01 grep-recovery path is exercised on the majority of rows, not just the tracer's one worked case |
+| 117 | Snippet-based disambiguation spot-check: two independent `TraceRecord` warnings (identical bracket identifier, different source lines) and two `unclosed HTML tag` warnings with no snippet note at all (`<status>`/`<body>`) | `TraceRecord` warnings resolve to two distinct lines, `crates/paladin-core/src/platform/container/trace.rs:6` and `:17` (confirmed by direct file read — both lines genuinely contain a `[`TraceRecord`]` link); the two HTML-tag warnings both resolve to `crates/paladin-llm/src/http_status.rs:6` and `:7` (confirmed live: `grep -rn '<status>\|<body>' crates/paladin-llm/src/http_status.rs` finds both on adjacent lines of one `//!` doc comment) — in every one of the 36 grep-recovered rows exactly one candidate match remained after crate-scoping, with zero ambiguous "first taken" fallbacks | ✅ PASS — the full quoted-snippet grep (not the bare bracket identifier alone) is what disambiguates same-identifier, different-location warnings; crate-scoped search (derived from the summary-line chunking algorithm, not stream position) is what let a workspace-wide, multi-match identifier resolve to a single crate-local hit every time |
+| 118 | WINDOWS.md rows 36 and 37 read (never edited) and cross-checked against the enumeration | Row 36: workspace-wide observation, stays `open`, its own count (16) stale against this run's 65/73 but not claimed current by this phase; Row 37: `crates/paladin-memory/src/token_counter/mod.rs:3` matches the enumeration's own last row (`RD-66`) exactly, same file/line, stays `open` | ✅ PASS — both rows remain `open`; `git status --porcelain -- .planning/WINDOWS.md` confirmed empty after this task's commit |
+| 119 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+| 120 | `bash 34-check.sh --seed` (post-task re-run, after fixing 3 duplicate-ID false positives — `RD-01`/`RD-66` cited by their literal string in this task's own new prose, the same recurring collision class every prior plan in this phase has hit and fixed) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+
+## Notes (plan 34-06)
+
+- `34-rustdoc-rows.sh` is written generically (crate/src-dir map built live from `Cargo.toml`
+  `[package] name` fields, never hardcoded) so plan 34-07's per-crate `-D warnings --all-features`
+  sweep can reuse it unmodified against an `error:`-prefixed capture (its `<run-label>` argument
+  switches the diagnostic prefix it walks).
+- The crate-attribution algorithm (summary-line chunking, front-to-back against the pending
+  diagnostic queue) is a finding of this plan, not assumed from RESEARCH.md: RESEARCH.md's Pitfall
+  P-01 documents the grep-recovery method for a *single* known-answer case but does not address how
+  to attribute a location-less diagnostic to a crate in a workspace-wide, concurrently-scheduled
+  run. This plan measured and validated the chunking approach live (row 117 above) before trusting
+  it for all 36 grep-recovered rows.
+
 ---
 
 *Phase: 34-documentation-currency-audit*

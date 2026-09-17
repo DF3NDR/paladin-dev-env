@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 34
 current_phase_name: documentation-currency-audit
 status: executing
-stopped_at: Completed 34-05-PLAN.md
-last_updated: "2026-09-17T05:19:01.867Z"
+stopped_at: Completed 34-06-PLAN.md
+last_updated: "2026-09-17T05:43:10.415Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 34 execution started
 progress:
   total_phases: 17
   completed_phases: 13
   total_plans: 167
-  completed_plans: 162
+  completed_plans: 164
 ---
 
 # Project State
@@ -35,7 +35,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 97%
+**Progress:** [██████████] 98%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -59,7 +59,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 34 (documentation-currency-audit) — EXECUTING
-Plan: 6 of 9
+Plan: 7 of 9
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 34 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -143,6 +143,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 34 P03 | 18min | 2 tasks | 3 files |
 | Phase 34 P04 | 28min | 2 tasks | 3 files |
 | Phase 34 P05 | ~60min | 2 tasks | 2 files |
+| Phase 34 P06 | ~18min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -474,6 +475,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 34 plan 03: measured the mdBook build/linkcheck/gate baseline green; settled 18 root/getting-started/architecture/api-reference page verdicts (12 stale via MB-04..MB-17, 6 current); confirmed upgrading.md agrees with MIGRATION.md §9.1/§9.8 4/4 and 7/7 with zero disagreements; both crate-map.md pages and architecture/overview.md found missing paladin-eval/paladin-herald and the Phase 33 paladin-memory->paladin-llm edge
 - [Phase ?]: Phase 34 plan 04: settled 40 mdBook page verdicts (26 current, 14 stale via MB-18..MB-36) plus the Phase 22 superstep-engine missing-page decision (row 94, MB-30, deferred in Phase 23, never picked up); genuine live-code-verified defects included control-flow.md still describing Parley as unimplemented (Phase 24 shipped it), fault-tolerance.md's stale fingerprint version (v5 vs live v6), sanctum-vector-memory.md's entirely absent Phase 33 RAG surface, cicd.md's fabricated CI/Release Pipeline job samples, and testing-guide.md's coverage command missing the ,llm-all feature flag scripts/coverage.sh actually runs
 - [Phase ?]: Phase 34 plan 05: settled all 34 remaining appendix page verdicts, closing the 93-page mdBook partition (current 38, stale 55, missing 1); disproved an initial pre-hexagonal-import-path staleness assumption empirically (paladin::core::/paladin::application::services:: style imports are maintained backward-compatible re-exports and compile fine); found a systemic paladin::paladin_ports:: double-nesting import defect across 5 pages, integration-tests.md missing 26 of 60 live test files, and security-scanning.md's Snyk framing contradicting the project's own dated decision record
+- [Phase ?]: Phase 34 plan 06: enumerated 65 default-feature rustdoc warnings as RD-02..RD-66 (36 location-less, recovered by full quoted-snippet grep, zero ambiguous fallbacks); wrote 34-rustdoc-rows.sh (crate attribution by summary-line chunking, not stream position) for plan 34-07 reuse; recorded the workspace all-features run's 17-error/4-crate floor (paladin-memory 1, paladin-web 8, paladin-storage 1, paladin-ai facade 7), correcting D-14's single-crate abort prose with a third independent measurement (no paladin-ai-core in this run's abort set at all)
 
 ### Pending Todos
 
@@ -1040,8 +1042,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T05:19:01.762Z
-**Stopped at:** Completed 34-05-PLAN.md
+**Last session:** 2026-09-17T05:43:04.639Z
+**Stopped at:** Completed 34-06-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

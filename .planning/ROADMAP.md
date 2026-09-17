@@ -958,7 +958,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 34-06-PLAN.md — Rustdoc default-feature enumeration against the ci.yml bar, plus the workspace all-features record
+- [x] 34-06-PLAN.md — Rustdoc default-feature enumeration against the ci.yml bar, plus the workspace all-features record
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

@@ -1,0 +1,69 @@
+Phase 36 Plan 01 -- Baseline capture (D-01, D-25)
+Toolchain: cargo 1.97.1 / rustc 1.97.1
+HEAD at capture time: 8fab0788b122e8297264453c3e306d0d62aa4309
+Captured: 2026-09-17T19:24:00Z
+
+This re-runs, verbatim, the two commands 36-RESEARCH.md's "Re-baseline delta" section already
+ran at HEAD 619551a781f6e352fac896d5fab1ba8630876585 -- confirming zero drift between that
+research-time HEAD and this plan's dispatch-time HEAD (8fab0788), which differ only by four
+docs-only commits (09c7221f, cbec17da,46c9430a, 619551a7..8fab0788 phase-planning commits under
+.planning/), per CONTEXT D-01.
+
+=====================================================================
+Command 1 -- ci.yml:63 verbatim (default features)
+  cargo doc --workspace --no-deps 2>&1 | tee /tmp/doc-output.txt && ! grep -q "warning:" /tmp/doc-output.txt
+=====================================================================
+
+$ cargo doc --workspace --no-deps
+cargo doc exit code: 0
+Total lines matching "warning:" (73 = 65 content diagnostics + 8 per-crate "generated N
+warnings" summary lines, per 36-RESEARCH.md Pitfall 5): 73
+`grep -q "warning:"` on the captured output: MATCH (exit 0) -> the `!` negation makes the
+overall ci.yml:63 command FAIL.
+Effective ci.yml:63 command exit code: 1  (RED, as expected pre-fix)
+
+Per-crate "generated N warnings" summary lines (byte-identical to 36-RESEARCH.md's re-baseline
+and to 34-AUDIT.md's Default-feature enumeration):
+  paladin-ai-core     14
+  paladin-battalion    36
+  paladin-llm           4
+  paladin-memory        1
+  paladin-ports         1
+  paladin-storage       1
+  paladin-web           3
+  paladin-ai            5
+  ------------------------
+  Sum                  65   (matches 34-AUDIT.md and 36-RESEARCH.md exactly)
+
+Full raw output captured to /tmp/36-01-baseline-default.txt during this run (590 lines); first
+diagnostic lines relevant to this plan's Task 1/Task 2 fixes:
+
+  warning: unresolved link to `HeuristicTokenCounter`
+    (crates/paladin-memory/src/token_counter/mod.rs -- RD-01, RD-66, RD-126)
+  warning: public documentation for `muster_progress_round_trips` links to private item `muster_progress_fixture`
+    (crates/paladin-storage/src/waypoint/contract_tests.rs -- RD-46, RD-128)
+
+(paladin-ports' RD-51/RD-127 `run_structured` -> `repair_prompt` private-link row is present
+further in the same capture, under the paladin-ports section.)
+
+=====================================================================
+Command 2 -- Workspace `-D warnings --all-features` bar
+  RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+=====================================================================
+
+$ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+EXIT:101  (RED, as expected pre-fix -- matches 36-RESEARCH.md's re-baseline exit 101 exactly)
+
+This command aborts on the first crate error rather than enumerating every crate (36-RESEARCH.md
+Pitfall 2, "floor, not enumeration") -- it is recorded here as the workspace-level gate check
+only. The per-crate sweep this plan actually verifies against is captured separately in
+36-01-percrate.txt (Task 1: paladin-memory; Task 2: paladin-ports, paladin-storage).
+
+=====================================================================
+Reconciliation
+=====================================================================
+
+No drift observed against 34-AUDIT.md / 36-RESEARCH.md at this plan's dispatch HEAD: 73 total
+"warning:" lines (65 content diagnostics across 8 crates) under default features, exit 101 under
+the all-features workspace bar -- both figures match exactly. No new RD-144+/EX-123+ rows are
+minted; 34-AUDIT.md sec6 remains the valid, unmodified work list for this phase.

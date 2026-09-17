@@ -1,0 +1,41 @@
+Phase 36 Plan 01 -- token_economy_commissary example run (D-16, D-29)
+Command: OPENAI_API_KEY, ANTHROPIC_API_KEY and DEEPSEEK_API_KEY all unset ->
+  cargo run --example token_economy_commissary
+Exit code: 0
+
+--- stdout (verbatim) ---
+Token Economy: Commissary Prompt-Budgeting
+
+1. TokenCounterPort::is_exact
+
+   heuristic-demo counter -- is_exact() = false
+   exact-demo counter    -- is_exact() = true
+
+2. resolve_context_window
+
+   Resolved window: 8192 tokens
+   WindowSource:    ProviderCapabilities (provider capabilities (get_capabilities().max_context_tokens))
+   (produced by WindowFallbackPolicy::Strict, since the provider's own
+    capabilities already declared a window -- no fallback was needed)
+
+3. Commissary::new + Commissary::dispense
+
+   Commissary constructed for provider "demo-provider", window 8192 tokens
+   Dispensed 2 item(s), shed 0 item(s)
+   Stockpile.prompt_tokens = 27, allotted_tokens = 7680, exact_tally = false
+
+4. Anthropic-shaped TokenUsage via MockLlmAdapter (offline)
+
+   response.usage.prompt_tokens     = 1000
+   response.usage.cache_read_tokens  = Some(300)
+   response.usage.cache_write_tokens = Some(100)
+   response.usage.completion_tokens  = 250
+   (prompt_tokens already includes the 300 cache-read and 100 cache-write
+    tokens above -- never add them again on top of prompt_tokens)
+
+Done -- fully offline, no provider API key was read.
+--- end stdout ---
+
+Required-string check (all present in the above stdout): Commissary, is_exact,
+resolve_context_window, WindowSource, prompt_tokens.
+`grep -c Quartermaster examples/token_economy_commissary.rs` = 0.

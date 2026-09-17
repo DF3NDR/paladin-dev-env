@@ -162,3 +162,13 @@ None observed. This plan touched no page the audit had settled `current`; all se
 ---
 *Phase: 35-mdbook-currency*
 *Completed: 2026-09-17*
+
+## Self-Check: PASSED
+
+- `docs/src/contributing/adr-index.md` — FOUND
+- `.planning/phases/35-mdbook-currency/35-05-SUMMARY.md` — FOUND
+- Commit `745e8a64` (MB-35) — FOUND
+- Commit `bc2a50d1` (MB-13, MB-14) — FOUND
+- Commit `10dba3e2` (MB-15) — FOUND
+- Commit `cb824ee2` (MB-16) — FOUND
+- Commit `f2b25fd3` (MB-17) — FOUND

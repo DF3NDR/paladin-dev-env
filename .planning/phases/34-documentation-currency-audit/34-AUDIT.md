@@ -1325,6 +1325,123 @@ Row count check: 8 rows above == 8 content errors recorded in the summary table 
 
 Row count check: 7 rows above == 7 content errors recorded in the summary table for `paladin-ai`.
 
+### Doctest baseline (plan 34-07, D-15)
+
+**Command, quoted verbatim (D-15):**
+
+```
+cargo test --workspace --doc
+```
+
+Run under the default feature set only — RESEARCH.md Pitfall P-08 already found that widening the
+feature set for this specific invocation trips a pre-existing, unrelated `cli_isolation` test
+conflict (`deferred-items.md`, Phase 31/32) that has nothing to do with doctests; that wider
+invocation is not run here, per D-15's own default-features instruction.
+
+**Why this baseline exists at all:** the coverage gate and the `--tests` test selector both skip
+doctests entirely, so a red doctest can sit unnoticed behind two green gates simultaneously, and
+Phase 36 SC3 requires every doctest green — this command is the only place in the project's own
+gate set that would ever catch one.
+
+**Result (this run, HEAD `f53daa8a845c34433fcd30ff0867348105b8330c`):** exit `0`; **462 passed, 0
+failed, 210 ignored** (summed across all 13 per-crate `test result:` lines in the capture); wall
+time 32s. Raw capture: `34-evidence/34-07-doctests.txt`. This matches RESEARCH.md's own
+independent measurement exactly (462 passed / 0 failed / 210 ignored).
+
+**The run is fully green — no `RD-nn` row is minted for this subsection.** Per D-15's own
+instruction, any failing doctest would be its own row (crate, item path, failure's first line);
+none exists to record.
+
+### Entry-point `# Examples`-heading gate (plan 34-07, D-15, D-00e)
+
+**Commands, run in both modes, teed to `34-evidence/34-07-public-api-examples.txt`:**
+
+```
+bash scripts/check-public-api-examples.sh          # gate mode (default)
+bash scripts/check-public-api-examples.sh --list   # report mode
+```
+
+**Gate mode:** exit `1`. **Report mode's own derivation: 101 entry points — 82 OK, 19 MISSING, 0
+SINGULAR** (`TOTAL: 101 entry points -- 82 OK, 19 MISSING, 0 SINGULAR`, the script's own closing
+line). The 19 MISSING violations, exactly as gate mode emitted them:
+
+| Kind | Item | File:line | Violation |
+|------|------|-----------|-----------|
+| Port | `RunTracePort` | crates/paladin-ports/src/output/run_trace_port.rs:130 | MISSING |
+| Port | `NodeCachePort` | crates/paladin-ports/src/output/node_cache_port.rs:135 | MISSING |
+| Port | `RunRepositoryPort` | crates/paladin-ports/src/output/run_repository_port.rs:145 | MISSING |
+| Port | `AssistantRepositoryPort` | crates/paladin-ports/src/output/assistant_repository_port.rs:119 | MISSING |
+| Port | `RunQueuePort` | crates/paladin-ports/src/output/run_queue_port.rs:115 | MISSING |
+| Port | `WebhookDeliveryRepositoryPort` | crates/paladin-ports/src/output/webhook_delivery_port.rs:78 | MISSING |
+| Port | `RunScheduleRepositoryPort` | crates/paladin-ports/src/output/run_schedule_repository_port.rs:84 | MISSING |
+| Port | `WaypointPort` | crates/paladin-ports/src/output/waypoint_port.rs:167 | MISSING |
+| Port | `StructuredExecutorPort` | crates/paladin-ports/src/output/structured_executor_port.rs:82 | MISSING |
+| Port | `AssistantAdminPort` | crates/paladin-ports/src/input/assistant_admin_port.rs:124 | MISSING |
+| Port | `RunSubmissionPort` | crates/paladin-ports/src/input/run_submission_port.rs:180 | MISSING |
+| Port | `ScheduleAdminPort` | crates/paladin-ports/src/input/schedule_admin_port.rs:90 | MISSING |
+| Service | `ScheduleService` | src/application/services/run/schedule/service.rs:143 | MISSING |
+| Service | `WebhookDeliveryService` | src/application/services/run/webhook/service.rs:103 | MISSING |
+| Service | `RunInspectorService` | src/application/services/run/inspector.rs:75 | MISSING |
+| Service | `RunEventStreamService` | src/application/services/run/events.rs:764 | MISSING |
+| Service | `RunSubmissionService` | src/application/services/run/submission.rs:105 | MISSING |
+| Service | `AssistantService` | src/application/services/assistant/service.rs:29 | MISSING |
+| Service | `WaypointRetentionService` | src/application/services/waypoint_retention.rs:73 | MISSING |
+
+12 `Port` + 7 `Service` = 19, matching the script's own closing-line count exactly.
+
+**Drift against the frozen Phase 16 enumeration:** `16-DOCS-03-ENTRY-POINTS.md` recorded **76**
+entry points (11 Builders + 35 `*Port` traits + 30 `*Service` structs) at Phase 16 close, with
+"carry an example block: 76 of 76 (100%)" as its own closing verdict. This run's live
+re-derivation finds **101** — a **+25-item drift** (101 − 76 = 25, ≈33% growth) as Phases 22-33
+added `pub *Builder`/`*Port`/`*Service` items faster than either the frozen file or this script's
+own gate were re-run against them.
+
+**No CI job and no make target runs this script — proven, not assumed:**
+
+```
+$ grep -rn check-public-api-examples .github/workflows/*.yml Makefile
+(no output; grep's own exit code 1 — zero matches)
+```
+
+**Disposition, routed explicitly (D-00c, D-00e):** the script's own scope drift (76→101) and its
+19 current MISSING violations are a finding about the D-05/D-06 rule's own apparatus — not about
+any single `docs/src` page, any single rustdoc diagnostic, or any single example program — so the
+phase's `MB-nn`/`RD-nn`/`EX-nn` ID taxonomy has no slot for it (RESEARCH.md's Open Question 1
+reaches the same conclusion and recommends this exact routing). Per D-00e ("the audit reports on
+that set only; it does not extend the rule"), none of the 19 MISSING items is fixed here, and the
+frozen 76-item entry-point set is not widened to 101 by this audit — doing either would silently
+re-litigate a rule scope this phase has no mandate to change. **Plan 34-09 files this finding in
+`deferred-items.md`** with the numbers recorded here (101 derived, 76 frozen, +25 drift, 19
+MISSING, 0 SINGULAR, no CI/make wiring confirmed empty); no `RD-nn`/`EX-nn`/`MB-nn` row is minted
+for any of the 19 individual violations or for the drift itself.
+
+### §3 close — counted totals (plan 34-07, D-01, D-23)
+
+Every figure below is counted from the rows and captures above, not recalled from RESEARCH.md or
+CONTEXT.md:
+
+- **Default-feature `cargo doc --workspace --no-deps` content-warning total** (plan 34-06): **65**
+  content diagnostics, spanning the default-feature enumeration's own row range, plus the tracer
+  row worked separately at the top of this section — 66 rows total from that measurement.
+- **Per-crate `-D warnings --all-features` all-features total** (this plan, Task 1): **77** content
+  errors across 8 of 12 red crates, spanning this task's own twelve per-crate subheadings' row
+  range immediately above.
+- **Doctest result** (this plan, Task 2): **462 passed, 0 failed, 210 ignored** — green, 0 rows.
+- **Entry-point gate result** (this plan, Task 2): **101** derived entry points, **19 MISSING**,
+  **0 SINGULAR**, gate exit `1` — findings routed to the deferred register (D-00e), 0 rows.
+- **Total row count in §3: 143** rustdoc rows, spanning the tracer row through this task's own
+  last per-crate row with no gap and no duplicate — every ID unique per `34-check.sh` assertion
+  (b), every File:line cell ending in a real `.rs:<line>` per the task's own verify.
+- **HEAD SHA:** `f53daa8a845c34433fcd30ff0867348105b8330c`, past the Phase 34 start SHA
+  `ee1fb160f8e743e638b32beb6c4e32be4ede9325` recorded in the Measurement Header; every intervening
+  commit touches only `.planning/` (D-22/D-23 invariance — the source tree these totals were
+  measured against is unchanged from the phase's start SHA).
+
+ROADMAP Success Criterion 2 is satisfiable in full from this section: both D-12 bars are quoted
+verbatim above, every warning and every error is enumerated with crate, file and line, and the
+all-features floor Phase 36 sizes against (77, not 14) is this phase's own measurement rather than
+a figure carried from a phase that never re-ran the per-crate sweep.
+
 ## §4 Examples table
 
 Rows land in plan 34-08 (the four `ci.yml:548-558` build invocations, the `doc-examples` gate, and

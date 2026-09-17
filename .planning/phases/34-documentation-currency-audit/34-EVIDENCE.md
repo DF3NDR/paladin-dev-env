@@ -282,6 +282,33 @@ measure is unchanged from the recorded Phase 34 start SHA.
   several commits later — the D-22 invariance argument (every intervening Phase 34 commit touches
   only `.planning/`) holds in practice, not just in principle.
 
+## Plan 34-07, Task 2 — doctest baseline and the entry-point `# Examples`-heading gate
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 142 | `cargo test --workspace --doc`, teed to `34-evidence/34-07-doctests.txt` (default features only, per RESEARCH.md Pitfall P-08's warning against widening the feature set for this invocation) | exit `0`; 462 passed, 0 failed, 210 ignored (summed across 13 per-crate `test result:` lines); wall time 32s | ✅ PASS — matches RESEARCH.md's own independent measurement exactly |
+| 143 | `bash scripts/check-public-api-examples.sh` (gate mode) and `bash scripts/check-public-api-examples.sh --list` (report mode), both teed to `34-evidence/34-07-public-api-examples.txt` | gate mode exit `1`; report mode's own closing line: `TOTAL: 101 entry points -- 82 OK, 19 MISSING, 0 SINGULAR`; gate mode's own 19-row MISSING listing verbatim | ⚠️ RECORDED — RED, as RESEARCH.md Pitfall P-06 predicted |
+| 144 | Drift check: derived count (101) vs `16-DOCS-03-ENTRY-POINTS.md`'s frozen count (76) | +25 items, ≈33% growth | ✅ PASS — reconciles with RESEARCH.md's own figure |
+| 145 | CI/make wiring check: `grep -rn check-public-api-examples .github/workflows/*.yml Makefile` | (no output, grep's own exit 1) | ✅ PASS — confirms no CI job or make target runs this script |
+| 146 | `grep -q 'cargo test --workspace --doc' 34-AUDIT.md` and `! grep -q 'cargo test --workspace --all-features --doc' 34-AUDIT.md` | first matches, second does not match | ✅ PASS |
+| 147 | Deferred-register routing: appended a numbered entry under a new `## Plan 34-07, Task 2` heading in `deferred-items.md` (never recreated the file), pointing to `34-AUDIT.md`'s own subsection for the full 19-row listing; no `RD-nn`/`EX-nn`/`MB-nn` row minted for the drift or any individual violation | entry appended, file's existing `## Plan 34-04, Task 2` heading and content untouched | ✅ PASS |
+| 148 | `git status --porcelain -- crates src scripts` (proves no violation was fixed and no script was edited) | (empty) | ✅ PASS |
+| 149 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+| 150 | `bash 34-check.sh --seed` (post-task re-run, after rewording three §3-close bullet points that repeated already-minted `RD-nn` literal IDs in prose — the same recurring false-positive class every prior plan in this phase has hit) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+
+## Notes (plan 34-07, Task 2)
+
+- The doctest run's 462/0/210 figures reproduce RESEARCH.md's own independent measurement exactly,
+  giving high confidence the doctest baseline is stable at this HEAD.
+- The entry-point gate's 101/19/0 figures likewise reproduce RESEARCH.md's own independent
+  measurement exactly (101 items, 19 MISSING, 0 SINGULAR, exit 1) — RESEARCH.md's Pitfall P-06 and
+  Open Question 1 recommendation were followed as written: record the drift, route it to the
+  deferred register, fix nothing, extend nothing.
+- §3 is now closed: the default-feature enumeration (plan 34-06), the per-crate all-features
+  sweep (this plan, Task 1), the doctest baseline and the entry-point gate record (this plan, Task
+  2) together give Phase 36 every figure ROADMAP Success Criterion 2 requires, all measured live
+  at this phase's own HEAD rather than carried from an earlier phase.
+
 ---
 
 *Phase: 34-documentation-currency-audit*

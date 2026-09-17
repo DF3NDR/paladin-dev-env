@@ -17,6 +17,31 @@ stays a pointer only. `34-AUDIT.md` §7 (assembled by plan 34-09) links back to 
    the local figure matches CI's. This devcontainer has no Docker, so this audit cannot perform
    that walk. Remains the maintainer's own item, unchanged, not owned by Phase 35 or 36.
 
+## Plan 34-07, Task 2
+
+1. **`scripts/check-public-api-examples.sh` scope drift and current RED result (RESEARCH.md
+   Pitfall P-06, `34-AUDIT.md` §3 "Entry-point `# Examples`-heading gate" subsection).** The
+   D-05/D-06 `# Examples`-heading rule was ratified against a frozen 76-item entry-point
+   enumeration (`16-DOCS-03-ENTRY-POINTS.md`: 11 Builders + 35 `*Port` traits + 30 `*Service`
+   structs, 100% compliant at Phase 16 close). The gate script re-derives its target set live from
+   the tree on every run rather than reading that frozen file, and Phases 22-33 added
+   `pub *Builder`/`*Port`/`*Service` items faster than anyone re-ran it: this audit's live run
+   derives **101** entry points (a +25-item, ≈33% drift), of which **19** are MISSING a plural
+   `# Examples` heading (0 SINGULAR), and the gate exits `1`. `grep -rn
+   check-public-api-examples .github/workflows/*.yml Makefile` returns nothing — no CI job and no
+   make target has ever run this script, so nothing would have caught the drift or the regression
+   as it happened. This is a finding about the rule's own apparatus (its scope has silently grown,
+   its gate is not wired anywhere, and it is currently failing), not about any one `docs/src`
+   page, rustdoc diagnostic, or example program — the phase's `MB-nn`/`RD-nn`/`EX-nn` ID taxonomy
+   has no slot for it (per D-19's "neither documentation nor an example" category and RESEARCH.md
+   Open Question 1's own recommendation). Per D-00e, this phase does not fix any of the 19 MISSING
+   items and does not widen the frozen 76-item entry-point set to 101 — both would silently
+   re-litigate a rule scope this phase has no mandate to change. The 19 individual violations
+   (item name, file:line) are enumerated in full in `34-AUDIT.md`'s own subsection; this entry is
+   the pointer only. Remains open for a maintainer decision: re-wire the script into CI/`make`
+   with the current 101-item set as the new baseline, refreeze `16-DOCS-03-ENTRY-POINTS.md` at
+   101, fix the 19 MISSING items, or some combination — none of which this phase decides.
+
 ---
 
 *Phase: 34-documentation-currency-audit*

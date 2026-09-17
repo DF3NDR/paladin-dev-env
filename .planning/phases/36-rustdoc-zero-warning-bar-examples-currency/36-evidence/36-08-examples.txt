@@ -1,0 +1,86 @@
+# Plan 36-08 evidence: agent_runtime_middleware.rs, structured_output_schema.rs, sanctum_rag_retrieval.rs
+
+## Task 1: examples/agent_runtime_middleware.rs
+
+Command: `env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY cargo run --example agent_runtime_middleware`
+Exit code: 0
+
+Full stdout:
+```
+Agent Runtime: Execution Middleware
+
+1. A custom ExecutionMiddleware -- before_model / after_model / around_tool
+
+     [1] before_model fired (loop_index = 0)
+     [2] after_model fired (finish_reason = FunctionCall)
+     [3] around_tool fired (tool = lookup)
+   Run completed -- stop_reason = MaxLoops
+
+2. AgentRuntimeConfig -- the built-in middleware's single config home
+
+   build_chain assembled 3 middleware from configuration alone (not with_middleware calls)
+   model_call_limit:  enabled=true max_calls=5
+   token_budget:      enabled=true max_tokens=20000
+   history_trimmer:   enabled=true default_context_tokens=4096
+
+3. A custom TokenCounterPort vs. the defaulted heuristic counter
+
+   defaulted counter -- name=heuristic, is_exact=false
+   injected counter   -- name=exact-word-demo, is_exact=true
+   heuristic count("the quick brown fox jumps over the lazy dog")   = 11
+   exact-word count("the quick brown fox jumps over the lazy dog") = 9
+
+4. Context-window management: HistoryTrimmer + SummarizationMiddleware
+
+   before: 80 history entries, 2590 tokens (heuristic count, prompt-side)
+   after:  11 history entries, 354 tokens (heuristic count) -- folded into 1 Garrison summary + 10 kept recent
+
+   HistoryTrimmer alone (tight 256-token budget): 80 entries -> 15 entries
+
+5. ConfinedVault -- structural memory namespacing
+
+   alice reads her own namespace -- favorite_color = Some(String("blue"))
+   alice attempts to read bob's namespace -- DENIED: namespace user/bob is not within the granted namespace user/alice
+
+6. Fail-run tool error mode
+
+   Run FAILED under the fail-run policy -- tool = lookup
+   reason = Transport error: upstream gateway rejected the request: Authorization: Bearer sk-live-demo0123456789
+
+   NOTE (discovered during this example's own read_first research):
+   `PaladinError::ArmamentFailed`'s own doc comment states `reason` should be "a
+   redacted, human-readable summary" -- the same sanitized text
+   `ToolResultFormatter::format_error` produces under the `FeedToModel` mode
+   (proven by that mode's own `a_secret_in_a_tool_error_never_reaches_the_model`
+   test). The current implementation's fail-run arms (both the Armament and the
+   handoff branch in `paladin_execution_service.rs`) build `reason` from the raw
+   `e.to_string()` directly, bypassing that sanitizer -- so a credential-shaped
+   string embedded in a failing tool's error text is NOT redacted here, unlike the
+   `FeedToModel` path. Recorded as a discovered library defect and left unfixed:
+   this is a docs-only phase and library source under src/ or crates/ is out of
+   scope (D-18 boundary).
+
+Done -- fully offline, no provider API key was read.
+```
+
+Acceptance-criteria greps:
+- `grep -c 'ExecutionMiddleware' examples/agent_runtime_middleware.rs` = 7 (>= 1 required)
+- `grep -c 'ConfinedVault' examples/agent_runtime_middleware.rs` = 6 (>= 1 required)
+- `grep -cE '\.unwrap\(\)|\.expect\(' examples/agent_runtime_middleware.rs` = 0
+- `grep -cE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY' examples/agent_runtime_middleware.rs` = 0
+- `grep -c 'Quartermaster' examples/agent_runtime_middleware.rs` = 0
+- `cargo fmt --all -- --check` = clean
+- `cargo check --workspace --all-targets --all-features` = exit 0
+- `./scripts/check-api-surface.sh .project/current-exports.txt` = API surface unchanged (3959 items)
+
+Discovered library defect (not fixed here, D-18 boundary -- docs-only phase, no src/ or crates/
+changes permitted): `PaladinError::ArmamentFailed`'s own doc comment
+(`crates/paladin-core/src/platform/container/paladin_error.rs`) states `reason` is "a redacted,
+human-readable summary ... never raw provider or tool output" -- the same sanitized text
+`ToolResultFormatter::format_error` produces under `ToolErrorMode::FeedToModel`. Both `FailRun` call
+sites in `src/application/services/paladin/paladin_execution_service.rs` (the Armament arm around
+line 1648 and the handoff arm around line 1769) build `reason: e.to_string()` directly, never
+routing through `ToolResultFormatter::sanitize_tool_text` (the module's single `redact_secret_patterns`
++ `bounded_excerpt` sanitization point). Reproduced live above: the fail-run reason field prints the
+fake credential (`Bearer sk-live-demo0123456789`) verbatim, unredacted. Recorded in this plan's
+SUMMARY.md deviations and appended to `.planning/WINDOWS.md`.

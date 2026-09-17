@@ -84,3 +84,65 @@ routing through `ToolResultFormatter::sanitize_tool_text` (the module's single `
 + `bounded_excerpt` sanitization point). Reproduced live above: the fail-run reason field prints the
 fake credential (`Bearer sk-live-demo0123456789`) verbatim, unredacted. Recorded in this plan's
 SUMMARY.md deviations and appended to `.planning/WINDOWS.md`.
+
+## Task 2: examples/structured_output_schema.rs
+
+Command: `env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY cargo run --example structured_output_schema`
+Exit code: 0
+
+Full stdout:
+```
+Structured Output: Schema Derivation and Validation
+
+1. Deriving a JSON Schema from WeatherReport via schemars::schema_for!
+
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A small local result type the structured-execution path derives a schema from\n(EX-90). `Deserialize` + `JsonSchema` are the two derives the shipped machinery\nrequires (`StructuredExecutorExt::execute_structured`'s own bound).",
+  "properties": {
+    "city": {
+      "description": "The city the report covers.",
+      "type": "string"
+    },
+    "conditions": {
+      "description": "A short one-line summary of the conditions.",
+      "type": "string"
+    },
+    "temp_c": {
+      "description": "The temperature, in Celsius.",
+      "format": "float",
+      "type": "number"
+    }
+  },
+  "required": [
+    "city",
+    "temp_c",
+    "conditions"
+  ],
+  "title": "WeatherReport",
+  "type": "object"
+}
+
+2. Schema-validated structured output -- a conforming response
+
+   Typed value returned: WeatherReport { city: "Oslo", temp_c: 4.5, conditions: "light snow" }
+   city=Oslo, temp_c=4.5, conditions=light snow
+
+3. Schema-validated structured output -- a schema-violating response
+
+   Rejected, not silently accepted -- typed PaladinError::StructuredOutputInvalid:
+     attempts   = 2
+     last_error = value conformed to the JSON Schema but could not be deserialized into the target type: invalid value: integer `201`, expected i8
+     raw_output = {"value": 201}
+
+Done -- fully offline, no provider API key was read.
+```
+
+Acceptance-criteria greps:
+- `grep -c 'schemars' examples/structured_output_schema.rs` = 5 (>= 1 required)
+- `grep -cE '\.unwrap\(\)|\.expect\(' examples/structured_output_schema.rs` = 0
+- `grep -cE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY' examples/structured_output_schema.rs` = 0
+- `cargo fmt --all -- --check` = clean
+- `cargo check --workspace --all-targets --all-features` = exit 0
+- `git diff --stat HEAD~1 -- src/ crates/ Cargo.toml` = empty (schemars already a workspace pin, no dependency added)
+- `./scripts/check-api-surface.sh .project/current-exports.txt` = API surface unchanged (3959 items)

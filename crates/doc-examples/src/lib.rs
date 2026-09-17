@@ -8,6 +8,7 @@
 pub mod support;
 
 pub mod agent_runtime;
+pub mod arsenal_tools;
 pub mod bridge;
 pub mod content;
 pub mod deployment_topologies;

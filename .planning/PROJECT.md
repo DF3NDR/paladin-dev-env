@@ -433,6 +433,13 @@ Security Paladin repo's token-economy systems analysis, findings F1-F8 / decisio
   (`CURR-01…05`, `.planning/`-only) — **complete 2026-09-17**: `34-AUDIT.md` 94 mdBook rows
   (38/55/1), 143 rustdoc rows (73→65 warnings + 77 all-features errors, not 14), 122 example rows
   (60/60 build), 60 + 207 work-list items, 5 deferred entries, SC5 proven by git diff, verification 5/5
+- Phase 35 — mdBook currency: every one of the 60 `MB-nn` rows in `34-AUDIT.md` §5 closed by
+  page edit, archive banner or new page (`CURR-06…10`) — **complete 2026-09-17**: the WarEngine
+  superstep-engine guide written with a compile-verified `doc-examples` module, six new modules
+  in all, the CLI appendix rebuilt from live `--help`, five appendix pages archived under ADR-0047
+  banners, the ADR index page added, `docs.yml` gate + `make test` green, D-21 exit greps empty,
+  `CHANGELOG.md` `[0.10.0]` `### Documentation` entry, `35-EVIDENCE.md` closure table; verification
+  9/9 after the code-review fix loop repaired the engine example's discarded `EngineLimits`
 
 **Locked by the corpus overview §0 (operator-confirmed 2026-09-14):** the two-officer model —
 `Commissary` (input-side, per-call window rationing; keep, do not rename) and `Treasurer`
@@ -1830,7 +1837,7 @@ through `Commissary::dispense`, silent truncation retired, Phase 29 release gate
 security `threats_open: 0`; 13 of 13 phases, 158/158 plans; next: push `feature/phase-33` for the CI coverage run,
 then `/gsd-complete-milestone v0.10.0`).*
 
-*Last updated: 2026-09-17 after Phase 34 completion (v0.10.0 milestone extended with Release Readiness
-Phases 34-37 on 2026-09-17; CURR-01…05 validated — `34-AUDIT.md` inventory: 94 mdBook / 143 rustdoc / 122 example
-rows, Phase 35 list 60 items, Phase 36 list 207 items, 5 deferred; 14 of 17 phases, 167/167 plans; next:
-`/gsd-discuss-phase 35` mdBook Currency, `/gsd-secure-phase 34` advisory).*
+*Last updated: 2026-09-17 after Phase 35 completion (mdBook Currency: 60/60 `MB-nn` rows closed,
+CURR-06…10 validated, 10/10 plans, verification 9/9; 15 of 17 phases, 177/177 plans; next:
+`/gsd-discuss-phase 36` Rustdoc Zero-Warning Bar & Examples Currency, `/gsd-secure-phase 35` and
+`/gsd-validate-phase 35` advisory).*

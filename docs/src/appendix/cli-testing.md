@@ -88,7 +88,9 @@ Each provider (OpenAI, DeepSeek, Anthropic) has 4 dedicated tests:
 3. **Error handling** - Tests invalid model detection and error mapping
 4. **Capabilities** - Validates provider capabilities reporting
 
-**Total:** 12 tests (4 per provider × 3 providers)
+**Total:** 13 tests — 12 live-API tests (4 per provider × 3 providers) plus one
+`test_suite_documentation` meta-test that documents the suite and always passes without making a
+call.
 
 **Test Characteristics:**
 - All tests are marked with `#[ignore]` - they don't run by default
@@ -178,7 +180,7 @@ cargo test --features integration-tests --test lib -- --include-ignored
 | Tier 1 (Core) | 45 | None |
 | Tier 2 (Docker) | 6 | `#[ignore]` + service check |
 | Tier 3 (API keys) | 5 | `integration-tests` feature + `#[ignore]` + env var |
-| Tier 4 (Live API) | 12 | `live-api-tests` feature + `#[ignore]` + env var |
+| Tier 4 (Live API) | 13 | `live-api-tests` feature + `#[ignore]` + env var |
 
 ## CI/CD Notes
 

@@ -1,12 +1,12 @@
 # Crate Map
 
-This page documents all nine workspace crates, their roles, feature flags, and
-dependency relationships.
+This page documents all eleven library crates plus the facade, their roles, feature
+flags, and dependency relationships.
 
 ## Workspace Overview
 
 ```
-paladin-ai  (root umbrella, v0.5.0)
+paladin-ai  (root umbrella / facade, v0.10.0)
 ├── paladin-ai-core          # Core domain
 ├── paladin-ports            # Port trait contracts
 ├── paladin-battalion        # Orchestration services
@@ -15,7 +15,9 @@ paladin-ai  (root umbrella, v0.5.0)
 ├── paladin-storage          # SQL adapters
 ├── paladin-notifications    # Notification adapters
 ├── paladin-content          # Content adapters
-└── paladin-web              # HTTP server
+├── paladin-web              # HTTP server
+├── paladin-eval              # Deterministic evaluation harness
+└── paladin-herald            # Output-formatter adapters (JSON/Markdown/Table)
 ```
 
 ## Dependency Graph
@@ -156,11 +158,18 @@ src/
 | `openai` | yes | `OpenAIAdapter`, `OpenAIEmbeddingAdapter` |
 | `anthropic` | no | `AnthropicAdapter` |
 | `deepseek` | no | `DeepSeekAdapter` |
+| `kimi` | no | `KimiAdapter` |
+| `qwen` | no | `QwenAdapter` |
+| `grok` | no | `GrokAdapter` |
+| `ollama` | no | `OllamaAdapter` |
+| `openai-compatible` | no | Generic OpenAI-compatible adapter |
+| `gemini` | no | `GeminiAdapter` |
 | `mock` | yes | `MockLlmAdapter`, `MultiStepMockLlmPort` |
 | `openai-embeddings` | no | Embedding API |
 | `vision` | no | Vision / multimodal extensions |
 
-**Key modules:** `src/openai/`, `src/anthropic/`, `src/deepseek/`, `src/mock.rs`
+**Key modules:** `src/openai/`, `src/anthropic/`, `src/deepseek/`, `src/kimi/`, `src/qwen/`,
+`src/grok/`, `src/ollama/`, `src/gemini/`, `src/mock.rs`
 
 ---
 

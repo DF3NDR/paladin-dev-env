@@ -933,11 +933,19 @@ Plans:
   4. The inventory is partitioned into the Phase 35 (mdBook) and Phase 36 (rustdoc + examples) work lists with each item sized, and anything found that is neither documentation nor an example is routed to the deferred register rather than absorbed into either phase
   5. No documentation, rustdoc or example is changed in this phase — the audit is read-only against the tree, and the phase's commits touch only `.planning/`
 
-**Plans**: 0 plans
+**Plans**: 9 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 34 to break down)
+- [ ] 34-01-PLAN.md — Tracer: mint CURR-01…05, build the 34-AUDIT.md spine, prove one worked row per table
+- [ ] 34-02-PLAN.md — Shipped-surface checklist (§1) compiled from CHANGELOG / MIGRATION / REQUIREMENTS
+- [ ] 34-03-PLAN.md — mdBook build + linkcheck + vocabulary baseline, and the 18 root/getting-started/architecture/api-reference verdicts
+- [ ] 34-04-PLAN.md — mdBook verdicts for the 20 user-guides and the 20 deployment/topologies/operations/contributing pages
+- [ ] 34-05-PLAN.md — mdBook verdicts for the 34 remaining appendix pages; the 93-page partition closes
+- [ ] 34-06-PLAN.md — Rustdoc default-feature enumeration against the ci.yml bar, plus the workspace all-features record
+- [ ] 34-07-PLAN.md — Per-crate all-features sweep, doctest baseline, public-API example-heading gate record
+- [ ] 34-08-PLAN.md — Examples build status under the four CI feature sets, currency verdicts and the capability gap list
+- [ ] 34-09-PLAN.md — Phase 35 / Phase 36 work lists, deferred register, and the phase-range read-only proof
 
 ### Phase 35: mdBook Currency
 

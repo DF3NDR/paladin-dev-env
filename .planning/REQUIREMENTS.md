@@ -512,13 +512,13 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
 - [x] **CURR-10**: `CHANGELOG.md` `[0.10.0]` carries a Documentation entry summarising the pages
   added and corrected (ROADMAP Phase 35 SC5; D-25)
 
-- [ ] **CURR-11**: `cargo doc --workspace --no-deps` emits zero `warning:` lines under the exact
+- [x] **CURR-11**: `cargo doc --workspace --no-deps` emits zero `warning:` lines under the exact
   `ci.yml:63` lint-job command and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace
   --all-features --no-deps` exits 0, with the per-crate `-D warnings --all-features` sweep green
   for all thirteen crates (ROADMAP Phase 36 SC1; D-00a, D-01, D-02, D-03, D-04, D-05, D-06, D-07,
   D-08, D-10)
 
-- [ ] **CURR-12**: Every one of the 143 `RD-nn` rows in `34-AUDIT.md` §6 is closed at its cited
+- [x] **CURR-12**: Every one of the 143 `RD-nn` rows in `34-AUDIT.md` §6 is closed at its cited
   crate / file / line under lead-row discipline, and both rustdoc commands plus
   `cargo test --workspace --doc` are wired into `make doc-check`, `make clean-code` and the
   pre-push hook, with the all-features command added to the CI lint job and proven by a real CI
@@ -529,13 +529,13 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
   `required-features` target — and `cargo test --workspace --doc` is green, run explicitly
   (ROADMAP Phase 36 SC3; D-00f, D-14, D-17, D-23)
 
-- [ ] **CURR-14**: Every one of the 64 `EX-nn` work rows in `34-AUDIT.md` §6 is closed — the five
+- [x] **CURR-14**: Every one of the 64 `EX-nn` work rows in `34-AUDIT.md` §6 is closed — the five
   stale rows are corrected against the shipped API and each of the 59 undemonstrated Phase 22-33
   capabilities has a runnable `examples/*.rs` program with an `examples/README.md` section whose
   **Demonstrates:** line names the capability (ROADMAP Phase 36 SC4; D-00e, D-00g, D-00i, D-00j,
   D-15, D-16, D-18, D-19, D-20, D-21, D-22, D-25, D-29)
 
-- [ ] **CURR-15**: `make api-surface` reports no change across every commit in the phase — the
+- [x] **CURR-15**: `make api-surface` reports no change across every commit in the phase — the
   rustdoc and examples work moves no public surface, and no private item is widened to `pub` and
   no rustdoc lint is suppressed to satisfy a link (ROADMAP Phase 36 SC5; D-00c, D-00d, D-00h,
   D-05, D-28)
@@ -658,11 +658,11 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CURR-08 | Phase 35 | Complete |
 | CURR-09 | Phase 35 | Complete |
 | CURR-10 | Phase 35 | Complete |
-| CURR-11 | Phase 36 | Pending |
-| CURR-12 | Phase 36 | Pending |
+| CURR-11 | Phase 36 | Complete |
+| CURR-12 | Phase 36 | Complete |
 | CURR-13 | Phase 36 | Pending |
-| CURR-14 | Phase 36 | Pending |
-| CURR-15 | Phase 36 | Pending |
+| CURR-14 | Phase 36 | Complete |
+| CURR-15 | Phase 36 | Complete |
 
 **Coverage:**
 

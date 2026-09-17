@@ -1031,7 +1031,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 36-01-PLAN.md — Tracer: close the memory/ports/storage rustdoc groups, add the token-economy example, seed the evidence harness
+- [x] 36-01-PLAN.md — Tracer: close the memory/ports/storage rustdoc groups, add the token-economy example, seed the evidence harness
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

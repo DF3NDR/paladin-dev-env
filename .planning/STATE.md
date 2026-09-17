@@ -5,10 +5,10 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36
 current_phase_name: Rustdoc Zero-Warning Bar & Examples Currency
 status: executing
-stopped_at: Phase 36 planned — 13 plans in 8 waves, checker passed; next: execute
-last_updated: "2026-09-17T19:14:38.095Z"
+stopped_at: Completed 36-01-PLAN.md
+last_updated: "2026-09-17T19:48:17.373Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 36 planned (13 plans, 8 waves)
+last_activity_desc: Phase 36 execution started
 progress:
   total_phases: 18
   completed_phases: 15
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-17 after Phase 34 completion)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 36 — Rustdoc Zero-Warning Bar & Examples Currency (consumes `34-AUDIT.md` §6, the 207-item work list)
+**Current focus:** Phase 36 — Rustdoc Zero-Warning Bar & Examples Currency
 Phase 34 was verified 2026-09-17: `34-UAT.md` 47/47 passed (all nine SUMMARYs coverage-mode, every
 deliverable automated and the list confirmed by the maintainer; `34-check.sh --final` 8/8 re-run at UAT
 time), `34-VERIFICATION.md` `passed` 5/5, `34-SECURITY.md` `verified` with `threats_open: 0`.
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 99%
+**Progress:** [█████████░] 93%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -61,10 +61,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 36 — Rustdoc Zero-Warning Bar & Examples Currency
-Plan: Not started
+Phase: 36 (Rustdoc Zero-Warning Bar & Examples Currency) — EXECUTING
+Plan: 2 of 13
 Status: Ready to execute
-Last activity: 2026-09-17 — Phase 35 complete, transitioned to Phase 36
+Last activity: 2026-09-17 — Phase 36 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
@@ -152,6 +152,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 34 P07 | 16min | 2 tasks | 16 files |
 | Phase 34 P08 | ~90min | 2 tasks | 3 files |
 | Phase 34 P09 | ~75min | 2 tasks | 4 files |
+| Phase 36 P01 | ~45min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -489,6 +490,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: 34-07: entry-point # Examples-heading gate scope drift (76->101) and its 19 violations routed to deferred-items.md per D-00e, not fixed or minted as RD-nn/EX-nn/MB-nn rows
 - [Phase ?]: Examples build/currency sweep (plan 34-08): all 60 examples/doc-examples programs build green under the exact CI feature sets; zero obsolete-API hits; two http_service_host rows marked stale on a server-router-parity claim; examples/README.md carries two new stale findings (11 undocumented programs, stale PaladinResult code-snippet fields); 59-row capability gap list for Phase 22-33 items no example demonstrates
 - [Phase ?]: Phase 34 plan 34-09: assembled the Phase 35 work list (60 MB-nn, missing superstep-engine page MB-30 leading) and Phase 36 work list (143 RD-nn grouped by crate with same-source-line cross-references, 64 EX-nn work items + 58 confirmed-current listed separately); both-directions reconciliation proven by diff; closed deferred-items.md (5 entries, 4 plans) and 34-AUDIT.md §7; proved SC5 over the whole phase range against the pinned Phase 34 start SHA (main lags 7 phases behind); fixed a 34-check.sh assertion (b) bug that treated the designed §5/§6 double-reference as a duplicate-ID error
+- [Phase ?]: Phase 36 plan 36-01: proved the bare-shorthand intra-doc link technique -- rustdoc resolves a //! module doc's link scope to the CRATE ROOT, not the enclosing submodule, so a same-file pub-use re-export needs the full crate-relative path (crate::token_counter::heuristic::HeuristicTokenCounter), not a bare shorthand or self::-prefixed path; closed RD-01/66/126 (paladin-memory), RD-51/127 (paladin-ports), RD-46/128 (paladin-storage) via D-05/D-06; added examples/token_economy_commissary.rs (EX-109,111,112,113,114,115) and its README section; seeded 36-EVIDENCE.md + 36-evidence/ for the rest of the phase; zero drift against the 73-line/65-diagnostic default baseline and the 101-exit all-features bar; make api-surface unchanged across all 6 commits
 
 ### Pending Todos
 
@@ -1056,9 +1058,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T17:45:29.388Z
-**Stopped at:** Phase 36 context gathered
-**Resume file:** .planning/phases/36-rustdoc-zero-warning-bar-examples-currency/36-CONTEXT.md
+**Last session:** 2026-09-17T19:48:17.285Z
+**Stopped at:** Completed 36-01-PLAN.md
+**Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

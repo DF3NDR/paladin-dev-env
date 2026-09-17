@@ -5,10 +5,10 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 35
 current_phase_name: mdBook Currency
 status: planning
-stopped_at: "Phase 34 complete 2026-09-17 — 9/9 plans, 34-VERIFICATION.md passed 5/5 (34-AUDIT.md: 94 mdBook rows 38 current/55 stale/1 missing, 143 RD rows, 122 EX rows; Phase 35 list 60 items, Phase 36 list 207 items; deferred register 5 entries; SC5 read-only proven over ee1fb160..HEAD); 34-UAT.md complete 47/47 (coverage-mode, maintainer-confirmed); next: /gsd-discuss-phase 35 (Phase 35 mdBook Currency consumes 34-AUDIT.md §5)"
-last_updated: "2026-09-17T11:59:41.000Z"
+stopped_at: Phase 35 context gathered
+last_updated: "2026-09-17T12:13:37.837Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 34 UAT complete (47/47), ready to plan Phase 35
+last_activity_desc: Phase 35 context gathered (35-CONTEXT.md, 35 decisions), ready to plan
 progress:
   total_phases: 17
   completed_phases: 14
@@ -1054,9 +1054,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T11:59:41.000Z
-**Stopped at:** Phase 34 complete — 34-UAT.md 47/47 passed and maintainer-confirmed; ready to plan Phase 35 (`/gsd-discuss-phase 35`)
-**Resume file:** None
+**Last session:** 2026-09-17T12:13:37.688Z
+**Stopped at:** Phase 35 context gathered
+**Resume file:** .planning/phases/35-mdbook-currency/35-CONTEXT.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

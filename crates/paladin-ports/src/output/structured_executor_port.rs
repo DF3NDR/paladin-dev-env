@@ -155,7 +155,8 @@ fn repair_prompt(
 /// then [`shape_check`](paladin_core::platform::container::structured::shape_check);
 /// on either failure, if attempts remain (`opts.max_repair_attempts`),
 /// `execute_fn` is called again with a re-prompt carrying the failure AND
-/// the offending output verbatim (via [`repair_prompt`]). On exhaustion,
+/// the offending output verbatim (via the crate-private `repair_prompt`
+/// helper). On exhaustion,
 /// returns [`PaladinError::StructuredOutputInvalid`] with `raw_output`
 /// being the LAST response, verbatim.
 ///

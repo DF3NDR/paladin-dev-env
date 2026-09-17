@@ -146,3 +146,106 @@ Acceptance-criteria greps:
 - `cargo check --workspace --all-targets --all-features` = exit 0
 - `git diff --stat HEAD~1 -- src/ crates/ Cargo.toml` = empty (schemars already a workspace pin, no dependency added)
 - `./scripts/check-api-surface.sh .project/current-exports.txt` = API surface unchanged (3959 items)
+
+## Task 3: examples/sanctum_rag_retrieval.rs
+
+### Post-audit drift re-check (D-02)
+
+Re-ran the five RAG capability-token greps from the Phase 34 audit against BOTH `examples/`
+and `crates/doc-examples/src/`, BEFORE writing this program, exactly as the plan's Task 3
+action requires:
+
+| token | examples/*.rs (files, hits) | crates/doc-examples/src/*.rs (files, hits) | audit's recorded figure | drift? |
+|---|---|---|---|---|
+| `RagRetrievalResult` | 0 files, 0 hits | 1 file, 4 hits | zero-hit (EX-116 gap row) | YES -- `crates/doc-examples/src/sanctum_vector_memory.rs` (Phase 35) already references it |
+| `ShedItem` | 0 files, 0 hits | 1 file, 1 hit | zero-hit (EX-117 gap row) | YES -- same Phase 35 module (`pub use ... ShedItem` doc comment) |
+| `RagRetrievalError` | 0 files, 0 hits | 0 files, 0 hits | zero-hit (EX-118 gap row) | no drift -- still zero everywhere |
+| `retrieve_context_with_timeout` | 0 files, 0 hits | 1 file, 2 hits | zero-hit (EX-119 gap row, explicitly flagged stale by this plan's own context) | YES -- confirmed: `sanctum_vector_memory.rs` calls this free function directly |
+| `with_token_counter` | 1 file, 2 hits (`token_economy_commissary.rs`, Commissary's own builder method, NOT RAG-specific) | 1 file, 2 hits (`sanctum_vector_memory.rs`, RAG-specific) | zero-hit (EX-120 gap row) | YES for the RAG-specific doc-examples hit; the `examples/` hit is a different (Commissary) capability, not this one |
+
+Per D-02, none of these rows was skipped on the basis of this drift: the gap the audit tracks
+is specifically the `examples/` gallery having no runnable program, and `examples/` itself
+still shows 0 hits for all five tokens before this plan's own commit. The drift is that
+`crates/doc-examples/src/sanctum_vector_memory.rs` (added by Phase 35, after the Phase 34 audit
+SHA) already exercises 4 of the 5 capabilities inside a *documentation* crate, not the
+`examples/` gallery -- so the audit's "no example demonstrates this" framing was accurate for
+`examples/` at audit time and remains accurate right up to this plan's own commit, while the
+"zero hits anywhere in the tree" framing implied by the audit's wording was already stale for
+`RagRetrievalResult`, `ShedItem` and `retrieve_context_with_timeout` before this plan started.
+
+Command: `env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY cargo run --example sanctum_rag_retrieval`
+Exit code: 0
+
+Full stdout:
+```
+Sanctum RAG Retrieval: the Phase 33 Rationed Retrieval Surface
+
+0. Post-audit drift re-check (D-02) -- see 36-evidence/36-08-examples.txt for the
+   verbatim grep output this program's own capability tokens were re-checked against.
+
+1. RagRetrievalResult -- retrieve context and read the typed result (EX-116)
+
+2. ShedItem -- a rationed retrieval's shed record (EX-117)
+
+   retained=1 shed=4 prompt_tokens=32 allotted_tokens=40 exact_tally=false
+   retained[0] score=0.99 truncated=true body="The Send and Sync auto traits let the compiler reason about which types are safe to move or share across thread\n... (truncated)"
+
+   rendered context (RagRetrievalService::format_for_prompt):
+## Relevant Context
+
+The following memories may be relevant to your current task:
+
+**Memory 1** (Similarity: 0.99)
+Type: Semantic
+Content: The Send and Sync auto traits let the compiler reason about which types are safe to move or share across thread
+... (truncated)
+Source: Conversation on 2026-09-17
+
+---
+
+
+[4 lower-relevance memories omitted to fit the 40-token RAG budget]
+
+   shed[0] label=f5d40d93-8f41-442b-af4f-cca4bf7300c1 priority=4 original_bytes=171 (did not fit the 40-token budget)
+   shed[1] label=3d820211-115e-46ab-99ff-8df04f166bb0 priority=3 original_bytes=133 (did not fit the 40-token budget)
+   shed[2] label=008151a0-8b33-4f53-8aa1-de1a1bb6258c priority=2 original_bytes=171 (did not fit the 40-token budget)
+   shed[3] label=56634447-d38b-4ebd-9fba-beeebd57f535 priority=1 original_bytes=173 (did not fit the 40-token budget)
+
+3. RagRetrievalError -- a typed, matched retrieval failure (EX-118)
+
+   RagRetrievalError::BudgetTooLarge { max_tokens: 18446744073709551615 }
+
+4. retrieve_context_with_timeout -- the free-function form with a deadline (EX-119)
+
+   retrieve_context_with_timeout(..., timeout_secs=5) -- retained=1 shed=4
+
+5. with_token_counter -- an exact counter injected into the retrieval service (EX-120)
+
+   all 5 memories: heuristic total=208 tokens, exact total=134 words -- contrast budget = 171
+   heuristic run (chars/4 counter) -- retained=2 shed=3 exact_tally=false
+   exact run (word-count counter)  -- retained=2 shed=3 exact_tally=true
+
+Done -- fully offline, no provider API key was read.
+```
+
+Note: the `retained[N]`/`shed[N]` `label` values are freshly generated memory UUIDs and differ
+on every run (identity, not content); the byte lengths, priorities, budget figures and typed
+error/variant text are stable and reproduced identically across repeated runs, because
+`FixedEmbedder::vector_for` derives each memory's embedding deterministically from its own
+content hash (`DefaultHasher::new()` uses a fixed key) rather than from `InMemorySanctum`'s
+`HashMap`-backed storage order, which is randomized per process.
+
+Acceptance-criteria greps:
+- `grep -c 'RagRetrievalResult' examples/sanctum_rag_retrieval.rs` = 4 (>= 1 required)
+- `grep -c 'ShedItem' examples/sanctum_rag_retrieval.rs` = 2 (>= 1 required)
+- `grep -c 'RagRetrievalError' examples/sanctum_rag_retrieval.rs` = 5 (>= 1 required)
+- `grep -c 'retrieve_context_with_timeout' examples/sanctum_rag_retrieval.rs` = 6 (>= 1 required)
+- `grep -c 'with_token_counter' examples/sanctum_rag_retrieval.rs` = 5 (>= 1 required)
+- `grep -cE '\.unwrap\(\)|\.expect\(' examples/sanctum_rag_retrieval.rs` = 0
+- `grep -cE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY' examples/sanctum_rag_retrieval.rs` = 0
+- `git status --porcelain examples/paladin_with_rag.rs` = empty (untouched, per D-18)
+- `cargo build --example sanctum_rag_retrieval` and `cargo build --examples` = exit 0, all three
+  plan binaries present under `target/debug/examples/`
+- `cargo fmt --all -- --check` = clean
+- `cargo check --workspace --all-targets --all-features` = exit 0
+- `./scripts/check-api-surface.sh .project/current-exports.txt` = API surface unchanged (3959 items)

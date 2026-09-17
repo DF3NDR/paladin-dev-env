@@ -950,7 +950,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 34-04-PLAN.md — mdBook verdicts for the 20 user-guides and the 20 deployment/topologies/operations/contributing pages
+- [x] 34-04-PLAN.md — mdBook verdicts for the 20 user-guides and the 20 deployment/topologies/operations/contributing pages
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

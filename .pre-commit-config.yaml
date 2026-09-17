@@ -130,3 +130,15 @@ repos:
         stages: [pre-push]
         pass_filenames: false
         files: ^(src|crates)/.*\.rs$|^Cargo\.toml$
+
+      # Same reasoning as check-api-surface above: GSD executor commits bypass
+      # commit-stage hooks entirely, and the rustdoc zero-warning bar (ADR-0033)
+      # -- two full workspace `cargo doc` builds plus the doctest run -- costs
+      # real time, tolerable once per push but not on every commit.
+      - id: doc-check
+        name: check rustdoc zero-warning bar (ADR-0033) + doctests
+        entry: make doc-check
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        files: ^(src|crates)/.*\.rs$|^Cargo\.toml$

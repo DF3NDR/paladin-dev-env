@@ -420,8 +420,18 @@ doc: ## Generate documentation
 	@echo "$(CYAN)Generating documentation...$(NC)"
 	@$(CARGO) doc --workspace --no-deps --open
 
+.PHONY: doc-check
+doc-check: ## Enforce the rustdoc zero-warning bar (ADR-0033) + doctests: default-features zero warnings, all-features -D warnings, cargo test --workspace --doc
+	@echo "$(CYAN)[1/3] Checking documentation (default features, zero warnings; ADR-0033)...$(NC)"
+	@$(CARGO) doc --workspace --no-deps 2>&1 | tee /tmp/doc-output.txt && ! grep -q "warning:" /tmp/doc-output.txt
+	@echo "$(CYAN)[2/3] Checking documentation (all features, -D warnings; ADR-0033)...$(NC)"
+	@RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --all-features --no-deps
+	@echo "$(CYAN)[3/3] Running documentation tests...$(NC)"
+	@$(CARGO) test --workspace --doc
+	@echo "$(GREEN)✅ doc-check passed (ADR-0033)$(NC)"
+
 .PHONY: clean-code
-clean-code: fmt lint lint-shell check ## Format, lint (Rust + shell), and check code
+clean-code: fmt lint lint-shell check doc-check ## Format, lint (Rust + shell), check code, and enforce the rustdoc zero-warning bar
 
 .PHONY: hooks
 hooks: ## Install git pre-commit and pre-push hooks

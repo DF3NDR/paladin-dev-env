@@ -344,3 +344,100 @@ and MB-58 each carry two commits — the tracer commit plus a same-plan follow-u
 - All seven D-21 checks empty or fully allowlisted, with every allowlist row naming a historical or
   real-file reason.
 - `git log --oneline --grep 'MB-'` reproduces the sixty-ID closure map mechanically (D-00a).
+
+## Final run (plan 35-10, Task 3) — the run Phase 37 re-seals against
+
+Captured on commit `f1418596460f5ab9c38f0062cab48e067adc4715` (Task 2's CHANGELOG commit — the
+last commit that touches `docs/src` or `crates/` in this plan; the following Task 3 commit only
+adds this section and folds `deferred-items.md`, neither of which changes anything the gate
+below measures). Date: 2026-09-17T14:43:05Z.
+
+### 1. `mdbook-mermaid install docs/`
+
+```
+[2026-09-17T14:42:18Z INFO  mdbook_mermaid] Reading configuration file docs/book.toml
+[2026-09-17T14:42:18Z INFO  mdbook_mermaid] Files & configuration for mdbook-mermaid are installed. You can start using it in your book.
+[2026-09-17T14:42:18Z INFO  mdbook_mermaid] Add a code block like:
+    ```mermaid
+    graph TD;
+        A-->B;
+        A-->C;
+        B-->D;
+        C-->D;
+    ```
+```
+
+### 2. `git status --porcelain -- docs` (immediately after)
+
+```
+(no output — clean, D-00e satisfied)
+```
+
+### 3. `mdbook build docs/`
+
+```
+...
+[2026-09-17T14:42:27Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T14:42:27Z INFO  mdbook_linkcheck] No broken links found
+```
+
+### 4. `./scripts/check-doc-examples.sh`
+
+```
+Compiling documentation examples (paladin-doc-examples crate)...
+All included examples compile.
+
+Checking README Quick Example matches crates/doc-examples/src/readme.rs ...
+README Quick Example is in sync.
+
+Checking doc code examples in .../docs/src ...
+
+Results: 0 checked, 622 skipped, 0 failed
+All doc code examples pass validation.
+```
+
+### 5. `./scripts/check-doc-config.sh`
+
+```
+Validating fenced YAML blocks in .../docs/src ...
+
+Results: 151 YAML block(s) checked, 0 failed
+```
+
+### 6. `make api-surface`
+
+```
+Checking public API surface...
+🔍 Checking API surface for changes...
+Extracting public API surface using cargo-public-api...
+✅ API surface extracted to /tmp/tmp.2iClcVbhtn (3959 items)
+✅ API surface unchanged
+```
+
+### 7. D-21 exit greps (final)
+
+| # | Grep | Result |
+|---|---|---|
+| 1 | `grep -rnE '"0\.[5-9]\.[0-9]+"' docs/src` | empty |
+| 2 | `grep -rnE '\b1\.(70\|75\|85)(\.[0-9]+)?\b' docs/src` | empty |
+| 3 | `grep -rn 'paladin::paladin_ports::' docs/src` | empty |
+| 4 | `grep -rn 'paladin::infrastructure::adapters::llm::' docs/src` | 2 hits, both `contributing/contributing-providers.md:272,367` — allowlisted (see table above; out-of-§5-scope page, recorded as a deferred observation) |
+| 5 | `grep -rniE '\bQuartermaster\b' docs/src` | empty |
+| 6 | `grep -rn 'test\.yml\|build-release' docs/src` | 8 hits, all real `docker/docker-compose.test.yml` / `config.test.yml` filenames — allowlisted (see table above) |
+| 7 | Phase 31 D-29 ten-page `token_count`/`TokenUsage` re-check | all ten pages clean (unchanged from the earlier capture above) |
+
+Identical to the earlier capture in this file — no drift between the two runs, confirming the
+Task 1/Task 2 commits are the only content-affecting changes this plan made after the first
+gate run.
+
+### Deferred-items fold-in confirmation
+
+`.planning/phases/35-mdbook-currency/deferred-items.md` now carries every `## Deferred
+observations` entry recorded across plans 35-01 through 35-09 (four plans — 35-02, 35-03, 35-05,
+35-08 — recorded none, stated explicitly; four observations were folded from 35-01, 35-04, 35-06,
+35-07 and 35-09, with 35-04's `adr-index.md` occurrence marked resolved rather than open, since
+the orchestrator's cross-plan integration commit `64a44c51` fixed it before this plan began). No
+entry from the Phase 34 register (`.planning/phases/34-documentation-currency-audit/deferred-items.md`)
+was absorbed, restated or renumbered.
+
+**Phase 35 is ready for `/gsd-verify-work 35`.**

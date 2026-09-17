@@ -512,6 +512,34 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
 - [x] **CURR-10**: `CHANGELOG.md` `[0.10.0]` carries a Documentation entry summarising the pages
   added and corrected (ROADMAP Phase 35 SC5; D-25)
 
+- [ ] **CURR-11**: `cargo doc --workspace --no-deps` emits zero `warning:` lines under the exact
+  `ci.yml:63` lint-job command and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace
+  --all-features --no-deps` exits 0, with the per-crate `-D warnings --all-features` sweep green
+  for all thirteen crates (ROADMAP Phase 36 SC1; D-00a, D-01, D-02, D-03, D-04, D-05, D-06, D-07,
+  D-08, D-10)
+
+- [ ] **CURR-12**: Every one of the 143 `RD-nn` rows in `34-AUDIT.md` §6 is closed at its cited
+  crate / file / line under lead-row discipline, and both rustdoc commands plus
+  `cargo test --workspace --doc` are wired into `make doc-check`, `make clean-code` and the
+  pre-push hook, with the all-features command added to the CI lint job and proven by a real CI
+  run (ROADMAP Phase 36 SC2; D-00b, D-09, D-11, D-12, D-13, D-24, D-26, D-27)
+
+- [ ] **CURR-13**: `cargo build --examples` passes under each of the four feature-set invocations
+  the CI "Example Muster" job splits on — including a dedicated invocation for every new
+  `required-features` target — and `cargo test --workspace --doc` is green, run explicitly
+  (ROADMAP Phase 36 SC3; D-00f, D-14, D-17, D-23)
+
+- [ ] **CURR-14**: Every one of the 64 `EX-nn` work rows in `34-AUDIT.md` §6 is closed — the five
+  stale rows are corrected against the shipped API and each of the 59 undemonstrated Phase 22-33
+  capabilities has a runnable `examples/*.rs` program with an `examples/README.md` section whose
+  **Demonstrates:** line names the capability (ROADMAP Phase 36 SC4; D-00e, D-00g, D-00i, D-00j,
+  D-15, D-16, D-18, D-19, D-20, D-21, D-22, D-25, D-29)
+
+- [ ] **CURR-15**: `make api-surface` reports no change across every commit in the phase — the
+  rustdoc and examples work moves no public surface, and no private item is widened to `pub` and
+  no rustdoc lint is suppressed to satisfy a link (ROADMAP Phase 36 SC5; D-00c, D-00d, D-00h,
+  D-05, D-28)
+
 ## v2 Requirements
 
 Deferred beyond this program (named out of scope by the corpus; tracked, not roadmapped):
@@ -630,17 +658,24 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CURR-08 | Phase 35 | Complete |
 | CURR-09 | Phase 35 | Complete |
 | CURR-10 | Phase 35 | Complete |
+| CURR-11 | Phase 36 | Pending |
+| CURR-12 | Phase 36 | Pending |
+| CURR-13 | Phase 36 | Pending |
+| CURR-14 | Phase 36 | Pending |
+| CURR-15 | Phase 36 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 76 total (45 from the `.project/v0.10.0/` corpus, complete; 21 added
-  2026-09-14 from `.project/Milestone_13-Token-Economy/`; 10 added 2026-09-17 for Phases 34-36)
+- v1 requirements: 81 total (45 from the `.project/v0.10.0/` corpus, complete; 21 added
+  2026-09-14 from `.project/Milestone_13-Token-Economy/`; 15 added 2026-09-17 for Phases 34-36)
 
-- Mapped to phases: 76
+- Mapped to phases: 81
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-01*
 *Last updated: 2026-09-01 after initial definition from the `.project/v0.10.0/` design corpus*
 *Extended: 2026-09-14 — VOCAB-01…07, ACCT-01…05, PRIM-01…05, COMM-01…04 added for Phases 30-33 from `.project/Milestone_13-Token-Economy/`; X-03 supersession for Phases 31-33 recorded above; FUT-08/FUT-09 now owned by the reserved Milestone 14; CURR-01…05 added 2026-09-17 for Phase 34 (Release Readiness); CURR-06…10 added 2026-09-17 for
-Phase 35 (mdBook Currency)*
+Phase 35 (mdBook Currency); CURR-11…15 added 2026-09-17 for Phase 36 (Rustdoc Zero-Warning Bar &
+Examples Currency), one per ROADMAP Phase 36 Success Criterion, minted under the Phase 34 `CURR-*`
+prefix per 36-CONTEXT.md D-00h*

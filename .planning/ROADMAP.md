@@ -1015,7 +1015,7 @@ Plans:
 
 **Goal**: The rustdoc corpus clears the bar CI already enforces and the examples demonstrate the tree that ships — `cargo doc --workspace --no-deps` emits zero `warning:` lines so the lint job's "Check documentation" step is green rather than carried, the 14 unresolved intra-doc links under `--all-features` are resolved, every public item Phases 22-33 added or changed has rustdoc (with a doc test where the project's public-API rule applies), and every `examples/` program and `crates/doc-examples` module builds against and demonstrates the v0.10.0 API.
 **Depends on**: Phase 34 (the rustdoc + examples work list); independent of Phase 35 and may run in parallel with it
-**Requirements**: TBD — assigned at planning under the Phase 34 prefix
+**Requirements**: CURR-11, CURR-12, CURR-13, CURR-14, CURR-15
 **Source**: Phase 34 audit inventory (rustdoc + examples partition); `33-CI-EVIDENCE.md` row 26; `WINDOWS.md` #36; `.github/workflows/ci.yml` lint job and the `cargo build --examples` feature-set split
 **UI hint**: no
 **Success Criteria** (what must be TRUE):
@@ -1026,11 +1026,52 @@ Plans:
   4. Every Phase 34 example finding is closed: obsolete examples are updated to the shipped API or deleted with a `CHANGELOG.md` note, and each Phase 22-33 capability the audit flagged as undemonstrated has a runnable example listed in `examples/README.md`
   5. `make api-surface` reports no change — docs and examples do not move the public surface; if a fix genuinely requires a public change it is recorded in `MIGRATION.md` §9.2 and the semver allowlist per the Phase 29 / 33 pattern
 
-**Plans**: 0 plans
+**Plans**: 13 plans
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd-plan-phase 36 to break down)
+- [ ] 36-01-PLAN.md — Tracer: close the memory/ports/storage rustdoc groups, add the token-economy example, seed the evidence harness
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 36-02-PLAN.md — Rustdoc: paladin-battalion (72 rows, 34 location groups)
+- [ ] 36-03-PLAN.md — Rustdoc: paladin-ai-core (28 rows, 14 location groups)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 36-04-PLAN.md — Rustdoc: paladin-llm and paladin-web (24 rows, 17 location groups)
+- [ ] 36-05-PLAN.md — Rustdoc: the paladin-ai facade (12 rows, 7 location groups)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 36-06-PLAN.md — Examples: WarEngine configuration & checkpoints, control flow & dynamic routing
+- [ ] 36-07-PLAN.md — Examples: human-in-the-loop gate & resume, graceful shutdown
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 36-08-PLAN.md — Examples: agent runtime & middleware, structured output, RAG retrieval
+- [ ] 36-09-PLAN.md — Examples: http_service_host router parity, Platform API client, webhook receiver
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 36-10-PLAN.md — Examples: node-result cache, observability & OTel export, eval scenarios
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 36-11-PLAN.md — examples/README.md: gallery index completion and currency fixes
+- [ ] 36-12-PLAN.md — Gate wiring: make doc-check, clean-code, pre-push, CI lint step, examples check, closing measurement
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 36-13-PLAN.md — Closure map, WINDOWS.md rows 36/37, CHANGELOG entries, CI evidence
+
+**Cross-cutting constraints:**
+
+- `make api-surface` reports the surface unchanged.
+- `cargo check --workspace --all-targets --all-features` exits 0 and `cargo test --workspace --doc` stays green.
+- Both programs are picked up by the bulk `cargo build --examples` selector — neither declares required-features.
+- `cargo check --workspace --all-targets --all-features` exits 0 and `make api-surface` reports the surface unchanged.
 
 ### Phase 36.1: Deferred Items Closure (INSERTED)
 
@@ -1110,7 +1151,7 @@ Plans:
 | 33. Commissary In-Tree Adoption | v0.10.0 | 6/6 | Complete    | 2026-09-16 |
 | 34. Documentation Currency Audit | v0.10.0 | 9/9 | Complete    | 2026-09-17 |
 | 35. mdBook Currency | v0.10.0 | 10/10 | Complete    | 2026-09-17 |
-| 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 0/0 | Not started | — |
+| 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 0/13 | Planned | — |
 | 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 0/0 | Not started | — |
 | 37. v0.10.0 Crate Release | v0.10.0 | 0/0 | Not started | — |
 

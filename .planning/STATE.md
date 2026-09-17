@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 36
 current_phase_name: Rustdoc Zero-Warning Bar & Examples Currency
-status: planning
-stopped_at: Phase 36 context gathered
-last_updated: "2026-09-17T17:45:29.494Z"
+status: executing
+stopped_at: Phase 36 planned — 13 plans in 8 waves, checker passed; next: execute
+last_updated: "2026-09-17T19:14:38.095Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 35 complete, transitioned to Phase 36
+last_activity_desc: Phase 36 planned (13 plans, 8 waves)
 progress:
   total_phases: 18
   completed_phases: 15
-  total_plans: 177
+  total_plans: 190
   completed_plans: 177
 ---
 
@@ -63,7 +63,7 @@ names. See MILESTONES.md.
 
 Phase: 36 — Rustdoc Zero-Warning Bar & Examples Currency
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-17 — Phase 35 complete, transitioned to Phase 36
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate

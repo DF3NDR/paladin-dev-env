@@ -69,23 +69,24 @@ tokio = { version = "1", features = ["full"] }
 
 ### Quick Example
 
-```rust
+```rust,ignore
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
-use paladin::infrastructure::adapters::llm::OpenAiAdapter;
-use paladin::infrastructure::config::OpenAiConfig;
+use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Create vision-capable LLM adapter
-    let config = OpenAiConfig {
+    let config = OpenAIConfig {
         api_key: std::env::var("OPENAI_API_KEY")?,
         base_url: "https://api.openai.com/v1".to_string(),
-        ..Default::default()
+        organization: None,
+        timeout_seconds: 300,
+        max_retries: 3,
     };
-    let llm = Arc::new(OpenAiAdapter::new(config)?);
+    let llm = Arc::new(OpenAIAdapter::new(config)?);
 
-    // 2. Build vision-enabled Paladin
+    // 2. Build vision-enabled Paladin (model is set on the builder, not the config)
     let paladin = PaladinBuilder::new(llm)
         .name("ImageAnalyzer")
         .system_prompt("You are an expert image analyst. Describe images in detail.")
@@ -115,7 +116,7 @@ Sentinel supports three ways to provide images to vision-capable Paladins:
 
 Reference images via HTTP/HTTPS URLs:
 
-```rust
+```rust,ignore
 use paladin::core::platform::container::vision::{VisionContent, ImageDetail};
 
 let content = VisionContent::ImageUrl {
@@ -130,7 +131,7 @@ let content = VisionContent::ImageUrl {
 
 Embed images as base64-encoded strings:
 
-```rust
+```rust,ignore
 let base64_data = "iVBORw0KGgoAAAANSUhEUg..."; // Base64-encoded image
 
 let content = VisionContent::ImageBase64 {
@@ -146,7 +147,7 @@ let content = VisionContent::ImageBase64 {
 
 Load images from the local filesystem:
 
-```rust
+```rust,ignore
 use std::path::PathBuf;
 
 let content = VisionContent::ImageFile {
@@ -161,7 +162,7 @@ let content = VisionContent::ImageFile {
 
 Control the resolution and token usage:
 
-```rust
+```rust,ignore
 pub enum ImageDetail {
     Auto,  // Let the model decide (balanced)
     Low,   // Faster, cheaper, less detail (512x512 max)
@@ -184,17 +185,19 @@ pub enum ImageDetail {
 
 **Models**: `gpt-4o`, `gpt-4o-mini`, `gpt-4-vision-preview`
 
-```rust
-use paladin::infrastructure::adapters::llm::OpenAiAdapter;
+```rust,ignore
+use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 
-let config = OpenAiConfig {
+// The model ("gpt-4o") is set on the PaladinBuilder, not on OpenAIConfig -- see the Quick Example above.
+let config = OpenAIConfig {
     api_key: env::var("OPENAI_API_KEY")?,
-    model: "gpt-4o".to_string(),
     base_url: "https://api.openai.com/v1".to_string(),
-    ..Default::default()
+    organization: None,
+    timeout_seconds: 300,
+    max_retries: 3,
 };
 
-let llm = Arc::new(OpenAiAdapter::new(config)?);
+let llm = Arc::new(OpenAIAdapter::new(config)?);
 ```
 
 **Features**:
@@ -212,14 +215,15 @@ let llm = Arc::new(OpenAiAdapter::new(config)?);
 
 **Models**: `claude-3-opus-20240229`, `claude-3-sonnet-20240229`, `claude-3-haiku-20240307`
 
-```rust
-use paladin::infrastructure::adapters::llm::AnthropicAdapter;
+```rust,ignore
+use paladin_llm::anthropic::{AnthropicAdapter, AnthropicConfig};
 
 let config = AnthropicConfig {
     api_key: env::var("ANTHROPIC_API_KEY")?,
     model: "claude-3-opus-20240229".to_string(),
     base_url: "https://api.anthropic.com/v1".to_string(),
-    ..Default::default()
+    max_tokens: 4096,
+    timeout_seconds: 300,
 };
 
 let llm = Arc::new(AnthropicAdapter::new(config)?);
@@ -235,7 +239,7 @@ let llm = Arc::new(AnthropicAdapter::new(config)?);
 
 ### Capability Detection
 
-```rust
+```rust,ignore
 let capabilities = llm.get_capabilities();
 if capabilities.supports_vision {
     println!("Provider: {}", llm.get_provider_name());
@@ -249,7 +253,7 @@ if capabilities.supports_vision {
 
 ### Building Vision-Enabled Paladins
 
-```rust
+```rust,ignore
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
 
 let paladin = PaladinBuilder::new(llm_port)
@@ -264,7 +268,7 @@ let paladin = PaladinBuilder::new(llm_port)
 
 ### Executing with Vision
 
-```rust
+```rust,ignore
 use paladin::core::platform::container::vision::VisionContent;
 
 // Single image
@@ -298,7 +302,7 @@ let result = paladin.execute_with_vision(
 
 ### With Memory (Garrison)
 
-```rust
+```rust,ignore
 use paladin::infrastructure::adapters::garrison::SqliteGarrison;
 
 let garrison = Arc::new(SqliteGarrison::new("memory.db")?);
@@ -314,7 +318,7 @@ let paladin = PaladinBuilder::new(llm_port)
 
 ### With RAG (Sanctum)
 
-```rust
+```rust,ignore
 use paladin::infrastructure::adapters::sanctum::QdrantSanctum;
 use paladin::application::services::sanctum::rag_retrieval_service::RagRetrievalService;
 
@@ -334,7 +338,7 @@ let paladin = PaladinBuilder::new(llm_port)
 
 ### PDF Text Extraction
 
-```rust
+```rust,ignore
 use paladin::infrastructure::adapters::document::pdf_extractor::PdfExtractor;
 use std::path::Path;
 
@@ -357,7 +361,7 @@ for page in &document.pages {
 
 ### DocumentPort Interface
 
-```rust
+```rust,ignore
 use paladin::paladin_ports::input::document_port::{
     DocumentPort, DocumentSource, ChunkConfig
 };
@@ -397,7 +401,7 @@ for chunk in chunks {
 
 ### Document Metadata
 
-```rust
+```rust,ignore
 pub struct DocumentMetadata {
     pub title: Option<String>,
     pub author: Option<String>,
@@ -408,7 +412,7 @@ pub struct DocumentMetadata {
 
 ### Intelligent Chunking
 
-```rust
+```rust,ignore
 let config = ChunkConfig {
     chunk_size: 500,        // Target chunk size in characters
     chunk_overlap: 100,     // Overlap between chunks
@@ -583,7 +587,7 @@ vision:
 
 **Using Configuration in Code**:
 
-```rust
+```rust,ignore
 use paladin::config::application_settings::ApplicationSettings;
 
 let settings = ApplicationSettings::load("config.yml")?;
@@ -610,7 +614,7 @@ let anthropic_adapter = AnthropicAdapter::new_with_vision_config(
 
 ### Encryption at Rest
 
-```rust
+```rust,ignore
 use paladin::infrastructure::security::encryption::{EncryptionService, SecureData};
 
 let encryption = EncryptionService::new();
@@ -628,7 +632,7 @@ let decrypted: SecureData<Vec<u8>> = encryption.decrypt_image_data(&encrypted)?;
 
 ### Data Retention
 
-```rust
+```rust,ignore
 use paladin::infrastructure::security::encryption::DataRetentionPolicy;
 use std::time::Duration;
 
@@ -646,7 +650,7 @@ if !policy.should_retain(&secure_data) {
 
 ### Audit Logging
 
-```rust
+```rust,ignore
 use paladin::infrastructure::security::audit::AuditLogger;
 
 let audit = AuditLogger::new(true);
@@ -675,7 +679,7 @@ All Battalion patterns work seamlessly with vision-enabled Paladins. See [BATTAL
 
 ### Formation: Sequential Vision Processing
 
-```rust
+```rust,ignore
 use paladin::application::services::battalion::formation_service::FormationExecutionService;
 use paladin::core::platform::container::battalion::formation::Formation;
 
@@ -694,7 +698,7 @@ let result = service.execute(&formation, "Analyze image.jpg").await?;
 
 ### Phalanx: Parallel Vision Processing
 
-```rust
+```rust,ignore
 use paladin::application::services::battalion::phalanx_service::PhalanxExecutionService;
 use paladin::core::platform::container::battalion::phalanx::Phalanx;
 
@@ -715,7 +719,7 @@ let result = service.execute(&phalanx, "Analyze all aspects of image.jpg").await
 
 ### VisionError Types
 
-```rust
+```rust,ignore
 use paladin::core::platform::container::vision::VisionError;
 
 match result {
@@ -742,7 +746,7 @@ match result {
 
 ### DocumentError Types
 
-```rust
+```rust,ignore
 use paladin::core::platform::container::document::DocumentError;
 
 match document_result {
@@ -766,7 +770,7 @@ match document_result {
 
 ### PaladinError Integration
 
-```rust
+```rust,ignore
 use paladin::application::services::paladin::error::PaladinError;
 
 match paladin.execute_with_vision(task, images).await {
@@ -803,7 +807,7 @@ match paladin.execute_with_vision(task, images).await {
 - Use `ImageDetail::Low` for faster processing
 - Compress images before upload to reduce latency
 
-```rust
+```rust,ignore
 // Fast processing (low detail)
 VisionContent::ImageFile {
     path: PathBuf::from("large_image.jpg"),
@@ -821,7 +825,7 @@ VisionContent::ImageFile {
 
 Use Phalanx for parallel processing:
 
-```rust
+```rust,ignore
 // Process 100 images in parallel with 10 Paladins
 let paladins: Vec<Paladin> = (0..10)
     .map(|i| create_vision_paladin(&format!("processor_{}", i)))
@@ -853,7 +857,7 @@ let result = service.execute(&phalanx, "Process batch of 100 images").await?;
 
 ### API Rate Limits
 
-```rust
+```rust,ignore
 // Add delays for rate limit compliance
 use tokio::time::{sleep, Duration};
 

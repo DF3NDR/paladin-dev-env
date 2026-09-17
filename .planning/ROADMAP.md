@@ -922,7 +922,7 @@ Plans:
 
 **Goal**: The documentation debt is measured before it is paid — one inventory records, per mdBook page under `docs/src/`, per crate's rustdoc, and per `examples/` / `crates/doc-examples` program, what Phases 22-33 changed that the docs do not yet say (plus any v0.9.0-era gap the Phase 16 currency pass and the Phase 28-17 / 29-06 docs plans left open), with every finding classified as *missing page*, *stale content*, *rustdoc warning or broken intra-doc link*, or *non-compiling / obsolete example*, so that Phases 35 and 36 are scoped by evidence rather than by guess.
 **Depends on**: Phase 33 (the tree the docs must describe is final — all 13 phases of the milestone are verified)
-**Requirements**: TBD — assigned at planning; one new prefix is needed per protocol item 3 (`DOCS-*` is spent)
+**Requirements**: CURR-01, CURR-02, CURR-03, CURR-04, CURR-05 (minted at planning 2026-09-17; prefix shared with Phases 35-36)
 **Source**: Operator instruction 2026-09-17 (pre-tag readiness review); `33-CI-EVIDENCE.md` row 26 (73 carried `cargo doc` warnings); STATE.md Phase 32 close (14 unresolved intra-doc links under `--all-features`); `WINDOWS.md` #36
 **UI hint**: no
 **Success Criteria** (what must be TRUE):

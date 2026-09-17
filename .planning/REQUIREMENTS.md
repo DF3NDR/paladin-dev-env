@@ -467,6 +467,31 @@ facade re-export.
   acceptance audit rather than a new audit (PRD R4; roadmap-time addition; SHIP-01…04
   re-verification)
 
+### Documentation Currency Audit (Release Readiness — Phases 34-36, epic `CURR`)
+
+The prefix also carries Phases 35-36 per ROADMAP ("assigned at planning under the Phase 34
+prefix"); those phases mint their own `CURR-nn` numbers when planned.
+
+- [ ] **CURR-01**: Every `.md` under `docs/src/` carries a `current`/`stale`/`missing` verdict
+  against the Phase 22-33 shipped surface, and every `stale`/`missing` verdict cites the phase and
+  the shipped item (ROADMAP Phase 34 SC1; D-05, D-06, D-07, D-08, D-09, D-10)
+
+- [ ] **CURR-02**: Every `warning:` line from the default-feature `cargo doc` run and every error
+  from the per-crate `-D warnings --all-features` sweep is enumerated with crate, file and line,
+  with the `ci.yml` lint-job command quoted verbatim as the bar (ROADMAP Phase 34 SC2; D-00a, D-12,
+  D-13, D-14, D-15)
+
+- [ ] **CURR-03**: Every program under `examples/`, every `crates/doc-examples` module and
+  `crates/paladin-llm/examples/live_vendor_smoke.rs` carries a build status under the CI
+  feature-set split plus a currency verdict (ROADMAP Phase 34 SC3; D-16, D-17, D-18)
+
+- [ ] **CURR-04**: The inventory is partitioned into sized Phase 35 (`MB-nn`) and Phase 36
+  (`RD-nn`, `EX-nn`) work lists, and any finding that is neither documentation nor an example is
+  routed to the deferred register (ROADMAP Phase 34 SC4; D-03, D-04, D-19, D-21)
+
+- [ ] **CURR-05**: The audit is read-only against the tree: the phase's commits touch only
+  `.planning/` (ROADMAP Phase 34 SC5; D-00c, D-22, D-23)
+
 ## v2 Requirements
 
 Deferred beyond this program (named out of scope by the corpus; tracked, not roadmapped):
@@ -575,16 +600,21 @@ Which phases cover which requirements. Populated during roadmap creation.
 | COMM-02 | Phase 33 | Complete |
 | COMM-03 | Phase 33 | Complete |
 | COMM-04 | Phase 33 | Complete |
+| CURR-01 | Phase 34 | Pending |
+| CURR-02 | Phase 34 | Pending |
+| CURR-03 | Phase 34 | Pending |
+| CURR-04 | Phase 34 | Pending |
+| CURR-05 | Phase 34 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 66 total (45 from the `.project/v0.10.0/` corpus, complete; 21 added
-  2026-09-14 from `.project/Milestone_13-Token-Economy/`)
+- v1 requirements: 71 total (45 from the `.project/v0.10.0/` corpus, complete; 21 added
+  2026-09-14 from `.project/Milestone_13-Token-Economy/`; 5 added 2026-09-17 for Phases 34-36)
 
-- Mapped to phases: 66
+- Mapped to phases: 71
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-01*
 *Last updated: 2026-09-01 after initial definition from the `.project/v0.10.0/` design corpus*
-*Extended: 2026-09-14 — VOCAB-01…07, ACCT-01…05, PRIM-01…05, COMM-01…04 added for Phases 30-33 from `.project/Milestone_13-Token-Economy/`; X-03 supersession for Phases 31-33 recorded above; FUT-08/FUT-09 now owned by the reserved Milestone 14*
+*Extended: 2026-09-14 — VOCAB-01…07, ACCT-01…05, PRIM-01…05, COMM-01…04 added for Phases 30-33 from `.project/Milestone_13-Token-Economy/`; X-03 supersession for Phases 31-33 recorded above; FUT-08/FUT-09 now owned by the reserved Milestone 14; CURR-01…05 added 2026-09-17 for Phase 34 (Release Readiness)*

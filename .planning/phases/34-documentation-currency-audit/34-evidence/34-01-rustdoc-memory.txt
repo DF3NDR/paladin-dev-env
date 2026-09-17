@@ -1,0 +1,13 @@
+ Documenting paladin-memory v0.10.0 (/workspace/crates/paladin-memory)
+error: unresolved link to `HeuristicTokenCounter`
+  |
+  = note: the link appears in this line:
+
+          [`HeuristicTokenCounter`] is the phase-wide default: a synchronous,
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `HeuristicTokenCounter` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+  = note: `-D rustdoc::broken-intra-doc-links` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(rustdoc::broken_intra_doc_links)]`
+
+error: could not document `paladin-memory`

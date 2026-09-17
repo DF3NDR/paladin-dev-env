@@ -1032,10 +1032,32 @@ Plans:
 
 - [ ] TBD (run /gsd-plan-phase 36 to break down)
 
+### Phase 36.1: Deferred Items Closure (INSERTED)
+
+**Goal**: Every deferred item Phases 30-35 recorded and left unowned is either closed in the tree or explicitly dispositioned before v0.10.0 ships — the per-phase `deferred-items.md` registers (31, 32, 34, 35), the two open `WINDOWS.md` rows (#36, #37) and the two `todos/pending/` files are walked item by item, each one is fixed, waived with a written reason, or re-homed to a named owner, and the `WINDOWS.md` ledger is brought back into agreement with the registers so `/gsd-complete-milestone` sees the whole picture rather than two rows.
+**Depends on**: Phase 36 (closes the rustdoc items — `WINDOWS.md` #36, #37 and the 73-warning `cargo doc` baseline — that this phase must verify closed rather than fix twice); independent of Phase 35
+**Requirements**: TBD — assigned at planning under the Phase 34 prefix
+**Source**: `phases/31-lossless-token-accounting/deferred-items.md`, `phases/32-unified-token-primitives/deferred-items.md`, `phases/34-documentation-currency-audit/deferred-items.md`, `phases/35-mdbook-currency/deferred-items.md`; `WINDOWS.md` rows 36-37; `todos/pending/2026-08-13-verify-local-coverage-reproduction.md`, `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md`; STATE.md Phase 32 / 33 close-out carried concerns
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. The unowned `docs/src` prose defects Phase 35 deferred are closed on the page: `contributing-providers.md` lines 272 and 367 use the relocated adapter path, `testing-guide.md`'s `tests/` tree no longer places `config.test.yml` under `fixtures/`, `cli-configuration.md`'s Garrison and Arsenal troubleshooting entries no longer assert a source-line TODO, `grep -rnw OpenAiAdapter docs/src` is empty across all seven pages, and `cicd.md`'s deploy and best-practice YAML is either captioned illustrative or replaced by a real workflow excerpt
+  2. The Phase 34 tooling findings are dispositioned, not merely re-pointed: `scripts/check-public-api-examples.sh` is either wired into CI or `make clean-code` against a refrozen entry-point baseline with its 19 MISSING items fixed, or waived in `WINDOWS.md` with the maintainer's reason; `ci.yml`'s examples-count comment matches `find examples -name '*.rs' | wc -l`; PROJECT.md's Phase 4 amendment names `paladin-llm` as the one crate with its own `examples/`
+  3. `tests/cli_isolation_test.rs::test_cli_feature_is_not_default` no longer fails under `cargo test --workspace --all-features` — gated or rescoped — so the three-phase-old carried failure stops being re-logged
+  4. `WINDOWS.md` #36 and #37 are `fixed` (verified against Phase 36's output, not re-done here), and every open entry from the Phase 34 and 35 registers has a `WINDOWS.md` row with status `fixed` or `waived` plus a reason, so the ledger and the registers agree
+  5. The two `todos/pending/` items (local coverage reproduction on a Docker machine; RustFS evaluation) are each either completed, or explicitly deferred past v0.10.0 with an owner and a re-check date written into the todo file — neither is left as an undated pointer
+  6. `make clean-code`, `make security`, `cargo test --workspace`, `mdbook build` with linkcheck, and `make api-surface` are green on the closing commit; docs-only fixes move no public surface
+
+**Plans**: 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 36.1 to break down)
+
 ### Phase 37: v0.10.0 Crate Release
 
 **Goal**: v0.10.0 is released, not merely releasable — the Phase 29 gates are re-sealed on the final post-documentation commit, the feature branch merges to `main`, `release.yml` cuts the `v0.10.0` tag on the merge commit per the Phase 29 two-SHA rule, every publishable crate is on crates.io at `0.10.0`, and the release evidence is recorded so the milestone can close.
-**Depends on**: Phase 35, Phase 36 (all documentation and example work landed); Phase 33 (the gate re-seal this phase repeats)
+**Depends on**: Phase 35, Phase 36 (all documentation and example work landed); Phase 36.1 (deferred items closed or dispositioned before the tag); Phase 33 (the gate re-seal this phase repeats)
 **Requirements**: TBD — assigned at planning; may extend SHIP-04 in place per protocol item 3 rather than minting a near-duplicate
 **Source**: Phase 29 D-17 / D-18 / D-21 (human-only §11 sign-off box; `0.10.0` bumped without a tag; tag cut on the `main` merge commit by `release.yml`); the v0.9.0 post-close release record in MILESTONES.md
 **UI hint**: no
@@ -1089,6 +1111,7 @@ Plans:
 | 34. Documentation Currency Audit | v0.10.0 | 9/9 | Complete    | 2026-09-17 |
 | 35. mdBook Currency | v0.10.0 | 10/10 | Complete    | 2026-09-17 |
 | 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 0/0 | Not started | — |
+| 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 0/0 | Not started | — |
 | 37. v0.10.0 Crate Release | v0.10.0 | 0/0 | Not started | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits

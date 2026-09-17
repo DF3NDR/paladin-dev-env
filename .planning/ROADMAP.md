@@ -1051,7 +1051,7 @@ Plans:
 **Wave 5** *(blocked on Wave 4 completion)*
 
 - [x] 36-08-PLAN.md — Examples: agent runtime & middleware, structured output, RAG retrieval
-- [ ] 36-09-PLAN.md — Examples: http_service_host router parity, Platform API client, webhook receiver
+- [x] 36-09-PLAN.md — Examples: http_service_host router parity, Platform API client, webhook receiver
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

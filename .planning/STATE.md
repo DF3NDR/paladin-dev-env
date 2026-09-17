@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36
 current_phase_name: Rustdoc Zero-Warning Bar & Examples Currency
 status: executing
-stopped_at: Completed 36-08-PLAN.md
-last_updated: "2026-09-17T22:07:18.575Z"
+stopped_at: Completed 36-09-PLAN.md
+last_updated: "2026-09-17T22:35:46.030Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 36 execution started
 progress:
   total_phases: 18
   completed_phases: 15
   total_plans: 190
-  completed_plans: 185
+  completed_plans: 186
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 97%
+**Progress:** [██████████] 98%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36 (Rustdoc Zero-Warning Bar & Examples Currency) — EXECUTING
-Plan: 9 of 13
+Plan: 10 of 13
 Status: Ready to execute
 Last activity: 2026-09-17 — Phase 36 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -160,6 +160,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36 P06 | 30min | 2 tasks | 3 files |
 | Phase 36 P07 | ~55min | 2 tasks | 3 files |
 | Phase 36 P08 | ~2h10min | 3 tasks | 4 files |
+| Phase 36 P09 | ~1h30min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -512,6 +513,9 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: 36-08: HistoryTrimmer's model-context-limit resolver tries the config table before the LLM port's own declared capabilities -- a standalone-trimmer demo must name the model explicitly and override model_context_limits for it, or MockLlmAdapter's 4096-token reported window silently shadows a smaller default_context_tokens
 - [Phase ?]: 36-08: InMemorySanctum's HashMap-backed storage has per-process randomized iteration order -- a RAG example seeding several memories at tied similarity scores needs a deterministic, content-hash-derived embedding (not one constant vector) for reproducible ranking across runs
 - [Phase ?]: 36-08: Discovered (not fixed, D-18 docs-only boundary): PaladinError::ArmamentFailed's FailRun arms in paladin_execution_service.rs build reason from raw e.to_string(), bypassing ToolResultFormatter's redact-then-bound sanitizer their own doc comment promises -- recorded as WINDOWS.md #38
+- [Phase ?]: http_service_host.rs/doc-examples: mount ThreadApiState/RunApiState unwired (matches server's off-by-default behavior) rather than wiring a working backend, closing EX-33/EX-55 without duplicating platform_api_client.rs's demonstration
+- [Phase ?]: platform_api_client.rs bypasses build_run_api (which needs a real provider credential via paladin_port_from_settings) and hand-wires the same collaborators with a local MockEnginePort, using paladin_storage in-memory adapters for every store
+- [Phase ?]: Thread state/resume/history and the dev-ui inspector are demonstrated against a Waypoint-less thread (Agent-kind assistant never touches the waypoint store) and documented as a scope deviation rather than building a full Workflow-based paused-thread demo
 
 ### Pending Todos
 
@@ -1079,8 +1083,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T22:07:04.549Z
-**Stopped at:** Completed 36-08-PLAN.md
+**Last session:** 2026-09-17T22:35:45.954Z
+**Stopped at:** Completed 36-09-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

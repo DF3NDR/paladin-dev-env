@@ -169,7 +169,10 @@ Waypoint's vanguard, and `resume` re-executes it from attempt 1.
 
 **Tuning is not a graph change.** `retry` and `timeout` are deliberately excluded from
 `WarGraph::fingerprint()`, so tightening either never makes `resume` fail with `GraphMismatch`.
-`on_error` and `cache`, which change what a run *does*, are hashed (fingerprint version `v5`).
+`on_error` and `cache`, which change what a run *does*, are hashed (fingerprint version `v6` —
+Phase 26 bumped it again when `output_schema` on `NodeSpec::Paladin` joined the canonical byte
+stream; see [The Graph Fingerprint](superstep-engine.md#the-graph-fingerprint) for the full
+scheme).
 
 ## Timeouts: Wall Clock versus Idle
 

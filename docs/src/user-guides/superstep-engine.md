@@ -41,7 +41,11 @@ order is deterministic regardless of how many nodes ran concurrently.
 
 The graph below is deliberately small and cyclic: one node self-loops over a `(count, status)`
 Battlefield a few times before falling out of the loop — the same shape that makes cyclic
-execution useful for retry-and-refine style workflows.
+execution useful for retry-and-refine style workflows. `build_graph` takes the `EngineLimits`
+to construct the graph with — pass `EngineLimits::default()` for the built-in bounds, or the
+limits `configure_limits` derives from `EngineConfig` (see
+[EngineConfig, EngineLimits and Bounded Iteration](#engineconfig-enginelimits-and-bounded-iteration)
+below).
 
 ```rust,ignore
 {{#include ../../../crates/doc-examples/src/superstep_engine.rs:build_graph}}

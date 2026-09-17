@@ -72,8 +72,11 @@ impl StateNode for LoopUntil {
 /// `(count, status)` `Battlefield` a few times, then falls out of the loop
 /// once `status` reads `"done"` -- a shape `WarGraph::validate` accepts
 /// precisely because cycles, including self-loops, are legal (ENG-FR-02),
-/// unlike the legacy Campaign graph's cycle-rejecting validation.
-pub fn build_graph() -> Result<WarGraph, Box<dyn std::error::Error>> {
+/// unlike the legacy Campaign graph's cycle-rejecting validation. Takes the
+/// `EngineLimits` to construct the graph with -- see [`configure_limits`]
+/// for how a deployment derives them from `EngineConfig`, or pass
+/// `EngineLimits::default()` to accept the built-in bounds.
+pub fn build_graph(limits: EngineLimits) -> Result<WarGraph, Box<dyn std::error::Error>> {
     let count = FieldName::new("count")?;
     let status = FieldName::new("status")?;
     let schema = BattlefieldSchema::new(vec![
@@ -86,7 +89,7 @@ pub fn build_graph() -> Result<WarGraph, Box<dyn std::error::Error>> {
         FieldSpec::new(status, DispatchRule::LastWrite, None, false),
     ]);
 
-    let mut graph = WarGraph::new(schema, EngineLimits::default());
+    let mut graph = WarGraph::new(schema, limits);
     let looper = NodeId::new("looper");
     graph.add_node(
         looper.clone(),
@@ -148,8 +151,8 @@ use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 /// exhausted.
 pub async fn run_engine()
 -> Result<(RunOutcome, Arc<InMemoryWaypointStore>, ThreadId), Box<dyn std::error::Error>> {
-    let graph = build_graph()?;
-    let (_limits, durability) = configure_limits()?;
+    let (limits, durability) = configure_limits()?;
+    let graph = build_graph(limits)?;
     let store = Arc::new(InMemoryWaypointStore::new());
     let engine = WarEngine::new(mock_paladin_port(), store.clone()).with_durability(durability);
     let thread = ThreadId::new("superstep-engine-guide")?;

@@ -128,6 +128,20 @@ this phase's `files_modified` lists: `docs/src/contributing/testing-guide.md`,
   `doc-examples` module edits — not new `docs/src` prose casing fixes). A future docs-currency pass
   or a standalone quick task is the natural owner.
 
+## Security audit, 2026-09-17 (`/gsd-secure-phase 35`)
+
+- **`docs/src/deployment/cicd.md` lines ~280–430 still carry the pre-phase illustrative
+  "Deploy to Kubernetes" workflow and the "Best Practices" YAML fragments** (blame 2026-01-27,
+  untouched by plan 35-06). They reference `${{ secrets.KUBE_CONFIG }}`,
+  `${{ secrets.OPENAI_API_KEY }}` and `${{ secrets.SLACK_WEBHOOK }}` — GitHub expression
+  references, not values, and none names a workflow that exists under `.github/`. Verified as
+  **not a disclosure** under T-35-10, but the blocks are not "verbatim captioned excerpts of a
+  real job" as D-15 bounds retained YAML, so the page's CI section is partly illustrative.
+  - **Proposed classification:** currency defect, same class as the fabricated sample plan 35-06
+    deleted from `testing-guide.md`; either caption the blocks as illustrative or replace them
+    with an excerpt of the real `release.yml` / `deploy` job.
+  - **Owner:** unassigned — outside the sixty-row MB-nn list; a future docs-currency pass.
+
 ---
 
 *Phase: 35-mdbook-currency*

@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Paladin is a **Rust workspace** of nine focused crates organised around
+Paladin is a **Rust workspace** of eleven library crates plus a facade, organised around
 **Hexagonal Architecture** (Ports & Adapters) and **Domain-Driven Design**.
 Each workspace crate maps to a distinct architectural layer, keeping the core
 domain free of all external dependencies.
@@ -14,14 +14,16 @@ domain free of all external dependencies.
 |-------|-------|---------|
 | `paladin-ai-core` | Core | Pure domain entities and base primitives |
 | `paladin-ports` | Application boundary | Port trait contracts (interfaces) |
-| `paladin-battalion` | Application services | Multi-agent orchestration patterns |
-| `paladin-llm` | Infrastructure | LLM provider adapters (OpenAI, Anthropic, DeepSeek) |
+| `paladin-battalion` | Application services | Multi-agent orchestration patterns, WarEngine superstep execution |
+| `paladin-llm` | Infrastructure | LLM provider adapters (OpenAI, Anthropic, DeepSeek), Commissary token rationing |
 | `paladin-memory` | Infrastructure | Garrison and Sanctum memory adapters |
 | `paladin-storage` | Infrastructure | SQL repository adapters (SQLite, MySQL) |
 | `paladin-notifications` | Infrastructure | Email, push, system notification adapters |
 | `paladin-content` | Infrastructure | Content ingestion and processing adapters |
-| `paladin-web` | Infrastructure | HTTP server (actix-web / axum), REST API |
-| `paladin-ai` *(root)* | Umbrella | Re-exports all crates; workspace feature flags |
+| `paladin-web` | Infrastructure | HTTP server (actix-web / axum), Platform API REST surface |
+| `paladin-herald` | Infrastructure | Concrete Herald output-formatter adapters (JSON, Markdown, Table) |
+| `paladin-eval` | Composition tool | Deterministic evaluation harness — scenario files, scripted `LlmPort`, trace assertions |
+| `paladin-ai` *(root)* | Umbrella / facade | Re-exports all crates; workspace feature flags |
 
 ## Three-Layer Hexagonal Architecture
 
@@ -232,6 +234,36 @@ infrastructure edge.
 
 See [Sentinel](../appendix/sentinel.md) for the full reference — content types, supported providers,
 document processing, CLI usage, YAML configuration, security, and Battalion integration.
+
+### WarEngine (Superstep Execution)
+
+A cyclic graph execution engine in `paladin-battalion`: a `WarGraph` of nodes runs in
+synchronized supersteps over a typed, schema-declared `Battlefield` shared state, checkpointing
+a `Waypoint` after each superstep so a run resumes with zero re-execution of completed work. See
+[WarEngine: Battlefield State & Superstep Execution](../user-guides/superstep-engine.md).
+
+### Aegis (Fault Tolerance)
+
+Per-node retry, timeout, error-handler, model-fallback and caching policy, attached as a
+`NodeId`-keyed sidecar on a `WarGraph` rather than baked into any node spec. See [Aegis: Retry,
+Timeout, Error Handlers, Model Fallback and Node Caching](../user-guides/fault-tolerance.md).
+
+### Commissary (Token-Budget Rationing)
+
+The input-side, per-call window-rationing officer in `paladin-llm`: a pre-flight
+`verify_fits` guard plus a bounded `dispense` allocator over caller-prioritised material. See
+[Commissary](commissary.md).
+
+### Observability (TraceRecord)
+
+Every superstep engine and facade-middleware event is enqueued as a `TraceRecord` envelope
+around a twelve-variant `TraceEvent`, delivered to configured sinks. See
+[Observability: Traces, Sinks and Persistence](../operations/observability.md).
+
+### Platform API
+
+An HTTP route surface (`paladin-web`) for Runs, Threads, Assistants, Schedules and Webhooks. See
+[Platform API](../api-reference/platform-api.md).
 
 ## Technology Stack
 

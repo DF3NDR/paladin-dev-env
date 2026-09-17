@@ -33,19 +33,18 @@ ports) or `src/input/` (ingestion-facing ports).
 // crates/paladin-ports/src/output/llm_port.rs
 #[async_trait]
 pub trait LlmPort: Send + Sync {
-    async fn generate(
-        &self,
-        messages: &[Message],
-        config: &LlmConfig,
-    ) -> Result<LlmResponse, LlmError>;
+    async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError>;
 
     async fn generate_stream(
         &self,
-        messages: &[Message],
-        config: &LlmConfig,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, LlmError>> + Send>>, LlmError>;
+        request: LlmRequest,
+    ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>;
 }
 ```
+
+`LlmRequest` is a single builder-constructed request value (`id`, `model`, `prompt`, `attachments`,
+`stream`, `metadata`, `response_format`) — not the two-parameter `(messages, config)` form this
+page previously showed.
 
 ### Garrison Port
 
@@ -111,11 +110,7 @@ pub struct OpenAIAdapter { /* ... */ }
 
 #[async_trait]
 impl LlmPort for OpenAIAdapter {
-    async fn generate(
-        &self,
-        messages: &[Message],
-        config: &LlmConfig,
-    ) -> Result<LlmResponse, LlmError> {
+    async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
         // calls https://api.openai.com/v1/chat/completions
     }
 }

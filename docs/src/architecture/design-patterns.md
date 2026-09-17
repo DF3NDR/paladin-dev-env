@@ -128,18 +128,20 @@ pub enum BattalionError {
 Services receive dependencies at construction time via `Arc<dyn Port>`:
 
 ```rust,ignore
+// src/application/services/paladin/paladin_execution_service.rs
 pub struct PaladinExecutionService {
-    llm:             Arc<dyn LlmPort>,
-    garrison:        Option<Arc<dyn GarrisonPort>>,
+    llm_port:        Arc<dyn LlmPort>,
     circuit_breaker: Arc<CircuitBreaker>,
+    garrison:        Option<Arc<dyn GarrisonPort>>,
+    arsenal:         Option<Arc<dyn ArsenalPort>>,
 }
 
 impl PaladinExecutionService {
     pub fn new(
-        llm: Arc<dyn LlmPort>,
+        llm_port: Arc<dyn LlmPort>,
         circuit_breaker: Arc<CircuitBreaker>,
         garrison: Option<Arc<dyn GarrisonPort>>,
-        herald: Option<Arc<dyn Herald>>,
+        arsenal: Option<Arc<dyn ArsenalPort>>,
     ) -> Self { /* … */ }
 }
 ```

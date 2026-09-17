@@ -97,10 +97,13 @@ pub type Paladin = Node<PaladinData>;
 ```rust,ignore
 // crates/paladin-core/src/platform/container/garrison.rs
 pub struct GarrisonEntry {
-    pub role:       MessageRole,   // User | Assistant | System | Tool
-    pub content:    String,
-    pub token_count: usize,
-    pub metadata:   HashMap<String, Value>,
+    pub id:          Uuid,
+    pub role:        ConversationRole,   // System | User | Assistant | Tool
+    pub content:     String,
+    pub timestamp:   DateTime<Utc>,
+    pub metadata:    HashMap<String, Value>,
+    pub token_count: Option<u32>,
+    pub is_summary:  bool,
 }
 ```
 
@@ -157,6 +160,34 @@ pub trait Herald: Send + Sync {
 
 Implementations: `JsonHerald`, `MarkdownHerald`, `TableHerald` — see
 [Herald Output](../user-guides/herald-output.md).
+
+### Battlefield (Superstep Shared State)
+
+`crates/paladin-core/src/platform/container/battlefield.rs` — the typed, schema-declared shared
+state passed to and returned (as `StateDelta`) from every node in a `WarGraph` run, merged each
+superstep by each field's declared `DispatchRule`. See [WarEngine: Battlefield State & Superstep
+Execution](../user-guides/superstep-engine.md).
+
+### Waypoint (Superstep Checkpoint)
+
+`crates/paladin-core/src/platform/container/waypoint.rs` — the checkpoint the superstep engine
+persists after every superstep: a full `Battlefield` snapshot addressed by `(ThreadId,
+WaypointId)`, enough to resume a run with zero re-execution of completed work. See [WarEngine:
+Battlefield State & Superstep Execution](../user-guides/superstep-engine.md).
+
+### Aegis (Fault-Tolerance Policy)
+
+`crates/paladin-core/src/platform/container/aegis.rs` — the per-node fault-tolerance policy
+family (retry, timeout, error handlers, model fallback, node caching), attached as a
+`NodeId`-keyed sidecar on a `WarGraph` rather than as a field on any node spec. See [Aegis:
+Retry, Timeout, Error Handlers, Model Fallback and Node Caching](../user-guides/fault-tolerance.md).
+
+### TraceRecord (Observability Envelope)
+
+`crates/paladin-core/src/platform/container/trace.rs` — the envelope every observability sink
+receives: `thread_id`, an optional `run_id`, a per-run monotonic `seq`, `at`, and the
+`#[non_exhaustive]` `TraceEvent` itself. See [Observability: Traces, Sinks and
+Persistence](../operations/observability.md).
 
 ## Base Primitives (`crates/paladin-core/src/base/`)
 

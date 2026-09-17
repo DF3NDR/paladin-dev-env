@@ -154,9 +154,11 @@ cargo install --locked cargo-release
   builds silently omitting `paladin-cli`/`paladin-server` when Cargo's `required-features` were
   unmet. `scripts/package-release-binaries.sh`'s expected-binary assertion now hard-fails the leg
   instead of silently shipping an incomplete archive. This does not gate crates.io publishing —
-  `publish-crates` depends only on `test` and `create-release` — so judge publish health by the
-  `publish-crates` job and the registry state, never by the workflow's overall run conclusion
-  alone.
+  `publish-crates` depends on three jobs: `test`, `create-release`, and
+  `check-release-consistency` (the pre-publish consistency gate, PUBOPS-01, which fails closed if
+  the release tag's version disagrees with any publishable crate's manifest version) — so judge
+  publish health by the `publish-crates` job and the registry state, never by the workflow's
+  overall run conclusion alone.
 
 ### Dry Run (no live publish)
 

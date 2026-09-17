@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 2
+open_count: 3
 waived_count: 26
 fixed_count: 9
-total_count: 37
-last_updated: 2026-09-15T16:43:27.667Z
+total_count: 38
+last_updated: 2026-09-17T22:05:24.451Z
 ---
 
 # Broken Windows Ledger
@@ -52,6 +52,7 @@ last_updated: 2026-09-15T16:43:27.667Z
 | 35 | 28 | deviation | .planning/phases/28-observability-tooling/28-BENCH-EVIDENCE.md |  | PRD 07 acceptance 6's <=3% superstep-overhead bar with tracing on was measured and FAILED: log_sink +22.18%, composite +18.46%, against a ~110us untraced baseline (28-BENCH-EVIDENCE.md). Both genuinely fail the bar. ACCEPTED for v0.10.0 as a documented deviation (D-16) because tracing sinks are opt-in (no sink -> no overhead), trace.state_values defaults off, and the microbenchmark is all-Function-node with no LLM latency to amortise the overhead against -- so no v0.9 workflow and no default v0.10 workflow pays it. Maintainer sign-off recorded at Phase 28 close-out UAT (2026-09-09, STATE.md D-37). Follow-up: re-scope the bar to an I/O-bound superstep. Same record lives in the program acceptance audit (.project/v0.10.0/09-program-acceptance-audit.md, Accepted deviation for v0.10.0 subsection), docs/src/operations/observability.md's Known limitations bullet, and the root CHANGELOG.md's [0.10.0] Known limitations entry (plan 29-09). | waived | ACCEPTED for v0.10.0 per 29-CONTEXT.md D-16 and STATE.md's Phase 28 close entry D-37: the maintainer signed off on this measured FAIL at Phase 28 close-out UAT (2026-09-09) rather than requiring a pre-release fix, because tracing sinks are opt-in, trace.state_values defaults off, and the microbenchmark is all-Function-node with no LLM latency to amortise the overhead against. Recorded (not re-litigated) in the program acceptance audit's Accepted deviation for v0.10.0 subsection per 29-07-SUMMARY.md. Follow-up (re-scoping the bar to an I/O-bound superstep) remains open engineering work, tracked in 29-CONTEXT.md's Deferred Ideas, not a reason to block this release. | 2026-09-10T01:59:53.866Z | 2026-09-10T02:00:11.423Z |
 | 36 | 31 | unmet-truth | docs/src (workspace-wide) |  | cargo doc --workspace --no-deps emits 16 pre-existing warnings (private intra-doc links, unclosed HTML tags) unrelated to ACCT-04/token accounting; see deferred-items.md Plan 31-05 entry | open |  | 2026-09-15T06:23:45.171Z |  |
 | 37 | 32 | deviation | crates/paladin-memory/src/token_counter/mod.rs | 3 | Pre-existing broken intra-doc link [HeuristicTokenCounter] blocks cargo doc -p paladin-memory --features content-processing --no-deps under -D warnings; confirmed present on pre-task base commit, unrelated to plan 32-03's removal (logged in deferred-items.md) | open |  | 2026-09-15T16:43:27.667Z |  |
+| 38 | 36 | deviation | src/application/services/paladin/paladin_execution_service.rs | 1648 | ToolErrorMode::FailRun builds PaladinError::ArmamentFailed.reason from raw e.to_string(), bypassing ToolResultFormatter's redact-then-bound sanitizer -- contradicts the variant's own doc comment (paladin_error.rs) promising a redacted summary; discovered by examples/agent_runtime_middleware.rs (36-08), not fixed (D-18 docs-only phase boundary) | open |  | 2026-09-17T22:05:24.451Z |  |
 
 ````json
 [
@@ -497,6 +498,18 @@ last_updated: 2026-09-15T16:43:27.667Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-15T16:43:27.667Z",
+    "resolved_at": null
+  },
+  {
+    "id": 38,
+    "kind": "deviation",
+    "phase": "36",
+    "file": "src/application/services/paladin/paladin_execution_service.rs",
+    "line": 1648,
+    "description": "ToolErrorMode::FailRun builds PaladinError::ArmamentFailed.reason from raw e.to_string(), bypassing ToolResultFormatter's redact-then-bound sanitizer -- contradicts the variant's own doc comment (paladin_error.rs) promising a redacted summary; discovered by examples/agent_runtime_middleware.rs (36-08), not fixed (D-18 docs-only phase boundary)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-17T22:05:24.451Z",
     "resolved_at": null
   }
 ]

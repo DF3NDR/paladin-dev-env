@@ -1,0 +1,67 @@
+# Plan 36-07 evidence: human_in_the_loop_gate.rs, graceful_shutdown.rs
+
+## Task 1: examples/human_in_the_loop_gate.rs
+
+Command: `env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY cargo run --example human_in_the_loop_gate`
+Exit code: 0
+
+Full stdout:
+```
+Human-in-the-Loop Gate: Pause, Resume, Replay
+
+1. Pause at a Gate (EX-71)
+
+   thread         = human-in-the-loop-gate
+   paused at node = approve
+   awaiting       = Approval -> "Deploy the release to production?"
+   parley id      = 01a0b13c-8f3b-7473-a76c-02326b2086ae
+
+2. Resume with typed responses (EX-72)
+
+   withheld the real response, submitted an unknown parley id instead:
+     -> typed rejection: unknown parley id: 01a0b13c-8f3c-7353-b02e-64bfa3e30a08
+
+   accepted the correct response -> thread resumed and completed
+   final waypoint = 01a0b13c-8f3c-7353-b02e-64d4016f8fdc
+   path           = Some("act: release deployed")
+
+3. Replay the thread (EX-73)
+
+   chronicle history (3 waypoint(s), newest first):
+     superstep 3 -> Completed (fork_of None)
+     superstep 2 -> Running (fork_of None)
+     superstep 1 -> AwaitingInput { parleys: [ParleyRequest { parley_id: ParleyId(01a0b13c-8f3b-7473-a76c-02326b2086ae), node_id: NodeId("approve"), kind: Approval, prompt: "Deploy the release to production?", payload: Object {}, choices: None, expires_at: None, created_at: 2026-09-17T21:18:51.195827689Z, on_expire: FailRun }], responses: [] } (fork_of None)
+
+   replayed from pause waypoint 01a0b13c-8f3b-7473-a76c-024c0d7d1280 -> new branch, new parley id 01a0b13c-8f3d-7233-a47a-84d8a81fdef9
+   branch resumed with the opposite decision -> waypoint 01a0b13c-8f3e-7a32-b3f9-bcdbc9f96959
+   branch path    = Some("cancel: release withheld")
+
+   mainline path (approved) = "act: release deployed"
+   branch   path (denied)   = "cancel: release withheld"
+   the replayed branch diverged from the mainline's own result.
+
+Done -- fully offline, no provider API key was read.
+```
+
+Also verified:
+- `cargo build --example human_in_the_loop_gate` -- exit 0, no `--features` flag.
+- `cargo fmt --all -- --check` -- exit 0.
+- `cargo check --workspace --all-targets --all-features` -- exit 0.
+- `./scripts/check-api-surface.sh .project/current-exports.txt` -- "API surface unchanged" (3959 items).
+- `grep -cE '\.unwrap\(\)|\.expect\(' examples/human_in_the_loop_gate.rs` -- 0.
+- `grep -cE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY' examples/human_in_the_loop_gate.rs` -- 0.
+- `grep -c 'Quartermaster' examples/human_in_the_loop_gate.rs` -- 0.
+- `git diff --stat HEAD -- src/ crates/` -- empty (no library source changed).
+- The thread id printed at the pause (`human-in-the-loop-gate`) is the same value used at the
+  resume call (the same `thread.clone()` is threaded through every call).
+
+Design note: the AwaitingInput Waypoint's own `vanguard` field is the parleying node itself
+(`approve`) -- confirmed empirically from `superstep.rs`'s HITL-01 suspension arm. `replay`/
+`fork` never populate `responses_by_node` (only `resume_with` does), so replaying from the
+pause point re-dispatches the Gate's "first visit" path and raises a brand-new parley id on
+a new branch -- exactly what the run output shows. Resuming that new branch with the OPPOSITE
+decision (`false` instead of `true`) produces a genuinely divergent `path` result ("cancel:
+release withheld" vs. the mainline's "act: release deployed"), satisfying the plan's
+"replay ... and print the divergent result" must-have without needing `fork`'s edit-merge
+(which would have required a graph shape where the fork point precedes the routing decision,
+not the Gate's own resolution -- the Gate is the routing edge's own source here).

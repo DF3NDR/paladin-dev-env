@@ -223,6 +223,31 @@ measure is unchanged from the recorded Phase 34 start SHA.
   run. This plan measured and validated the chunking approach live (row 117 above) before trusting
   it for all 36 grep-recovered rows.
 
+## Plan 34-06, Task 2 — workspace all-features run recorded as a partial view
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 121 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`, teed to `34-evidence/34-06-cargo-doc-allfeatures-workspace.txt` | exit `101`; wall time 34s; 183-line capture | ⚠️ RECORDED — carried baseline per ADR-0033/D-14, not a gate this phase enforces |
+| 122 | `grep -c '^error:'` vs `grep -c '^error: could not document'` on the capture | `21` total, `4` `could not document` boundary lines → `17` content errors | ✅ PASS — arithmetic reconciles with the per-crate table below |
+| 123 | Per-error crate attribution: `-->` path read directly where present; for the 4 carrying none, `grep -rnF` for the exact quoted snippet restricted to doc-comment lines, tried against each candidate crate's own `src/` in turn (`RunInspectorPort` → `crates/paladin-web/src`; `dev_ui_inspector_page` → same; `InspectorView::supersteps` → same; `HeuristicTokenCounter` → `crates/paladin-memory/src`, the already-known case) | all 4 location-less errors resolve to exactly one doc-comment match each: `crates/paladin-web/src/dev_ui_controller.rs:3`, `:20`, `:28` (three separate `paladin-web` errors, not `paladin-memory` as stream position alone would suggest) and `crates/paladin-memory/src/token_counter/mod.rs:3` | ✅ PASS — confirms the abort-boundary ordering is not crate-reliable (this run's biggest single finding) |
+| 124 | Full per-crate tally: `paladin-memory` 1, `paladin-web` 8 (3 location-less + 5 `-->`-bearing), `paladin-storage` 1, `paladin-ai` (facade) 7, all `-->`-bearing under `src/` | `1 + 8 + 1 + 7 = 17`, matching row 122's content-error count exactly | ✅ PASS |
+| 125 | Cross-check: does this run's abort set include `paladin-ai-core`, the single crate `32-05-SUMMARY.md` named? | No — `paladin-ai-core` is absent from this run's 4-crate abort set (`paladin-memory`, `paladin-web`, `paladin-storage`, `paladin-ai`) entirely; a different job never got scheduled before the overall abort | ⚠️ RECORDED — third independent measurement (after Phase 32's 1-crate and RESEARCH.md's 3-crate) to find a *different* abort set, confirming the floor is scheduling-dependent rather than reproducible per D-14's original single-crate prose |
+| 126 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+| 127 | `bash 34-check.sh --seed` (post-task re-run, after fixing 3 further duplicate-ID false positives — `RD-01`/`RD-66` again cited by literal string in this task's own new prose) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+
+## Notes (plan 34-06, Task 2)
+
+- No `RD-nn` row is minted from this run (per the plan's own instruction) — its 17 content errors
+  are a strict subset of what plan 34-07's per-crate sweep will enumerate with full rows; recording
+  a count here and rows there later would double-count the same diagnostics under two different run
+  labels.
+- This subsection's crate-attribution table reuses the same content-based recovery method
+  `34-rustdoc-rows.sh` already implements (Task 1), applied by hand here since no rows are being
+  emitted — the same snippet-grep precision that resolved two same-identifier `TraceRecord`
+  warnings to two different lines in Task 1 is what caught `RunInspectorPort`/`dev_ui_inspector_page`/
+  `InspectorView::supersteps` as `paladin-web`, not `paladin-memory`, despite printing before
+  `paladin-memory`'s own abort line in the raw stream.
+
 ---
 
 *Phase: 34-documentation-currency-audit*

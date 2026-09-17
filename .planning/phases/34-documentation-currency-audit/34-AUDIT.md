@@ -985,6 +985,75 @@ enumeration below — the table's own last row, matching the WINDOWS.md row's `f
 this phase — neither is edited, moved, or waived here (D-00c/D-00d); Phase 36 is their named closer
 per this section's own header note.
 
+### Workspace all-features run (plan 34-06, D-12/D-14) — a floor, not an enumeration
+
+**Command, quoted verbatim (D-12):**
+
+```
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+```
+
+**This is what the `--workspace` invocation of the all-features bar surfaces — a partial view, not
+the enumeration.** No `RD-nn` row is minted from this run. Its findings are a subset of the
+per-crate `-D warnings --all-features` sweep plan 34-07 performs crate-by-crate; minting rows here
+would double-count them against that enumeration. The `RD` row count in this file is unchanged from
+the end of the previous subsection (66 rows total, the tracer plus the full default-feature
+enumeration) by this subsection's own edit.
+
+**Measured result (re-run live, this plan's own HEAD `d81de538d5697c215eb5cad346077f75fddabe1b`):**
+exit `101`; wall time 34s; raw capture
+`34-evidence/34-06-cargo-doc-allfeatures-workspace.txt` (164 lines, post-hook trailing-whitespace normalization).
+
+**Crates that reported errors before the abort, and how many errors each reported** (`grep -c
+'^error:' ` on the capture returns 21 total `error:`-prefixed lines; 4 are `error: could not
+document \`<crate>\`` boundary lines, leaving **17** content errors, attributed per-error by its own
+`-->` path where present and — for the 4 carrying none — by the same crate-scoped
+quoted-snippet grep recovery `34-rustdoc-rows.sh` uses, confirmed against the live tree):
+
+| Crate | Content errors | Evidence |
+|-------|-----------------|----------|
+| `paladin-memory` | 1 | `unresolved link to \`HeuristicTokenCounter\`` — the same known-answer case worked at the top of this section and re-confirmed in the default-feature enumeration above |
+| `paladin-web` | 8 | 3 location-less (`RunInspectorPort` → `crates/paladin-web/src/dev_ui_controller.rs:3`; `dev_ui_inspector_page` → `:20`; `InspectorView::supersteps` → `:28`, all confirmed by snippet grep restricted to `crates/paladin-web/src`) + 5 `-->`-bearing (`dev_ui_controller.rs:69`, `:131`, `thread_controller.rs:483`, `:686`, `:757`) |
+| `paladin-storage` | 1 | `-->` `crates/paladin-storage/src/waypoint/contract_tests.rs:673` |
+| `paladin-ai` (facade) | 7 | all `-->`-bearing, all under `src/` (`cli/commands/eval.rs:281`, `application/services/paladin/paladin_execution_service.rs:1014`, `application/services/parley/adapter.rs:28`, `application/services/run/worker.rs:641`, `config/agent_runtime.rs:1174`, `infrastructure/telemetry/otel_sink.rs:42`, `presets/mod.rs:55`) |
+
+`1 + 8 + 1 + 7 = 17`, reconciling exactly against the capture's own content-error count.
+
+**The concurrency-driven abort behaviour, stated in plain terms:** cargo documents independent
+crates concurrently under `--workspace`. When one job's diagnostics trip `-D warnings`, cargo stops
+*scheduling new* documentation jobs but lets every job already in flight finish and report its own
+errors before the whole invocation exits `101`. The stream itself is **not** reliably ordered by
+crate — `error: could not document \`paladin-memory\`` prints as the *first* abort boundary in this
+capture even though the bulk of the errors preceding it (`RunInspectorPort`, `dev_ui_inspector_page`,
+`InspectorView::supersteps`, plus all five `-->`-bearing `paladin-web` errors) belong to
+`paladin-web`, not `paladin-memory` — confirmed only by re-deriving each error's true crate from its
+own `-->` path or grep-recovered location, never by its position in the stream relative to the
+nearest `could not document` line. **Which crates and how many errors this run shows therefore
+depends on scheduling, and is a floor, not a total** — a different run, or the same command at a
+different HEAD, can surface an entirely different subset of failing crates before the same abort
+point.
+
+**This explicitly corrects D-14's own prose.** `34-CONTEXT.md` D-14 states the run "aborts at the
+first failing crate in build order (`paladin-ai-core`, 14 unresolved links at Phase 32-05)" — a
+single-crate framing. RESEARCH.md's Pitfall P-02 already measured this wrong once (3 crates —
+`paladin-ports`, `paladin-ai-core`, `paladin-storage`, 16 errors — at its own HEAD `c36b7729`); this
+plan's own independent re-run finds a **third**, entirely different 4-crate set (`paladin-memory`,
+`paladin-web`, `paladin-storage`, `paladin-ai`, 17 errors) that does not even include
+`paladin-ai-core` at all. Three independent measurements, three different abort sets — the pattern
+itself (concurrency-dependent, non-deterministic scheduling) is now confirmed twice over, not just
+once. The per-crate sweep (Pattern 2 — plan 34-07) is never optional; it is the only accurate
+enumeration, and this subsection's own finding reinforces rather than merely repeats that
+conclusion.
+
+**Drift against the Phase 32 close figure:** `32-05-SUMMARY.md` recorded "the build fails at the
+very first crate in build order, `paladin-ai-core`, with 14 unresolved-intra-doc-link errors" —
+a figure scoped to one crate from a run that happened to abort there first, **never claimed or
+presented as a workspace-wide total**. This run does not reach `paladin-ai-core` at all (a
+different 4-crate subset aborted first this time), so this command cannot confirm or refute whether
+`paladin-ai-core`'s own count is still 14 — only the per-crate sweep (`RUSTDOCFLAGS="-D warnings"
+cargo doc -p paladin-ai-core --all-features --no-deps`, plan 34-07) can settle that directly. No
+figure this run did not itself produce is carried forward as current.
+
 ## §4 Examples table
 
 Rows land in plan 34-08 (the four `ci.yml:548-558` build invocations, the `doc-examples` gate, and

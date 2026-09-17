@@ -8,6 +8,7 @@ This directory contains comprehensive examples demonstrating Paladin's capabilit
 - [Basic Paladin Examples](#basic-paladin-examples)
 - [Autonomous Agent Examples](#autonomous-agent-examples) 🆕
 - [Memory & Garrison Examples](#memory--garrison-examples)
+- [Token Economy Examples](#token-economy-examples)
 - [Sanctum Long-term Memory Examples](#sanctum-long-term-memory-examples)
 - [Tool Integration Examples](#tool-integration-examples)
 - [Battalion Orchestration Examples](#battalion-orchestration-examples)
@@ -384,6 +385,27 @@ cargo run --example garrison_semantic_search
 - Vector similarity search
 - RAG (Retrieval-Augmented Generation)
 - Long-term knowledge
+
+## Token Economy Examples
+
+### [token_economy_commissary.rs](token_economy_commissary.rs)
+**Demonstrates:** Commissary prompt-budgeting and context-window resolution
+
+Shows the Commissary -- the input-side, per-call window-rationing officer -- measuring
+an assembled prompt against a provider's own declared context window, dispensing a
+bounded, priority-ordered stockpile of material, and resolving that window through the
+shared `resolve_context_window` precedence chain. Runs fully offline against a
+`MockLlmAdapter`; needs no provider API key.
+
+```bash
+cargo run --example token_economy_commissary
+```
+
+**Key concepts:**
+- `Commissary::new` / `Commissary::dispense`
+- `TokenCounterPort::is_exact` (approximate vs. exact counters)
+- `resolve_context_window`, `WindowSource`, `WindowFallbackPolicy`
+- `TokenUsage`'s cache-read/cache-write sub-counts (Anthropic-shaped usage)
 
 ## Sanctum Long-term Memory Examples
 

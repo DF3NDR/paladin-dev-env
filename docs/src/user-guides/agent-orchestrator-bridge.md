@@ -11,7 +11,7 @@ This guide covers both directions, how to configure the bridge safely, and four 
 recipes. It builds on the [Orchestration](orchestration.md) and
 [Content Processing](content-processing.md) guides.
 
-> Every example targets the current **v0.5.0** workspace. The substantive examples are real,
+> Every example targets the current **v0.10.0** workspace. The substantive examples are real,
 > compiled code pulled from the `paladin-doc-examples` crate via mdBook `{{#include}}` (one
 > illustrative fragment is `rust,ignore`). API forms are verified against
 > `crates/paladin-ports/src/output/orchestrator_port.rs`, `paladin_executor_port.rs`,

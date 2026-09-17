@@ -15,29 +15,33 @@ Complete guide for monitoring Paladin with Prometheus, Grafana, and observabilit
 
 ## Overview
 
-**Corrected 2026-08-24 (D-09/D-12 currency sweep).** No `/metrics` endpoint exists in this
-codebase today: `prometheus` and `opentelemetry` are not dependencies anywhere in the workspace
-(`grep -rn 'prometheus\|opentelemetry' Cargo.toml crates/*/Cargo.toml` → 0 hits), and no route
-named `/metrics` is registered anywhere (`grep -rn '"/metrics"' src/ crates/` → 0 hits). The
-Dockerfile does `EXPOSE 8080 9090` (`Dockerfile:68`) and the shipped `k8s/service.yaml` test
-fixture does declare a `paladin-metrics` service on port 9090, but nothing listens on 9090 for
-metrics — the port and service name are reserved, not wired up (consistent with 16-04's
-`docker.md`/`production.md` findings). The two endpoints that actually exist are liveness and
-readiness, both unauthenticated (`crates/paladin-web/src/health.rs`):
+No `/metrics` endpoint exists in this codebase: `prometheus` is not a dependency anywhere in the
+workspace, and no route named `/metrics` is registered anywhere (`grep -rn '"/metrics"' src/
+crates/` → 0 hits) — that half of this page's original premise still holds. The other half no
+longer does: `opentelemetry` **is** now a real, optional workspace dependency, behind the `otel`
+Cargo feature (off by default), and the shipped trace pipeline exports OTLP spans through it —
+see [Distributed Tracing](#distributed-tracing) below and the
+[Observability](observability.md) page for the full trace model, sink configuration and
+persistence story. The Dockerfile does `EXPOSE 8080 9090` (`Dockerfile:68`) and the shipped
+`k8s/service.yaml` test fixture does declare a `paladin-metrics` service on port 9090, but nothing
+listens on 9090 for metrics — the port and service name are reserved, not wired up. The two
+endpoints that actually exist for the metrics/health surface are liveness and readiness, both
+unauthenticated (`crates/paladin-web/src/health.rs`):
 - `GET /health` → always `200 {"status": "ok"}`
 - `GET /ready` → `200 {"status": "ready", "agents": N}` once the registry is built (a shallow
   check, no network I/O)
 
-Everything below this point (Prometheus, Grafana, Alertmanager, Jaeger) describes a monitoring
+Everything below this point about Prometheus, Grafana and Alertmanager describes a metrics
 stack that is not implemented in this codebase — treat it as an illustrative target
-architecture, not a description of shipped code. Per D-12 the sections are left in place with
-this standing correction rather than rewritten line by line.
+architecture, not a description of shipped code. The Distributed Tracing section below is the
+exception: it now describes the real, shipped OTLP export path rather than a target.
 
-**Monitoring Stack (target architecture, not yet implemented):**
-- **Prometheus**: Metrics collection and storage
-- **Grafana**: Visualization and dashboards
-- **Alertmanager**: Alert routing and notification
-- **Jaeger** (optional): Distributed tracing
+**Monitoring Stack:**
+- **Prometheus**: Metrics collection and storage (target architecture, not yet implemented)
+- **Grafana**: Visualization and dashboards (target architecture, not yet implemented)
+- **Alertmanager**: Alert routing and notification (target architecture, not yet implemented)
+- **OpenTelemetry / OTLP**: Distributed tracing — real, shipped, behind the `otel` feature (see
+  below)
 
 ## Metrics Collection
 
@@ -383,31 +387,24 @@ receivers:
 
 ## Distributed Tracing
 
-### Jaeger Integration
+### The shipped OTLP trace sink
 
-```rust,ignore
-use opentelemetry::global;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_opentelemetry::OpenTelemetryLayer;
+Distributed tracing is real, shipped code, not a target architecture. Every `WarEngine` run
+already emits a structured `TraceRecord` stream; `OtelTraceSink` turns that stream into OTLP spans
+when the workspace is built with the `otel` Cargo feature (`dep:opentelemetry`,
+`dep:opentelemetry_sdk`, `dep:opentelemetry-otlp` — all optional, all absent from the default
+feature set):
 
-pub fn init_tracing(service_name: &str) -> Result<()> {
-    global::set_text_map_propagator(opentelemetry_jaeger::Propagator::new());
-
-    let tracer = opentelemetry_jaeger::new_agent_pipeline()
-        .with_service_name(service_name)
-        .with_endpoint("jaeger:6831")
-        .install_simple()?;
-
-    let opentelemetry = OpenTelemetryLayer::new(tracer);
-
-    tracing_subscriber::registry()
-        .with(opentelemetry)
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
-    Ok(())
-}
+```bash
+cargo build --features otel
 ```
+
+`otel.enabled: true` in config turns the sink on at runtime; setting it on a build compiled
+without the `otel` feature is a typed configuration error (`TraceConfigError::FeatureNotCompiled`),
+never a silent no-op. The full trace model, the OTLP endpoint/header configuration, the sink's
+export behavior, and how a trace record correlates with the corresponding log line and stored row
+are documented on [Observability: Traces, Sinks and Persistence](observability.md) — this page
+does not duplicate that content.
 
 ## Health Checks
 

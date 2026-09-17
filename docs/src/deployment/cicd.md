@@ -32,6 +32,7 @@ Paladin uses GitHub Actions for CI/CD with the following pipelines:
 ├── workflows/
 │   ├── benchmarks.yml            # Performance benchmark tracking
 │   ├── ci.yml                    # Main CI pipeline (lint, test, integration, audit)
+│   ├── codeql.yml                # Rust SAST scan — advisory only, does not gate a merge
 │   ├── docs.yml                  # MDBook build + GitHub Pages deploy
 │   ├── feature-flags.yml         # Feature-flag matrix tests
 │   ├── pre-commit.yml            # Pre-commit checks
@@ -45,101 +46,77 @@ Paladin uses GitHub Actions for CI/CD with the following pipelines:
 
 ### ci.yml
 
+`ci.yml` runs on every push (`branches: ['**']`, D-03) and on pull requests targeting `main` or
+`release/**`. It has grown well beyond the three-job (`lint`/`test`/`coverage`) sample previously
+shown here — the table below names every job the live file declares. The **Required or advisory**
+column is taken directly from `.github/rulesets/protect-main-branch.json`'s
+`required_status_checks` array: a check whose display name is not listed there can fail without
+blocking a merge into `main`.
+
+| Job (`ci.yml`) | Display name | What it gates | Required or advisory |
+|---|---|---|---|
+| `lint` | Code Quality | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo doc` warnings | Required |
+| `actionlint` | Workflow Lint | Lints every `.github/workflows/*.yml` file with `actionlint` | Required |
+| `security-audit` | Security Audit | `cargo audit` against the RustSec advisory database, exceptions from `.cargo/audit.toml` | Required |
+| `cargo-deny` | License & Dependency Policy | `cargo deny check` plus the repository's own policy scripts (changelogs, crate names, advisory register, workflow-suppression and workflow-trigger guards, CodeQL dismissal register, shell-guard regression tests) | Required |
+| `osv-scanner` | OSV Scanner | Google OSV database scan of `Cargo.lock`; SARIF uploaded for PR annotation | Required |
+| `api-surface` | API Surface Tracking | `cargo public-api` diff against `.project/current-exports.txt`, plus deprecation-warning checks | Required |
+| `msrv` | MSRV (Rust 1.88) | `cargo check --workspace --all-features --all-targets` at the pinned MSRV | Advisory |
+| `semver` | Semver Checks (vs v0.9.0) | `cargo-semver-checks` for every publishable crate against the published v0.9.0 baseline | Advisory |
+| `test` | Unit Tests (stable / beta) | `cargo test --workspace --lib --bins` and `cargo test --workspace --doc`, matrixed over stable and beta | Required |
+| `examples` | Example Muster (Feature Matrix) | Builds all 47 `examples/*.rs` targets across a 4-invocation feature matrix | Required |
+| `crate-isolation` | Crate Isolation (`<crate>`) | Each of the 10 matrixed workspace crates builds and tests independently, with and without default features | Required |
+| `integration-tests` | Integration Tests | Redis + MinIO `--ignored` suites, plus the broad `--features integration-tests` workspace sweep | Required |
+| `docker-integration` | Docker Integration Tests | Runs the Docker Compose test stack's `integration-tests` service | Required |
+| `ollama-integration` | Ollama Integration Tests (live server) | Live Ollama server suite (`ollama_docker`) | Advisory |
+| `postgres-integration` | Postgres Storage Contract Suites (live server) | Every `*::postgres` contract suite against a live Postgres container | Advisory |
+| `redis-cache-integration` | Redis Node Cache Contract Suite (live server) | `node_cache::redis` against a live Redis container | Advisory |
+| `redis-queue` | Redis Run Queue Contract Suite (live server) | `run_queue::redis` against a live Redis container | Advisory |
+| `sdk-clients` | Generated SDK Clients (Python + TypeScript) smoke | Generates and smoke-tests the OpenAPI Python and TypeScript clients against a live `paladin-server` | Advisory |
+| `e2e-platform-api` | E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof) | The assistant → run → SSE → `AwaitingInput` → webhook → resume → history → fork lifecycle, plus the `v0_9_config_boot` backward-compat proof | Advisory |
+| `coverage` | Coverage | Workspace line-coverage measurement and floor gate (see excerpt below) | Required |
+| `cli-tests` | CLI Snapshot Tests | `cargo test -p paladin-ai --features cli --test cli` | Required |
+| `bench-check` | Benchmark Compile Check | `cargo bench --workspace --no-run` (compiles every `[[bench]]` target; runs none) | Required |
+| `docker` | Docker Build | Multi-arch image build and the 500 MB size budget; wall-clock is reported, not enforced | Advisory |
+| `kubernetes-smoke` | Kubernetes Smoke Test | Deploys to a `kind` cluster and checks pod readiness | Advisory |
+| `e2e-tests` | End-to-End Tests | Full Docker Compose stack end-to-end test; push-to-`main` only | Required |
+| `benchmark-regression-signal` | Benchmark Regression Signal (Non-Blocking) | Criterion regression check on PRs/dispatch; `continue-on-error: true` | Advisory |
+| `publish-dry-run` | Publish Dry Run | `cargo publish --workspace --dry-run`; push-to-`main` only | Advisory |
+
+The `coverage` floor is not inlined in the workflow — the job delegates to the same script
+`make coverage` runs locally:
+
 ```yaml
-name: CI
-
-on:
-  push:
-    branches: [ '**' ]
-  pull_request:
-    branches: [ main, 'release/**' ]
-  workflow_dispatch:
-
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-
-jobs:
-  lint:
-    name: Code Quality
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v3
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo index
-        uses: actions/cache@v3
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo build
-        uses: actions/cache@v3
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Check
-        run: cargo check --all-features
-
-  test:
-    name: Test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable, beta]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust ${{ matrix.rust }}
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-
-      - name: Run tests
-        run: cargo test --all-features
-
-      - name: Run doc tests
-        run: cargo test --doc --all-features
-
-  coverage:
-    name: Code Coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
-      - name: Generate coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
-
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          files: lcov.info
-          fail_ci_if_error: true
+# excerpt: .github/workflows/ci.yml — job: coverage
+      - name: Measure coverage
+        env:
+          USE_EXTERNAL_TEST_SERVICES: "true"
+          TEST_REDIS_HOST: localhost
+          TEST_REDIS_PORT: 6380
+          TEST_MINIO_ENDPOINT: localhost:9010
+          TEST_MINIO_ACCESS_KEY: testuser
+          TEST_MINIO_SECRET_KEY: testpass123
+        run: bash scripts/coverage.sh
 ```
+
+```bash
+# excerpt: scripts/coverage.sh
+exec cargo llvm-cov --workspace --features integration-tests,llm-all \
+    --lcov --output-path lcov.info --fail-under-lines "$FLOOR" -- --test-threads=1
+```
+
+`$FLOOR` defaults to `82` — the ADR-0006 coverage floor. See the
+[Testing Guide](../contributing/testing-guide.md) for why the `llm-all` feature is load-bearing
+for that measurement.
+
+### codeql.yml — Rust SAST (advisory only)
+
+`codeql.yml` runs Rust static analysis on every push, pull request and schedule (Wednesdays
+07:00 UTC), reporting findings into the code-scanning UI. It is **not pinned in any ruleset and
+does not gate a merge** — CodeQL was evaluated and disqualified as a required-check-grade Rust
+SAST at CodeQL `2.26.3` (2026-08-25); the manual credential-handling review documented in
+[`.github/instructions/security.instructions.md`](https://github.com/Am0rfu5/paladin/blob/main/.github/instructions/security.instructions.md)
+stays the primary control for that class of code.
 
 ## Docker Build Pipeline
 
@@ -174,104 +151,25 @@ The Dockerfiles themselves are described in [Docker Deployment](docker.md).
 
 ### release.yml
 
-```yaml
-name: Release
+`release.yml` triggers on a `v*.*.*` tag push or manual `workflow_dispatch` (with an optional
+`dry_run` input). An earlier version of this page described a single combined build-and-package
+job under a name that does not exist in the live file. The real jobs, in dependency order, are:
 
-on:
-  push:
-    tags:
-      - 'v*.*.*'
+| Job (`release.yml`) | What it does |
+|---|---|
+| `verify-tag-source` | The tag-source guard: resolves the release commit and fails the whole run closed unless that commit is an ancestor of `origin/main` — enforces the "main is the source of truth" invariant before anything else runs |
+| `test` | `cargo test --workspace`; gates crates.io publishing only — Docker images and release binaries are **not** gated on it (a release with a failing test suite can still push an image and attach binaries, just not publish to crates.io) |
+| `create-release` | Extracts the matching `## [X.Y.Z]` section from `CHANGELOG.md` and creates (or reuses) the GitHub release |
+| `build-docker` | Builds and pushes the multi-arch (`linux/amd64`, `linux/arm64`) image to `ghcr.io` |
+| `build-binaries` | Cross-compiles and uploads release binaries for 4 platform targets (Linux amd64/arm64, macOS amd64/arm64) |
+| `check-release-consistency` | Pre-publish gate: fails closed if the tag disagrees with any publishable crate's manifest version, or with the tagged commit's own recorded CI conclusion |
+| `sbom` | Generates a CycloneDX SBOM and uploads it to the release |
+| `finalize-release-body` | Aggregates the Docker image digest, aggregated binary checksums, and SBOM asset name into the release body |
+| `publish-crates` | Publishes to crates.io in dependency order via crates.io Trusted Publishing (short-lived OIDC token), after `check-release-consistency` and `test` both pass |
 
-permissions:
-  contents: write
-  packages: write
-
-jobs:
-  build-release:
-    name: Build Release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-          - os: macos-latest
-            target: x86_64-apple-darwin
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install cross-compilation tools (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Package (Unix)
-        if: matrix.os != 'windows-latest'
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar czf paladin-${{ github.ref_name }}-${{ matrix.target }}.tar.gz paladin
-          mv paladin-${{ github.ref_name }}-${{ matrix.target }}.tar.gz ${{ github.workspace }}/
-
-      - name: Package (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          cd target/${{ matrix.target }}/release
-          7z a paladin-${{ github.ref_name }}-${{ matrix.target }}.zip paladin.exe
-          move paladin-${{ github.ref_name }}-${{ matrix.target }}.zip ${{ github.workspace }}/
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: release-${{ matrix.target }}
-          path: |
-            paladin-*.tar.gz
-            paladin-*.zip
-
-  create-release:
-    name: Create Release
-    needs: build-release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v3
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          # Extract changelog for this version
-          VERSION="${{ github.ref_name }}"
-          awk "/^## \[$VERSION\]/,/^## \[/" CHANGELOG.md | head -n -1 > release_notes.md
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release-*/paladin-*.tar.gz
-            release-*/paladin-*.zip
-          body_path: release_notes.md
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-```
+`verify-tag-source`'s guard is the reason a release tag must be cut from a merged PR into `main`
+rather than from a feature branch directly — see
+[Branch Protection](../appendix/branch-protection.md).
 
 ## Integration Testing
 

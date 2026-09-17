@@ -25,7 +25,7 @@
 //! To honour D-25's contract (an error surfaces synchronously, from THIS
 //! call, before any background task is spawned; a valid-and-complete
 //! submission spawns the continuation and returns immediately) without
-//! modifying `paladin-battalion`, [`shadow_validate`] re-implements the
+//! modifying `paladin-battalion`, `shadow_validate` re-implements the
 //! SAME validation algorithm (24-04's D-10/D-11/D-12 ordering: lazy expiry
 //! scan over every outstanding parley, then total per-response validation)
 //! using only public data and public helper logic. This is a defensive,

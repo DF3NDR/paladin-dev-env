@@ -39,7 +39,7 @@
 //! # Security (T-28-09-01/02, `.github/instructions/security.instructions.md`)
 //!
 //! The OTLP HTTP client is built with `redirect(Policy::none())` (this
-//! file's `Policy::none()` -- see [`build_reqwest_client`]) so a `3xx` from
+//! file's `Policy::none()` -- see `build_reqwest_client`) so a `3xx` from
 //! the configured collector can never carry `OtelConfig.headers`'
 //! credential-shaped values to a different, attacker-influenced host. No
 //! header value is ever logged, `Debug`-printed or otherwise interpolated

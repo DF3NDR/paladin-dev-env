@@ -1011,7 +1011,7 @@ impl PaladinExecutionService {
     /// same reasoning loop, same timeout wrapper -- resolving `scope`'s
     /// Vault grant via [`PaladinExecutionService::confined_vault`] before
     /// dispatching. `heartbeat` is `Some` only on the observed path,
-    /// exactly like [`Self::execute_bounded`]'s own contract.
+    /// exactly like `execute_bounded`'s own contract.
     ///
     /// # Examples
     ///

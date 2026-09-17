@@ -52,7 +52,7 @@ const DEFAULT_CIRCUIT_BREAKER_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// | Field | Default |
 /// |---|---|
-/// | `system_prompt` | [`DEFAULT_SYSTEM_PROMPT`] -- a documented tool-use prompt |
+/// | `system_prompt` | `DEFAULT_SYSTEM_PROMPT` -- a documented tool-use prompt |
 /// | `model` | `None` -- the built [`Paladin`]'s own default model |
 /// | `max_loops` | `5` |
 /// | `max_tool_calls` | `20` |

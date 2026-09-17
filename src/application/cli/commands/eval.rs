@@ -278,7 +278,7 @@ async fn run_repeat_sweep(
 }
 
 /// The first `(run_index, seq_from, seq_to)` at which some run's captured
-/// record stream diverges from run 0's, comparing [`stabilized_fingerprints`]
+/// record stream diverges from run 0's, comparing `stabilized_fingerprints`
 /// (never the raw record: `TraceRecord::at` and several per-attempt
 /// `duration_ms`/generated-id fields are wall-clock or UUID noise that
 /// legitimately differs run-to-run even under a fully deterministic

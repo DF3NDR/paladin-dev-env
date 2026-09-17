@@ -16,19 +16,27 @@ use paladin_core::platform::container::herald::{
 /// shape this page previously showed.
 pub struct CsvHerald;
 
+/// Escape a field for inclusion in a comma-separated row. This bespoke example
+/// deliberately keeps escaping minimal (commas only, no quoting/newline handling) --
+/// it is not RFC 4180-complete -- but applies it consistently across every method
+/// below so no field can silently break row alignment.
+fn csv_escape(field: &str) -> String {
+    field.replace(',', ";")
+}
+
 impl Herald for CsvHerald {
     fn format_paladin_result(&self, result: &PaladinResult) -> Result<String, HeraldError> {
         Ok(format!(
-            "{},{},{},{:?}\n",
-            result.output.replace(',', ";"),
+            "{},{},{},{}\n",
+            csv_escape(&result.output),
             result.usage.total_tokens,
             result.execution_time_ms,
-            result.stop_reason,
+            csv_escape(&format!("{:?}", result.stop_reason)),
         ))
     }
 
     fn format_battalion_result(&self, result: &BattalionResult) -> Result<String, HeraldError> {
-        Ok(result.final_output.clone())
+        Ok(format!("{}\n", csv_escape(&result.final_output)))
     }
 
     fn format_stream_chunk(&self, chunk: &StreamChunk) -> Result<Option<String>, HeraldError> {
@@ -37,13 +45,14 @@ impl Herald for CsvHerald {
 
     fn finalize_stream(&self, metadata: &ExecutionMetadata) -> Result<String, HeraldError> {
         Ok(format!(
-            "# total_tokens={},duration_ms={:?}\n",
-            metadata.token_usage.total_tokens, metadata.duration_ms
+            "# total_tokens={},duration_ms={}\n",
+            metadata.token_usage.total_tokens,
+            csv_escape(&format!("{:?}", metadata.duration_ms)),
         ))
     }
 
     fn format_error(&self, error: &PaladinError) -> String {
-        format!("error,{error}\n")
+        format!("error,{}\n", csv_escape(&error.to_string()))
     }
 
     fn name(&self) -> &str {

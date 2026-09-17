@@ -48,6 +48,20 @@ renumbered, because Phases 35 and 36 close items by ID (their SUMMARY/VERIFICATI
 - **L** — a new page, a new example, or a rewrite of more than half of an existing page or
   example.
 
+**Recorded choice — spec-less probe fallback skipped this run:** this phase has no `SPEC.md`, and
+no `CURR-*` requirement IDs existed at plan time (plan 34-01 mints them). The phase's `must_haves`
+truths were therefore derived directly from the five ROADMAP success criteria and the CONTEXT.md
+decisions, not from probe-derived predicates — the usual spec-less-probe fallback path was not
+exercised because there was no spec to probe against in the first place.
+
+**Recorded choice — D-22 reversibility, no blocking human checkpoint inserted:** CONTEXT.md rates
+D-22 (read-only enforcement) one-way, and every plan in this phase carries that rating on the
+tasks that implement it, but no plan inserts a blocking human checkpoint for it. The run is
+unattended, and D-22's enforcement is itself a mechanical recorded `git diff` that every task's
+`<verify>` re-runs before any commit — a human gate that cannot itself answer "did this diff touch
+a file outside `.planning/`" any more definitively than the diff already does would stall the
+audit without adding protection the diff does not already give.
+
 ## Measurement Header
 
 **HEAD SHA measured:** `ee1fb160f8e743e638b32beb6c4e32be4ede9325`

@@ -217,47 +217,14 @@ let paladin = PaladinBuilder::new(llm_port)
 
 ## Custom Armaments (Direct Rust Tools)
 
-Implement `ArsenalPort` to expose any Rust function as a tool:
+Implement `ArsenalPort` to expose any Rust function as a tool. `Armament` carries a
+`parameters` JSON Schema (not `input_schema`) plus a `required_params` list; the live
+`ArmamentResult` has five fields — `call_id`, `success`, `output`, `error` and
+`execution_time_ms` — and a call's arguments are read from the `arguments` map on
+`ArmamentCall`, not an `args` field:
 
 ```rust,ignore
-use async_trait::async_trait;
-use paladin_core::platform::container::arsenal::{
-    Armament, ArmamentCall, ArmamentResult, ArsenalError,
-};
-use paladin_ports::output::arsenal_port::ArsenalPort;
-
-pub struct CalculatorTool;
-
-#[async_trait]
-impl ArsenalPort for CalculatorTool {
-    async fn list_armaments(&self) -> Vec<Armament> {
-        vec![Armament {
-            name: "calculate".to_string(),
-            description: "Evaluate a mathematical expression".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "expression": { "type": "string" }
-                },
-                "required": ["expression"]
-            }),
-        }]
-    }
-
-    async fn invoke(&self, call: ArmamentCall) -> Result<ArmamentResult, ArsenalError> {
-        let expr = call.args["expression"].as_str().unwrap_or_default();
-        // ... evaluate ...
-        Ok(ArmamentResult { success: true, output: Some(serde_json::json!(42)), error: None })
-    }
-
-    fn validate_call(&self, call: &ArmamentCall) -> Result<(), ArsenalError> {
-        if call.args.contains_key("expression") {
-            Ok(())
-        } else {
-            Err(ArsenalError::InvalidArguments("expression is required".into()))
-        }
-    }
-}
+{{#include ../../../crates/doc-examples/src/arsenal_tools.rs:custom_armament}}
 ```
 
 ---
@@ -266,15 +233,11 @@ impl ArsenalPort for CalculatorTool {
 
 The `handoff_tool` in `crates/paladin-core/src/platform/container/arsenal/handoff_tool.rs`
 is a built-in Armament that allows a Paladin to delegate sub-tasks to specialist agents
-at runtime. Register specialist agents on the builder:
+at runtime. Register specialist agents on the builder via `with_handoffs`, which takes
+the whole specialist list at once — there is no per-call chainable registration method:
 
 ```rust,ignore
-let coordinator = PaladinBuilder::new(llm_port)
-    .system_prompt("You are a coordinator. Delegate to specialists when needed.")
-    .with_specialist(Arc::new(code_paladin))
-    .with_specialist(Arc::new(test_paladin))
-    .build()
-    .await?;
+{{#include ../../../crates/doc-examples/src/arsenal_tools.rs:handoffs}}
 ```
 
 The LLM will emit a tool-call for `handoff` when it determines a specialist is more

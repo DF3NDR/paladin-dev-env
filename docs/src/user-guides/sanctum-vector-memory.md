@@ -46,7 +46,7 @@ trait) with adapter implementations in `crates/paladin-memory/src/sanctum/`.
 
 ```rust,ignore
 use paladin_memory::sanctum::QdrantSanctumAdapter;
-use paladin_memory::services::rag_retrieval_service::RAGRetrievalService;
+use paladin_memory::services::rag_retrieval_service::RagRetrievalService;
 use paladin_core::platform::container::sanctum::{Memory, MemoryType, SanctumEntry};
 use paladin_ports::output::sanctum_port::{SanctumPort, SanctumQuery};
 use paladin_ports::output::embedding_port::EmbeddingPort;
@@ -214,8 +214,9 @@ let results = sanctum.search(SanctumQuery {
 
 ## RAG — Retrieval-Augmented Generation
 
-The `RAGRetrievalService` in `crates/paladin-memory/src/services/rag_retrieval_service.rs`
-automates memory retrieval and injection into the Paladin's prompt context:
+The `RagRetrievalService` (camelCase `Rag`, not `RAG`) in
+`crates/paladin-memory/src/services/rag_retrieval_service.rs` automates memory retrieval and
+injection into the Paladin's prompt context:
 
 ```rust,ignore
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
@@ -245,6 +246,45 @@ rag:
   top_k: 5
   min_score: 0.7
   inject_into_prompt: true
+```
+
+### Calling `RagRetrievalService` Directly
+
+Construct the service over a `SanctumPort` and `EmbeddingPort`, optionally inject an exact
+token counter via `with_token_counter` (the default is a heuristic estimator), and call the
+timeout-bounded retrieval entry point, `retrieve_context_with_timeout`:
+
+```rust,ignore
+{{#include ../../../crates/doc-examples/src/sanctum_vector_memory.rs:rag_retrieve}}
+```
+
+`retrieve_context_with_timeout` wraps `RagRetrievalService::retrieve_context`, which rations
+the ranked search results through the Commissary and returns a `RagRetrievalResult`:
+
+```rust,ignore
+pub struct RagRetrievalResult {
+    pub memories: Vec<RagRetainedMemory>,  // retained, descending relevance order
+    pub shed: Vec<ShedItem>,               // memories dropped entirely to fit the budget
+    pub prompt_tokens: u32,
+    pub allotted_tokens: u32,
+    pub exact_tally: bool,
+}
+```
+
+Every memory that does not survive rationing appears in `shed`, labelled by its memory UUID —
+nothing is dropped silently. Retrieval failures surface as a typed `RagRetrievalError`
+(`Sanctum`, `Commissary`, `BudgetTooLarge`, `UnmatchedDispensedLabel`, `DuplicateMemoryId`).
+
+### Rendering the Result — the Omission Marker
+
+`RagRetrievalService::format_for_prompt` renders a `RagRetrievalResult` into prompt context —
+the same renderer the facade's `PaladinExecutionService::format_retrieved_context` mirrors, so
+the two can never drift — and appends a trailing omission-marker line whenever `shed` is
+non-empty, naming how many lower-relevance memories were dropped entirely and the token budget
+they were rationed against:
+
+```rust,ignore
+{{#include ../../../crates/doc-examples/src/sanctum_vector_memory.rs:rag_format}}
 ```
 
 ---

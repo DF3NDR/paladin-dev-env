@@ -976,7 +976,8 @@ Plans:
 
 **Goal**: The mdBook describes the v0.10.0 tree — every gap the Phase 34 inventory records for `docs/src/` is closed: a page exists for each Phase 22-33 capability that shipped without one, every stale page is corrected to the shipped API and vocabulary (the superstep engine, Parley, Aegis, the platform API, the `TokenUsage` split, `Commissary`), the Upgrading page and migration pointers agree with `MIGRATION.md`, and `mdbook build` with the linkcheck backend is green.
 **Depends on**: Phase 34 (the mdBook work list); independent of Phase 36 and may run in parallel with it
-**Requirements**: TBD — assigned at planning under the Phase 34 prefix
+**Requirements**: CURR-06, CURR-07, CURR-08, CURR-09, CURR-10 (minted at planning 2026-09-17;
+prefix shared with Phases 34 and 36)
 **Source**: Phase 34 audit inventory (mdBook partition); `.github/workflows/docs.yml`
 **UI hint**: no
 **Success Criteria** (what must be TRUE):

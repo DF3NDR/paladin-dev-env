@@ -17,3 +17,4 @@ pub mod orchestration;
 pub mod queue_worker;
 pub mod readme;
 pub mod sidecar;
+pub mod superstep_engine;

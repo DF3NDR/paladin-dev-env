@@ -85,8 +85,8 @@ pub struct CommissaryPlan {
     /// The tokens-per-1000-bytes ratio used ONLY for byte-share PLANNING while
     /// dispensing (deciding how many bytes each item may keep). The final tally
     /// reported on the returned [`Stockpile`] always goes through the configured
-    /// [`TokenCounterPort`], never this ratio. Defaults to
-    /// [`PESSIMISTIC_TOKENS_PER_1000_BYTES`]. Zero is rejected at
+    /// [`TokenCounterPort`], never this ratio. Defaults to the crate-private
+    /// `PESSIMISTIC_TOKENS_PER_1000_BYTES` constant. Zero is rejected at
     /// [`Commissary::new`] construction time — the division-hazard guard.
     pub pessimistic_tokens_per_1000_bytes: u32,
 

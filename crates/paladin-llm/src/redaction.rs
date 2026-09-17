@@ -161,8 +161,8 @@ pub fn redact_credentials(body: &str, api_key: &str) -> String {
 /// 3. any `AKIA`-prefixed AWS access key ID;
 /// 4. `key=` / `token=` query-string values;
 /// 5. JWT-shaped `header.payload.signature` triples — three dot-separated
-///    base64url segments, each at least [`JWT_MIN_SEGMENT_LEN`] characters
-///    (chosen well above a dotted version string like `1.2.3` or a
+///    base64url segments, each at least the crate-private minimum segment
+///    length (chosen well above a dotted version string like `1.2.3` or a
 ///    hostname label, so those are never misredacted).
 ///
 /// **Ordering is load-bearing: call this BEFORE [`bounded_excerpt`], never

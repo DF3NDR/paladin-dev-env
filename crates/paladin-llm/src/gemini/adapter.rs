@@ -25,7 +25,7 @@
 //!   this adapter's line-oriented parse loop would silently produce
 //!   nothing.
 //! - **Gemini streams partial `GenerateContentResponse` objects** — the
-//!   same shape [`GeminiResponse`] already parses for the non-streaming
+//!   same shape `GeminiResponse` already parses for the non-streaming
 //!   path — rather than a distinct delta type. There is no `[DONE]`
 //!   sentinel; the stream simply ends when the body ends.
 //!
@@ -56,7 +56,7 @@
 //! rides on every request this client sends. The redirect policy is
 //! `none` (also set in [`GeminiAdapter::new`]) so a `3xx` response can
 //! never move that header to a host the operator did not configure; a
-//! refused redirect surfaces via [`GeminiAdapter::map_error`]'s
+//! refused redirect surfaces via `GeminiAdapter::map_error`'s
 //! `300..=399` arm. The residual case — an operator deliberately pointing
 //! `base_url` at an internal address — is the operator's own trust
 //! decision; no allowlist is introduced, matching

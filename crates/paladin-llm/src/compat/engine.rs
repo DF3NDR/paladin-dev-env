@@ -111,7 +111,7 @@ pub struct CompatRequestParameters {
     ///
     /// **Option (a) — chosen by the developer 2026-08-22, recorded here
     /// against ADR-0004 (closing G-17-4b, plan 17-19).** When a preset
-    /// declares this `false`, [`CompatEngine::build_request`] omits
+    /// declares this `false`, `CompatEngine::build_request` omits
     /// `temperature` from the outgoing body entirely; it never substitutes
     /// one legal value for another. ADR-0004's *Considered Options* rejects
     /// adapter-level clamping by name: *"a caller who requested 1.8 and got
@@ -198,7 +198,7 @@ pub struct CompatEngineConfig {
     /// the same reasoning applies uniformly. Setting `Policy::none()` means
     /// a `3xx` response can never cause the `Authorization` header carrying
     /// the operator's API key to be replayed to a different,
-    /// attacker-influenced host — see [`CompatEngine::map_error`]'s
+    /// attacker-influenced host — see `CompatEngine::map_error`'s
     /// `300..=399` arm for what a refused redirect surfaces to the caller
     /// as.
     pub redirect_policy: Option<reqwest::redirect::Policy>,
@@ -1038,7 +1038,7 @@ impl CompatEngine {
     /// every failure at `debug` with the same sentence, which is precisely
     /// why a region/credential mismatch looked identical to an offline
     /// vendor and G-17-4c was misdiagnosed for five days. It now reads
-    /// [`classify_fetch_failure`]'s verdict on `e` and only a
+    /// `classify_fetch_failure`'s verdict on `e` and only a
     /// misconfiguration (currently: `AuthenticationError`) is raised to
     /// `warn`; every other failure — including the offline/timeout states
     /// D-13/D-14 were written for — keeps its original `debug` wording

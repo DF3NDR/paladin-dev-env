@@ -116,8 +116,8 @@ use paladin_battalion::engine::WaypointDurability;
 /// (`waypoint_durability` stays on the source `EngineConfig` value itself;
 /// it is not part of `EngineLimits` and is passed to
 /// `WarEngine::with_durability` separately).
-pub fn configure_limits()
--> Result<(EngineLimits, WaypointDurability), Box<dyn std::error::Error>> {
+pub fn configure_limits() -> Result<(EngineLimits, WaypointDurability), Box<dyn std::error::Error>>
+{
     let config = EngineConfig {
         max_supersteps: 20,
         max_node_visits: 10,
@@ -153,7 +153,9 @@ pub async fn run_engine()
     let store = Arc::new(InMemoryWaypointStore::new());
     let engine = WarEngine::new(mock_paladin_port(), store.clone()).with_durability(durability);
     let thread = ThreadId::new("superstep-engine-guide")?;
-    let outcome = engine.start(&graph, thread.clone(), StateDelta::new()).await?;
+    let outcome = engine
+        .start(&graph, thread.clone(), StateDelta::new())
+        .await?;
     Ok((outcome, store, thread))
 }
 // ANCHOR_END: run_engine

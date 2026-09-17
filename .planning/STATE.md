@@ -4,16 +4,16 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 34
 current_phase_name: documentation-currency-audit
-status: executing
-stopped_at: Completed 34-08-PLAN.md
-last_updated: "2026-09-17T06:21:33.922Z"
+status: verifying
+stopped_at: Completed 34-09-PLAN.md (Phase 34 execution complete, ready for verification)
+last_updated: "2026-09-17T06:44:00.977Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 34 execution started
 progress:
   total_phases: 17
   completed_phases: 13
   total_plans: 167
-  completed_plans: 165
+  completed_plans: 166
 ---
 
 # Project State
@@ -60,7 +60,7 @@ names. See MILESTONES.md.
 
 Phase: 34 (documentation-currency-audit) — EXECUTING
 Plan: 9 of 9
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-17 — Phase 34 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
@@ -146,6 +146,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 34 P06 | ~18min | 2 tasks | 5 files |
 | Phase 34 P07 | 16min | 2 tasks | 16 files |
 | Phase 34 P08 | ~90min | 2 tasks | 3 files |
+| Phase 34 P09 | ~75min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -482,6 +483,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: 34-07: extended 34-rustdoc-rows.sh with a crate-override argument since a single-crate -p <crate> capture never prints the summary line the default attribution pass depends on
 - [Phase ?]: 34-07: entry-point # Examples-heading gate scope drift (76->101) and its 19 violations routed to deferred-items.md per D-00e, not fixed or minted as RD-nn/EX-nn/MB-nn rows
 - [Phase ?]: Examples build/currency sweep (plan 34-08): all 60 examples/doc-examples programs build green under the exact CI feature sets; zero obsolete-API hits; two http_service_host rows marked stale on a server-router-parity claim; examples/README.md carries two new stale findings (11 undocumented programs, stale PaladinResult code-snippet fields); 59-row capability gap list for Phase 22-33 items no example demonstrates
+- [Phase ?]: Phase 34 plan 34-09: assembled the Phase 35 work list (60 MB-nn, missing superstep-engine page MB-30 leading) and Phase 36 work list (143 RD-nn grouped by crate with same-source-line cross-references, 64 EX-nn work items + 58 confirmed-current listed separately); both-directions reconciliation proven by diff; closed deferred-items.md (5 entries, 4 plans) and 34-AUDIT.md §7; proved SC5 over the whole phase range against the pinned Phase 34 start SHA (main lags 7 phases behind); fixed a 34-check.sh assertion (b) bug that treated the designed §5/§6 double-reference as a duplicate-ID error
 
 ### Pending Todos
 
@@ -1048,8 +1050,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T06:21:33.812Z
-**Stopped at:** Completed 34-08-PLAN.md
+**Last session:** 2026-09-17T06:44:00.874Z
+**Stopped at:** Completed 34-09-PLAN.md (Phase 34 execution complete, ready for verification)
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

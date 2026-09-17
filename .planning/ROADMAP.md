@@ -970,7 +970,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 34-09-PLAN.md — Phase 35 / Phase 36 work lists, deferred register, and the phase-range read-only proof
+- [x] 34-09-PLAN.md — Phase 35 / Phase 36 work lists, deferred register, and the phase-range read-only proof
 
 ### Phase 35: mdBook Currency
 

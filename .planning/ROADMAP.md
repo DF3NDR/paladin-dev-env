@@ -954,7 +954,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 34-05-PLAN.md — mdBook verdicts for the 34 remaining appendix pages; the 93-page partition closes
+- [x] 34-05-PLAN.md — mdBook verdicts for the 34 remaining appendix pages; the 93-page partition closes
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

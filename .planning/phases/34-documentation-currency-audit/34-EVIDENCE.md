@@ -248,6 +248,40 @@ measure is unchanged from the recorded Phase 34 start SHA.
   `InspectorView::supersteps` as `paladin-web`, not `paladin-memory`, despite printing before
   `paladin-memory`'s own abort line in the raw stream.
 
+## Plan 34-07, Task 1 — per-crate `-D warnings --all-features` sweep, the true floor
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 128 | Precondition dry run: `bash 34-rustdoc-rows.sh 34-evidence/34-06-cargo-doc-default.txt default` (re-run against the already-committed default-feature capture, unmodified) | `RECONCILED: 65 content diagnostics == 65 rows emitted`, byte-identical to the already-committed §3 rows | ✅ PASS — parser's existing default-feature code path unaffected by the extension below |
+| 129 | Precondition dry run (extended): `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-memory --all-features --no-deps`, teed to `34-evidence/34-07-percrate/paladin-memory.txt`, then `bash 34-rustdoc-rows.sh <capture> "all-features -p paladin-memory"` (no crate-override arg) | `FATAL: 1 diagnostic block(s) never attributed to a crate` | ❌ FAIL as expected — confirms the precondition's own warning: a single-crate capture never prints the per-crate summary line the attribution pass depends on (verified again against a green capture, `paladin-herald`, exit 0, no summary line either) |
+| 130 | Rule 3 fix: `34-rustdoc-rows.sh` extended with an optional third `<crate-override>` argument that bypasses summary-line attribution and assigns every parsed block directly to the named crate (correct by construction for a `-p <crate>` invocation); the Run-cell text and the evidence-anchor path were corrected in the same edit (per-crate invocation quoted instead of the workspace command; anchor recovers the full `34-evidence/...` suffix instead of assuming a fixed depth) | `bash 34-rustdoc-rows.sh 34-evidence/34-07-percrate/paladin-memory.txt "all-features -p paladin-memory" paladin-memory` → `RECONCILED: 1 content diagnostics == 1 rows emitted`, row resolves to `crates/paladin-memory/src/token_counter/mod.rs:3` | ✅ PASS — known-answer case (CONTEXT.md's own method self-test) confirmed before the remaining ten crates were swept |
+| 131 | Regression check: re-ran `bash 34-rustdoc-rows.sh 34-evidence/34-06-cargo-doc-default.txt default` (no crate-override) after the script edit | `RECONCILED: 65 content diagnostics == 65 rows emitted`, output byte-identical to row 128's pre-edit run | ✅ PASS — the default-feature code path plan 34-06 exercised is unchanged by the extension |
+| 132 | Remaining eleven-crate sweep: `RUSTDOCFLAGS="-D warnings" cargo doc -p <crate> --all-features --no-deps` for `paladin-battalion`, `paladin-content`, `paladin-ai-core`, `paladin-eval`, `paladin-herald`, `paladin-llm`, `paladin-notifications`, `paladin-ports`, `paladin-storage`, `paladin-web`, `paladin-ai`, each teed to its own `34-evidence/34-07-percrate/<crate>.txt` | 8 of 12 crates total (including `paladin-memory` from row 130) exit `101`: `paladin-battalion` 36, `paladin-ai-core` 14, `paladin-llm` 9, `paladin-memory` 1, `paladin-ports` 1, `paladin-storage` 1, `paladin-web` 8, `paladin-ai` 7; the other 4 (`paladin-content`, `paladin-eval`, `paladin-herald`, `paladin-notifications`) exit `0`. Combined wall time 68s (warm `target/`) | ✅ PASS — matches RESEARCH.md Pattern 2's table exactly, crate-for-crate and error-for-error, **77 total content errors** |
+| 133 | Parsed all twelve captures with `bash 34-rustdoc-rows.sh <capture> "all-features -p <crate>" <crate>`, renumbered `PLACEHOLDER-RD` sequentially `RD-67`..`RD-143` in crate order (continuing from the existing high-water mark `RD-66`), pasted into `34-AUDIT.md` §3 under twelve per-crate subheadings plus a summary table and comparison prose | Every crate's parser run printed `RECONCILED: N content diagnostics == N rows emitted`, exit 0; `67+77=144` next-free ID confirmed by script output | ✅ PASS |
+| 134 | `test "$(ls 34-evidence/34-07-percrate/*.txt \| wc -l)" -ge 12` | `12` | ✅ PASS |
+| 135 | `grep -q 'crates/paladin-memory/src/token_counter/mod.rs:3' 34-AUDIT.md` | found (as `RD-126`) | ✅ PASS |
+| 136 | `grep -c '^\| RD-[0-9]' 34-AUDIT.md` vs `grep -cE '^\| RD-[0-9]+ \|[^\|]*\|[^\|]*\| [A-Za-z0-9_./-]+\.rs:[0-9]+ ' 34-AUDIT.md` | both `143` | ✅ PASS — every RD row ends its File:line cell with a real `.rs:<line>` |
+| 137 | `grep -oE 'RD-[0-9]+' 34-AUDIT.md \| sort \| uniq -d` | (empty) | ✅ PASS — no duplicate RD ID, and no newly-minted `RD-nn` string repeated in prose outside its own row |
+| 138 | Per-crate row-count reconciliation stated in-line under each crate's subheading (`Row count check: N rows above == N content errors...`) | all twelve crates reconcile exactly (36, 0, 14, 0, 0, 9, 1, 0, 1, 1, 8, 7 = 77) | ✅ PASS |
+| 139 | Comparison against the carried "14 unresolved intra-doc links" figure (`ROADMAP.md`, `34-CONTEXT.md` D-14, `STATE.md` Phase 32 close note) | 77 / 14 ≈ 5.5x undercount; 63-item undersizing of Phase 36's `RD-nn` work list stated in `34-AUDIT.md` | ✅ PASS — recorded, not corrected elsewhere (D-00c) |
+| 140 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+| 141 | `bash 34-check.sh --seed` (post-task re-run) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+
+## Notes (plan 34-07, Task 1)
+
+- The precondition check itself surfaced the deviation: `34-rustdoc-rows.sh`'s crate-attribution
+  mechanism (plan 34-06) depends entirely on a per-crate "generated N warnings/errors" summary
+  line that a single-crate `-p <crate>` invocation never prints — under `-D warnings` the job
+  aborts before reaching one, and a clean crate's own closing line is a different pattern
+  entirely. This is exactly the shape of blocking issue Rule 3 covers: extend the tool rather than
+  hand-transcribe 77 rows across twelve captures by hand.
+- The known-answer check (row 130) was verified *before* the remaining ten-crate sweep ran, per
+  the plan's own instruction to stop and fix rather than continue past a mismatch — the method
+  self-test gates the rest of the task, not just its own row.
+- This run's 77-error, 8-red-crate total matches RESEARCH.md's Pattern 2 table exactly at a HEAD
+  several commits later — the D-22 invariance argument (every intervening Phase 34 commit touches
+  only `.planning/`) holds in practice, not just in principle.
+
 ---
 
 *Phase: 34-documentation-currency-audit*

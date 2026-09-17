@@ -1054,6 +1054,277 @@ different 4-crate subset aborted first this time), so this command cannot confir
 cargo doc -p paladin-ai-core --all-features --no-deps`, plan 34-07) can settle that directly. No
 figure this run did not itself produce is carried forward as current.
 
+### Per-crate `-D warnings --all-features` sweep (plan 34-07, D-12/D-14) — the true floor
+
+**Crate list, derived from the tree, not copied from RESEARCH.md or CONTEXT.md:** `ls crates/`
+lists twelve directories; `paladin-doc-examples` (`crates/doc-examples`, `publish = false`) is
+excluded — D-14 scopes this sweep to "the eleven library crates plus the facade", and
+`doc-examples` is a compile-verified example holder (§4's own subject, plan 34-08), not a library
+crate the `-D warnings --all-features` bar applies to. The remaining eleven directories'
+`[package] name` fields plus the root `Cargo.toml`'s facade package name give the twelve
+invocation targets, matching RESEARCH.md Pattern 2's list exactly: `paladin-battalion`,
+`paladin-content`, `paladin-ai-core` (directory `crates/paladin-core`), `paladin-eval`,
+`paladin-herald`, `paladin-llm`, `paladin-memory`, `paladin-notifications`, `paladin-ports`,
+`paladin-storage`, `paladin-web`, facade `paladin-ai`.
+
+**Method extension (Rule 3 — blocking-issue auto-fix, this task's own precondition check):** the
+task's precondition asked for a dry run against 34-06's own default-feature capture before
+trusting the sweep; that dry run (re-running the parser against 34-06's own committed
+capture, unmodified) reproduced the identical, already-committed 65-row output exactly — but the
+*equivalent* dry run against a fresh single-crate capture (`paladin-memory`, the known-answer
+case) failed with `FATAL: 1 diagnostic block(s) never attributed to a crate` — `34-rustdoc-rows.sh`
+(written by plan 34-06) attributes every diagnostic block to a crate by consuming a per-crate
+"`<crate>` (lib doc) generated N warnings/errors" summary line, a mechanism the `--workspace`
+capture always emits but a single-crate `cargo doc -p <crate> --all-features --no-deps` invocation
+never does: under `-D warnings` the job aborts on its first content diagnostic before any summary
+line would print at all, and a clean (0-error) crate's own closing line ("Generated
+.../index.html") does not match the summary pattern either — confirmed live against both a red
+capture (`paladin-memory`, 1 error) and a green one (`paladin-herald`, 0 errors) before any of the
+remaining ten-crate sweep ran. Per the precondition's own instruction, the parser was extended
+rather than the rows hand-transcribed: `34-rustdoc-rows.sh` now accepts an optional third
+argument, `<crate-override>`, which bypasses the summary-line attribution pass entirely and
+assigns every parsed block directly to the named crate — correct by construction, since a `-p
+<crate>` invocation can only ever emit diagnostics for that one crate. The existing default-feature
+(`--workspace`) code path plan 34-06 exercised is unchanged by this edit — re-running the parser
+against `34-evidence/34-06-cargo-doc-default.txt` without the new argument reproduces the identical
+65-row, byte-identical output already pasted into the subsection above (confirmed by diff before
+this subsection's own rows were added). Two further corrections landed in the same edit: the Run
+cell for a crate-override run now quotes the actual `-p <crate>` invocation (D-12/D-14) instead of
+the workspace command's D-12/D-13 text, and the evidence-anchor path now recovers the full
+`34-evidence/...` suffix from the capture's own absolute path rather than assuming every capture
+sits one level below `34-evidence/` directly — this task's captures sit a level deeper, at
+`34-evidence/34-07-percrate/<crate>.txt`, which the old basename-only anchor would have silently
+mis-pointed.
+
+**Known-answer verification (CONTEXT.md's own method self-test, checked before trusting any other
+row below):** the `paladin-memory` sweep's one row resolves to
+`crates/paladin-memory/src/token_counter/mod.rs:3` — the same file:line the tracer row worked at
+the top of this section and the default-feature enumeration's own last row both already carry.
+Verified before the remaining ten crates were swept, per the plan's own instruction to stop and
+fix rather than continue past a mismatch.
+
+**Twelve invocations, run live at HEAD `f53daa8a845c34433fcd30ff0867348105b8330c`** (warm
+`target/`, well under RESEARCH.md's cold-cache ~4m47s combined estimate):
+
+| Crate | Invocation | Exit | Content errors | Wall time | Capture |
+|-------|-----------|------|-----------------|-----------|---------|
+| `paladin-battalion` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` | 101 | 36 | 4s | 34-evidence/34-07-percrate/paladin-battalion.txt |
+| `paladin-content` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-content --all-features --no-deps` | 0 | 0 | 4s | 34-evidence/34-07-percrate/paladin-content.txt |
+| `paladin-ai-core` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` | 101 | 14 | 7s | 34-evidence/34-07-percrate/paladin-ai-core.txt |
+| `paladin-eval` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-eval --all-features --no-deps` | 0 | 0 | 5s | 34-evidence/34-07-percrate/paladin-eval.txt |
+| `paladin-herald` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-herald --all-features --no-deps` | 0 | 0 | 4s | 34-evidence/34-07-percrate/paladin-herald.txt |
+| `paladin-llm` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps` | 101 | 9 | 4s | 34-evidence/34-07-percrate/paladin-llm.txt |
+| `paladin-memory` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-memory --all-features --no-deps` | 101 | 1 | 4s | 34-evidence/34-07-percrate/paladin-memory.txt |
+| `paladin-notifications` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-notifications --all-features --no-deps` | 0 | 0 | 4s | 34-evidence/34-07-percrate/paladin-notifications.txt |
+| `paladin-ports` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ports --all-features --no-deps` | 101 | 1 | 4s | 34-evidence/34-07-percrate/paladin-ports.txt |
+| `paladin-storage` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-storage --all-features --no-deps` | 101 | 1 | 6s | 34-evidence/34-07-percrate/paladin-storage.txt |
+| `paladin-web` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps` | 101 | 8 | 4s | 34-evidence/34-07-percrate/paladin-web.txt |
+| `paladin-ai` | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai --all-features --no-deps` | 101 | 7 | 18s | 34-evidence/34-07-percrate/paladin-ai.txt |
+| **Total** | — | — | **77** | **68s** | — |
+
+**8 of 12 crates are RED** (`paladin-battalion`, `paladin-ai-core`, `paladin-llm`, `paladin-memory`, `paladin-ports`, `paladin-storage`, `paladin-web`, `paladin-ai`); the other 4
+(`paladin-content`, `paladin-eval`, `paladin-herald`, `paladin-notifications`) are green with zero
+content errors and zero rows. This run's totals match RESEARCH.md Pattern 2's table exactly,
+crate-for-crate and error-for-error (77 total, the same 8 red crates), at a HEAD several commits
+past RESEARCH.md's own measurement SHA `c36b7729` — the D-22 invariance argument holds: every
+intervening Phase 34 commit touches only `.planning/`, so the source tree the two SHAs measure is
+identical.
+
+**This is the true floor D-14 asks for — 77, not 14 and not 17.** The figure the
+roadmap (`ROADMAP.md`'s "Phase 36" goal statement and its Source line), this phase's own
+`34-CONTEXT.md` D-14 prose, and `STATE.md`'s Phase 32 close note all still carry ("14 unresolved
+intra-doc links [in `paladin-ai-core`]") is `paladin-ai-core`'s own count alone — a figure Phase
+32-05's own summary never claimed as a workspace total, and one plan 34-06's workspace-run
+subsection above already flagged as undersized against its own 17-error partial view. Against the
+77-error true floor, the carried "14" figure would have undersized Phase 36's `RD-nn`
+work list by 63 items (a roughly 5.5x undercount, 77 / 14 ≈ 5.5); even this plan's own
+predecessor subsection's 17-error four-crate workspace-run floor would have undersized the list by
+60 items. The per-crate sweep is not a refinement of either number — it is the only way to reach
+the true one at all, since eight of the twelve red crates never all appear together in any single
+`--workspace` invocation's partial output before that invocation's own concurrency-driven abort
+(Pitfall P-02, corrected again by this task's own measurement: this run's per-crate sweep found
+red crates — `paladin-battalion`, `paladin-llm` — that neither RESEARCH.md's 3-crate workspace
+abort nor plan 34-06's own 4-crate workspace abort ever reached).
+
+**HEAD SHA and D-23 note:** measured at `f53daa8a845c34433fcd30ff0867348105b8330c`, past the Phase
+34 start SHA `ee1fb160f8e743e638b32beb6c4e32be4ede9325` recorded in the Measurement Header above;
+every intervening commit touches only `.planning/` (this phase's own SC5 constraint), so per
+D-23's own invariance argument the source tree these 77 errors were measured against
+is identical to the tree at the phase's start SHA.
+
+#### `paladin-battalion` — 36 content errors
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` — exit `101`, 4s, capture `34-evidence/34-07-percrate/paladin-battalion.txt`.
+
+| RD ID | Run | Crate | File:line | Kind | Message (verbatim first line) | Location source | Evidence anchor | Size |
+|-------|-----|-------|-----------|------|-------------------------------|------------------|------------------|------|
+| RD-67 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/commander.rs:35 | private intra-doc link | `error: public documentation for `StrategySelection` links to private item `Commander::analyze_and_select`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:2 | S |
+| RD-68 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/commander.rs:49 | private intra-doc link | `error: public documentation for `Heuristic` links to private item `Commander::analyze_and_select`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:12 | S |
+| RD-69 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/edge_evaluator.rs:3 | unresolved link | `error: unresolved link to `EdgeCondition`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/edge_evaluator.rs:3`) | 34-evidence/34-07-percrate/paladin-battalion.txt:20 | S |
+| RD-70 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:3 | unresolved link | `error: unresolved link to `WarGraph`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:3`) | 34-evidence/34-07-percrate/paladin-battalion.txt:31 | S |
+| RD-71 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:4 | unresolved link | `error: unresolved link to `StateNode`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:4`) | 34-evidence/34-07-percrate/paladin-battalion.txt:40 | S |
+| RD-72 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:5 | unresolved link | `error: unresolved link to `Battlefield`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:5`) | 34-evidence/34-07-percrate/paladin-battalion.txt:49 | S |
+| RD-73 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:6 | unresolved link | `error: unresolved link to `Waypoint`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:6`) | 34-evidence/34-07-percrate/paladin-battalion.txt:58 | S |
+| RD-74 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:6 | unresolved link | `error: unresolved link to `WaypointPort`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:6`) | 34-evidence/34-07-percrate/paladin-battalion.txt:67 | S |
+| RD-75 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:10 | unresolved link | `error: unresolved link to `WarEngine::start`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:10`) | 34-evidence/34-07-percrate/paladin-battalion.txt:76 | S |
+| RD-76 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:20 | unresolved link | `error: unresolved link to `bridges`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:20`) | 34-evidence/34-07-percrate/paladin-battalion.txt:84 | S |
+| RD-77 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:25 | unresolved link | `error: unresolved link to `graph`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:25`) | 34-evidence/34-07-percrate/paladin-battalion.txt:93 | S |
+| RD-78 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:27 | unresolved link | `error: unresolved link to `directive_parser`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:27`) | 34-evidence/34-07-percrate/paladin-battalion.txt:102 | S |
+| RD-79 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:31 | unresolved link | `error: unresolved link to `input_mapping`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:31`) | 34-evidence/34-07-percrate/paladin-battalion.txt:111 | S |
+| RD-80 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:33 | unresolved link | `error: unresolved link to `node`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:33`) | 34-evidence/34-07-percrate/paladin-battalion.txt:120 | S |
+| RD-81 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:34 | unresolved link | `error: unresolved link to `dispatch_registry`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:34`) | 34-evidence/34-07-percrate/paladin-battalion.txt:129 | S |
+| RD-82 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:36 | unresolved link | `error: unresolved link to `hooks`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/mod.rs:36`) | 34-evidence/34-07-percrate/paladin-battalion.txt:138 | S |
+| RD-83 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/cache_key.rs:23 | unresolved link | `error: unresolved link to `graph_prefix`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/cache_key.rs:23`) | 34-evidence/34-07-percrate/paladin-battalion.txt:147 | S |
+| RD-84 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/cache_key.rs:23 | unresolved link | `error: unresolved link to `node_prefix`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/engine/cache_key.rs:23`) | 34-evidence/34-07-percrate/paladin-battalion.txt:156 | S |
+| RD-85 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/directive_parser.rs:47 | private intra-doc link | `error: public documentation for `directive_parser` links to private item `crate::engine::graph::validate_parley_value_for_kind`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:165 | S |
+| RD-86 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/graph.rs:772 | private intra-doc link | `error: public documentation for `validate` links to private item `WarGraph::validate_schedulable`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:173 | S |
+| RD-87 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/graph.rs:1375 | private intra-doc link | `error: public documentation for `validate_node_cache_backend` links to private item `WarGraph::validate_aegis_undeclared_nodes`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:181 | S |
+| RD-88 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/graph.rs:2258 | private intra-doc link | `error: public documentation for `fingerprint` links to private item `push_field`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:189 | S |
+| RD-89 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/graph.rs:2287 | private intra-doc link | `error: public documentation for `fingerprint` links to private item `push_field`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:197 | S |
+| RD-90 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/graph.rs:2303 | private intra-doc link | `error: public documentation for `fingerprint` links to private item `push_field`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:205 | S |
+| RD-91 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/graph.rs:2337 | private intra-doc link | `error: public documentation for `fingerprint` links to private item `push_field`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:213 | S |
+| RD-92 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/graph.rs:2358 | private intra-doc link | `error: public documentation for `fingerprint` links to private item `push_field`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:221 | S |
+| RD-93 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:744 | private intra-doc link | `error: public documentation for `ResponseShapeInvalid` links to private item `graph::validate_parley_value_for_kind`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:229 | S |
+| RD-94 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:1423 | unresolved link | `error: unresolved link to `Waypoint`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:237 | S |
+| RD-95 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:2686 | private intra-doc link | `error: public documentation for `replay` links to private item `superstep::run_with_namespace`` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:245 | S |
+| RD-96 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/llm_decision.rs:40 | unresolved link | `error: unresolved link to `llm_error_class`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/llm_decision.rs:40`) | 34-evidence/34-07-percrate/paladin-battalion.txt:253 | S |
+| RD-97 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/llm_failure.rs:1 | unresolved link | `error: unresolved link to `PaladinError::LlmFailure`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/llm_failure.rs:1`) | 34-evidence/34-07-percrate/paladin-battalion.txt:262 | S |
+| RD-98 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/llm_failure.rs:8 | unresolved link | `error: unresolved link to `PaladinError::LlmFailure`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/llm_failure.rs:8`) | 34-evidence/34-07-percrate/paladin-battalion.txt:270 | S |
+| RD-99 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/llm_failure.rs:38 | unresolved link | `error: unresolved link to `PaladinError::is_retryable`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-battalion/src`, resolved to `crates/paladin-battalion/src/llm_failure.rs:38`) | 34-evidence/34-07-percrate/paladin-battalion.txt:278 | S |
+| RD-100 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/input_mapping.rs:30 | redundant explicit link | `error: redundant explicit link target` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:286 | S |
+| RD-101 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/input_mapping.rs:40 | redundant explicit link | `error: redundant explicit link target` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:304 | S |
+| RD-102 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps` (D-12/D-14) | paladin-battalion | crates/paladin-battalion/src/engine/mod.rs:1085 | redundant explicit link | `error: redundant explicit link target` | rustdoc span | 34-evidence/34-07-percrate/paladin-battalion.txt:320 | S |
+
+Row count check: 36 rows above == 36 content errors recorded in the summary table for `paladin-battalion`.
+
+#### `paladin-content` — 0 content errors
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-content --all-features --no-deps` — exit `0`, 4s, capture `34-evidence/34-07-percrate/paladin-content.txt`.
+
+No content errors — 0 rows minted (green crate).
+
+#### `paladin-ai-core` — 14 content errors
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` — exit `101`, 7s, capture `34-evidence/34-07-percrate/paladin-ai-core.txt`.
+
+| RD ID | Run | Crate | File:line | Kind | Message (verbatim first line) | Location source | Evidence anchor | Size |
+|-------|-----|-------|-----------|------|-------------------------------|------------------|------------------|------|
+| RD-103 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/directive.rs:3 | unresolved link | `error: unresolved link to `StateNode::run`` | rustdoc span | 34-evidence/34-07-percrate/paladin-ai-core.txt:2 | S |
+| RD-104 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/structured.rs:13 | unresolved link | `error: unresolved link to `extract_json`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/structured.rs:13`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:11 | S |
+| RD-105 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/trace.rs:3 | unresolved link | `error: unresolved link to `TraceEvent`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/trace.rs:3`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:20 | S |
+| RD-106 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/trace.rs:6 | unresolved link | `error: unresolved link to `TraceRecord`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/trace.rs:6`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:29 | S |
+| RD-107 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/trace.rs:17 | unresolved link | `error: unresolved link to `TraceRecord`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/trace.rs:17`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:38 | S |
+| RD-108 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/trace.rs:21 | unresolved link | `error: unresolved link to `TraceEvent::DeltaMerged`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/trace.rs:21`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:47 | S |
+| RD-109 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/trace.rs:22 | unresolved link | `error: unresolved link to `FieldChange`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/trace.rs:22`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:55 | S |
+| RD-110 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/trace.rs:25 | unresolved link | `error: unresolved link to `FieldChange::value`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/trace.rs:25`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:64 | S |
+| RD-111 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/trace.rs:36 | unresolved link | `error: unresolved link to `TraceEvent::NodeProgress`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/trace.rs:36`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:72 | S |
+| RD-112 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/trace.rs:37 | unresolved link | `error: unresolved link to `TraceEvent::ParleyRaised`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/trace.rs:37`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:80 | S |
+| RD-113 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/trace.rs:44 | unresolved link | `error: unresolved link to `TraceEvent::NodeProgress`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/trace.rs:44`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:88 | S |
+| RD-114 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/trace.rs:45 | unresolved link | `error: unresolved link to `TraceEvent::ParleyRaised`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/trace.rs:45`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:96 | S |
+| RD-115 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/webhook.rs:19 | unresolved link | `error: unresolved link to `WebhookDelivery`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/webhook.rs:19`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:104 | S |
+| RD-116 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai-core --all-features --no-deps` (D-12/D-14) | paladin-ai-core | crates/paladin-core/src/platform/container/webhook.rs:20 | unresolved link | `error: unresolved link to `WEBHOOK_DELIVERY_SCHEMA_VERSION`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-core/src`, resolved to `crates/paladin-core/src/platform/container/webhook.rs:20`) | 34-evidence/34-07-percrate/paladin-ai-core.txt:113 | S |
+
+Row count check: 14 rows above == 14 content errors recorded in the summary table for `paladin-ai-core`.
+
+#### `paladin-eval` — 0 content errors
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-eval --all-features --no-deps` — exit `0`, 5s, capture `34-evidence/34-07-percrate/paladin-eval.txt`.
+
+No content errors — 0 rows minted (green crate).
+
+#### `paladin-herald` — 0 content errors
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-herald --all-features --no-deps` — exit `0`, 4s, capture `34-evidence/34-07-percrate/paladin-herald.txt`.
+
+No content errors — 0 rows minted (green crate).
+
+#### `paladin-llm` — 9 content errors
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps` — exit `101`, 4s, capture `34-evidence/34-07-percrate/paladin-llm.txt`.
+
+| RD ID | Run | Crate | File:line | Kind | Message (verbatim first line) | Location source | Evidence anchor | Size |
+|-------|-----|-------|-----------|------|-------------------------------|------------------|------------------|------|
+| RD-117 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps` (D-12/D-14) | paladin-llm | crates/paladin-llm/src/redaction.rs:164 | private intra-doc link | `error: public documentation for `redact_secret_patterns` links to private item `JWT_MIN_SEGMENT_LEN`` | rustdoc span | 34-evidence/34-07-percrate/paladin-llm.txt:2 | S |
+| RD-118 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps` (D-12/D-14) | paladin-llm | crates/paladin-llm/src/services/commissary.rs:89 | private intra-doc link | `error: public documentation for `pessimistic_tokens_per_1000_bytes` links to private item `PESSIMISTIC_TOKENS_PER_1000_BYTES`` | rustdoc span | 34-evidence/34-07-percrate/paladin-llm.txt:12 | S |
+| RD-119 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps` (D-12/D-14) | paladin-llm | crates/paladin-llm/src/compat/engine.rs:114 | private intra-doc link | `error: public documentation for `temperature` links to private item `CompatEngine::build_request`` | rustdoc span | 34-evidence/34-07-percrate/paladin-llm.txt:20 | S |
+| RD-120 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps` (D-12/D-14) | paladin-llm | crates/paladin-llm/src/compat/engine.rs:201 | private intra-doc link | `error: public documentation for `redirect_policy` links to private item `CompatEngine::map_error`` | rustdoc span | 34-evidence/34-07-percrate/paladin-llm.txt:28 | S |
+| RD-121 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps` (D-12/D-14) | paladin-llm | crates/paladin-llm/src/compat/engine.rs:1041 | private intra-doc link | `error: public documentation for `available_models` links to private item `classify_fetch_failure`` | rustdoc span | 34-evidence/34-07-percrate/paladin-llm.txt:36 | S |
+| RD-122 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps` (D-12/D-14) | paladin-llm | crates/paladin-llm/src/gemini/adapter.rs:28 | private intra-doc link | `error: public documentation for `adapter` links to private item `GeminiResponse`` | rustdoc span | 34-evidence/34-07-percrate/paladin-llm.txt:44 | S |
+| RD-123 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps` (D-12/D-14) | paladin-llm | crates/paladin-llm/src/gemini/adapter.rs:59 | private intra-doc link | `error: public documentation for `adapter` links to private item `GeminiAdapter::map_error`` | rustdoc span | 34-evidence/34-07-percrate/paladin-llm.txt:52 | S |
+| RD-124 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps` (D-12/D-14) | paladin-llm | crates/paladin-llm/src/http_status.rs:6 | unclosed HTML tag | `error: unclosed HTML tag `status`` | grep recovery (`grep -rnF "<status>" crates/paladin-llm/src`, resolved to `crates/paladin-llm/src/http_status.rs:6`) | 34-evidence/34-07-percrate/paladin-llm.txt:60 | S |
+| RD-125 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps` (D-12/D-14) | paladin-llm | crates/paladin-llm/src/http_status.rs:7 | unclosed HTML tag | `error: unclosed HTML tag `body`` | grep recovery (`grep -rnF "<body>" crates/paladin-llm/src`, resolved to `crates/paladin-llm/src/http_status.rs:7`) | 34-evidence/34-07-percrate/paladin-llm.txt:65 | S |
+
+Row count check: 9 rows above == 9 content errors recorded in the summary table for `paladin-llm`.
+
+#### `paladin-memory` — 1 content error
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-memory --all-features --no-deps` — exit `101`, 4s, capture `34-evidence/34-07-percrate/paladin-memory.txt`.
+
+| RD ID | Run | Crate | File:line | Kind | Message (verbatim first line) | Location source | Evidence anchor | Size |
+|-------|-----|-------|-----------|------|-------------------------------|------------------|------------------|------|
+| RD-126 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-memory --all-features --no-deps` (D-12/D-14) | paladin-memory | crates/paladin-memory/src/token_counter/mod.rs:3 | unresolved link | `error: unresolved link to `HeuristicTokenCounter`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-memory/src`, resolved to `crates/paladin-memory/src/token_counter/mod.rs:3`) | 34-evidence/34-07-percrate/paladin-memory.txt:2 | S |
+
+Row count check: 1 rows above == 1 content errors recorded in the summary table for `paladin-memory`.
+
+#### `paladin-notifications` — 0 content errors
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-notifications --all-features --no-deps` — exit `0`, 4s, capture `34-evidence/34-07-percrate/paladin-notifications.txt`.
+
+No content errors — 0 rows minted (green crate).
+
+#### `paladin-ports` — 1 content error
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ports --all-features --no-deps` — exit `101`, 4s, capture `34-evidence/34-07-percrate/paladin-ports.txt`.
+
+| RD ID | Run | Crate | File:line | Kind | Message (verbatim first line) | Location source | Evidence anchor | Size |
+|-------|-----|-------|-----------|------|-------------------------------|------------------|------------------|------|
+| RD-127 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ports --all-features --no-deps` (D-12/D-14) | paladin-ports | crates/paladin-ports/src/output/structured_executor_port.rs:158 | private intra-doc link | `error: public documentation for `run_structured` links to private item `repair_prompt`` | rustdoc span | 34-evidence/34-07-percrate/paladin-ports.txt:2 | S |
+
+Row count check: 1 rows above == 1 content errors recorded in the summary table for `paladin-ports`.
+
+#### `paladin-storage` — 1 content error
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-storage --all-features --no-deps` — exit `101`, 6s, capture `34-evidence/34-07-percrate/paladin-storage.txt`.
+
+| RD ID | Run | Crate | File:line | Kind | Message (verbatim first line) | Location source | Evidence anchor | Size |
+|-------|-----|-------|-----------|------|-------------------------------|------------------|------------------|------|
+| RD-128 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-storage --all-features --no-deps` (D-12/D-14) | paladin-storage | crates/paladin-storage/src/waypoint/contract_tests.rs:673 | private intra-doc link | `error: public documentation for `muster_progress_round_trips` links to private item `muster_progress_fixture`` | rustdoc span | 34-evidence/34-07-percrate/paladin-storage.txt:2 | S |
+
+Row count check: 1 rows above == 1 content errors recorded in the summary table for `paladin-storage`.
+
+#### `paladin-web` — 8 content errors
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps` — exit `101`, 4s, capture `34-evidence/34-07-percrate/paladin-web.txt`.
+
+| RD ID | Run | Crate | File:line | Kind | Message (verbatim first line) | Location source | Evidence anchor | Size |
+|-------|-----|-------|-----------|------|-------------------------------|------------------|------------------|------|
+| RD-129 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps` (D-12/D-14) | paladin-web | crates/paladin-web/src/dev_ui_controller.rs:3 | unresolved link | `error: unresolved link to `RunInspectorPort`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-web/src`, resolved to `crates/paladin-web/src/dev_ui_controller.rs:3`) | 34-evidence/34-07-percrate/paladin-web.txt:2 | S |
+| RD-130 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps` (D-12/D-14) | paladin-web | crates/paladin-web/src/dev_ui_controller.rs:20 | unresolved link | `error: unresolved link to `dev_ui_inspector_page`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-web/src`, resolved to `crates/paladin-web/src/dev_ui_controller.rs:20`) | 34-evidence/34-07-percrate/paladin-web.txt:13 | S |
+| RD-131 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps` (D-12/D-14) | paladin-web | crates/paladin-web/src/dev_ui_controller.rs:28 | unresolved link | `error: unresolved link to `InspectorView::supersteps`` | grep recovery (snippet quoted under "the link appears in this line:" — `grep -rnF "<snippet>" crates/paladin-web/src`, resolved to `crates/paladin-web/src/dev_ui_controller.rs:28`) | 34-evidence/34-07-percrate/paladin-web.txt:22 | S |
+| RD-132 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps` (D-12/D-14) | paladin-web | crates/paladin-web/src/dev_ui_controller.rs:69 | private intra-doc link | `error: public documentation for `DevUiState` links to private item `NOT_WIRED_MESSAGE`` | rustdoc span | 34-evidence/34-07-percrate/paladin-web.txt:30 | S |
+| RD-133 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps` (D-12/D-14) | paladin-web | crates/paladin-web/src/dev_ui_controller.rs:131 | private intra-doc link | `error: public documentation for `dev_ui_inspector_page` links to private item `escape_for_script`` | rustdoc span | 34-evidence/34-07-percrate/paladin-web.txt:40 | S |
+| RD-134 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps` (D-12/D-14) | paladin-web | crates/paladin-web/src/thread_controller.rs:483 | private intra-doc link | `error: public documentation for `limit` links to private item `MAX_HISTORY_LIMIT`` | rustdoc span | 34-evidence/34-07-percrate/paladin-web.txt:48 | S |
+| RD-135 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps` (D-12/D-14) | paladin-web | crates/paladin-web/src/thread_controller.rs:686 | private intra-doc link | `error: public documentation for `resume_thread` links to private item `map_parley_error`` | rustdoc span | 34-evidence/34-07-percrate/paladin-web.txt:56 | S |
+| RD-136 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps` (D-12/D-14) | paladin-web | crates/paladin-web/src/thread_controller.rs:757 | private intra-doc link | `error: public documentation for `get_thread_history` links to private item `MAX_HISTORY_LIMIT`` | rustdoc span | 34-evidence/34-07-percrate/paladin-web.txt:64 | S |
+
+Row count check: 8 rows above == 8 content errors recorded in the summary table for `paladin-web`.
+
+#### `paladin-ai` — 7 content errors
+
+`RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai --all-features --no-deps` — exit `101`, 18s, capture `34-evidence/34-07-percrate/paladin-ai.txt`.
+
+| RD ID | Run | Crate | File:line | Kind | Message (verbatim first line) | Location source | Evidence anchor | Size |
+|-------|-----|-------|-----------|------|-------------------------------|------------------|------------------|------|
+| RD-137 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai --all-features --no-deps` (D-12/D-14) | paladin-ai | src/application/cli/commands/eval.rs:281 | private intra-doc link | `error: public documentation for `first_divergence` links to private item `stabilized_fingerprints`` | rustdoc span | 34-evidence/34-07-percrate/paladin-ai.txt:2 | S |
+| RD-138 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai --all-features --no-deps` (D-12/D-14) | paladin-ai | src/application/services/paladin/paladin_execution_service.rs:1014 | private intra-doc link | `error: public documentation for `execute_scoped` links to private item `Self::execute_bounded`` | rustdoc span | 34-evidence/34-07-percrate/paladin-ai.txt:12 | S |
+| RD-139 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai --all-features --no-deps` (D-12/D-14) | paladin-ai | src/application/services/parley/adapter.rs:28 | private intra-doc link | `error: public documentation for `adapter` links to private item `shadow_validate`` | rustdoc span | 34-evidence/34-07-percrate/paladin-ai.txt:20 | S |
+| RD-140 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai --all-features --no-deps` (D-12/D-14) | paladin-ai | src/application/services/run/worker.rs:641 | private intra-doc link | `error: public documentation for `with_event_bus` links to private item `Self::record_engine_failure`` | rustdoc span | 34-evidence/34-07-percrate/paladin-ai.txt:28 | S |
+| RD-141 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai --all-features --no-deps` (D-12/D-14) | paladin-ai | src/config/agent_runtime.rs:1174 | private intra-doc link | `error: public documentation for `resolve_chain` links to private item `KNOWN_PROVIDER_NAMES`` | rustdoc span | 34-evidence/34-07-percrate/paladin-ai.txt:36 | S |
+| RD-142 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai --all-features --no-deps` (D-12/D-14) | paladin-ai | src/infrastructure/telemetry/otel_sink.rs:42 | private intra-doc link | `error: public documentation for `otel_sink` links to private item `build_reqwest_client`` | rustdoc span | 34-evidence/34-07-percrate/paladin-ai.txt:44 | S |
+| RD-143 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai --all-features --no-deps` (D-12/D-14) | paladin-ai | src/presets/mod.rs:55 | private intra-doc link | `error: public documentation for `ReasoningAgentOptions` links to private item `DEFAULT_SYSTEM_PROMPT`` | rustdoc span | 34-evidence/34-07-percrate/paladin-ai.txt:52 | S |
+
+Row count check: 7 rows above == 7 content errors recorded in the summary table for `paladin-ai`.
+
 ## §4 Examples table
 
 Rows land in plan 34-08 (the four `ci.yml:548-558` build invocations, the `doc-examples` gate, and

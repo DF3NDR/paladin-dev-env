@@ -1,0 +1,60 @@
+ Documenting paladin-ai v0.10.0 (/workspace)
+error: public documentation for `first_divergence` links to private item `stabilized_fingerprints`
+   --> src/application/cli/commands/eval.rs:281:54
+    |
+281 | /// record stream diverges from run 0's, comparing [`stabilized_fingerprints`]
+    |                                                      ^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+    = note: `-D rustdoc::private-intra-doc-links` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(rustdoc::private_intra_doc_links)]`
+
+error: public documentation for `execute_scoped` links to private item `Self::execute_bounded`
+    --> src/application/services/paladin/paladin_execution_service.rs:1014:24
+     |
+1014 |     /// exactly like [`Self::execute_bounded`]'s own contract.
+     |                        ^^^^^^^^^^^^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `adapter` links to private item `shadow_validate`
+  --> src/application/services/parley/adapter.rs:28:38
+   |
+28 | //! modifying `paladin-battalion`, [`shadow_validate`] re-implements the
+   |                                      ^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `with_event_bus` links to private item `Self::record_engine_failure`
+   --> src/application/services/run/worker.rs:641:11
+    |
+641 |     /// [`Self::record_engine_failure`]'s own retained publish, is
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `resolve_chain` links to private item `KNOWN_PROVIDER_NAMES`
+    --> src/config/agent_runtime.rs:1174:22
+     |
+1174 |     /// build (via [`KNOWN_PROVIDER_NAMES`], a list independent of the
+     |                      ^^^^^^^^^^^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `otel_sink` links to private item `build_reqwest_client`
+  --> src/infrastructure/telemetry/otel_sink.rs:42:38
+   |
+42 | //! file's `Policy::none()` -- see [`build_reqwest_client`]) so a `3xx` from
+   |                                      ^^^^^^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `ReasoningAgentOptions` links to private item `DEFAULT_SYSTEM_PROMPT`
+  --> src/presets/mod.rs:55:27
+   |
+55 | /// | `system_prompt` | [`DEFAULT_SYSTEM_PROMPT`] -- a documented tool-use prompt |
+   |                           ^^^^^^^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+
+error: could not document `paladin-ai`

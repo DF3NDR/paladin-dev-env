@@ -1,0 +1,12 @@
+ Documenting paladin-ports v0.10.0 (/workspace/crates/paladin-ports)
+error: public documentation for `run_structured` links to private item `repair_prompt`
+   --> crates/paladin-ports/src/output/structured_executor_port.rs:158:42
+    |
+158 | /// the offending output verbatim (via [`repair_prompt`]). On exhaustion,
+    |                                          ^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+    = note: `-D rustdoc::private-intra-doc-links` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(rustdoc::private_intra_doc_links)]`
+
+error: could not document `paladin-ports`

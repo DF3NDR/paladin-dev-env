@@ -1,0 +1,67 @@
+ Documenting paladin-llm v0.10.0 (/workspace/crates/paladin-llm)
+error: public documentation for `redact_secret_patterns` links to private item `JWT_MIN_SEGMENT_LEN`
+   --> crates/paladin-llm/src/redaction.rs:164:44
+    |
+164 | ///    base64url segments, each at least [`JWT_MIN_SEGMENT_LEN`] characters
+    |                                            ^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+    = note: `-D rustdoc::private-intra-doc-links` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(rustdoc::private_intra_doc_links)]`
+
+error: public documentation for `pessimistic_tokens_per_1000_bytes` links to private item `PESSIMISTIC_TOKENS_PER_1000_BYTES`
+  --> crates/paladin-llm/src/services/commissary.rs:89:11
+   |
+89 |     /// [`PESSIMISTIC_TOKENS_PER_1000_BYTES`]. Zero is rejected at
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `temperature` links to private item `CompatEngine::build_request`
+   --> crates/paladin-llm/src/compat/engine.rs:114:34
+    |
+114 |     /// declares this `false`, [`CompatEngine::build_request`] omits
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `redirect_policy` links to private item `CompatEngine::map_error`
+   --> crates/paladin-llm/src/compat/engine.rs:201:42
+    |
+201 |     /// attacker-influenced host — see [`CompatEngine::map_error`]'s
+    |                                          ^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `available_models` links to private item `classify_fetch_failure`
+    --> crates/paladin-llm/src/compat/engine.rs:1041:11
+     |
+1041 |     /// [`classify_fetch_failure`]'s verdict on `e` and only a
+     |           ^^^^^^^^^^^^^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `adapter` links to private item `GeminiResponse`
+  --> crates/paladin-llm/src/gemini/adapter.rs:28:20
+   |
+28 | //!   same shape [`GeminiResponse`] already parses for the non-streaming
+   |                    ^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `adapter` links to private item `GeminiAdapter::map_error`
+  --> crates/paladin-llm/src/gemini/adapter.rs:59:37
+   |
+59 | //! refused redirect surfaces via [`GeminiAdapter::map_error`]'s
+   |                                     ^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+
+error: unclosed HTML tag `status`
+  |
+  = note: `-D rustdoc::invalid-html-tags` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(rustdoc::invalid_html_tags)]`
+
+error: unclosed HTML tag `body`
+
+error: could not document `paladin-llm`

@@ -1,0 +1,336 @@
+ Documenting paladin-battalion v0.10.0 (/workspace/crates/paladin-battalion)
+error: public documentation for `StrategySelection` links to private item `Commander::analyze_and_select`
+  --> crates/paladin-battalion/src/commander.rs:35:32
+   |
+35 | /// -- today's keyword-based [`Commander::analyze_and_select`], unchanged. No
+   |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+   = note: `-D rustdoc::private-intra-doc-links` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rustdoc::private_intra_doc_links)]`
+
+error: public documentation for `Heuristic` links to private item `Commander::analyze_and_select`
+  --> crates/paladin-battalion/src/commander.rs:49:44
+   |
+49 |     /// Today's keyword-based heuristic ([`Commander::analyze_and_select`]),
+   |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+
+error: unresolved link to `EdgeCondition`
+  |
+  = note: the link appears in this line:
+
+          `paladin-core`'s [`EdgeCondition`] enum names a `Custom(String)` variant
+                            ^^^^^^^^^^^^^^^
+  = note: no item named `EdgeCondition` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+  = note: `-D rustdoc::broken-intra-doc-links` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(rustdoc::broken_intra_doc_links)]`
+
+error: unresolved link to `WarGraph`
+  |
+  = note: the link appears in this line:
+
+          This module implements the execution engine for [`WarGraph`]s: typed,
+                                                           ^^^^^^^^^^
+  = note: no item named `WarGraph` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `StateNode`
+  |
+  = note: the link appears in this line:
+
+          potentially-cyclic graphs of [`StateNode`]s whose shared state is a
+                                        ^^^^^^^^^^^
+  = note: no item named `StateNode` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `Battlefield`
+  |
+  = note: the link appears in this line:
+
+          [`Battlefield`] (`paladin-core`), automatically checkpointed as a
+           ^^^^^^^^^^^^^
+  = note: no item named `Battlefield` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `Waypoint`
+  |
+  = note: the link appears in this line:
+
+          [`Waypoint`] after every superstep through a [`WaypointPort`]
+           ^^^^^^^^^^
+  = note: no item named `Waypoint` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `WaypointPort`
+  |
+  = note: the link appears in this line:
+
+          [`Waypoint`] after every superstep through a [`WaypointPort`]
+                                                        ^^^^^^^^^^^^^^
+  = note: no item named `WaypointPort` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `WarEngine::start`
+  |
+  = note: the link appears in this line:
+
+          zero-edge graph, run through [`WarEngine::start`], checkpointed as exactly
+                                        ^^^^^^^^^^^^^^^^^^
+  = note: no item named `WarEngine` in scope
+
+error: unresolved link to `bridges`
+  |
+  = note: the link appears in this line:
+
+          - [`bridges`] — `WarGraph::from_formation`/`from_phalanx`/`from_campaign`
+             ^^^^^^^^^
+  = note: no item named `bridges` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `graph`
+  |
+  = note: the link appears in this line:
+
+          - [`graph`] — `WarGraph`, `NodeSpec`, `EdgeSpec`, `EngineLimits`, and
+             ^^^^^^^
+  = note: no item named `graph` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `directive_parser`
+  |
+  = note: the link appears in this line:
+
+          - [`directive_parser`] — `DirectiveParser`, `OnParseError`: how a
+             ^^^^^^^^^^^^^^^^^^
+  = note: no item named `directive_parser` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `input_mapping`
+  |
+  = note: the link appears in this line:
+
+          - [`input_mapping`] — `InputMapping`, `InputMappingError`: the X-03
+             ^^^^^^^^^^^^^^^
+  = note: no item named `input_mapping` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `node`
+  |
+  = note: the link appears in this line:
+
+          - [`node`] — `StateNode`, `NodeContext`, `StateNodeError`.
+             ^^^^^^
+  = note: no item named `node` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `dispatch_registry`
+  |
+  = note: the link appears in this line:
+
+          - [`dispatch_registry`] — `DispatchRegistry`, the engine-owned
+             ^^^^^^^^^^^^^^^^^^^
+  = note: no item named `dispatch_registry` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `hooks`
+  |
+  = note: the link appears in this line:
+
+          - [`hooks`] — `TraceDispatcher` (ENG-FR-21's bounded, drop-oldest
+             ^^^^^^^
+  = note: no item named `hooks` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `graph_prefix`
+  |
+  = note: the link appears in this line:
+
+            ([`graph_prefix`]) or one node ([`node_prefix`]).
+              ^^^^^^^^^^^^^^
+  = note: no item named `graph_prefix` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `node_prefix`
+  |
+  = note: the link appears in this line:
+
+            ([`graph_prefix`]) or one node ([`node_prefix`]).
+                                             ^^^^^^^^^^^^^
+  = note: no item named `node_prefix` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: public documentation for `directive_parser` links to private item `crate::engine::graph::validate_parley_value_for_kind`
+  --> crates/paladin-battalion/src/engine/directive_parser.rs:47:7
+   |
+47 | //! [`crate::engine::graph::validate_parley_value_for_kind`] a
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `validate` links to private item `WarGraph::validate_schedulable`
+   --> crates/paladin-battalion/src/engine/graph.rs:772:29
+    |
+772 |     /// A THIRD clause -- [`WarGraph::validate_schedulable`], D-03's
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `validate_node_cache_backend` links to private item `WarGraph::validate_aegis_undeclared_nodes`
+    --> crates/paladin-battalion/src/engine/graph.rs:1375:21
+     |
+1375 |     /// mirroring [`WarGraph::validate_aegis_undeclared_nodes`]'s discipline.
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `fingerprint` links to private item `push_field`
+    --> crates/paladin-battalion/src/engine/graph.rs:2258:54
+     |
+2258 |     /// walked in `node_order` and written through [`push_field`], the same
+     |                                                      ^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `fingerprint` links to private item `push_field`
+    --> crates/paladin-battalion/src/engine/graph.rs:2287:34
+     |
+2287 |     /// variable-length field ([`push_field`]) is preceded by its byte length
+     |                                  ^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `fingerprint` links to private item `push_field`
+    --> crates/paladin-battalion/src/engine/graph.rs:2303:46
+     |
+2303 |     /// variable-length field goes through [`push_field`], and the two
+     |                                              ^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `fingerprint` links to private item `push_field`
+    --> crates/paladin-battalion/src/engine/graph.rs:2337:27
+     |
+2337 |     /// written through [`push_field`] exactly like every other section; the
+     |                           ^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `fingerprint` links to private item `push_field`
+    --> crates/paladin-battalion/src/engine/graph.rs:2358:35
+     |
+2358 |     /// length-prefixed through [`push_field`], sorted by node id via
+     |                                   ^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `ResponseShapeInvalid` links to private item `graph::validate_parley_value_for_kind`
+   --> crates/paladin-battalion/src/engine/mod.rs:744:11
+    |
+744 |     /// [`graph::validate_parley_value_for_kind`] a Gate's own `on_expire`
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: unresolved link to `Waypoint`
+    --> crates/paladin-battalion/src/engine/mod.rs:1423:56
+     |
+1423 | /// [`Battlefield`], and automatically checkpoints a [`Waypoint`] after every
+     |                                                        ^^^^^^^^ no item named `Waypoint` in scope
+     |
+     = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: public documentation for `replay` links to private item `superstep::run_with_namespace`
+    --> crates/paladin-battalion/src/engine/mod.rs:2686:45
+     |
+2686 |     /// own guard order -- then re-enters [`superstep::run_with_namespace`]
+     |                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: unresolved link to `llm_error_class`
+  |
+  = note: the link appears in this line:
+
+          evaluator and a short, fixed failure class (see [`llm_error_class`]).
+                                                           ^^^^^^^^^^^^^^^^^
+  = note: no item named `llm_error_class` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `PaladinError::LlmFailure`
+  |
+  = note: the link appears in this line:
+
+          The one `LlmError` -> [`PaladinError::LlmFailure`] conversion (D-02, X-06).
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `PaladinError` in scope
+
+error: unresolved link to `PaladinError::LlmFailure`
+  |
+  = note: the link appears in this line:
+
+          [`PaladinError::LlmFailure`] variant so `transience`, the HTTP `status` and
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `PaladinError` in scope
+
+error: unresolved link to `PaladinError::is_retryable`
+  |
+  = note: the link appears in this line:
+
+            [`PaladinError::is_retryable`] answers `true` for `LlmFailure` exactly
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `PaladinError` in scope
+
+error: redundant explicit link target
+  --> crates/paladin-battalion/src/engine/input_mapping.rs:30:32
+   |
+30 | //!   node's [`MusterContext`](paladin_core::platform::container::directive::MusterContext)
+   |               ---------------  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ explicit target is redundant
+   |               |
+   |               because label contains path that resolves to same destination
+   |
+   = note: when a link's destination is not specified,
+           the label is used to resolve intra-doc links
+   = note: `-D rustdoc::redundant-explicit-links` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rustdoc::redundant_explicit_links)]`
+help: remove explicit link target
+   |
+30 - //!   node's [`MusterContext`](paladin_core::platform::container::directive::MusterContext)
+30 + //!   node's [`MusterContext`]
+   |
+
+error: redundant explicit link target
+  --> crates/paladin-battalion/src/engine/input_mapping.rs:40:26
+   |
+40 | //!   [`ParleyResponse`](paladin_core::platform::container::parley::ParleyResponse)
+   |        ----------------  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ explicit target is redundant
+   |        |
+   |        because label contains path that resolves to same destination
+   |
+   = note: when a link's destination is not specified,
+           the label is used to resolve intra-doc links
+help: remove explicit link target
+   |
+40 - //!   [`ParleyResponse`](paladin_core::platform::container::parley::ParleyResponse)
+40 + //!   [`ParleyResponse`]
+   |
+
+error: redundant explicit link target
+    --> crates/paladin-battalion/src/engine/mod.rs:1085:31
+     |
+1085 |     /// [`WaypointPort::get`](paladin_ports::output::waypoint_port::WaypointPort::get)
+     |          -------------------  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ explicit target is redundant
+     |          |
+     |          because label contains path that resolves to same destination
+     |
+     = note: when a link's destination is not specified,
+             the label is used to resolve intra-doc links
+help: remove explicit link target
+     |
+1085 -     /// [`WaypointPort::get`](paladin_ports::output::waypoint_port::WaypointPort::get)
+1085 +     /// [`WaypointPort::get`]
+     |
+
+error: could not document `paladin-battalion`

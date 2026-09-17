@@ -2,7 +2,7 @@
 # 34-rustdoc-rows.sh — parse a captured `cargo doc` run into §3 `RD-nn` pipe-table
 # rows (crate, file:line, kind, message, location source, evidence anchor, size).
 #
-# Usage: 34-rustdoc-rows.sh <capture-file> <run-label>
+# Usage: 34-rustdoc-rows.sh <capture-file> <run-label> [<crate-override>]
 #
 # <run-label> selects the diagnostic prefix to walk:
 #   - "default" (or any label not containing "allfeatures"/"all-features") walks
@@ -10,6 +10,22 @@
 #   - a label containing "allfeatures" or "all-features" walks `^error:` blocks —
 #     an `RUSTDOCFLAGS="-D warnings" cargo doc ... --all-features` run, where
 #     content diagnostics are reported as errors, not warnings.
+#
+# <crate-override> (optional, added by plan 34-07's precondition check — a
+#   single-crate `cargo doc -p <crate> --all-features --no-deps` capture never
+#   prints a per-crate "(lib doc) generated N errors" summary line at all: cargo
+#   aborts under `-D warnings` as soon as the one crate in the job fails, before
+#   any summary line would print, and a clean (0-error) crate's summary line
+#   ("Generated /workspace/target/doc/.../index.html") is not the warning/error
+#   summary form `summary_re` matches either — verified live against both a red
+#   (`paladin-memory`, 1 error) and a green (`paladin-herald`, 0 errors) capture.
+#   The summary-line/pending-queue attribution algorithm (module docstring below)
+#   therefore has nothing to attribute against and always fails single-crate
+#   captures with "diagnostic block(s) never attributed to a crate". When given,
+#   this argument bypasses that attribution pass entirely and assigns every
+#   parsed content-diagnostic block directly to the named crate — correct by
+#   construction, since a `-p <crate>` invocation can only ever emit diagnostics
+#   for that one crate.
 #
 # Method (RESEARCH.md Pattern 2/3, Pitfall P-01):
 #   1. Per-crate "generated N warnings/errors" summary lines are never content
@@ -46,9 +62,10 @@ set -u
 
 CAPTURE="${1:-}"
 RUN_LABEL="${2:-}"
+CRATE_OVERRIDE="${3:-}"
 
 if [ -z "$CAPTURE" ] || [ -z "$RUN_LABEL" ]; then
-  echo "usage: 34-rustdoc-rows.sh <capture-file> <run-label>" >&2
+  echo "usage: 34-rustdoc-rows.sh <capture-file> <run-label> [<crate-override>]" >&2
   exit 2
 fi
 
@@ -59,10 +76,11 @@ fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
-python3 - "$CAPTURE" "$RUN_LABEL" "$REPO_ROOT" <<'PYEOF'
+python3 - "$CAPTURE" "$RUN_LABEL" "$REPO_ROOT" "$CRATE_OVERRIDE" <<'PYEOF'
 import sys, re, os, subprocess
 
 capture_path, run_label, repo_root = sys.argv[1], sys.argv[2], sys.argv[3]
+crate_override = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
 
 sev = "error" if ("allfeatures" in run_label.lower() or "all-features" in run_label.lower()) else "warning"
 
@@ -118,27 +136,36 @@ for idx, line in enumerate(lines, start=1):
 if cur_block is not None:
     events.append(("block", cur_block))
 
-# ---- Pass 2: attribute blocks to crates by consuming the pending queue
-#      front-to-back against each summary's count, in stream order. ----
-pending = []          # list of Block awaiting attribution
-attributed = []        # list of (Block, crate_name) in final table order
-for kind, *rest in events:
-    if kind == "block":
-        pending.append(rest[0])
-    else:
-        _, crate_name, count = (kind,) + tuple(rest)
-        if len(pending) < count:
-            print(f"FATAL: summary for `{crate_name}` claims {count} diagnostics "
-                  f"but only {len(pending)} are pending in queue", file=sys.stderr)
-            sys.exit(1)
-        chunk, pending = pending[:count], pending[count:]
-        for b in chunk:
-            attributed.append((b, crate_name))
+# ---- Pass 2: attribute blocks to crates. ----
+if crate_override:
+    # Single-crate `-p <crate>` capture (plan 34-07): no summary line is ever
+    # printed (see the module docstring above), so there is nothing to
+    # attribute against. Every block found belongs to the one crate the
+    # invocation named — assign directly, ignore any summary events.
+    attributed = [(b, crate_override) for kind, *rest in events if kind == "block" for b in [rest[0]]]
+else:
+    # Multi-crate `--workspace` capture: attribute blocks to crates by
+    # consuming the pending queue front-to-back against each summary's count,
+    # in stream order.
+    pending = []          # list of Block awaiting attribution
+    attributed = []        # list of (Block, crate_name) in final table order
+    for kind, *rest in events:
+        if kind == "block":
+            pending.append(rest[0])
+        else:
+            _, crate_name, count = (kind,) + tuple(rest)
+            if len(pending) < count:
+                print(f"FATAL: summary for `{crate_name}` claims {count} diagnostics "
+                      f"but only {len(pending)} are pending in queue", file=sys.stderr)
+                sys.exit(1)
+            chunk, pending = pending[:count], pending[count:]
+            for b in chunk:
+                attributed.append((b, crate_name))
 
-if pending:
-    print(f"FATAL: {len(pending)} diagnostic block(s) never attributed to a crate "
-          f"(no trailing summary line covered them)", file=sys.stderr)
-    sys.exit(1)
+    if pending:
+        print(f"FATAL: {len(pending)} diagnostic block(s) never attributed to a crate "
+              f"(no trailing summary line covered them)", file=sys.stderr)
+        sys.exit(1)
 
 # ---- Build package-name -> src-dir map from the live tree (never hardcoded). ----
 def read_pkg_name(cargo_toml):
@@ -291,7 +318,17 @@ for block, crate in attributed:
                   file=sys.stderr)
             sys.exit(1)
 
-    anchor = f"{os.path.basename(capture_path)}:{block.start_line}"
+    # Anchor path: relative to the phase directory's own `34-evidence/` tree,
+    # not just the capture's basename — plan 34-07's per-crate captures live
+    # one level deeper (`34-evidence/34-07-percrate/<crate>.txt`) than plan
+    # 34-06's captures (`34-evidence/<file>.txt` directly), so a basename-only
+    # anchor would silently point at a non-existent flat path for every
+    # per-crate row. Recover the `34-evidence/...` suffix from the capture's
+    # own absolute path rather than assuming a fixed depth.
+    _capture_abs = os.path.abspath(capture_path)
+    _idx = _capture_abs.rfind("34-evidence" + os.sep)
+    _evidence_rel = _capture_abs[_idx:] if _idx != -1 else os.path.basename(capture_path)
+    anchor = f"{_evidence_rel}:{block.start_line}"
     rows.append({
         "crate": crate,
         "file_line": file_line,
@@ -302,12 +339,24 @@ for block, crate in attributed:
         "size": size_default,
     })
 
+# The Run cell: the default-feature workspace run always cites the D-12/D-13
+# ci.yml bar verbatim (unchanged — the 66 rows already pasted into 34-AUDIT.md
+# from an earlier run of this branch used this exact string and must stay
+# byte-identical). A crate-override (per-crate) run instead cites the actual
+# per-crate invocation D-12/D-14 quotes verbatim, with the crate substituted,
+# so a reader can reproduce the exact command that produced each row.
+if crate_override:
+    run_cell = (f'`RUSTDOCFLAGS="-D warnings" cargo doc -p {crate_override} '
+                f'--all-features --no-deps` (D-12/D-14)')
+else:
+    run_cell = '`cargo doc --workspace --no-deps` (D-12/D-13)'
+
 for r in rows:
     msg = r["message"].replace("|", "\\|")
     loc = r["loc_source"].replace("|", "\\|")
-    print(f"|PLACEHOLDER-RD| `cargo doc --workspace --no-deps` (D-12/D-13) | {r['crate']} | "
+    print(f"|PLACEHOLDER-RD| {run_cell} | {r['crate']} | "
           f"{r['file_line']} | {r['kind']} | `{msg}` | {loc} | "
-          f"34-evidence/{r['anchor']} | {r['size']} |")
+          f"{r['anchor']} | {r['size']} |")
 
 # ---- Reconciliation ----
 content_diagnostics = len(attributed)

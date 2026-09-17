@@ -1,0 +1,72 @@
+ Documenting paladin-web v0.10.0 (/workspace/crates/paladin-web)
+error: unresolved link to `RunInspectorPort`
+  |
+  = note: the link appears in this line:
+
+          [`RunInspectorPort`] view as a single static HTML page -- the execution overlay
+           ^^^^^^^^^^^^^^^^^^
+  = note: no item named `RunInspectorPort` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+  = note: `-D rustdoc::broken-intra-doc-links` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(rustdoc::broken_intra_doc_links)]`
+
+error: unresolved link to `dev_ui_inspector_page`
+  |
+  = note: the link appears in this line:
+
+          `crate::app::create_dev_ui_router` mounts [`dev_ui_inspector_page`] under the SAME
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `dev_ui_inspector_page` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `InspectorView::supersteps`
+  |
+  = note: the link appears in this line:
+
+          [`InspectorView::supersteps`]'s `field_changes` is `Vec<FieldName>` by TYPE (28-14) --
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `InspectorView` in scope
+
+error: public documentation for `DevUiState` links to private item `NOT_WIRED_MESSAGE`
+  --> crates/paladin-web/src/dev_ui_controller.rs:69:49
+   |
+69 | /// point every request answers `501` through [`NOT_WIRED_MESSAGE`] rather than panicking
+   |                                                 ^^^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+   = note: `-D rustdoc::private-intra-doc-links` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rustdoc::private_intra_doc_links)]`
+
+error: public documentation for `dev_ui_inspector_page` links to private item `escape_for_script`
+   --> crates/paladin-web/src/dev_ui_controller.rs:131:20
+    |
+131 | /// (escaped per [`escape_for_script`]) and the configured Mermaid URL.
+    |                    ^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `limit` links to private item `MAX_HISTORY_LIMIT`
+   --> crates/paladin-web/src/thread_controller.rs:483:54
+    |
+483 |     /// Maximum number of items to return (at most [`MAX_HISTORY_LIMIT`]).
+    |                                                      ^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `resume_thread` links to private item `map_parley_error`
+   --> crates/paladin-web/src/thread_controller.rs:686:27
+    |
+686 | /// [`ParleyError`] per [`map_parley_error`].
+    |                           ^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `get_thread_history` links to private item `MAX_HISTORY_LIMIT`
+   --> crates/paladin-web/src/thread_controller.rs:757:24
+    |
+757 | /// `limit` (at most [`MAX_HISTORY_LIMIT`]) and an opaque `cursor` whose
+    |                        ^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: could not document `paladin-web`

@@ -1,0 +1,3 @@
+ Documenting paladin-eval v0.10.0 (/workspace/crates/paladin-eval)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.97s
+   Generated /workspace/target/doc/paladin_eval/index.html

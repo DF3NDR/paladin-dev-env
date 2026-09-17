@@ -1035,7 +1035,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 36-02-PLAN.md — Rustdoc: paladin-battalion (72 rows, 34 location groups)
+- [x] 36-02-PLAN.md — Rustdoc: paladin-battalion (72 rows, 34 location groups)
 - [ ] 36-03-PLAN.md — Rustdoc: paladin-ai-core (28 rows, 14 location groups)
 
 **Wave 3** *(blocked on Wave 2 completion)*

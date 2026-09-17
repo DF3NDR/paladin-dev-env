@@ -112,10 +112,236 @@ match (each contains a `Commissary` row/entry) per 34-RESEARCH.md Assumption A1.
 
 ## §1 Shipped-surface checklist
 
-Empty. Compiled by plan 34-02 from, in D-08 precedence order: (1)
-`git diff v0.9.0..HEAD -- .project/current-exports.txt`; (2) `CHANGELOG.md [0.10.0]`; (3)
-`MIGRATION.md` §9.1-§9.8; (4) `.planning/REQUIREMENTS.md`'s v0.10.0 capability list. Every §2/§3/§4
-verdict below cites into this checklist once it exists.
+Compiled by plan 34-02, in D-08 precedence order: (1)
+`git diff v0.9.0..HEAD -- .project/current-exports.txt` — cross-check only, never read
+prose-style (see the note after the tables below); (2) `CHANGELOG.md [0.10.0]`; (3)
+`MIGRATION.md` §9.1-§9.8; (4) `.planning/REQUIREMENTS.md`'s v0.10.0 capability list. In practice
+every row's Source below is CHANGELOG or MIGRATION, confirmed by the exports-diff cross-check note
+after the tables — matching the rule the Method statement above already states. Every §2/§3/§4
+verdict cites into this checklist by copying a row, per this phase's own `success_criteria`.
+
+#### Phase 22 — Battlefield State & Superstep Engine
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-01 | `WarEngine` executes cyclic graphs in supersteps, self-loops included | type | CHANGELOG [0.10.0] Behavioral changes | ENG-02 | WarEngine |
+| SS-02 | `Waypoint` — a full `Battlefield` snapshot persisted automatically after every superstep | type | MIGRATION §9.2 | ENG-03 | Waypoint |
+| SS-03 | `WaypointPort` — three backends (InMemory, SQLite with migrations, Postgres) | type | REQUIREMENTS ENG-05 | ENG-05 | WaypointPort |
+| SS-04 | `waypoints` table — new per-backend persistence table for checkpoint snapshots | migration | MIGRATION §9.4 | ENG-03 | waypoints |
+| SS-05 | `EngineConfig` (`max_supersteps`, `max_node_visits`, `run_timeout_secs`, `waypoint_durability`, `max_muster_tasks`) | config key | MIGRATION §9.5 | ENG-02 | EngineConfig |
+| SS-06 | `APP_ENGINE_MAX_SUPERSTEPS` environment override (default 50) | env var | MIGRATION §9.5 | ENG-02 | APP_ENGINE_MAX_SUPERSTEPS |
+| SS-07 | `WaypointRetentionService`/`WaypointRetentionConfig` — public application-layer pruning service | type | CHANGELOG [0.10.0] Added | ENG-05 | WaypointRetentionService |
+
+#### Phase 22.1 — Engine readiness defect and MSRV follow-up (INSERTED)
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-08 | Workspace MSRV floor raised from 1.85 to 1.88 (X-11.2 stop-and-flag resolution, measured against `rmcp`/`process-wrap`/`time` chain) | dependency | CHANGELOG [0.10.0] Changed | — | rust-version = "1.88" |
+| SS-09 | `[workspace] resolver = "3"` — recurrence guard against a future silent re-resolution above the MSRV floor | dependency | MIGRATION §9.3 | — | resolver = "3" |
+| SS-10 | Graph fingerprint `v1:` → `v2:` bump — closes a delimiter-collision hash weakness (22-REVIEW CR-01) | migration | MIGRATION §9.4 | — | GraphFingerprint |
+
+#### Phase 23 — Control Flow — Dynamic Routing, Fan-Out & Subgraphs
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-11 | `EdgeCondition::Custom` fails closed instead of always-routing when unregistered (M-B-01, BUG-01 fix) | behavioral change | CHANGELOG [0.10.0] Behavioral changes | CF-01 | EdgeCondition::Custom |
+| SS-12 | Node-driven `Directive` routing (`NextStep::{Edges, Goto, Muster, End, Parley}`) | type | CHANGELOG [0.10.0] Added | CF-02 | Directive |
+| SS-13 | Muster dynamic worker fan-out (`NextStep::Muster`, `WarGraph::add_worker_template`) | type | CHANGELOG [0.10.0] Added | CF-03 | Muster |
+| SS-14 | `NodeSpec::Battalion` — nested subgraph composition via a declared `StateMap` | type | CHANGELOG [0.10.0] Added | CF-04 | NodeSpec::Battalion |
+| SS-15 | `LlmDecisionEvaluator` + Commander `StrategySelection::Semantic`, both off by default | type | CHANGELOG [0.10.0] Added | CF-05 | LlmDecisionEvaluator |
+| SS-16 | `APP_ENGINE_MAX_MUSTER_TASKS` environment override (default 100) | env var | MIGRATION §9.5 | CF-03 | APP_ENGINE_MAX_MUSTER_TASKS |
+
+#### Phase 24 — Pause/Resume, History & Graceful Shutdown
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-17 | `NodeSpec::Gate` — first-class approval-gate node rendering prompt/payload from the Battlefield | type | CHANGELOG [0.10.0] Added | HITL-01 | NodeSpec::Gate |
+| SS-18 | `WarEngine::resume_with(graph, thread, responses)` — typed, total-validation resume | type | CHANGELOG [0.10.0] Added | HITL-02 | resume_with |
+| SS-19 | `ChronicleService` (`history`/`inspect`/`latest_on_branch`) + `WarEngine::replay`/`fork` | type | CHANGELOG [0.10.0] Added | HITL-03 | ChronicleService |
+| SS-20 | Graceful shutdown on SIGTERM/SIGINT via `ShutdownCoordinator` (M-B-02) | behavioral change | CHANGELOG [0.10.0] Behavioral changes | HITL-04 | ShutdownCoordinator |
+| SS-21 | `APP_ENGINE_SHUTDOWN_GRACE_SECS` environment override (default 30) | env var | MIGRATION §9.1 | HITL-04 | APP_ENGINE_SHUTDOWN_GRACE_SECS |
+| SS-22 | `APP_ENGINE_GRACEFUL_SHUTDOWN` environment override (default true) | env var | MIGRATION §9.1 | HITL-04 | APP_ENGINE_GRACEFUL_SHUTDOWN |
+| SS-23 | `GET /v1/threads/{id}/state` route | route | MIGRATION §9.6 | HITL-05 | GET /v1/threads/{id}/state |
+| SS-24 | `POST /v1/threads/{id}/resume` route (202, background continuation) | route | MIGRATION §9.6 | HITL-05 | POST /v1/threads/{id}/resume |
+| SS-25 | `GET /v1/threads/{id}/history` route (paginated) | route | MIGRATION §9.6 | HITL-05 | GET /v1/threads/{id}/history |
+| SS-26 | Graph fingerprint `v3:` → `v4:` bump — `Gate` node routing properties now hashed | migration | CHANGELOG [0.10.0] Changed | HITL-01 | GRAPH_FINGERPRINT_VERSION |
+
+#### Phase 25 — Node-Level Fault Tolerance
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-27 | `Transience { Transient, Permanent, Unknown }` typed error taxonomy | type | CHANGELOG [0.10.0] Added | FT-01 | Transience |
+| SS-28 | `Aegis { retry, timeout, on_error, cache }` — per-node policy sidecar | type | CHANGELOG [0.10.0] Added | FT-02 | Aegis |
+| SS-29 | `TimeoutPolicy { run_timeout, idle_timeout }` + `HeartbeatHandle` progress channel | type | CHANGELOG [0.10.0] Added | FT-03 | TimeoutPolicy |
+| SS-30 | `ErrorHandlerSpec::{Route, Absorb, Custom}` typed compensation handlers | type | CHANGELOG [0.10.0] Added | FT-04 | ErrorHandlerSpec |
+| SS-31 | `FallbackLlmAdapter` — ordered `LlmPort` chain with Transient/Unknown-only hops | type | CHANGELOG [0.10.0] Added | FT-05 | FallbackLlmAdapter |
+| SS-32 | `CachePolicy { ttl, key }` node-result caching via the new `NodeCachePort` | type | CHANGELOG [0.10.0] Added | FT-06 | CachePolicy |
+| SS-33 | `redis-cache` Cargo feature on `paladin-storage` (never in a default set) | feature flag | MIGRATION §9.3 | FT-06 | redis-cache |
+| SS-34 | `APP_NODE_CACHE_ENABLED` environment override (default false) | env var | MIGRATION §9.5 | FT-06 | APP_NODE_CACHE_ENABLED |
+
+#### Phase 26 — Agent Runtime Enhancements
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-35 | `ExecutionMiddleware` trait (`before_model`/`after_model`/`around_tool`, onion-ordered) | type | CHANGELOG [0.10.0] Changed | RT-01 | ExecutionMiddleware |
+| SS-36 | `AgentRuntimeConfig` — one grouped config carrying twelve built-in middleware sub-structs | config key | MIGRATION §9.5 | RT-02 | AgentRuntimeConfig |
+| SS-37 | `TokenCounterPort` — synchronous, infallible token-counting contract | type | MIGRATION §9.2 | RT-03 | TokenCounterPort |
+| SS-38 | `HistoryTrimmer` + `SummarizationMiddleware` context-window management | type | CHANGELOG [0.10.0] Added | RT-03 | HistoryTrimmer |
+| SS-39 | `VaultPort` (put/get/delete/list/search) + structural `ConfinedVault` namespacing | type | CHANGELOG [0.10.0] Added | RT-04 | VaultPort |
+| SS-40 | `StructuredExecutorPort` / `execute_structured<T>` schema-validated output | type | CHANGELOG [0.10.0] Added | RT-05 | StructuredExecutorPort |
+| SS-41 | `reasoning_agent(llm, arsenal, opts)` one-line preset | type | CHANGELOG [0.10.0] Added | RT-07 | reasoning_agent |
+| SS-42 | `tool_error_mode = FailRun` opt-in + redact-then-bound sanitization of fed-back tool text (M-B-03) | behavioral change | CHANGELOG [0.10.0] Behavioral changes | RT-07 | tool_error_mode |
+| SS-43 | `schemars = "1.2"` — new direct facade dependency for schema derivation | dependency | MIGRATION §9.3 | RT-05 | schemars |
+
+#### Phase 27 — Platform API
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-44 | `POST /v1/runs` route (202, decoupled submission) | route | MIGRATION §9.6 | PLAT-01 | POST /v1/runs |
+| SS-45 | `GET /v1/runs/{run_id}/stream` route (SSE, seven frozen wire events) | route | MIGRATION §9.6 | PLAT-03 | GET /v1/runs/{run_id}/stream |
+| SS-46 | `POST /v1/runs/{run_id}/cancel` route | route | MIGRATION §9.6 | PLAT-02 | POST /v1/runs/{run_id}/cancel |
+| SS-47 | `/v1/assistants*` — seven routes, append-only immutable versions | route | MIGRATION §9.6 | PLAT-04 | /v1/assistants |
+| SS-48 | `/v1/schedules*` — five routes, cron-driven recurring run submission | route | MIGRATION §9.6 | PLAT-05 | /v1/schedules |
+| SS-49 | `webhook_deliveries` table + `X-Paladin-Signature` HMAC delivery | type | MIGRATION §9.4 | PLAT-05 | webhook_deliveries |
+| SS-50 | `APP_WEBHOOKS_ALLOW_PRIVATE` — the only SSRF-guard override | env var | MIGRATION §9.5 | PLAT-05 | APP_WEBHOOKS_ALLOW_PRIVATE |
+| SS-51 | `RunQueuePort` (InMemory + Redis) durable worker-pool dispatch | type | REQUIREMENTS PLAT-02 | PLAT-02 | RunQueuePort |
+| SS-52 | `APP_RUN_STORE_BACKEND` (disabled, sqlite or postgres) | env var | MIGRATION §9.5 | PLAT-01 | APP_RUN_STORE_BACKEND |
+
+#### Phase 28 — Observability & Tooling
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-53 | `TraceRecord` envelope — twelve `TraceEvent` variants, moved to `paladin-core` | type | MIGRATION §9.2 | OBS-01 | TraceRecord |
+| SS-54 | `TraceConfig` (`log_sink`/`persist`/`state_values`/`otel`) nested under `Settings.trace` | config key | MIGRATION §9.5 | OBS-02 | TraceConfig |
+| SS-55 | `PALADIN_TRACE_OTEL_ENABLED` — deliberately `PALADIN_*`, not `APP_*` | env var | MIGRATION §9.5 | OBS-02 | PALADIN_TRACE_OTEL_ENABLED |
+| SS-56 | `otel` Cargo feature (`opentelemetry`/`opentelemetry_sdk`/`opentelemetry-otlp`, HTTP/protobuf only) | feature flag | MIGRATION §9.3 | OBS-02 | otel |
+| SS-57 | `GET /v1/dev-ui/threads/{id}` — non-API, admin-gated, `dev-ui`-feature-gated route | route | MIGRATION §9.6 | OBS-03 | /v1/dev-ui/threads |
+| SS-58 | `paladin-eval` crate + `eval_scenarios!` custom test-harness macro | type | MIGRATION §9.3 | OBS-04 | paladin-eval |
+| SS-59 | `PALADIN_EVAL_LIVE` — one of three simultaneous live-mode gates | env var | MIGRATION §9.5 | OBS-04 | PALADIN_EVAL_LIVE |
+| SS-60 | `paladin-cli eval run <glob>` subcommand | CLI subcommand | MIGRATION §9.3 | OBS-04 | eval run |
+| SS-61 | Tracing overhead exceeds the ≤3% bar — accepted, documented deviation for v0.10.0 | behavioral change | CHANGELOG [0.10.0] Known limitations | OBS-02 | tracing overhead |
+| SS-62 | `run_traces` table — append-only persisted trace history | migration | MIGRATION §9.4 | OBS-02 | run_traces |
+
+#### Phase 29 — Program Gates & Release
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-63 | `cargo doc --workspace --no-deps` zero-`warning:` bar ratified as the CI documentation gate | behavioral change | REQUIREMENTS SHIP-01 | SHIP-01 | cargo doc --workspace --no-deps |
+| SS-64 | `openapi_golden_v0_9.rs` — program-wide byte-identity proof for every pre-existing `/v1` path | type | MIGRATION §9.6 | SHIP-02 | openapi_golden_v0_9 |
+| SS-65 | 82% workspace line coverage floor (`cargo llvm-cov ... --fail-under-lines 82`) | behavioral change | MIGRATION §9.6 | SHIP-04 | fail-under-lines 82 |
+| SS-66 | `openapi-generator-cli:v7.25.0` — pinned image generating the Python/TypeScript SDK clients | dependency | MIGRATION §9.6 | SHIP-04 | openapi-generator-cli |
+
+#### Phase 30 — Token-Economy Vocabulary & Commissary Anchoring
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-67 | Units-plain/roles-medieval vocabulary rule (ADR-0049's governing rule) | vocabulary term | REQUIREMENTS VOCAB-01 | VOCAB-01 | Medieval Military |
+| SS-68 | `Commissary` anchored (ADR-0049 + `docs/src/architecture/commissary.md`) | vocabulary term | REQUIREMENTS VOCAB-02 | VOCAB-02 | Commissary |
+| SS-69 | `Treasurer` reserved as the output-side, cross-run spend-governance officer name (ADR-0050) | vocabulary term | REQUIREMENTS VOCAB-04 | VOCAB-04 | Treasurer |
+| SS-70 | Four `max_tokens` meanings disambiguation table | vocabulary term | REQUIREMENTS VOCAB-05 | VOCAB-05 | max_tokens |
+| SS-71 | `Quartermaster` purge — zero in-tree references remain | vocabulary term | REQUIREMENTS VOCAB-06 | VOCAB-06 | Quartermaster |
+| SS-72 | Token-economy clean-break versioning decision (ADR-0051) | vocabulary term | REQUIREMENTS VOCAB-07 | VOCAB-07 | ADR-0051 |
+
+#### Phase 31 — Lossless Token Accounting
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-73 | `TokenUsage` gains `cache_read_tokens`/`cache_write_tokens`/`reasoning_tokens` | type | CHANGELOG [0.10.0] Changed | ACCT-01 | TokenUsage |
+| SS-74 | `TokenUsage::from_total` deleted outright, no `#[deprecated]` replacement | type | CHANGELOG [0.10.0] Changed | ACCT-01 | TokenUsage::from_total |
+| SS-75 | `PaladinResult.usage: TokenUsage` replaces the bare `token_count: u32` field | type | MIGRATION §9.2 | ACCT-02 | PaladinResult |
+| SS-76 | `StreamingResponse.usage` / `ChunkMetadata.usage` additive fields | type | MIGRATION §9.2 | ACCT-03 | StreamingResponse |
+| SS-77 | `ExecuteResponse.usage: TokenUsageResponse` — HTTP-surface DTO replacing `token_count: u32` | type | MIGRATION §9.2 | ACCT-02 | TokenUsageResponse |
+| SS-78 | Anthropic `prompt_tokens` now includes cache-read/cache-write tokens (billed-figure fix) | behavioral change | CHANGELOG [0.10.0] Fixed | ACCT-03 | prompt_tokens |
+| SS-79 | Battalion per-Paladin token split zero-fill bug fixed (`per_paladin_tokens`) | behavioral change | CHANGELOG [0.10.0] Fixed | ACCT-02 | per_paladin_tokens |
+
+#### Phase 32 — Unified Token Primitives
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-80 | `TokenCounterPort::is_exact(&self) -> bool` defaulted method | type | CHANGELOG [0.10.0] Added | PRIM-01 | is_exact |
+| SS-81 | `Commissary::new`/`from_port` drop the caller-supplied `is_exact_counter` argument | type | CHANGELOG [0.10.0] Changed | PRIM-02 | Commissary::new |
+| SS-82 | `paladin_llm::window::resolve_context_window` — one shared precedence resolver | type | CHANGELOG [0.10.0] Changed | PRIM-04 | resolve_context_window |
+| SS-83 | `WindowSource`/`WindowFallbackPolicy`/`ResolvedWindow` re-exported from the `paladin` facade | type | CHANGELOG [0.10.0] Added | PRIM-04 | WindowSource |
+| SS-84 | Legacy `garrison::TokenCounter` trait removed outright, no `#[deprecated]` shim | type | CHANGELOG [0.10.0] Removed | PRIM-03 | TokenCounter |
+| SS-85 | Legacy `TokenCounterFactory` struct removed outright | type | CHANGELOG [0.10.0] Removed | PRIM-03 | TokenCounterFactory |
+
+#### Phase 33 — Commissary In-Tree Adoption
+
+| SS ID | Shipped item | Kind | Source | Req ID | Grep token |
+|---|---|---|---|---|---|
+| SS-86 | `RagRetrievalService::retrieve_context` returns the new `RagRetrievalResult` | type | CHANGELOG [0.10.0] Changed | COMM-01 | RagRetrievalResult |
+| SS-87 | `RagRetrievalResult.shed: Vec<ShedItem>` — truncation/shed record surfaced to the caller | type | CHANGELOG [0.10.0] Changed | COMM-02 | ShedItem |
+| SS-88 | `RagRetrievalError` typed enum (Sanctum/Commissary/budget-conversion failures) | type | MIGRATION §9.2 | COMM-01 | RagRetrievalError |
+| SS-89 | `retrieve_context_with_timeout` free function returns `RagRetrievalResult` | type | MIGRATION §9.2 | COMM-01 | retrieve_context_with_timeout |
+| SS-90 | `paladin-memory` gains an unconditional production dependency on `paladin-llm` | dependency | CHANGELOG [0.10.0] Added | COMM-01 | paladin-llm |
+| SS-91 | `RagRetrievalService::with_token_counter(Arc<dyn TokenCounterPort>)` builder | type | CHANGELOG [0.10.0] Changed | COMM-04 | with_token_counter |
+
+### D-10 ubiquitous-language list confirmation
+
+The three ubiquitous-language lists Phase 35 SC4 names are confirmed by direct, line-anchored
+content match:
+
+1. **`.github/copilot-instructions.md`** — the naming table. `grep -n 'Commissary'
+   .github/copilot-instructions.md` finds line 36: `| **Commissary** | Input-side, per-call
+   window-rationing officer | \`crates/paladin-llm/src/services/commissary.rs\` |`.
+2. **`.planning/PROJECT.md`** — the term list. `grep -n 'Commissary' .planning/PROJECT.md` finds
+   line 1324, the Ubiquitous-language bullet's enumerated term list: "...Herald, Armory, Sanctum,
+   Sentinel, Quest, Commissary) are mandatory in code, docs and comments" — this prose bullet is
+   the row PROJECT.md carries in place of a literal markdown table.
+3. **`docs/src/architecture/domain-model.md`** — line 30: `| **Commissary** | Input-side,
+   per-call window-rationing officer | \`Commissary\` · \`crates/paladin-llm/src/services/
+   commissary.rs\` |`.
+
+**A fourth, partial list exists.** `docs/src/introduction.md` lines 78-91 carry a twelve-term
+"Medieval Military naming convention" table (`Paladin`, `Battalion`, `Formation`, `Phalanx`,
+`Campaign`, `Chain of Command`, `Maneuver`, `Garrison`, `Arsenal`, `Armament`, `Citadel`,
+`Herald`) — found via `grep -rlni 'medieval military' docs/src/`. It does **not** carry
+`Commissary`, `Sanctum`, `Sentinel`, `Quest`, `Conclave`, `Council`, `Grove` or `Commander` — a
+genuine fourth list distinct from the three D-10 names. Its currency (a stale/incomplete-list
+candidate) is a §2 mdBook-sweep question for whichever plan sweeps `introduction.md`, not judged
+here — this task's own scope is compiling the checklist, not settling verdicts.
+
+### Exports-diff cross-check (D-08 precedence source 1)
+
+`git diff v0.9.0..HEAD -- .project/current-exports.txt` adds exactly **4,376** lines
+(`grep '^+' <diff> | grep -vc '^+++'`), matching CONTEXT.md's own recorded figure exactly.
+`.project/current-exports.txt`'s own header states it is generated by `cargo-public-api` and
+tracks **only the `paladin` facade crate's exports** (`pub paladin::...` — `grep -c '^pub
+paladin::' .project/current-exports.txt` is 1095 of 7924 total lines, the remainder `pub use`
+re-export lines and blank/doc lines under the same facade root). This scope is why a genuine
+public type shipped in `paladin-ports`/`paladin-llm`/`paladin-core` but not re-exported through
+the facade prelude can show zero diff hits below without being missing from the tree.
+
+Twenty-two identifier tokens sampled (exceeds the required fifteen):
+
+| Token | Diff hits | Disposition |
+|---|---|---|
+| `WarEngine` | 26 | confirmed present |
+| `PaladinError` | 171 | confirmed present |
+| `ExecutionMiddleware` | 64 | confirmed present |
+| `GarrisonEntry` | 6 | confirmed present |
+| `PaladinResult` | 6 | confirmed present |
+| `StructuredExecutorPort` | 7 | confirmed present |
+| `TokenCounterPort` | 7 | confirmed present |
+| `StopReason` | 5 | confirmed present |
+| `TokenUsage` | 3 | confirmed present |
+| `Commissary` | 3 | confirmed present |
+| `ShedItem` | 3 | confirmed present |
+| `VaultPort` | 2 | confirmed present |
+| `RagRetrievalResult` | 2 | confirmed present |
+| `resolve_context_window` | 1 | confirmed present |
+| `WindowSource` | 1 | confirmed present |
+| `BattalionError` | 1 | confirmed present (new variant only; the type itself is directly `pub paladin::`-rooted) |
+| `Aegis` | 0 | not found — defined/used entirely within `paladin-core`/`paladin-battalion`, never re-exported at the tracked `paladin::` root (facade-scope gap, see header note above, not a missing shipped item) |
+| `FallbackLlmAdapter` | 0 | not found — same facade-scope gap (`paladin_llm::fallback` is not re-exported at the tracked root) |
+| `StreamingResponse` | 0 | not found — same facade-scope gap (`paladin-ports` type) |
+| `ChunkMetadata` | 0 | not found — same facade-scope gap (`paladin-ports` type) |
+| `LlmError` | 0 | not found for the phase's own new variants — the enum's re-export path (`pub use paladin::prelude::LlmError`) is unchanged since v0.9.0; a diff over one `pub use` line cannot show an added enum variant |
+| `NodeError` | 0 | not found — the structured `paladin_core::...::node_error::NodeError` this phase adds is not re-exported at the `paladin::` root either |
+
+Sixteen of twenty-two tokens confirmed present in the diff; the six not-found tokens are all the
+same documented facade-scope limitation of this evidence source (§1 preface above), never a
+D-00g tree/document conflict — no CHANGELOG/MIGRATION item sampled here disagreed with the tree.
 
 ## §2 mdBook verdict table
 

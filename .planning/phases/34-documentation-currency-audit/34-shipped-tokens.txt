@@ -1,0 +1,92 @@
+# SS-01..SS-91 -- compiled at HEAD ee1fb160f8e743e638b32beb6c4e32be4ede9325 (Phase 34 start SHA, D-23 invariance argument in 34-AUDIT.md's Measurement Header)
+WarEngine
+Waypoint
+WaypointPort
+waypoints
+EngineConfig
+APP_ENGINE_MAX_SUPERSTEPS
+WaypointRetentionService
+rust-version = "1.88"
+resolver = "3"
+GraphFingerprint
+EdgeCondition::Custom
+Directive
+Muster
+NodeSpec::Battalion
+LlmDecisionEvaluator
+APP_ENGINE_MAX_MUSTER_TASKS
+NodeSpec::Gate
+resume_with
+ChronicleService
+ShutdownCoordinator
+APP_ENGINE_SHUTDOWN_GRACE_SECS
+APP_ENGINE_GRACEFUL_SHUTDOWN
+GET /v1/threads/{id}/state
+POST /v1/threads/{id}/resume
+GET /v1/threads/{id}/history
+GRAPH_FINGERPRINT_VERSION
+Transience
+Aegis
+TimeoutPolicy
+ErrorHandlerSpec
+FallbackLlmAdapter
+CachePolicy
+redis-cache
+APP_NODE_CACHE_ENABLED
+ExecutionMiddleware
+AgentRuntimeConfig
+TokenCounterPort
+HistoryTrimmer
+VaultPort
+StructuredExecutorPort
+reasoning_agent
+tool_error_mode
+schemars
+POST /v1/runs
+GET /v1/runs/{run_id}/stream
+POST /v1/runs/{run_id}/cancel
+/v1/assistants
+/v1/schedules
+webhook_deliveries
+APP_WEBHOOKS_ALLOW_PRIVATE
+RunQueuePort
+APP_RUN_STORE_BACKEND
+TraceRecord
+TraceConfig
+PALADIN_TRACE_OTEL_ENABLED
+otel
+/v1/dev-ui/threads
+paladin-eval
+PALADIN_EVAL_LIVE
+eval run
+tracing overhead
+run_traces
+cargo doc --workspace --no-deps
+openapi_golden_v0_9
+fail-under-lines 82
+openapi-generator-cli
+Medieval Military
+Commissary
+Treasurer
+max_tokens
+Quartermaster
+ADR-0051
+TokenUsage
+TokenUsage::from_total
+PaladinResult
+StreamingResponse
+TokenUsageResponse
+prompt_tokens
+per_paladin_tokens
+is_exact
+Commissary::new
+resolve_context_window
+WindowSource
+TokenCounter
+TokenCounterFactory
+RagRetrievalResult
+ShedItem
+RagRetrievalError
+retrieve_context_with_timeout
+paladin-llm
+with_token_counter

@@ -48,6 +48,19 @@ mdbook-mermaid 0.13.0
 | 12 | `git diff --stat ee1fb160f8e743e638b32beb6c4e32be4ede9325..HEAD -- . ':!.planning'` (SC5 proof, D-22 — base is the Phase 34 start SHA, not `main`; see `34-check.sh`'s deviation comment for why `git merge-base HEAD main` as literally specified in the plan text would always be non-empty on this branch, 196 files, since `main` is merged only through Phase 26) | (empty) | ✅ PASS — no non-`.planning` diff has accumulated since Phase 34 began |
 | 13 | `bash 34-check.sh --seed` | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS — the mechanical completeness/read-only gate is green |
 
+| 14 | `awk '/^## \[0\.10\.0\]/,/^## \[0\.9\.0\]/' CHANGELOG.md \| wc -l` (D-08 precedence source 2, the primary readable source) | `427` | ✅ RECORDED — every entry in this 427-line, 6-headed-subsection block was read end-to-end and turned into a §1 row or subsumed by one |
+| 15 | `grep -n '^## 9\.' MIGRATION.md` (D-08 precedence source 3, locating §9.1-§9.8) | Eight headings at lines 14, 162, 287, 311, 336, 418, 671, 677 | ✅ RECORDED — every subsection read in full per the plan's `read_first` list |
+| 16 | `grep -nE '^\- \[x\] \*\*(ENG\|CF\|HITL\|FT\|RT\|PLAT\|OBS\|SHIP\|VOCAB\|ACCT\|PRIM\|COMM)-[0-9]+' .planning/REQUIREMENTS.md` (D-08 precedence source 4, the capability axis) | 47 requirement bullets across the twelve v0.10.0 prefixes | ✅ RECORDED — read for the capability axis; every ID cited in a §1 row's Req ID cell traces to one of these bullets |
+| 17 | `git diff v0.9.0..HEAD -- .project/current-exports.txt \| grep -c '^+'` minus the `+++` header line | `4376` | ✅ RECORDED — matches CONTEXT.md's own figure exactly; confirms the diff was measured, not copied |
+| 18 | Eighteen-plus identifier-token cross-check: `for t in WarEngine PaladinError ExecutionMiddleware GarrisonEntry PaladinResult StructuredExecutorPort TokenCounterPort StopReason TokenUsage Commissary ShedItem VaultPort RagRetrievalResult resolve_context_window WindowSource BattalionError Aegis FallbackLlmAdapter StreamingResponse ChunkMetadata LlmError NodeError; do grep -cF "$t" <diff>; done` (D-08's own fifteen-token-minimum cross-check) | 16 of 22 tokens present (1-171 hits each); 6 (`Aegis`, `FallbackLlmAdapter`, `StreamingResponse`, `ChunkMetadata`, `LlmError`, `NodeError`) show 0 hits | ✅ PASS — every 0-hit token traced to `.project/current-exports.txt`'s own documented `paladin::`-facade-only scope (`grep -c '^pub paladin::' .project/current-exports.txt` = 1095 of 7924 lines, confirmed by header read), never a D-00g tree/document disagreement; recorded verbatim in `34-AUDIT.md`'s exports-diff cross-check note |
+| 19 | `grep -n 'Commissary' .github/copilot-instructions.md`; `grep -n 'Commissary' .planning/PROJECT.md`; `grep -n 'Commissary' docs/src/architecture/domain-model.md` (D-10 confirmation, line-anchored) | Line 36 (naming table); line 1324 (ubiquitous-language bullet); line 30 (domain-model table) | ✅ PASS — confirms the three D-10-named lists by direct content match |
+| 20 | `grep -rlni 'medieval military' docs/src/` (D-10 fourth-list search) | `docs/src/introduction.md` (plus mentions in `commissary.md`/`overview.md`/`development-setup.md`/`contributing-legacy.md` that point at the three named lists, not independent tables) | ✅ RECORDED — `introduction.md` lines 78-91 carry a genuine fourth, 12-term partial list (no `Commissary`); recorded in `34-AUDIT.md`, not judged for currency here (§2 sweep scope) |
+| 21 | `bash 34-signals.sh docs/src/architecture/commissary.md` (post-token-file write, method self-test re-run) | Class 9 now prints real `grep -nFf` hits (`# Commissary`, the `Commissary` definition line), no `SKIPPED` marker; exit 0 | ✅ PASS — confirms `34-shipped-tokens.txt`'s leading `#`-prefixed comment line is correctly ignored by `grep -nFf` (it never matches page content) and class 9's degrade path has closed as D-07 requires |
+| 22 | `grep -c '^\| SS-[0-9]' 34-AUDIT.md`; `grep -vc '^#' 34-shipped-tokens.txt`; `grep -oE 'SS-[0-9]+' 34-AUDIT.md \| sort \| uniq -d`; `grep -c '^#### Phase ' 34-AUDIT.md` | `91`; `91`; (empty — no duplicates); `13` | ✅ PASS — row count matches token-line count exactly, every `SS-nn` is unique, all 13 phase tables present |
+| 23 | `for t in WarEngine Commissary resolve_context_window WindowSource RagRetrievalResult TokenUsage; do grep -qxF "$t" 34-shipped-tokens.txt \|\| echo MISSING $t; done` (Rule 1 deviation — see 34-02-SUMMARY.md; the plan's own literal `grep -q "\| $t \|"` command cannot match a no-markup token file) | (empty — no `MISSING` lines) | ✅ PASS — all six required tokens present as exact lines |
+| 24 | `bash 34-check.sh --seed` (post-§1-write re-run) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS — completeness/read-only gate still green after this plan's edits |
+| 25 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this plan's commit) | (empty) | ✅ PASS — no file outside `.planning/` modified, created or deleted |
+
 ## Notes
 
 - Rows 7-8's raw captures are teed verbatim to `34-evidence/34-01-cargo-doc-default.txt` and
@@ -58,6 +71,9 @@ mdbook-mermaid 0.13.0
   directory; `cargo doc`'s output lands in `target/doc/`, already `.gitignore`d.
 - Class 9 of `34-signals.sh` (rows 5-6) is expected to read SKIPPED until plan 34-02 writes
   `34-shipped-tokens.txt` — this is the documented degrade path (D-07), not a defect.
+- **Rows 14-25 (plan 34-02):** `34-shipped-tokens.txt` now exists (91 lines, one per §1 `SS-nn`
+  row) and class 9's degrade path closes as row 21 proves — no row here retroactively edits the
+  plan 34-01 verdict on rows 1-13, which were correctly `SKIPPED` at the time they were captured.
 
 ---
 

@@ -5,12 +5,12 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36
 current_phase_name: Rustdoc Zero-Warning Bar & Examples Currency
 status: planning
-stopped_at: Phase 35 context gathered
-last_updated: "2026-09-17T15:02:59.523Z"
+stopped_at: Phase 36 context gathered
+last_updated: "2026-09-17T17:45:29.494Z"
 last_activity: 2026-09-17
 last_activity_desc: Phase 35 complete, transitioned to Phase 36
 progress:
-  total_phases: 17
+  total_phases: 18
   completed_phases: 15
   total_plans: 177
   completed_plans: 177
@@ -962,6 +962,7 @@ requirement.
 - Phase 35 added: mdBook Currency — close every Phase 34 mdBook gap; `mdbook build` + linkcheck green (2026-09-17)
 - Phase 36 added: Rustdoc Zero-Warning Bar & Examples Currency — `cargo doc` 73→0 warnings so CI "Check documentation" is green, 14 `--all-features` intra-doc links resolved, `examples/` + `doc-examples` current (2026-09-17)
 - Phase 37 added: v0.10.0 Crate Release — re-seal the Phase 29 gates on the final commit, merge to `main`, `release.yml` tags `v0.10.0`, all publishable crates on crates.io at `0.10.0` (2026-09-17)
+- Phase 36.1 inserted after Phase 36: Deferred Items Closure — walk the Phase 31/32/34/35 deferred-items registers, WINDOWS.md #36-37 and the two pending todos; fix, waive with reason, or re-home each; bring WINDOWS.md back into agreement with the registers before Phase 37 tags v0.10.0 (URGENT)
 
 ## Deferred Items
 
@@ -1055,9 +1056,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T12:13:37.688Z
-**Stopped at:** Phase 35 complete 2026-09-17 — 10/10 plans, 35-VERIFICATION.md passed 9/9 after one gap (engine example limits) was fixed by the code-review fix loop; 60/60 MB rows closed, docs.yml gate green, CHANGELOG Documentation entry written; next: /gsd-discuss-phase 36
-**Resume file:** None
+**Last session:** 2026-09-17T17:45:29.388Z
+**Stopped at:** Phase 36 context gathered
+**Resume file:** .planning/phases/36-rustdoc-zero-warning-bar-examples-currency/36-CONTEXT.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

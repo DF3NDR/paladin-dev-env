@@ -58,12 +58,28 @@ else
   fail "(a) pages missing from §2: $(echo "$MISSING_PAGES" | tr '\n' ' ')"
 fi
 
-# (b) every MB-/RD-/EX- ID is unique
-DUP_IDS=$(grep -oE '(MB|RD|EX)-[0-9]+' "$AUDIT" | sort | uniq -d)
+# (b) every MB-/RD-/EX- ID is unique at mint time (§1-§4, before the work lists exist).
+#
+# DEVIATION (Rule 1 -- bug, recorded in 34-09-SUMMARY.md): this assertion originally scanned the
+# whole file for a duplicate MB-/RD-/EX- token. That was a correct duplicate-mint detector through
+# plan 34-08, when §5/§6/§7 were still the "Empty." stubs plan 34-01 seeded -- every ID appeared
+# exactly once, in its own §2/§3/§4 originating row, so any second occurrence really was a bug.
+# Plan 34-09's own Task 1 <verify> line (this plan's PLAN.md) and 34-check.sh's own --final
+# assertion (g) both *require* every ID to appear a second time, in its §5/§6 work-list row (or the
+# EX-nn "confirmed current" list, or deferred-items.md) -- D-03's whole citability guarantee
+# ("Phase 35/36 close items by ID") depends on that second occurrence existing. Once §5/§6 are
+# populated, the original whole-file scan is structurally guaranteed to "fail" on all 265 IDs,
+# which is not a duplicate-mint bug, it is the phase working as designed. The mechanically correct
+# scope for "is this ID unique at the point it is minted" is §1-§4 (everything before the first
+# "## §5" heading) -- a real duplicate mint (the same ID accidentally assigned to two different
+# findings) still fails this narrower check exactly as before; a legitimate §5/§6/§7 cross-reference
+# no longer does.
+ORIGIN_TEXT=$(awk '/^## §5/{exit} {print}' "$AUDIT")
+DUP_IDS=$(echo "$ORIGIN_TEXT" | grep -oE '(MB|RD|EX)-[0-9]+' | sort | uniq -d)
 if [ -z "$DUP_IDS" ]; then
-  pass "(b) every MB-/RD-/EX- ID is unique"
+  pass "(b) every MB-/RD-/EX- ID is unique at mint time (§1-§4)"
 else
-  fail "(b) duplicate IDs: $(echo "$DUP_IDS" | tr '\n' ' ')"
+  fail "(b) duplicate IDs at mint time (§1-§4): $(echo "$DUP_IDS" | tr '\n' ' ')"
 fi
 
 # (c) no settled verdict row (current/stale/missing) has an empty or seeded

@@ -1835,13 +1835,440 @@ left for Phase 36 to rediscover.
 
 ## §5 Phase 35 work list
 
-Empty. Assembled by plan 34-09 from every `MB-nn` row in §2 once plans 34-03/34-04/34-05 have
-swept all 93 pages, ordered per D-21 (blocking `L` items first, then by page order).
+Sufficient for `/gsd-plan-phase 35` to plan every mdBook (`MB-nn`) finding in §2 by ID. Phase 35 may re-batch these rows into its own plans/waves, but must close every ID listed below — none may be dropped, merged away, or silently absorbed into a different ID's fix. Measured HEAD SHA: `ee1fb160f8e743e638b32beb6c4e32be4ede9325` (D-23). If the branch moves before Phase 35 plans, re-run the D-12/D-16 commands this audit ran (34-EVIDENCE.md) and diff against the rows below rather than trusting the counts unchanged.
+
+Ordered per D-21: MB-30 (the missing superstep-engine page, the one `L` item every other row in this list depends on being written first, since it is the page `control-flow.md` (MB-22) already points forward to) leads; the remainder follow in `docs/src/SUMMARY.md` nav order, each MB ID keeping the size, location and citation the originating §2 row already carries.
+
+| Order | ID | Classification | Size | Location | Cites (Phase N — item (REQ)) | Blocks | Evidence anchor |
+|---|---|---|---|---|---|---|---|
+| 1 | MB-30 | missing page | L | docs/src/user-guides/the-superstep-engine.md *(proposed — does not exist on disk)* | Phase 22 — `WarEngine` executes cyclic graphs in supersteps, self-loops included (ENG-02, SS-01) | MB-22 | 34-AUDIT.md §2 row 94 |
+| 2 | MB-04 | stale content | M | docs/src/introduction.md | Phase 30 — `Commissary` anchored (VOCAB-02, SS-68) |  | 34-AUDIT.md §2 row 68 |
+| 3 | MB-05 | stale content | L | docs/src/introduction.md | Phase 22 — `WarEngine` executes cyclic graphs in supersteps (ENG-02, SS-01) |  | 34-AUDIT.md §2 row 68 |
+| 4 | MB-06 | stale content | L | docs/src/getting-started/installation.md | Phase 22.1 — Workspace MSRV floor raised from 1.85 to 1.88 (X-11.2, SS-08) |  | 34-AUDIT.md §2 row 66 |
+| 5 | MB-07 | stale content | S | docs/src/getting-started/quickstart.md | Phase 22-33 (v0.10.0 milestone) — workspace crate version `0.10.0` (`Cargo.toml [workspace.package]`) |  | 34-AUDIT.md §2 row 67 |
+| 6 | MB-27 | stale content | M | docs/src/user-guides/paladin-agents.md | Phase 22-33 (v0.10.0 milestone) — workspace crate version `0.10.0` |  | 34-AUDIT.md §2 row 89 |
+| 7 | MB-20 | stale content | M | docs/src/user-guides/battalion-patterns.md | Phase 22-33 (v0.10.0 milestone) — workspace crate version `0.10.0`, no matching §1 row for a bare version-pin fact |  | 34-AUDIT.md §2 row 77 |
+| 8 | MB-26 | stale content | S | docs/src/user-guides/orchestration.md | Phase 22-33 (v0.10.0 milestone) — workspace crate version `0.10.0`, no matching §1 row for a bare version-pin fact |  | 34-AUDIT.md §2 row 87 |
+| 9 | MB-21 | stale content | S | docs/src/user-guides/content-processing.md | Phase 22-33 (v0.10.0 milestone) — workspace crate version `0.10.0`, no matching §1 row for a bare version-pin fact |  | 34-AUDIT.md §2 row 78 |
+| 10 | MB-18 | stale content | S | docs/src/user-guides/agent-orchestrator-bridge.md | Phase 22-33 (v0.10.0 milestone) — workspace crate version `0.10.0` (`Cargo.toml [workspace.package]`) |  | 34-AUDIT.md §2 row 74 |
+| 11 | MB-19 | stale content | M | docs/src/user-guides/arsenal-tools.md | pre-v0.10.0 API drift (D-00g: shipped tree outranks any document |  | 34-AUDIT.md §2 row 76 |
+| 12 | MB-28 | stale content | L | docs/src/user-guides/sanctum-vector-memory.md | Phase 33 — `RagRetrievalService::retrieve_context` returns `RagRetrievalResult` (COMM-01, SS-86) |  | 34-AUDIT.md §2 row 92 |
+| 13 | MB-24 | stale content | S | docs/src/user-guides/herald-output.md | pre-v0.10.0 API drift (D-00g: shipped tree outranks any document |  | 34-AUDIT.md §2 row 84 |
+| 14 | MB-25 | stale content | S | docs/src/user-guides/maneuver-flow-dsl.md | Phase 22-33 (v0.10.0 milestone) — workspace crate version `0.10.0`, no matching §1 row for a bare version-pin fact |  | 34-AUDIT.md §2 row 85 |
+| 15 | MB-22 | stale content | M | docs/src/user-guides/control-flow.md | Phase 24 — `NodeSpec::Gate` first-class approval-gate node + `WarEngine::resume_with` (HITL-01/HITL-02, SS-17/SS-18) |  | 34-AUDIT.md §2 row 79 |
+| 16 | MB-23 | stale content | S | docs/src/user-guides/fault-tolerance.md | Phase 26 — `output_schema` on `NodeSpec::Paladin` bumps `GRAPH_FINGERPRINT_VERSION` to `v6` (D-29, RT-05, SS-40) |  | 34-AUDIT.md §2 row 81 |
+| 17 | MB-29 | stale content | S | docs/src/user-guides/tool-integration.md | Phase 26 — `ToolCallProtocolMiddleware`/`FinishOnPlainAnswerMiddleware` prompt-level tool-call protocol via the `reasoning_agent` preset (RT-07, `tool_error_mode`, SS-41/SS-42) |  | 34-AUDIT.md §2 row 93 |
+| 18 | MB-08 | stale content | M | docs/src/architecture/overview.md | Phase 28 — `paladin-eval` crate (OBS-04, SS-58) |  | 34-AUDIT.md §2 row 49 |
+| 19 | MB-09 | stale content | L | docs/src/architecture/overview.md | Phase 22 — `WarEngine` executes cyclic graphs in supersteps (ENG-02, SS-01) |  | 34-AUDIT.md §2 row 49 |
+| 20 | MB-10 | stale content | M | docs/src/architecture/hexagonal-design.md | pre-v0.10.0 API drift (D-00g: shipped tree outranks any document |  | 34-AUDIT.md §2 row 48 |
+| 21 | MB-03 | stale content | M | docs/src/architecture/domain-model.md:96-104 | Phase 26 — `GarrisonEntry.is_summary` effective-history marker (RT-03, SS-38) |  | 34-AUDIT.md §2 Phase 31 D-29 token_count subsection |
+| 22 | MB-11 | stale content | L | docs/src/architecture/domain-model.md | Phase 22 — `Waypoint`, a full `Battlefield` snapshot persisted automatically after every superstep (ENG-03, SS-02) |  | 34-AUDIT.md §2 row 47 |
+| 23 | MB-02 | stale content | S | docs/src/architecture/commissary.md:7 | Phase 30 — `Quartermaster` purged, zero in-tree references required (VOCAB-06, SS-71) |  | 34-AUDIT.md §2 Vocabulary sweep subsection |
+| 24 | MB-12 | stale content | S | docs/src/architecture/design-patterns.md | pre-v0.10.0 API drift (D-00g: shipped tree outranks any document |  | 34-AUDIT.md §2 row 46 |
+| 25 | MB-13 | stale content | L | docs/src/architecture/crate-map.md | Phase 33 — `paladin-memory` gains an unconditional dependency on `paladin-llm` (COMM-01, SS-90) |  | 34-AUDIT.md §2 row 45 |
+| 26 | MB-31 | stale content | L | docs/src/deployment/cicd.md | Phase 18 — `codeql.yml` Rust SAST, evaluated and retained advisory-only (2026-08-25, pre-milestone but post-dates the page's own last correction) |  | 34-AUDIT.md §2 row 61 |
+| 27 | MB-32 | stale content | M | docs/src/operations/monitoring.md | Phase 28 — `OtelTraceSink`/`otel` Cargo feature, real OTLP/HTTP trace export (OBS-02, SS-56) |  | 34-AUDIT.md §2 row 70 |
+| 28 | MB-33 | stale content | S | docs/src/operations/performance-tuning.md | Phase 22 — the superstep engine gains its own benchmark file (`benches/engine_benchmarks.rs`, ENG-02) |  | 34-AUDIT.md §2 row 72 |
+| 29 | MB-34 | stale content | S | docs/src/operations/troubleshooting.md | Phase 28 — `opentelemetry`/`opentelemetry_sdk`/`opentelemetry-otlp` become real, optional workspace dependencies behind the `otel` feature (OBS-02, SS-56) |  | 34-AUDIT.md §2 row 73 |
+| 30 | MB-14 | stale content | L | docs/src/api-reference/crate-map.md | Phase 33 — `paladin-memory` gains an unconditional dependency on `paladin-llm` (COMM-01, SS-90) |  | 34-AUDIT.md §2 row 2 |
+| 31 | MB-15 | stale content | L | docs/src/api-reference/feature-flags.md | Phase 25 — `redis-cache` Cargo feature on `paladin-storage` (FT-06, SS-33) |  | 34-AUDIT.md §2 row 3 |
+| 32 | MB-16 | stale content | S | docs/src/api-reference/migration-guide.md | Phase 29 — release versioning is v0.10.0-scoped (SHIP-01) |  | 34-AUDIT.md §2 row 4 |
+| 33 | MB-17 | stale content | L | docs/src/api-reference/stable-api.md | Phase 28 — `paladin-eval` crate + `eval_scenarios!` harness (OBS-04, SS-58) |  | 34-AUDIT.md §2 row 6 |
+| 34 | MB-36 | stale content | L | docs/src/contributing/testing-guide.md | Phase 29 — 82% workspace line coverage floor, `cargo llvm-cov --fail-under-lines` (SHIP-04, SS-65) |  | 34-AUDIT.md §2 row 54 |
+| 35 | MB-35 | stale content | L | docs/src/contributing/architecture-decisions.md | pre-existing content/nav-title mismatch (D-00g: shipped tree — here, the nav's own title — outranks the document |  | 34-AUDIT.md §2 row 50 |
+| 36 | MB-48 | stale content | L | docs/src/appendix/council.md | Phase 26 -- no Phase 22-33 REQ-ID applies (pre-milestone API drift, D-00g) |  | 34-AUDIT.md §2 row 23 |
+| 37 | MB-58 | stale content | M | docs/src/appendix/sentinel.md | Phase 17 through Phase 26 -- no single Phase 22-33 REQ-ID applies (vision predates the milestone, D-00g) |  | 34-AUDIT.md §2 row 41 |
+| 38 | MB-38 | stale content | M | docs/src/appendix/battalion-patterns-guide.md | Phase 30 -- vocabulary/facade precision is a program-wide concern (VOCAB-01) |  | 34-AUDIT.md §2 row 10 |
+| 39 | MB-46 | stale content | M | docs/src/appendix/cli-usage.md | Phase 26 -- no Phase 22-33 REQ-ID applies |  | 34-AUDIT.md §2 row 20 |
+| 40 | MB-60 | stale content | L | docs/src/appendix/user-system.md | Phase 22 through Phase 33 -- no REQ-ID applies (pre-milestone artifact, D-00g) |  | 34-AUDIT.md §2 row 43 |
+| 41 | MB-59 | stale content | L | docs/src/appendix/user-rest-api.md | Phase 22 through Phase 33 -- no REQ-ID applies (pre-milestone artifact, D-00g) |  | 34-AUDIT.md §2 row 42 |
+| 42 | MB-52 | stale content | L | docs/src/appendix/provider-expansion.md | Phase 17 -- Kimi/Qwen/Grok/Ollama/Gemini/generic-OpenAI-compatible adapters shipped (PROV-01..04, predates Phase 22 but is the concrete contradiction) |  | 34-AUDIT.md §2 row 32 |
+| 43 | MB-49 | stale content | L | docs/src/appendix/integration-tests.md | Phase 22 through Phase 33 -- essentially every phase's own integration-test additions are missing from the inventory (representative REQ-IDs: PLAT-01 SS-44, COMM-01 SS-86, RT-04 SS-39, OBS-02 SS-54) |  | 34-AUDIT.md §2 row 28 |
+| 44 | MB-57 | stale content | L | docs/src/appendix/security-scanning.md | v0.9.0 (Phases 18-21) -- the Rust-SAST evaluation and CodeQL advisory-only disposition (SAST-01..04) |  | 34-AUDIT.md §2 row 40 |
+| 45 | MB-39 | stale content | S | docs/src/appendix/build-baselines.md | Phase 28 -- `paladin-eval` crate added (OBS-04, SS-58) |  | 34-AUDIT.md §2 row 13 |
+| 46 | MB-37 | stale content | S | docs/src/appendix/battalion-benchmarks.md | Phase 22.1 -- workspace MSRV floor raised 1.85 -> 1.88 (SS-08) |  | 34-AUDIT.md §2 row 9 |
+| 47 | MB-55 | stale content | M | docs/src/appendix/sanctum-benchmarks.md | Milestone 2-3 -- Qdrant Sanctum adapter shipped ("Milestone 2-3 as-shipped ledger" |  | 34-AUDIT.md §2 row 37 |
+| 48 | MB-56 | stale content | M | docs/src/appendix/sanctum-migration.md | Phase 22 through Phase 33 -- no REQ-ID applies |  | 34-AUDIT.md §2 row 39 |
+| 49 | MB-54 | stale content | S | docs/src/appendix/release-automation.md | Phase 29 -- release-gate composition (SHIP-02, `check-release-consistency` job) |  | 34-AUDIT.md §2 row 34 |
+| 50 | MB-01 | stale content | M | docs/src/appendix/doc-coverage-report.md | Phase 29 — cargo doc zero-`warning:` bar ratified (ADR-0033, D-00a) |  | 34-AUDIT.md §2 row 25 |
+| 51 | MB-51 | stale content | S | docs/src/appendix/port-trait-template.md | Phase 22 through Phase 33 -- no REQ-ID applies (a pre-milestone documentation-template defect, D-00g) |  | 34-AUDIT.md §2 row 31 |
+| 52 | MB-50 | stale content | M | docs/src/appendix/minio-file-repository-setup.md | Phase 22 through Phase 33 -- no single REQ-ID applies |  | 34-AUDIT.md §2 row 29 |
+| 53 | MB-53 | stale content | M | docs/src/appendix/redis-queue-adapter-setup.md | Phase 25 -- `redis-cache` Cargo feature on `paladin-storage` shipped in an adjacent context (FT-06, SS-33) |  | 34-AUDIT.md §2 row 33 |
+| 54 | MB-40 | stale content | S | docs/src/appendix/cli-configuration.md | Phase 27 -- `/v1/schedules*` cron-driven recurring run submission wired (PLAT-05, SS-48) |  | 34-AUDIT.md §2 row 14 |
+| 55 | MB-41 | stale content | L | docs/src/appendix/cli-council.md | Phase 26 -- no Phase 22-33 REQ-ID applies (pre-milestone CLI surface) |  | 34-AUDIT.md §2 row 15 |
+| 56 | MB-42 | stale content | L | docs/src/appendix/cli-muster.md | Phase 26 -- no Phase 22-33 REQ-ID applies (pre-milestone CLI surface) |  | 34-AUDIT.md §2 row 16 |
+| 57 | MB-43 | stale content | M | docs/src/appendix/cli-onboarding.md | Phase 26 -- no Phase 22-33 REQ-ID applies |  | 34-AUDIT.md §2 row 17 |
+| 58 | MB-44 | stale content | S | docs/src/appendix/cli-setup-check.md | Phase 26 -- no Phase 22-33 REQ-ID applies |  | 34-AUDIT.md §2 row 18 |
+| 59 | MB-45 | stale content | S | docs/src/appendix/cli-testing.md | Phase 26 -- no Phase 22-33 REQ-ID applies |  | 34-AUDIT.md §2 row 19 |
+| 60 | MB-47 | stale content | M | docs/src/appendix/contributing-legacy.md | Phase 22.1 -- MSRV floor raised 1.85->1.88 (SS-08) |  | 34-AUDIT.md §2 row 22 |
+
+**Count:** 60 `MB-nn` rows — 1 missing page, 59 stale content. Sizes: 20 S, 19 M, 21 L.
 
 ## §6 Phase 36 work list
 
-Empty. Assembled by plan 34-09 from every `RD-nn` row in §3 and every `EX-nn` row in §4 once
-plans 34-06/34-07/34-08 have completed their sweeps, ordered per D-21.
+Sufficient for `/gsd-plan-phase 36` to plan every rustdoc finding (`RD-nn`, §3) and every example finding (`EX-nn`, §4) by ID. Phase 36 may re-batch these rows into its own plans/waves, but must close every ID listed below. Closing an `RD-nn` lead row's underlying source line also closes every ID in its `Blocks` cell (same file:line, found by a different measurement run — D-12/D-13 default-feature vs D-12/D-14 per-crate all-features — never two separate defects). Measured HEAD SHA: `ee1fb160f8e743e638b32beb6c4e32be4ede9325` (D-23). If the branch moves before Phase 36 plans, re-run the D-12/D-16 commands this audit ran (34-EVIDENCE.md) and diff against the rows below rather than trusting the counts unchanged.
+
+Ordered per D-21: rustdoc rows (`RD-nn`) first, grouped by crate in the order `paladin-ai, paladin-web, paladin-battalion, paladin-storage, paladin-llm, paladin-ports, paladin-ai-core, paladin-memory` (row 112's own summary-line order); within a crate, a lead row with a non-empty `Blocks` cell precedes every follower it names, then the remainder in file:line order. Example rows (`EX-nn`) follow: the 5 stale rows from the build/currency sweep (§4's Program/module table) in their existing ID order, then the 59 gap-list rows (§4's Capability table) in their existing ID order, which is already ascending-phase (Phase 22 → Phase 33).
+
+### RD-nn (rustdoc findings — the full enumeration below is Phase 36's closure surface for WINDOWS.md row 36's workspace-wide observation; RD-01/RD-66/RD-126 specifically close row 37's named `HeuristicTokenCounter` link)
+
+| Order | ID | Classification | Size | Location | Cites (Phase N — item (REQ)) | Blocks | Evidence anchor |
+|---|---|---|---|---|---|---|---|
+| 1 | RD-137 | rustdoc warning or broken intra-doc link | S | src/application/cli/commands/eval.rs:281 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-ai.txt:2 |
+| 2 | RD-02 | rustdoc warning or broken intra-doc link | S | src/application/services/paladin/paladin_execution_service.rs:1014 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-138 | 34-evidence/34-06-cargo-doc-default.txt:1 |
+| 3 | RD-138 | rustdoc warning or broken intra-doc link | S | src/application/services/paladin/paladin_execution_service.rs:1014 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-02 |  | 34-evidence/34-07-percrate/paladin-ai.txt:12 |
+| 4 | RD-03 | rustdoc warning or broken intra-doc link | S | src/application/services/parley/adapter.rs:28 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-139 | 34-evidence/34-06-cargo-doc-default.txt:10 |
+| 5 | RD-139 | rustdoc warning or broken intra-doc link | S | src/application/services/parley/adapter.rs:28 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-03 |  | 34-evidence/34-07-percrate/paladin-ai.txt:20 |
+| 6 | RD-04 | rustdoc warning or broken intra-doc link | S | src/application/services/run/worker.rs:641 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-140 | 34-evidence/34-06-cargo-doc-default.txt:18 |
+| 7 | RD-140 | rustdoc warning or broken intra-doc link | S | src/application/services/run/worker.rs:641 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-04 |  | 34-evidence/34-07-percrate/paladin-ai.txt:28 |
+| 8 | RD-05 | rustdoc warning or broken intra-doc link | S | src/config/agent_runtime.rs:1174 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-141 | 34-evidence/34-06-cargo-doc-default.txt:26 |
+| 9 | RD-141 | rustdoc warning or broken intra-doc link | S | src/config/agent_runtime.rs:1174 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-05 |  | 34-evidence/34-07-percrate/paladin-ai.txt:36 |
+| 10 | RD-142 | rustdoc warning or broken intra-doc link | S | src/infrastructure/telemetry/otel_sink.rs:42 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-ai.txt:44 |
+| 11 | RD-06 | rustdoc warning or broken intra-doc link | S | src/presets/mod.rs:55 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-143 | 34-evidence/34-06-cargo-doc-default.txt:34 |
+| 12 | RD-143 | rustdoc warning or broken intra-doc link | S | src/presets/mod.rs:55 | paladin-ai — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-06 |  | 34-evidence/34-07-percrate/paladin-ai.txt:52 |
+| 13 | RD-133 | rustdoc warning or broken intra-doc link | S | crates/paladin-web/src/dev_ui_controller.rs:131 | paladin-web — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-web.txt:40 |
+| 14 | RD-130 | rustdoc warning or broken intra-doc link | S | crates/paladin-web/src/dev_ui_controller.rs:20 | paladin-web — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-web.txt:13 |
+| 15 | RD-131 | rustdoc warning or broken intra-doc link | S | crates/paladin-web/src/dev_ui_controller.rs:28 | paladin-web — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-web.txt:22 |
+| 16 | RD-129 | rustdoc warning or broken intra-doc link | S | crates/paladin-web/src/dev_ui_controller.rs:3 | paladin-web — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-web.txt:2 |
+| 17 | RD-132 | rustdoc warning or broken intra-doc link | S | crates/paladin-web/src/dev_ui_controller.rs:69 | paladin-web — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-web.txt:30 |
+| 18 | RD-07 | rustdoc warning or broken intra-doc link | S | crates/paladin-web/src/thread_controller.rs:483 | paladin-web — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-134 | 34-evidence/34-06-cargo-doc-default.txt:42 |
+| 19 | RD-134 | rustdoc warning or broken intra-doc link | S | crates/paladin-web/src/thread_controller.rs:483 | paladin-web — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-07 |  | 34-evidence/34-07-percrate/paladin-web.txt:48 |
+| 20 | RD-08 | rustdoc warning or broken intra-doc link | S | crates/paladin-web/src/thread_controller.rs:686 | paladin-web — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-135 | 34-evidence/34-06-cargo-doc-default.txt:51 |
+| 21 | RD-135 | rustdoc warning or broken intra-doc link | S | crates/paladin-web/src/thread_controller.rs:686 | paladin-web — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-08 |  | 34-evidence/34-07-percrate/paladin-web.txt:56 |
+| 22 | RD-09 | rustdoc warning or broken intra-doc link | S | crates/paladin-web/src/thread_controller.rs:757 | paladin-web — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-136 | 34-evidence/34-06-cargo-doc-default.txt:59 |
+| 23 | RD-136 | rustdoc warning or broken intra-doc link | S | crates/paladin-web/src/thread_controller.rs:757 | paladin-web — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-09 |  | 34-evidence/34-07-percrate/paladin-web.txt:64 |
+| 24 | RD-10 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/commander.rs:35 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-67 | 34-evidence/34-06-cargo-doc-default.txt:69 |
+| 25 | RD-67 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/commander.rs:35 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-10 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:2 |
+| 26 | RD-11 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/commander.rs:49 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-68 | 34-evidence/34-06-cargo-doc-default.txt:78 |
+| 27 | RD-68 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/commander.rs:49 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-11 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:12 |
+| 28 | RD-12 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/edge_evaluator.rs:3 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-69 | 34-evidence/34-06-cargo-doc-default.txt:86 |
+| 29 | RD-69 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/edge_evaluator.rs:3 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-12 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:20 |
+| 30 | RD-26 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/cache_key.rs:23 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-27, RD-83, RD-84 | 34-evidence/34-06-cargo-doc-default.txt:212 |
+| 31 | RD-27 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/cache_key.rs:23 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-26 |  | 34-evidence/34-06-cargo-doc-default.txt:221 |
+| 32 | RD-83 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/cache_key.rs:23 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-26 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:147 |
+| 33 | RD-84 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/cache_key.rs:23 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-26 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:156 |
+| 34 | RD-28 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/directive_parser.rs:47 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-85 | 34-evidence/34-06-cargo-doc-default.txt:230 |
+| 35 | RD-85 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/directive_parser.rs:47 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-28 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:165 |
+| 36 | RD-30 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:1375 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-87 | 34-evidence/34-06-cargo-doc-default.txt:246 |
+| 37 | RD-87 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:1375 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-30 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:181 |
+| 38 | RD-31 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:2258 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-88 | 34-evidence/34-06-cargo-doc-default.txt:254 |
+| 39 | RD-88 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:2258 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-31 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:189 |
+| 40 | RD-32 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:2287 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-89 | 34-evidence/34-06-cargo-doc-default.txt:262 |
+| 41 | RD-89 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:2287 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-32 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:197 |
+| 42 | RD-33 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:2303 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-90 | 34-evidence/34-06-cargo-doc-default.txt:270 |
+| 43 | RD-90 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:2303 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-33 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:205 |
+| 44 | RD-34 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:2337 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-91 | 34-evidence/34-06-cargo-doc-default.txt:278 |
+| 45 | RD-91 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:2337 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-34 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:213 |
+| 46 | RD-35 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:2358 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-92 | 34-evidence/34-06-cargo-doc-default.txt:286 |
+| 47 | RD-92 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:2358 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-35 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:221 |
+| 48 | RD-29 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:772 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-86 | 34-evidence/34-06-cargo-doc-default.txt:238 |
+| 49 | RD-86 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/graph.rs:772 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-29 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:173 |
+| 50 | RD-43 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/input_mapping.rs:30 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-100 | 34-evidence/34-06-cargo-doc-default.txt:351 |
+| 51 | RD-100 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/input_mapping.rs:30 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-43 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:286 |
+| 52 | RD-44 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/input_mapping.rs:40 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-101 | 34-evidence/34-06-cargo-doc-default.txt:368 |
+| 53 | RD-101 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/input_mapping.rs:40 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-44 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:304 |
+| 54 | RD-18 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:10 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-75 | 34-evidence/34-06-cargo-doc-default.txt:141 |
+| 55 | RD-75 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:10 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-18 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:76 |
+| 56 | RD-45 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:1085 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-102 | 34-evidence/34-06-cargo-doc-default.txt:384 |
+| 57 | RD-102 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:1085 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-45 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:320 |
+| 58 | RD-37 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:1423 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-94 | 34-evidence/34-06-cargo-doc-default.txt:302 |
+| 59 | RD-94 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:1423 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-37 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:237 |
+| 60 | RD-19 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:20 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-76 | 34-evidence/34-06-cargo-doc-default.txt:149 |
+| 61 | RD-76 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:20 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-19 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:84 |
+| 62 | RD-20 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:25 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-77 | 34-evidence/34-06-cargo-doc-default.txt:158 |
+| 63 | RD-77 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:25 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-20 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:93 |
+| 64 | RD-38 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:2686 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-95 | 34-evidence/34-06-cargo-doc-default.txt:310 |
+| 65 | RD-95 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:2686 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-38 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:245 |
+| 66 | RD-21 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:27 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-78 | 34-evidence/34-06-cargo-doc-default.txt:167 |
+| 67 | RD-78 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:27 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-21 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:102 |
+| 68 | RD-13 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:3 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-70 | 34-evidence/34-06-cargo-doc-default.txt:96 |
+| 69 | RD-70 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:3 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-13 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:31 |
+| 70 | RD-22 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:31 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-79 | 34-evidence/34-06-cargo-doc-default.txt:176 |
+| 71 | RD-79 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:31 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-22 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:111 |
+| 72 | RD-23 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:33 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-80 | 34-evidence/34-06-cargo-doc-default.txt:185 |
+| 73 | RD-80 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:33 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-23 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:120 |
+| 74 | RD-24 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:34 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-81 | 34-evidence/34-06-cargo-doc-default.txt:194 |
+| 75 | RD-81 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:34 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-24 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:129 |
+| 76 | RD-25 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:36 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-82 | 34-evidence/34-06-cargo-doc-default.txt:203 |
+| 77 | RD-82 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:36 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-25 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:138 |
+| 78 | RD-14 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:4 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-71 | 34-evidence/34-06-cargo-doc-default.txt:105 |
+| 79 | RD-71 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:4 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-14 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:40 |
+| 80 | RD-15 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:5 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-72 | 34-evidence/34-06-cargo-doc-default.txt:114 |
+| 81 | RD-72 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:5 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-15 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:49 |
+| 82 | RD-16 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:6 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-17, RD-73, RD-74 | 34-evidence/34-06-cargo-doc-default.txt:123 |
+| 83 | RD-17 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:6 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-16 |  | 34-evidence/34-06-cargo-doc-default.txt:132 |
+| 84 | RD-73 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:6 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-16 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:58 |
+| 85 | RD-74 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:6 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-16 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:67 |
+| 86 | RD-36 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:744 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-93 | 34-evidence/34-06-cargo-doc-default.txt:294 |
+| 87 | RD-93 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/engine/mod.rs:744 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-36 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:229 |
+| 88 | RD-39 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/llm_decision.rs:40 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-96 | 34-evidence/34-06-cargo-doc-default.txt:318 |
+| 89 | RD-96 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/llm_decision.rs:40 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-39 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:253 |
+| 90 | RD-40 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/llm_failure.rs:1 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-97 | 34-evidence/34-06-cargo-doc-default.txt:327 |
+| 91 | RD-97 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/llm_failure.rs:1 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-40 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:262 |
+| 92 | RD-42 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/llm_failure.rs:38 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-99 | 34-evidence/34-06-cargo-doc-default.txt:343 |
+| 93 | RD-99 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/llm_failure.rs:38 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-42 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:278 |
+| 94 | RD-41 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/llm_failure.rs:8 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-98 | 34-evidence/34-06-cargo-doc-default.txt:335 |
+| 95 | RD-98 | rustdoc warning or broken intra-doc link | S | crates/paladin-battalion/src/llm_failure.rs:8 | paladin-battalion — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-41 |  | 34-evidence/34-07-percrate/paladin-battalion.txt:270 |
+| 96 | RD-46 | rustdoc warning or broken intra-doc link | S | crates/paladin-storage/src/waypoint/contract_tests.rs:673 | paladin-storage — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-128 | 34-evidence/34-06-cargo-doc-default.txt:400 |
+| 97 | RD-128 | rustdoc warning or broken intra-doc link | S | crates/paladin-storage/src/waypoint/contract_tests.rs:673 | paladin-storage — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-46 |  | 34-evidence/34-07-percrate/paladin-storage.txt:2 |
+| 98 | RD-121 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/compat/engine.rs:1041 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-llm.txt:36 |
+| 99 | RD-119 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/compat/engine.rs:114 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-llm.txt:20 |
+| 100 | RD-120 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/compat/engine.rs:201 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-llm.txt:28 |
+| 101 | RD-122 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/gemini/adapter.rs:28 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-llm.txt:44 |
+| 102 | RD-123 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/gemini/adapter.rs:59 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) |  | 34-evidence/34-07-percrate/paladin-llm.txt:52 |
+| 103 | RD-49 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/http_status.rs:6 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-124 | 34-evidence/34-06-cargo-doc-default.txt:427 |
+| 104 | RD-124 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/http_status.rs:6 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-49 |  | 34-evidence/34-07-percrate/paladin-llm.txt:60 |
+| 105 | RD-50 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/http_status.rs:7 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-125 | 34-evidence/34-06-cargo-doc-default.txt:431 |
+| 106 | RD-125 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/http_status.rs:7 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-50 |  | 34-evidence/34-07-percrate/paladin-llm.txt:65 |
+| 107 | RD-47 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/redaction.rs:164 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-117 | 34-evidence/34-06-cargo-doc-default.txt:410 |
+| 108 | RD-117 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/redaction.rs:164 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-47 |  | 34-evidence/34-07-percrate/paladin-llm.txt:2 |
+| 109 | RD-48 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/services/commissary.rs:89 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-118 | 34-evidence/34-06-cargo-doc-default.txt:419 |
+| 110 | RD-118 | rustdoc warning or broken intra-doc link | S | crates/paladin-llm/src/services/commissary.rs:89 | paladin-llm — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-48 |  | 34-evidence/34-07-percrate/paladin-llm.txt:12 |
+| 111 | RD-51 | rustdoc warning or broken intra-doc link | S | crates/paladin-ports/src/output/structured_executor_port.rs:158 | paladin-ports — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-127 | 34-evidence/34-06-cargo-doc-default.txt:436 |
+| 112 | RD-127 | rustdoc warning or broken intra-doc link | S | crates/paladin-ports/src/output/structured_executor_port.rs:158 | paladin-ports — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-51 |  | 34-evidence/34-07-percrate/paladin-ports.txt:2 |
+| 113 | RD-52 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/directive.rs:3 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-103 | 34-evidence/34-06-cargo-doc-default.txt:445 |
+| 114 | RD-103 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/directive.rs:3 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-52 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:2 |
+| 115 | RD-53 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/structured.rs:13 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-104 | 34-evidence/34-06-cargo-doc-default.txt:453 |
+| 116 | RD-104 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/structured.rs:13 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-53 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:11 |
+| 117 | RD-56 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:17 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-107 | 34-evidence/34-06-cargo-doc-default.txt:480 |
+| 118 | RD-107 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:17 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-56 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:38 |
+| 119 | RD-57 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:21 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-108 | 34-evidence/34-06-cargo-doc-default.txt:489 |
+| 120 | RD-108 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:21 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-57 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:47 |
+| 121 | RD-58 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:22 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-109 | 34-evidence/34-06-cargo-doc-default.txt:497 |
+| 122 | RD-109 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:22 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-58 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:55 |
+| 123 | RD-59 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:25 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-110 | 34-evidence/34-06-cargo-doc-default.txt:506 |
+| 124 | RD-110 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:25 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-59 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:64 |
+| 125 | RD-54 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:3 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-105 | 34-evidence/34-06-cargo-doc-default.txt:462 |
+| 126 | RD-105 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:3 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-54 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:20 |
+| 127 | RD-60 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:36 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-111 | 34-evidence/34-06-cargo-doc-default.txt:514 |
+| 128 | RD-111 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:36 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-60 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:72 |
+| 129 | RD-61 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:37 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-112 | 34-evidence/34-06-cargo-doc-default.txt:522 |
+| 130 | RD-112 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:37 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-61 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:80 |
+| 131 | RD-62 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:44 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-113 | 34-evidence/34-06-cargo-doc-default.txt:530 |
+| 132 | RD-113 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:44 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-62 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:88 |
+| 133 | RD-63 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:45 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-114 | 34-evidence/34-06-cargo-doc-default.txt:538 |
+| 134 | RD-114 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:45 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-63 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:96 |
+| 135 | RD-55 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:6 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-106 | 34-evidence/34-06-cargo-doc-default.txt:471 |
+| 136 | RD-106 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/trace.rs:6 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-55 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:29 |
+| 137 | RD-64 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/webhook.rs:19 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-115 | 34-evidence/34-06-cargo-doc-default.txt:546 |
+| 138 | RD-115 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/webhook.rs:19 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-64 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:104 |
+| 139 | RD-65 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/webhook.rs:20 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a) | RD-116 | 34-evidence/34-06-cargo-doc-default.txt:555 |
+| 140 | RD-116 | rustdoc warning or broken intra-doc link | S | crates/paladin-core/src/platform/container/webhook.rs:20 | paladin-ai-core — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); same source line as RD-65 |  | 34-evidence/34-07-percrate/paladin-ai-core.txt:113 |
+| 141 | RD-01 | rustdoc warning or broken intra-doc link | S | crates/paladin-memory/src/token_counter/mod.rs:3 | paladin-memory — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); closes WINDOWS.md row 37 (`HeuristicTokenCounter`) | RD-66, RD-126 | 34-EVIDENCE.md #6, #7 |
+| 142 | RD-66 | rustdoc warning or broken intra-doc link | S | crates/paladin-memory/src/token_counter/mod.rs:3 | paladin-memory — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); closes WINDOWS.md row 37 (`HeuristicTokenCounter`); same source line as RD-01 |  | 34-evidence/34-06-cargo-doc-default.txt:566 |
+| 143 | RD-126 | rustdoc warning or broken intra-doc link | S | crates/paladin-memory/src/token_counter/mod.rs:3 | paladin-memory — cargo doc zero-`warning:` bar (Phase 29 — ADR-0033, D-00a); closes WINDOWS.md row 37 (`HeuristicTokenCounter`); same source line as RD-01 |  | 34-evidence/34-07-percrate/paladin-memory.txt:2 |
+
+**Count:** 143 `RD-nn` rows in 75 location groups (63 groups have a follower closed by the same fix). All sized S per D-04 (a rustdoc link repair is a one-line fix).
+
+### EX-nn (examples — currency and gap findings)
+
+| Order | ID | Classification | Size | Location | Cites (Phase N — item (REQ)) | Blocks | Evidence anchor |
+|---|---|---|---|---|---|---|---|
+| 144 | EX-01 | non-compiling or obsolete example | S | examples/README.md | Phase 22.1 — workspace MSRV floor raised 1.85 → 1.88 (SS-08) |  | 34-EVIDENCE.md #8 |
+| 145 | EX-33 | non-compiling or obsolete example | M | examples/http_service_host.rs | Phase 24 — `thread_router` mounted (HITL, SS-23…SS-25); Phase 27 — `run_router` mounted (Platform API, SS-44…SS-52) |  | 34-evidence/34-08-examples-builds.txt (Invocation 4) |
+| 146 | EX-55 | non-compiling or obsolete example | M | crates/doc-examples/src/http_service_host.rs | Phase 24 — `thread_router` mounted (HITL, SS-23…SS-25); Phase 27 — `run_router` mounted (Platform API, SS-44…SS-52) — sibling of EX-33 |  | 34-evidence/34-08-examples-builds.txt (Extra target 1: scripts/check-doc-examples.sh, Layer 1) |
+| 147 | EX-121 | non-compiling or obsolete example | L | examples/README.md | Cross-phase — examples/README.md gallery completeness; the 11 undocumented programs span Phases 22-33 (see the EX-62…EX-120 gap list for the underlying capabilities) |  | 34-EVIDENCE.md #159 |
+| 148 | EX-122 | non-compiling or obsolete example | S | examples/README.md | Pre-milestone — `PaladinResult` field naming (`output`/`usage`/`execution_time_ms`); the README's own code snippet was never updated to match, not a Phase 22-33 regression |  | 34-EVIDENCE.md #160 |
+| 149 | EX-62 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 22 — Injecting a custom WaypointPort backend (InMemory/SQLite/Postgres) for checkpoint snapshots (SS-03) (ENG-05) |  | `grep -rlF 'WaypointPort' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 150 | EX-63 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 22 — Reading/inspecting the waypoints persistence table directly (SS-04) (ENG-03) |  | `grep -rlF 'waypoints' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 151 | EX-64 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 22 — Configuring WarEngine via EngineConfig (max_supersteps, max_node_visits, run_timeout_secs, waypoint_durability, max_muster_tasks) (SS-05) (ENG-02) |  | `grep -rlF 'EngineConfig' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 152 | EX-65 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 22 — Overriding the superstep cap via APP_ENGINE_MAX_SUPERSTEPS (SS-06) (ENG-02) |  | `grep -rlF 'APP_ENGINE_MAX_SUPERSTEPS' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 153 | EX-66 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 22 — Pruning old Waypoints via WaypointRetentionService/WaypointRetentionConfig (SS-07) (ENG-05) |  | `grep -rlF 'WaypointRetentionService' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 154 | EX-67 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 23 — EdgeCondition::Custom's fail-closed behavior when unregistered (SS-11) (CF-01) |  | `grep -rlF 'EdgeCondition::Custom' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 155 | EX-68 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 23 — Nested subgraph composition via NodeSpec::Battalion (SS-14) (CF-04) |  | `grep -rlF 'NodeSpec::Battalion' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 156 | EX-69 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 23 — LLM-driven dynamic routing via LlmDecisionEvaluator / Commander StrategySelection::Semantic (SS-15) (CF-05) |  | `grep -rlF 'LlmDecisionEvaluator' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 157 | EX-70 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 23 — Overriding the Muster fan-out cap via APP_ENGINE_MAX_MUSTER_TASKS (SS-16) (CF-03) |  | `grep -rlF 'APP_ENGINE_MAX_MUSTER_TASKS' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 158 | EX-71 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 24 — First-class approval-gate nodes via NodeSpec::Gate (SS-17) (HITL-01) |  | `grep -rlF 'NodeSpec::Gate' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 159 | EX-72 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 24 — Typed, total-validation resume via WarEngine::resume_with(graph, thread, responses) (SS-18) (HITL-02) |  | `grep -rlF 'resume_with' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 160 | EX-73 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 24 — History/replay/fork via ChronicleService + WarEngine::replay/fork (SS-19) (HITL-03) |  | `grep -rlF 'ChronicleService' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 161 | EX-74 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 24 — Graceful shutdown on SIGTERM/SIGINT via ShutdownCoordinator (SS-20) (HITL-04) |  | `grep -rlF 'ShutdownCoordinator' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 162 | EX-75 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 24 — Configuring shutdown grace period via APP_ENGINE_SHUTDOWN_GRACE_SECS (SS-21) (HITL-04) |  | `grep -rlF 'APP_ENGINE_SHUTDOWN_GRACE_SECS' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 163 | EX-76 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 24 — Toggling graceful shutdown via APP_ENGINE_GRACEFUL_SHUTDOWN (SS-22) (HITL-04) |  | `grep -rlF 'APP_ENGINE_GRACEFUL_SHUTDOWN' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 164 | EX-77 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 24 — Reading paused-thread state via GET /v1/threads/{id}/state (SS-23) (HITL-05) |  | `grep -rlF 'GET /v1/threads/{id}/state' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 165 | EX-78 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 24 — Resuming a paused thread via POST /v1/threads/{id}/resume (SS-24) (HITL-05) |  | `grep -rlF 'POST /v1/threads/{id}/resume' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 166 | EX-79 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 24 — Paginated history retrieval via GET /v1/threads/{id}/history (SS-25) (HITL-05) |  | `grep -rlF 'GET /v1/threads/{id}/history' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 167 | EX-80 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 24 — The v3→v4 graph-fingerprint bump for Gate node routing properties (SS-26) (HITL-01) |  | `grep -rlF 'GRAPH_FINGERPRINT_VERSION' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 168 | EX-81 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 25 — Enabling node-result caching via the redis-cache Cargo feature (SS-33) (FT-06) |  | `grep -rlF 'redis-cache' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 169 | EX-82 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 25 — Toggling node-result caching via APP_NODE_CACHE_ENABLED (SS-34) (FT-06) |  | `grep -rlF 'APP_NODE_CACHE_ENABLED' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 170 | EX-83 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 26 — Writing a custom ExecutionMiddleware (before_model/after_model/around_tool) (SS-35) (RT-01) |  | `grep -rlF 'ExecutionMiddleware' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 171 | EX-84 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 26 — Configuring the twelve built-in middleware sub-structs via AgentRuntimeConfig (SS-36) (RT-02) |  | `grep -rlF 'AgentRuntimeConfig' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 172 | EX-85 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 26 — Implementing a custom TokenCounterPort (SS-37) (RT-03) |  | `grep -rlF 'TokenCounterPort' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 173 | EX-86 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 26 — Context-window management via HistoryTrimmer + SummarizationMiddleware (SS-38) (RT-03) |  | `grep -rlF 'HistoryTrimmer' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 174 | EX-87 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 26 — Structural memory namespacing via VaultPort / ConfinedVault (SS-39) (RT-04) |  | `grep -rlF 'VaultPort' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 175 | EX-88 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 26 — Schema-validated structured output via StructuredExecutorPort / execute_structured<T> (SS-40) (RT-05) |  | `grep -rlF 'StructuredExecutorPort' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 176 | EX-89 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 26 — Opting into tool_error_mode = FailRun with redact-then-bound tool-text sanitization (SS-42) (RT-07) |  | `grep -rlF 'tool_error_mode' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 177 | EX-90 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 26 — Deriving a JSON schema for structured output via schemars (SS-43) (RT-05) |  | `grep -rlF 'schemars' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 178 | EX-91 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 27 — Decoupled run submission via POST /v1/runs (SS-44) (PLAT-01) |  | `grep -rlF 'POST /v1/runs' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 179 | EX-92 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 27 — SSE run streaming via GET /v1/runs/{run_id}/stream (seven frozen wire events) (SS-45) (PLAT-03) |  | `grep -rlF 'GET /v1/runs/{run_id}/stream' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 180 | EX-93 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 27 — Cancelling an in-flight run via POST /v1/runs/{run_id}/cancel (SS-46) (PLAT-02) |  | `grep -rlF 'POST /v1/runs/{run_id}/cancel' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 181 | EX-94 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 27 — Managing immutable assistant versions via /v1/assistants* (SS-47) (PLAT-04) |  | `grep -rlF '/v1/assistants' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 182 | EX-95 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 27 — Cron-driven recurring run submission via /v1/schedules* (SS-48) (PLAT-05) |  | `grep -rlF '/v1/schedules' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 183 | EX-96 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 27 — Webhook delivery with X-Paladin-Signature HMAC verification (SS-49) (PLAT-05) |  | `grep -rlF 'webhook_deliveries' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 184 | EX-97 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 27 — The SSRF-guard override APP_WEBHOOKS_ALLOW_PRIVATE (SS-50) (PLAT-05) |  | `grep -rlF 'APP_WEBHOOKS_ALLOW_PRIVATE' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 185 | EX-98 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 27 — Durable worker-pool dispatch via RunQueuePort (InMemory + Redis) (SS-51) (PLAT-02) |  | `grep -rlF 'RunQueuePort' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 186 | EX-99 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 27 — Selecting a durable run-store backend via APP_RUN_STORE_BACKEND (SS-52) (PLAT-01) |  | `grep -rlF 'APP_RUN_STORE_BACKEND' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 187 | EX-100 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 28 — Consuming the TraceRecord envelope / twelve TraceEvent variants (SS-53) (OBS-01) |  | `grep -rlF 'TraceRecord' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 188 | EX-101 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 28 — Configuring tracing via TraceConfig (log_sink/persist/state_values/otel) (SS-54) (OBS-02) |  | `grep -rlF 'TraceConfig' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 189 | EX-102 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 28 — Enabling OTel export via PALADIN_TRACE_OTEL_ENABLED (SS-55) (OBS-02) |  | `grep -rlF 'PALADIN_TRACE_OTEL_ENABLED' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 190 | EX-103 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 28 — Wiring the otel Cargo feature (opentelemetry/opentelemetry_sdk/opentelemetry-otlp) (SS-56) (OBS-02) |  | `grep -rlF 'otel' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 191 | EX-104 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 28 — The admin-gated, dev-ui-feature-gated GET /v1/dev-ui/threads/{id} route (SS-57) (OBS-03) |  | `grep -rlF '/v1/dev-ui/threads' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 192 | EX-105 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 28 — Writing eval scenarios via the paladin-eval crate + eval_scenarios! macro (SS-58) (OBS-04) |  | `grep -rlF 'paladin-eval' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 193 | EX-106 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 28 — Enabling live-mode eval runs via PALADIN_EVAL_LIVE (SS-59) (OBS-04) |  | `grep -rlF 'PALADIN_EVAL_LIVE' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 194 | EX-107 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 28 — Running eval scenarios via paladin-cli eval run <glob> (SS-60) (OBS-04) |  | `grep -rlF 'eval run' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 195 | EX-108 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 28 — Querying the append-only run_traces persisted-trace-history table (SS-62) (OBS-02) |  | `grep -rlF 'run_traces' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 196 | EX-109 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 30 — Constructing/using Commissary directly (input-side, per-call window-rationing) (SS-68) (VOCAB-02) |  | `grep -rlF 'Commissary' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 197 | EX-110 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 31 — The HTTP-surface TokenUsageResponse DTO on ExecuteResponse.usage (SS-77) (ACCT-02) |  | `grep -rlF 'TokenUsageResponse' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 198 | EX-111 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 31 — Anthropic's fixed prompt_tokens figure now including cache-read/cache-write tokens (SS-78) (ACCT-03) |  | `grep -rlF 'prompt_tokens' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 199 | EX-112 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 32 — TokenCounterPort::is_exact(&self) -> bool's defaulted behavior (SS-80) (PRIM-01) |  | `grep -rlF 'is_exact' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 200 | EX-113 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 32 — Commissary::new/from_port's is_exact_counter-argument removal (exactness read live from is_exact) (SS-81) (PRIM-02) |  | `grep -rlF 'Commissary::new' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 201 | EX-114 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 32 — The shared precedence resolver paladin_llm::window::resolve_context_window (SS-82) (PRIM-04) |  | `grep -rlF 'resolve_context_window' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 202 | EX-115 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 32 — WindowSource/WindowFallbackPolicy/ResolvedWindow re-exported from the paladin facade (SS-83) (PRIM-04) |  | `grep -rlF 'WindowSource' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 203 | EX-116 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 33 — Reading RagRetrievalService::retrieve_context's new RagRetrievalResult return type (SS-86) (COMM-01) |  | `grep -rlF 'RagRetrievalResult' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 204 | EX-117 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 33 — Reading the truncation/shed record via RagRetrievalResult.shed: Vec<ShedItem> (SS-87) (COMM-02) |  | `grep -rlF 'ShedItem' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 205 | EX-118 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 33 — Handling the typed RagRetrievalError enum (Sanctum/Commissary/budget-conversion failures) (SS-88) (COMM-01) |  | `grep -rlF 'RagRetrievalError' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 206 | EX-119 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 33 — The free function retrieve_context_with_timeout returning RagRetrievalResult (SS-89) (COMM-01) |  | `grep -rlF 'retrieve_context_with_timeout' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+| 207 | EX-120 | non-compiling or obsolete example | L | examples/ (gap — no program demonstrates this capability) | Phase 33 — Injecting an exact token counter via RagRetrievalService::with_token_counter (SS-91) (COMM-04) |  | `grep -rlF 'with_token_counter' examples/ crates/doc-examples/src/` → (no output, 0 hits) |
+
+**Count:** 64 `EX-nn` rows — 5 currency/obsolescence findings on existing programs (2 S, 2 M, 1 L), plus 59 gap-list rows for a Phase 22-33 capability no example demonstrates (all sized L per D-17(c)).
+
+### EX-nn confirmed current (not work items, D-19 / phase_specific_rules point 5 — listed here only for ID-completeness/reconciliation, excluded from the Order sequence and the work-item counts above)
+
+Every program in `examples/` and `crates/doc-examples/src/` that this audit's build/currency sweep confirmed `current` (builds green, no removed/renamed API named, capability claim matches the tree) carries its own `EX-nn` ID in §4's Program/module table, per D-17's per-program numbering — but a `current` verdict is not a finding (mirrors §2's own rule that a `current` mdBook page mints no `MB-nn` at all). These IDs require no Phase 36 action; they are listed below, once each, so the reconciliation check below can account for every ID §4 names without misrepresenting a passing check as an open work item.
+
+| ID | Program / module |
+|---|---|
+| EX-02 | examples/agent_handoffs.rs |
+| EX-03 | examples/arsenal_stdio_tools.rs |
+| EX-04 | examples/arsenal_streamable_http_tools.rs |
+| EX-05 | examples/autonomous_full_config.rs |
+| EX-06 | examples/autonomous_planning.rs |
+| EX-07 | examples/autonomous_prompt_generation.rs |
+| EX-08 | examples/basic_paladin.rs |
+| EX-09 | examples/battalion_checkpoint_recovery.rs |
+| EX-10 | examples/campaign_workflow.rs |
+| EX-11 | examples/chain_of_command_delegation.rs |
+| EX-12 | examples/citadel_autosave.rs |
+| EX-13 | examples/citadel_restore.rs |
+| EX-14 | examples/commander_auto.rs |
+| EX-15 | examples/commander_basic.rs |
+| EX-16 | examples/commander_council.rs |
+| EX-17 | examples/commander_full_config.rs |
+| EX-18 | examples/commander_grove.rs |
+| EX-19 | examples/commander_with_metadata_export.rs |
+| EX-20 | examples/conclave_expert_panel.rs |
+| EX-21 | examples/council_discussion.rs |
+| EX-22 | examples/document_processing.rs |
+| EX-23 | examples/dynamic_temperature.rs |
+| EX-24 | examples/formation_sequential.rs |
+| EX-25 | examples/garrison_in_memory.rs |
+| EX-26 | examples/garrison_persistent.rs |
+| EX-27 | examples/garrison_semantic_search.rs |
+| EX-28 | examples/grove_routing.rs |
+| EX-29 | examples/herald_custom_formatter.rs |
+| EX-30 | examples/herald_json_output.rs |
+| EX-31 | examples/herald_markdown_output.rs |
+| EX-32 | examples/herald_streaming.rs |
+| EX-34 | examples/llm_provider_selection.rs |
+| EX-35 | examples/maneuver_basic.rs |
+| EX-36 | examples/maneuver_dynamic_flow.rs |
+| EX-37 | examples/maneuver_nested_flow.rs |
+| EX-38 | examples/muster_baseline.rs |
+| EX-39 | examples/paladin_with_config.rs |
+| EX-40 | examples/paladin_with_rag.rs |
+| EX-41 | examples/paladin_with_sanctum.rs |
+| EX-42 | examples/phalanx_parallel.rs |
+| EX-43 | examples/sanctum_adapter_migration.rs |
+| EX-44 | examples/sanctum_basic_inmemory.rs |
+| EX-45 | examples/sanctum_configuration.rs |
+| EX-46 | examples/sanctum_qdrant_production.rs |
+| EX-47 | examples/vision_analysis.rs |
+| EX-48 | examples/vision_battalion.rs |
+| EX-49 | examples/war_engine_memory_baseline.rs |
+| EX-50 | crates/doc-examples/src/agent_runtime.rs |
+| EX-51 | crates/doc-examples/src/bridge.rs |
+| EX-52 | crates/doc-examples/src/content.rs |
+| EX-53 | crates/doc-examples/src/deployment_topologies.rs |
+| EX-54 | crates/doc-examples/src/fault_tolerance.rs |
+| EX-56 | crates/doc-examples/src/orchestration.rs |
+| EX-57 | crates/doc-examples/src/queue_worker.rs |
+| EX-58 | crates/doc-examples/src/readme.rs |
+| EX-59 | crates/doc-examples/src/sidecar.rs |
+| EX-60 | crates/doc-examples/src/support.rs |
+| EX-61 | crates/paladin-llm/examples/live_vendor_smoke.rs |
+
+**Count:** 58 `EX-nn` IDs confirmed `current`, 0 Phase 36 action required.
+
+## Reconciliation (plan 34-09, Task 1)
+
+Both directions checked mechanically, not asserted. Every command below was run against this file
+after §5/§6 were written; results are verbatim.
+
+**Forward direction — every ID minted in §2/§3/§4 is routed:**
+
+```
+$ sed -n '/^## §2/,/^## §3/p' 34-AUDIT.md | grep -oE 'MB-[0-9]+' | sort -u | wc -l
+60
+$ sed -n '/^## §5/,/^## §6/p' 34-AUDIT.md | grep -oE 'MB-[0-9]+' | sort -u | wc -l
+60
+$ diff <(sed -n '/^## §2/,/^## §3/p' 34-AUDIT.md | grep -oE 'MB-[0-9]+' | sort -u) \
+       <(sed -n '/^## §5/,/^## §6/p' 34-AUDIT.md | grep -oE 'MB-[0-9]+' | sort -u)
+(empty — the two 60-ID sets are byte-identical)
+
+$ sed -n '/^## §3/,/^## §4/p' 34-AUDIT.md | grep -oE 'RD-[0-9]+' | sort -u | wc -l
+143
+$ diff <(sed -n '/^## §3/,/^## §4/p' 34-AUDIT.md | grep -oE 'RD-[0-9]+' | sort -u) \
+       <(sed -n '/^## §6/,/^## §7/p' 34-AUDIT.md | grep -oE 'RD-[0-9]+' | sort -u)
+(empty — the two 143-ID sets are byte-identical)
+
+$ sed -n '/^## §4/,/^## §5/p' 34-AUDIT.md | grep -oE 'EX-[0-9]+' | sort -u | wc -l
+122
+$ diff <(sed -n '/^## §4/,/^## §5/p' 34-AUDIT.md | grep -oE 'EX-[0-9]+' | sort -u) \
+       <(sed -n '/^## §6/,/^## §7/p' 34-AUDIT.md | grep -oE 'EX-[0-9]+' | sort -u)
+(empty — the two 122-ID sets are byte-identical; 64 as Order-numbered work-item rows, 58 as
+"confirmed current" ID-completeness rows, per the classification split immediately above)
+```
+
+**Reverse direction — every ID appearing in a work list resolves to an originating row:** by
+construction, every row in §5 and §6 (and the confirmed-current list) was generated directly from
+its §2/§3/§4 originating row (Location, Size and Cites copied verbatim, never re-derived) — the
+forward-direction set-equality proof above is symmetric proof of the reverse, since an empty `diff`
+between two ID sets means neither set contains an element absent from the other.
+
+**No `MB-nn` in §6, no `RD-nn`/`EX-nn` in §5:**
+
+```
+$ awk '/^## §5/,/^## §6/' 34-AUDIT.md | grep -oE '(RD|EX)-[0-9]+' | sort -u | wc -l
+0
+$ awk '/^## §6/,/^## §7/' 34-AUDIT.md | grep -oE 'MB-[0-9]+' | sort -u | wc -l
+0
+```
+
+**Counts per list and per classification:**
+
+| List | Classification | Count |
+|---|---|---|
+| §5 (Phase 35) | missing page | 1 |
+| §5 (Phase 35) | stale content | 59 |
+| §5 total | | **60** |
+| §6 (Phase 36) | rustdoc warning or broken intra-doc link | 143 |
+| §6 (Phase 36) | non-compiling or obsolete example | 64 |
+| §6 total (work items) | | **207** |
+| §6 (Phase 36) | confirmed current (not a work item) | 58 |
+| §6 total (all EX/RD IDs accounted for) | | **265** |
+
+**Sizes:** §5 — 1 L (the missing-page row leading the list), plus the remaining 59 mixed S/M/L (kept identical to their §2
+originating row, never re-derived, per this task's action text). §6 RD-nn — 143 S (D-04: a
+rustdoc link repair is always a one-line fix). §6 EX-nn work items — 59 L (the gap list, D-17(c))
+plus 2 S / 2 M / 1 L from the 5 currency findings on existing programs.
+
+**SC5 read-only proof (Task 1 close):**
+
+```
+$ git status --porcelain -- . ':!.planning'
+(empty)
+```
+
+No file outside `.planning/` was created, modified or deleted by this task.
 
 ## §7 Deferred routing
 

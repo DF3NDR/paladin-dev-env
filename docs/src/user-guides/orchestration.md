@@ -11,7 +11,7 @@ and workflows call each other see the [Agent ↔ Orchestrator Bridge](agent-orch
 For how a Battalion fits among the ways to *run* agents, see
 [Deployment Topologies](../deployment-topologies/overview.md).
 
-> Every code example targets the current **v0.8.0** workspace. The substantive examples are real,
+> Every code example targets the current **v0.10.0** workspace. The substantive examples are real,
 > compiled code pulled from the `paladin-doc-examples` crate via mdBook `{{#include}}`, so they are
 > checked against the live API; a few illustrative fragments are marked `rust,ignore`. The API forms
 > are verified against `crates/paladin-battalion/` and `crates/paladin-ports/`.

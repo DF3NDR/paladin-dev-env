@@ -13,6 +13,7 @@ pub mod bridge;
 pub mod content;
 pub mod deployment_topologies;
 pub mod fault_tolerance;
+pub mod herald_output;
 pub mod http_service_host;
 pub mod orchestration;
 pub mod paladin_agents;

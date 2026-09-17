@@ -288,6 +288,12 @@ None.
 
 None — this plan only edits documentation prose and pastes verbatim `--help` output from a locally built binary; no new network endpoint, auth path, file access pattern, or schema change was introduced. Each captured block was read before pasting and contains no API key, token, real endpoint host, or local absolute path outside the repository (T-35-11 mitigation applied).
 
+## Self-Check: PASSED
+
+- All 7 modified page files and this SUMMARY.md confirmed present on disk via `[ -f ... ]`.
+- All 8 commits (7 page commits + this SUMMARY commit) confirmed present via `git log --oneline -8`
+  in this worktree.
+
 ---
 *Phase: 35-mdbook-currency*
 *Completed: 2026-09-17*

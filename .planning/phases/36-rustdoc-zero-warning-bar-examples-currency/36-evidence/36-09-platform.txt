@@ -1,0 +1,74 @@
+Phase 36 Plan 09 -- Platform API client + webhook receiver + HTTP-service-host router parity
+================================================================================================
+
+Task 1: Router parity for both HTTP-service-host files (EX-33, EX-55)
+------------------------------------------------------------------------------------------------
+
+Files: examples/http_service_host.rs, crates/doc-examples/src/http_service_host.rs
+
+Fix: both files now assemble agent_router().merge(thread_router()).merge(run_router()) --
+then the docs router (examples/http_service_host.rs only) -- in the same order
+src/bin/paladin-server.rs uses (paladin-server.rs lines 230-238). The thread and run states
+are constructed unwired (ThreadApiState::new()/RunApiState::new(), no waypoint/run store),
+matching the shipped server's own off-by-default behavior (RunStoreBackend::Disabled /
+WaypointStoreBackend::Disabled are the defaults) -- every /v1/threads/* and /v1/runs/* route
+therefore answers 501 not_implemented (reachable) rather than 404 (absent), which is exactly
+the EX-33/EX-55 defect this task closes.
+
+$ cargo build --example http_service_host --features "web-server"
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.42s
+exit 0
+
+$ env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY \
+    cargo run --example http_service_host --features "web-server"
+paladin-server (example) listening on http://127.0.0.1:41677
+GET /v1/agents -> [{"description":"You research topics thoroughly.","id":"researcher","model":"mock","name":"researcher"}]
+POST …/execute -> output: "Mock LLM response"
+POST …/execute/stream -> 1 chunk event(s)
+GET /v1/threads/demo-thread/state -> 501 Not Implemented (no waypoint store wired)
+GET /v1/runs/{run_id} -> 501 Not Implemented (no run store wired)
+GET /openapi.json -> "Paladin Agent API"
+docs UI available at http://127.0.0.1:41677/docs
+exit 0
+
+$ ./scripts/check-doc-examples.sh
+Compiling documentation examples (paladin-doc-examples crate)...
+All included examples compile.
+Checking README Quick Example matches crates/doc-examples/src/readme.rs ...
+README Quick Example is in sync.
+Checking doc code examples in /workspace/docs/src ...
+Results: 0 checked, 622 skipped, 0 failed
+All doc code examples pass validation.
+exit 0
+
+$ mdbook build docs/
+...
+[2026-09-17T22:12:51Z INFO  mdbook_linkcheck] No broken links found
+exit 0
+
+$ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-doc-examples --all-features --no-deps
+ Documenting paladin-doc-examples v0.10.0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.89s
+    Generated /workspace/target/doc/paladin_doc_examples/index.html
+exit 0
+
+$ cargo fmt --all -- --check
+exit 0
+
+$ cargo check --workspace --all-targets --all-features
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.01s
+exit 0
+
+$ ./scripts/check-api-surface.sh .project/current-exports.txt
+✅ API surface extracted (3959 items)
+✅ API surface unchanged
+exit 0
+
+Acceptance-criteria greps:
+  grep -c 'thread_router' examples/http_service_host.rs                    -> 2 (>= 1)
+  grep -c 'run_router' examples/http_service_host.rs                       -> 2 (>= 1)
+  grep -c 'thread_router' crates/doc-examples/src/http_service_host.rs     -> 3 (>= 1)
+  grep -c 'run_router' crates/doc-examples/src/http_service_host.rs        -> 3 (>= 1)
+  grep -c 'http_host' crates/doc-examples/src/http_service_host.rs         -> 2 (>= 2, anchor open/close intact)
+
+git diff --stat HEAD~1 -- src/ : empty (no src/ changes in this task's commit)

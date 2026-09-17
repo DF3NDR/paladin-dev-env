@@ -31,16 +31,22 @@ Paladin supports multiple LLM providers out of the box, allowing you to choose t
 
 ## Provider Comparison
 
-| Feature | OpenAI | DeepSeek | Anthropic |
-|---------|--------|----------|-----------|
-| **Streaming** | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Tool Calling** | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Function Calling** | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Vision/Images** | ✅ GPT-4V | ❌ No | ✅ Claude 3+ |
-| **Max Context** | 128K (GPT-4) | 64K | 200K (Claude 3) |
-| **Best For** | General purpose, production | Cost-effective, reasoning | Safety-critical, analysis |
-| **Pricing** | $$ | $ | $$$ |
-| **Latency** | Low | Low | Low-Medium |
+All nine shipped providers report their capabilities through the same `ProviderCapabilities`
+struct (`crates/paladin-ports/src/output/llm_port.rs`); the table below is read directly from
+each adapter's `get_capabilities()` implementation, not hand-transcribed from provider marketing.
+No shipped adapter declares `supports_tool_calling` or `supports_function_calling` true today —
+the struct's own rustdoc notes this explicitly.
+
+| Feature | OpenAI | DeepSeek | Anthropic | xAI Grok | Moonshot Kimi | Alibaba Qwen | Ollama | Google Gemini | Generic OpenAI-compatible |
+|---------|--------|----------|-----------|----------|----------------|---------------|--------|----------------|----------------------------|
+| **Streaming** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | configurable |
+| **Tool Calling** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
+| **Function Calling** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
+| **Vision/Images** | ✅ Yes | ❌ No | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
+| **Max Context** | 128K | 64K | 200K | 131K | 131K | 131K | model-dependent (unset) | 1.05M | server-dependent |
+| **Best For** | General purpose, production | Cost-effective, reasoning | Safety-critical, analysis | General purpose | Long-context reasoning | General purpose | Local/self-hosted | Very long context | Self-hosted or third-party OpenAI-API servers |
+| **Pricing** | $$ | $ | $$$ | Varies (see provider docs) | Varies (see provider docs) | Varies (see provider docs) | Free (self-hosted) | Varies (see provider docs) | Varies (server-dependent) |
+| **Latency** | Low | Low | Low-Medium | Varies (see provider docs) | Varies (see provider docs) | Varies (see provider docs) | Varies (local hardware) | Varies (see provider docs) | Varies (server-dependent) |
 
 ### Detailed Feature Matrix
 
@@ -197,23 +203,28 @@ llm:
 
 #### OpenAI
 
-```rust
-use paladin::infrastructure::adapters::llm::openai_adapter::OpenAILlmAdapter;
-use std::time::Duration;
+```rust,ignore
+use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 
-let adapter = OpenAILlmAdapter::new(
+// From environment
+let config = OpenAIConfig::from_env()?;
+let adapter = OpenAIAdapter::new(config)?;
+
+// Or custom
+let config = OpenAIConfig {
     api_key,
-    None, // Use default base URL
-    Some(Duration::from_secs(30))
-)?;
+    base_url: "https://api.openai.com/v1".to_string(),
+    organization: None,
+    timeout_seconds: 30,
+    max_retries: 3,
+};
+let adapter = OpenAIAdapter::new(config)?;
 ```
 
 #### DeepSeek
 
-```rust
-use paladin::infrastructure::adapters::llm::deepseek_adapter::{
-    DeepSeekAdapter, DeepSeekConfig
-};
+```rust,ignore
+use paladin_llm::deepseek::{DeepSeekAdapter, DeepSeekConfig};
 
 // From environment
 let config = DeepSeekConfig::from_env()?;
@@ -230,10 +241,8 @@ let adapter = DeepSeekAdapter::new(config)?;
 
 #### Anthropic
 
-```rust
-use paladin::infrastructure::adapters::llm::anthropic_adapter::{
-    AnthropicAdapter, AnthropicConfig
-};
+```rust,ignore
+use paladin_llm::anthropic::{AnthropicAdapter, AnthropicConfig};
 
 // From environment
 let config = AnthropicConfig::from_env()?;
@@ -308,13 +317,9 @@ let adapter = AnthropicAdapter::new(config)?;
 
 DeepSeek uses an OpenAI-compatible API, making migration straightforward:
 
-```rust
+```rust,ignore
 // Before (OpenAI)
-let llm_port = Arc::new(OpenAILlmAdapter::new(
-    openai_key,
-    None,
-    Some(Duration::from_secs(30))
-)?);
+let llm_port = Arc::new(OpenAIAdapter::new(OpenAIConfig::from_env()?)?);
 
 // After (DeepSeek)
 let config = DeepSeekConfig::from_env()?;
@@ -335,13 +340,9 @@ let paladin = PaladinBuilder::new(llm_port)
 
 Anthropic Claude requires some adjustments due to API differences:
 
-```rust
+```rust,ignore
 // Before (OpenAI)
-let llm_port = Arc::new(OpenAILlmAdapter::new(
-    openai_key,
-    None,
-    Some(Duration::from_secs(30))
-)?);
+let llm_port = Arc::new(OpenAIAdapter::new(OpenAIConfig::from_env()?)?);
 
 // After (Anthropic)
 let config = AnthropicConfig::from_env()?;
@@ -363,8 +364,8 @@ let paladin = PaladinBuilder::new(llm_port)
 
 Implement graceful fallback for higher reliability:
 
-```rust
-use paladin::paladin_ports::output::llm_port::LlmPort;
+```rust,ignore
+use paladin_ports::output::llm_port::LlmPort;
 use std::sync::Arc;
 
 fn create_llm_provider() -> Result<Arc<dyn LlmPort>, Box<dyn std::error::Error>> {
@@ -384,11 +385,7 @@ fn create_llm_provider() -> Result<Arc<dyn LlmPort>, Box<dyn std::error::Error>>
 
     // Final fallback to OpenAI (default)
     let api_key = std::env::var("OPENAI_API_KEY")?;
-    Ok(Arc::new(OpenAILlmAdapter::new(
-        api_key,
-        None,
-        Some(Duration::from_secs(30))
-    )?))
+    Ok(Arc::new(OpenAIAdapter::new(OpenAIConfig::from_env()?)?))
 }
 ```
 
@@ -445,7 +442,7 @@ fn create_llm_provider() -> Result<Arc<dyn LlmPort>, Box<dyn std::error::Error>>
 
 Query provider capabilities before attempting operations:
 
-```rust
+```rust,ignore
 let caps = provider.get_capabilities();
 
 if caps.supports_vision {
@@ -461,22 +458,18 @@ if caps.supports_streaming {
 
 Different providers may have different response times:
 
-```rust
+```rust,ignore
 // Higher timeout for Claude with long contexts
 let claude_config = AnthropicConfig::new(/* ... */);
 // Timeout handled internally
 
 // Standard timeout for others
-let openai = OpenAILlmAdapter::new(
-    api_key,
-    None,
-    Some(Duration::from_secs(30))
-)?;
+let openai = OpenAIAdapter::new(OpenAIConfig::from_env()?)?;
 ```
 
 ### 3. Handle Provider-Specific Errors
 
-```rust
+```rust,ignore
 match provider.generate(&request).await {
     Ok(response) => // Handle response,
     Err(LlmError::RateLimitExceeded { retry_after }) => {
@@ -492,7 +485,7 @@ match provider.generate(&request).await {
 
 ### 4. Monitor Usage and Costs
 
-```rust
+```rust,ignore
 let response = provider.generate(&request).await?;
 
 // Log token usage
@@ -556,5 +549,4 @@ println!("Total cost: ${}", calculate_cost(&response, provider_name));
 
 ---
 
-**Last Updated:** January 2026  
-**Version:** 0.1.0
+**Version:** 0.10.0

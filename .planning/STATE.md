@@ -5,10 +5,10 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 35
 current_phase_name: mdBook Currency
 status: planning
-stopped_at: "Phase 34 complete 2026-09-17 — 9/9 plans, 34-VERIFICATION.md passed 5/5 (34-AUDIT.md: 94 mdBook rows 38 current/55 stale/1 missing, 143 RD rows, 122 EX rows; Phase 35 list 60 items, Phase 36 list 207 items; deferred register 5 entries; SC5 read-only proven over ee1fb160..HEAD); next: /gsd-discuss-phase 35 --auto (Phase 35 mdBook Currency consumes 34-AUDIT.md §5)"
-last_updated: "2026-09-17T06:55:03.024Z"
+stopped_at: "Phase 34 complete 2026-09-17 — 9/9 plans, 34-VERIFICATION.md passed 5/5 (34-AUDIT.md: 94 mdBook rows 38 current/55 stale/1 missing, 143 RD rows, 122 EX rows; Phase 35 list 60 items, Phase 36 list 207 items; deferred register 5 entries; SC5 read-only proven over ee1fb160..HEAD); 34-UAT.md complete 47/47 (coverage-mode, maintainer-confirmed); next: /gsd-discuss-phase 35 (Phase 35 mdBook Currency consumes 34-AUDIT.md §5)"
+last_updated: "2026-09-17T11:59:41.000Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 34 complete, transitioned to Phase 35
+last_activity_desc: Phase 34 UAT complete (47/47), ready to plan Phase 35
 progress:
   total_phases: 17
   completed_phases: 14
@@ -20,12 +20,15 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-17 after Phase 33 verification)
+See: .planning/PROJECT.md (updated 2026-09-17 after Phase 34 completion)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 34 — documentation-currency-audit
+**Current focus:** Phase 35 — mdBook Currency (consumes `34-AUDIT.md` §5, the 60-item work list)
+Phase 34 was verified 2026-09-17: `34-UAT.md` 47/47 passed (all nine SUMMARYs coverage-mode, every
+deliverable automated and the list confirmed by the maintainer; `34-check.sh --final` 8/8 re-run at UAT
+time), `34-VERIFICATION.md` `passed` 5/5, `34-SECURITY.md` `verified` with `threats_open: 0`.
 `0.10.0` tag is not yet cut. Phases 30-33 (Token Economy) are closed. Phase 33 was verified 2026-09-17:
 `33-UAT.md` 23/23 passed (22 coverage-mode automated passes + the maintainer's human acceptance of corpus
 audit §11 and `33-CI-EVIDENCE.md`), `33-SECURITY.md` `verified` with `threats_open: 0`, `33-VALIDATION.md`
@@ -1051,8 +1054,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T06:44:00.874Z
-**Stopped at:** Completed 34-09-PLAN.md (Phase 34 execution complete, ready for verification)
+**Last session:** 2026-09-17T11:59:41.000Z
+**Stopped at:** Phase 34 complete — 34-UAT.md 47/47 passed and maintainer-confirmed; ready to plan Phase 35 (`/gsd-discuss-phase 35`)
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

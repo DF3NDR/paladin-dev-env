@@ -218,7 +218,7 @@ pub enum RunSubmissionError {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let port = AlwaysAccepts;
 ///     let request = SubmitRun {
 ///         assistant_id: "a1".to_string(),
@@ -229,8 +229,9 @@ pub enum RunSubmissionError {
 ///         requested_by: None,
 ///     };
 ///
-///     let accepted = port.submit(request).await.unwrap();
-///     assert_eq!(accepted.thread_id, ThreadId::new("t1").unwrap());
+///     let accepted = port.submit(request).await?;
+///     assert_eq!(accepted.thread_id, ThreadId::new("t1")?);
+///     Ok(())
 /// }
 /// ```
 #[async_trait]

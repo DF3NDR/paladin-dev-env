@@ -155,7 +155,7 @@ pub enum ScheduleAdminError {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let admin = InMemorySchedules {
 ///         rows: Mutex::new(HashMap::new()),
 ///     };
@@ -171,11 +171,11 @@ pub enum ScheduleAdminError {
 ///             on_missed: None,
 ///             webhook: None,
 ///         })
-///         .await
-///         .unwrap();
+///         .await?;
 ///
-///     let fetched = admin.get(&created.schedule_id).await.unwrap();
+///     let fetched = admin.get(&created.schedule_id).await?;
 ///     assert_eq!(fetched.as_ref().map(|s| &s.schedule_id), Some(&created.schedule_id));
+///     Ok(())
 /// }
 /// ```
 #[async_trait]

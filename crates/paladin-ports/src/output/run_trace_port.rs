@@ -186,14 +186,14 @@ pub enum RunTraceError {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let store = InMemoryTraceStore {
 ///         records: Mutex::new(HashMap::new()),
 ///     };
-///     let thread = ThreadId::new("thread-1").unwrap();
+///     let thread = ThreadId::new("thread-1")?;
 ///
 ///     // A thread that was never written to reads back empty, not an error.
-///     let empty = store.read(&thread, 0, 100).await.unwrap();
+///     let empty = store.read(&thread, 0, 100).await?;
 ///     assert!(
 ///         empty.is_empty(),
 ///         "an unwritten thread reads as empty, never an error"
@@ -209,10 +209,11 @@ pub enum RunTraceError {
 ///             graph_fingerprint: "fp".to_string(),
 ///         },
 ///     };
-///     store.append(&[record]).await.unwrap();
+///     store.append(&[record]).await?;
 ///
-///     let rows = store.read(&thread, 0, 100).await.unwrap();
+///     let rows = store.read(&thread, 0, 100).await?;
 ///     assert_eq!(rows.len(), 1, "the appended record round-trips back out");
+///     Ok(())
 /// }
 /// ```
 #[async_trait]

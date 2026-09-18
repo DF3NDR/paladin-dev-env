@@ -163,20 +163,21 @@ pub enum QueueError {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let queue = InMemoryQueue {
 ///         pending: Mutex::new(VecDeque::new()),
 ///     };
 ///     let run = QueuedRun {
 ///         run_id: RunId::new_v7(),
-///         thread_id: ThreadId::new("t1").unwrap(),
+///         thread_id: ThreadId::new("t1")?,
 ///         attempt: 1,
 ///         enqueued_at: Utc::now(),
 ///     };
 ///
-///     queue.enqueue(run.clone()).await.unwrap();
-///     let leased = queue.dequeue(Duration::from_secs(30)).await.unwrap();
+///     queue.enqueue(run.clone()).await?;
+///     let leased = queue.dequeue(Duration::from_secs(30)).await?;
 ///     assert_eq!(leased.map(|l| l.queued.run_id), Some(run.run_id));
+///     Ok(())
 /// }
 /// ```
 #[async_trait]

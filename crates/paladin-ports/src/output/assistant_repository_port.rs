@@ -257,12 +257,12 @@ pub enum AssistantRepositoryError {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let repo = InMemoryAssistants {
 ///         assistants: Mutex::new(HashMap::new()),
 ///         versions: Mutex::new(HashMap::new()),
 ///     };
-///     let assistant_id = AssistantId::new("triage-agent").unwrap();
+///     let assistant_id = AssistantId::new("triage-agent")?;
 ///     let definition = AssistantDefinition {
 ///         kind: AssistantKind::Agent,
 ///         body: serde_json::json!({ "system_prompt": "You triage tickets." }),
@@ -276,8 +276,7 @@ pub enum AssistantRepositoryError {
 ///             note: None,
 ///         },
 ///     )
-///     .await
-///     .unwrap();
+///     .await?;
 ///
 ///     repo.append_version(
 ///         &assistant_id,
@@ -287,15 +286,15 @@ pub enum AssistantRepositoryError {
 ///             note: Some("second pass".to_string()),
 ///         },
 ///     )
-///     .await
-///     .unwrap();
+///     .await?;
 ///
-///     let page = repo.list_versions(&assistant_id, 10, None).await.unwrap();
+///     let page = repo.list_versions(&assistant_id, 10, None).await?;
 ///     assert_eq!(
 ///         page.items.len(),
 ///         2,
 ///         "create plus one append_version leaves exactly two versions on record"
 ///     );
+///     Ok(())
 /// }
 /// ```
 #[async_trait]

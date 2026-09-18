@@ -251,12 +251,12 @@ pub enum AssistantAdminError {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let admin = InMemoryAdmin {
 ///         assistants: Mutex::new(HashMap::new()),
 ///         versions: Mutex::new(HashMap::new()),
 ///     };
-///     let assistant_id = AssistantId::new("triage-agent").unwrap();
+///     let assistant_id = AssistantId::new("triage-agent")?;
 ///     let definition = AssistantDefinition {
 ///         kind: AssistantKind::Agent,
 ///         body: serde_json::json!({ "system_prompt": "You triage tickets." }),
@@ -271,15 +271,15 @@ pub enum AssistantAdminError {
 ///                 note: None,
 ///             },
 ///         )
-///         .await
-///         .unwrap();
+///         .await?;
 ///
-///     let fetched = admin.get(&assistant_id).await.unwrap();
+///     let fetched = admin.get(&assistant_id).await?;
 ///     assert_eq!(
 ///         fetched.map(|a| a.latest),
 ///         Some(created.version),
 ///         "the record just created round-trips back out through get"
 ///     );
+///     Ok(())
 /// }
 /// ```
 #[async_trait]

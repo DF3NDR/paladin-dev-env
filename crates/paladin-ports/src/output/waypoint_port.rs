@@ -255,11 +255,11 @@ pub struct ThreadSummary {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let store = InMemoryWaypoints {
 ///         by_thread: Mutex::new(HashMap::new()),
 ///     };
-///     let thread = ThreadId::new("thread-1").unwrap();
+///     let thread = ThreadId::new("thread-1")?;
 ///     let waypoint = Waypoint::new_root(
 ///         thread.clone(),
 ///         0,
@@ -272,12 +272,16 @@ pub struct ThreadSummary {
 ///         FrontierSnapshot::default(),
 ///     );
 ///
-///     store.save(&waypoint).await.unwrap();
-///     let latest = store.latest(&thread).await.unwrap().unwrap();
+///     store.save(&waypoint).await?;
+///     let latest = store
+///         .latest(&thread)
+///         .await?
+///         .ok_or("expected the just-saved waypoint to round-trip back out")?;
 ///     assert_eq!(
 ///         latest.waypoint_id, waypoint.waypoint_id,
 ///         "latest returns the exact waypoint that was saved"
 ///     );
+///     Ok(())
 /// }
 /// ```
 #[async_trait]

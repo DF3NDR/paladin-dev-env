@@ -176,7 +176,7 @@ pub enum NodeCacheError {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let cache = InMemoryCache {
 ///         entries: Mutex::new(HashMap::new()),
 ///     };
@@ -184,11 +184,11 @@ pub enum NodeCacheError {
 ///
 ///     cache
 ///         .put(&key, &StateDelta::new(), Duration::from_secs(60))
-///         .await
-///         .unwrap();
+///         .await?;
 ///
-///     let hit = cache.get(&key).await.unwrap();
+///     let hit = cache.get(&key).await?;
 ///     assert!(hit.is_some(), "a stored entry round-trips back out as a hit");
+///     Ok(())
 /// }
 /// ```
 #[async_trait]

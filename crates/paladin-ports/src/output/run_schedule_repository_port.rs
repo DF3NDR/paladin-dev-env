@@ -172,19 +172,20 @@ pub enum RunScheduleRepositoryError {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let repo = InMemorySchedules {
 ///         schedules: Mutex::new(HashMap::new()),
 ///     };
 ///     let schedule = RunSchedule::new(RunScheduleId::new_v7(), "assistant-1", "*/5 * * * *");
 ///
-///     repo.insert(schedule).await.unwrap();
-///     let page = repo.list(10, None).await.unwrap();
+///     repo.insert(schedule).await?;
+///     let page = repo.list(10, None).await?;
 ///     assert_eq!(
 ///         page.items.len(),
 ///         1,
 ///         "the inserted schedule shows up in list"
 ///     );
+///     Ok(())
 /// }
 /// ```
 #[async_trait]

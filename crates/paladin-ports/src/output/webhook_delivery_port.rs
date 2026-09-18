@@ -160,7 +160,7 @@ pub enum WebhookDeliveryRepositoryError {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let repo = InMemoryDeliveries {
 ///         rows: Mutex::new(HashMap::new()),
 ///     };
@@ -168,16 +168,17 @@ pub enum WebhookDeliveryRepositoryError {
 ///     let delivery = WebhookDelivery::new(
 ///         WebhookDeliveryId::new_v7(),
 ///         run_id.clone(),
-///         ThreadId::new("t1").unwrap(),
+///         ThreadId::new("t1")?,
 ///         RunEventKind::Completed,
 ///         "https://example.invalid/hook",
 ///         "{}",
 ///         Utc::now(),
 ///     );
 ///
-///     repo.enqueue(delivery).await.unwrap();
-///     let page = repo.list_for_run(&run_id, 10, None).await.unwrap();
+///     repo.enqueue(delivery).await?;
+///     let page = repo.list_for_run(&run_id, 10, None).await?;
 ///     assert_eq!(page.items.len(), 1, "the enqueued delivery must be listed back");
+///     Ok(())
 /// }
 /// ```
 #[async_trait]

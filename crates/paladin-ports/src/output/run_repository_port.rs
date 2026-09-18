@@ -238,13 +238,13 @@ pub enum RunRepositoryError {
 /// }
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let repo = InMemoryRuns {
 ///         runs: Mutex::new(HashMap::new()),
 ///     };
 ///     let run = Run::new(
 ///         RunId::new_v7(),
-///         ThreadId::new("thread-1").unwrap(),
+///         ThreadId::new("thread-1")?,
 ///         AssistantRef {
 ///             assistant_id: "assistant-1".to_string(),
 ///             version: 1,
@@ -252,13 +252,14 @@ pub enum RunRepositoryError {
 ///         serde_json::json!({"input": "hello"}),
 ///     );
 ///
-///     repo.insert(&run).await.unwrap();
-///     let fetched = repo.get(&run.run_id).await.unwrap();
+///     repo.insert(&run).await?;
+///     let fetched = repo.get(&run.run_id).await?;
 ///     assert_eq!(
 ///         fetched.map(|r| r.run_id),
 ///         Some(run.run_id),
 ///         "the inserted run round-trips back out of get"
 ///     );
+///     Ok(())
 /// }
 /// ```
 #[async_trait]

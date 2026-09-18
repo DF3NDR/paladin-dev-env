@@ -140,6 +140,70 @@ impl Default for ScheduleServiceOptions {
 /// `pub(super)` rather than private so `schedule::admin`'s
 /// `impl ScheduleAdminPort for ScheduleService` (a sibling module, not this
 /// one) can read them directly.
+///
+/// # Examples
+///
+/// Constructing a `ScheduleService` from its port dependencies: the shipped
+/// in-memory schedule repository, plus a minimal local [`RunSubmissionPort`]
+/// implementation, since no in-memory adapter for that port ships (the shape
+/// here mirrors `RunSubmissionPort`'s own doctest fixture).
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use async_trait::async_trait;
+/// use paladin::application::services::run::schedule::{
+///     ScheduleService, ScheduleServiceOptions,
+/// };
+/// use paladin_core::platform::container::run::RunId;
+/// use paladin_core::platform::container::user::UserRole;
+/// use paladin_core::platform::container::waypoint::ThreadId;
+/// use paladin_ports::input::run_submission_port::{
+///     CancelOutcome, ForkRun, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
+/// };
+/// use paladin_storage::run_schedule::in_memory::InMemoryRunScheduleRepository;
+///
+/// struct AlwaysAccepts;
+///
+/// #[async_trait]
+/// impl RunSubmissionPort for AlwaysAccepts {
+///     async fn submit(&self, request: SubmitRun) -> Result<RunAccepted, RunSubmissionError> {
+///         Ok(RunAccepted {
+///             run_id: RunId::new_v7(),
+///             thread_id: request.thread_id.unwrap_or_else(|| ThreadId::new("t1").unwrap()),
+///         })
+///     }
+///
+///     async fn cancel(
+///         &self,
+///         run_id: &RunId,
+///         _requested_by: Option<(String, UserRole)>,
+///     ) -> Result<CancelOutcome, RunSubmissionError> {
+///         Err(RunSubmissionError::NotFound {
+///             run_id: run_id.clone(),
+///         })
+///     }
+///
+///     async fn fork(&self, request: ForkRun) -> Result<RunAccepted, RunSubmissionError> {
+///         Ok(RunAccepted {
+///             run_id: RunId::new_v7(),
+///             thread_id: request.thread_id,
+///         })
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let repo = Arc::new(InMemoryRunScheduleRepository::new());
+///     let submission = Arc::new(AlwaysAccepts);
+///     let service = ScheduleService::new(repo, submission, ScheduleServiceOptions::default());
+///
+///     // No schedules exist yet, so this tick processes nothing -- proving
+///     // the service is fully wired without a live backend.
+///     let outcomes = service.tick_once().await;
+///     assert!(outcomes.is_empty());
+/// }
+/// ```
 pub struct ScheduleService {
     pub(super) repo: Arc<dyn RunScheduleRepositoryPort>,
     pub(super) submission: Arc<dyn RunSubmissionPort>,

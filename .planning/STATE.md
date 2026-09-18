@@ -5,8 +5,8 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37
 current_phase_name: v0.10.0 Crate Release
 status: planning
-stopped_at: Phase 36.1 complete (verification passed 6/6, review fixed, CI run 35329107346 green); Phase 37 ready to plan
-last_updated: "2026-09-18T10:18:49.816Z"
+stopped_at: Phase 37 context gathered
+last_updated: "2026-09-18T12:40:20.021Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36.1 complete, transitioned to Phase 37
 progress:
@@ -1129,9 +1129,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T09:51:32.106Z
-**Stopped at:** Phase 36.1 complete (verification passed 6/6, review fixed, CI run 35329107346 green); Phase 37 ready to plan
-**Resume file:** .planning/phases/36.1-deferred-items-closure/36.1-VERIFICATION.md
+**Last session:** 2026-09-18T12:40:19.919Z
+**Stopped at:** Phase 37 context gathered
+**Resume file:** .planning/phases/37-v0-10-0-crate-release/37-CONTEXT.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

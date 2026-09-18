@@ -548,7 +548,7 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
   all seven pages, and `cicd.md`'s deploy and best-practice YAML is captioned illustrative
   (ROADMAP Phase 36.1 SC1; D-00a, D-00e, D-00h, D-02, D-04, D-05, D-06, D-07, D-08)
 
-- [x] **CURR-17**: The Phase 34 tooling findings are dispositioned, not re-pointed —
+- [ ] **CURR-17**: The Phase 34 tooling findings are dispositioned, not re-pointed —
   `scripts/check-public-api-examples.sh` is wired into `make clean-code`, the pre-push hook and the
   CI lint job with all 19 MISSING entry points fixed, the set at closure is recorded in
   `36.1-ENTRY-POINTS.md` at 101 items, `ci.yml`'s examples-count comment is verified correct, and
@@ -706,7 +706,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CURR-14 | Phase 36 | Complete |
 | CURR-15 | Phase 36 | Complete |
 | CURR-16 | Phase 36.1 | Complete |
-| CURR-17 | Phase 36.1 | Complete |
+| CURR-17 | Phase 36.1 | Pending |
 | CURR-18 | Phase 36.1 | Complete |
 | CURR-19 | Phase 36.1 | Pending |
 | CURR-20 | Phase 36.1 | Pending |

@@ -181,6 +181,43 @@ Full per-package logs (`start`/`end` timestamps, full `cargo semver-checks` outp
 the earlier, interrupted run's files are preserved separately at
 `target/37-02/interrupted-20260918T1622Z/` and are not this gate's evidence (see the finding above).
 
+### Plan 37-03 Task 1 head SHA (dispatch, D-06 gate row 6)
+
+`git rev-parse HEAD` at dispatch of plan 37-03 → `ed0d3b06b897d4a905ce47989ccea10de38bc90b` (the tip
+of `feature/phase-33`, `docs(37-02): complete local gate re-seal plan`). The source tree under test
+(`crates/`, `src/`, `tests/`, `Cargo.toml`/`Cargo.lock`) is byte-identical to plan 37-02's own head
+`af21ede9`'s — plan 37-02's Task 3 commit (`b95d2af0`) and Task 3's SUMMARY commit only ever touched
+`.planning/phases/37-v0-10-0-crate-release/37-CI-EVIDENCE.md` and `37-02-SUMMARY.md`. Measured live
+at dispatch: `df -BG --output=avail /workspace` → **120G**; `git status --porcelain` → empty (clean
+tree). Re-measured immediately before launching gate row 6 (per this plan's action text — plan
+37-02's numbers are a baseline, not a licence): still **120G** free, tree still clean, same head
+SHA — both re-checks satisfy the plan's stated >= 40 GiB precondition with wide headroom.
+
+**Quiet-machine wait (plan's pitfall 2, before launching g6):** the 1-minute load average was
+checked before launch per the plan's quiet-machine rule (`release-check` stacks `clean-code`
+immediately before the full workspace test suite, a previously-observed local timeout pattern in
+this devcontainer). Readings, foreground-polled at ~60s intervals, no process killed: `4.38`,
+`2.86`, `3.34`, `4.07`, `3.23`, `3.29`, `2.07`, `1.70` — settled under the ~2.0 threshold after ~7
+minutes and launched at that reading (`1.70`). `nproc` → `8`.
+
+Hosted detached per the plan's long-running-command protocol: `target/37-03/run.sh g6 make
+publish-dry-run`, launched via `nohup ... &` + a separate `echo $! > target/37-03/g6.pid` statement
+(no combined cleanup-plus-launch compound), polled to completion with repeated foreground
+`timeout 560 tail --pid=... -f /dev/null` calls. Real exit code and full log captured at
+`target/37-03/g6.exit` / `g6.log`.
+
+| 29 | `make publish-dry-run` (D-06 gate row 6 — head `ed0d3b06`, hosted detached at `target/37-03/g6.{log,exit,pid}`) | Ran `2026-09-18T17:20:22Z`–`17:53:54Z` (**33m 32s** wall time, cold `target/` per plan 37-02's addendum — a genuine `release` profile build appears in the log at `13m 12s`, the longest single incremental compile step at `8m 02s`, consistent with a cold-cache run, not a no-op). Exit code `0`. `release-check` leg: all 40 `test result:` lines in the log report `ok` with `0 failed` (zero-failed-test statement satisfied); `cargo audit` reported the same **10** allowed pre-existing unmaintained/yanked-transitive warnings as `33-CI-EVIDENCE.md`/§11 (no new advisory introduced); `[0;32m✅ Release check passed![0m` printed. `cargo publish --workspace --dry-run` uploaded **12** crates in dependency order — `paladin-ai-core`, `paladin-ports`, `paladin-herald`, `paladin-llm`, `paladin-notifications`, `paladin-storage`, `paladin-web`, `paladin-battalion`, `paladin-content`, `paladin-memory`, `paladin-eval`, `paladin-ai` — each ending `warning: aborting upload due to dry run` (`grep -c 'aborting upload due to dry run' target/37-03/g6.log` → `12`, matching the required >= 12 count exactly). `paladin-doc-examples` (`publish = false`) was compiled and doc-tested (`Doc-tests paladin_doc_examples`, `running 0 tests`) as part of the workspace test suite but **never appears in the `Uploading` list** — correctly absent from the packaged/uploaded set. `git status --porcelain` empty after the run (full tree, not just the scoped paths); `git status --porcelain -- crates src tests Cargo.toml Cargo.lock` also empty. Free space after the run: **110G** (down ~10G from packaging + release-build artifacts, still far above threshold). | ✅ PASS (12/12, non-empty, dependency order) |
+
+**Deviation from the plan's own `<automated>` verify block (disclosed, not a gate substitution of
+meaning):** the plan's `<automated>` block chains `git status --porcelain` → `make
+publish-dry-run` (foreground) → three `grep -c` assertions into one command. Run that way it would
+both exceed the Bash tool's 600s ceiling (the gate took 33m 32s) and constitute hosting the gate
+outside the mandated detached-with-real-exit-code protocol. Per this repo's own execution rules
+(repo rule 2), the gate was hosted detached exactly once and the same three conditions — dry-run
+abort count >= 12, zero `test result: FAILED` lines, `paladin-doc-examples` absent from the
+`Uploading` list — were asserted directly against `target/37-03/g6.log`/`g6.exit` after the one run
+completed, not re-run. No gate's pass/fail meaning was altered by this substitution.
+
 ---
 
 ## CI-run table

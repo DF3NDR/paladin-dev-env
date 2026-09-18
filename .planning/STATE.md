@@ -5,8 +5,8 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36.1
 current_phase_name: Deferred Items Closure
 status: planning
-stopped_at: Completed 36-13-PLAN.md — Phase 36 fully closed (13/13 plans complete)
-last_updated: "2026-09-18T01:19:37.532Z"
+stopped_at: Phase 36.1 context gathered
+last_updated: "2026-09-18T02:17:19.208Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36 complete, transitioned to Phase 36.1
 progress:
@@ -1095,9 +1095,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T00:42:44.472Z
-**Stopped at:** Completed 36-13-PLAN.md — Phase 36 fully closed (13/13 plans complete)
-**Resume file:** None
+**Last session:** 2026-09-18T02:17:19.121Z
+**Stopped at:** Phase 36.1 context gathered
+**Resume file:** .planning/phases/36.1-deferred-items-closure/36.1-CONTEXT.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

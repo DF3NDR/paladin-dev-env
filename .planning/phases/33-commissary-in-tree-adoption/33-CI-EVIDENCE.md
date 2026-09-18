@@ -151,3 +151,6 @@ both the real pre-merge run and, later, the post-merge run on the tagged `main` 
 
 *Phase: 33-commissary-in-tree-adoption*
 *Written: 2026-09-16*
+
+*2026-09-18 addendum: Phase 37's pre-merge/post-tag CI evidence for the v0.10.0 release lives in
+`.planning/phases/37-v0-10-0-crate-release/37-CI-EVIDENCE.md`; this file's own rows are unchanged.*

@@ -35,7 +35,7 @@ audit §11 and `33-CI-EVIDENCE.md`), `33-SECURITY.md` `verified` with `threats_o
 `validated`, `33-VERIFICATION.md` `passed`. The §11 sign-off box itself stays unticked in the corpus file
 until the maintainer ticks it by hand at tag time (Phase 29 D-17). Next: `/gsd-complete-milestone v0.10.0`.
 Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job supplies the one gate this
-devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
+devcontainer cannot measure and a real pre-merge run is appended to `37-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
 **Progress:** [██████████] 96%

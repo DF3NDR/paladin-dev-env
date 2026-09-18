@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36.1
 current_phase_name: Deferred Items Closure
 status: executing
-stopped_at: Phase 36.1 context gathered
-last_updated: "2026-09-18T03:23:24.708Z"
+stopped_at: Completed 36.1-01-PLAN.md
+last_updated: "2026-09-18T03:37:05.802Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36.1 execution started
 progress:
   total_phases: 18
   completed_phases: 16
   total_plans: 204
-  completed_plans: 190
+  completed_plans: 191
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 100%
+**Progress:** [█████████░] 94%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -62,8 +62,8 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36.1 (Deferred Items Closure) — EXECUTING
-Plan: 1 of 14
-Status: Executing Phase 36.1
+Plan: 2 of 14
+Status: Ready to execute
 Last activity: 2026-09-18 — Phase 36.1 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
@@ -166,6 +166,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36 P11 | ~1h10min | 3 tasks | 2 files |
 | Phase 36 P12 | ~1h | 2 tasks | 8 files |
 | Phase 36 P13 | 25min | 3 tasks | 4 files |
+| Phase 36.1 P01 | 20min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -528,6 +529,9 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 36 closure: all 207 audit rows (143 RD-nn + 64 EX-nn) traced by ID to a commit in 36-EVIDENCE.md; no row omitted or invented
 - [Phase ?]: WINDOWS.md rows 36 and 37 resolved to fixed via gsd-tools only; CHANGELOG.md [0.10.0] Documentation section gained four reader-facing Phase 36 bullets
 - [Phase ?]: Real pushed-branch CI run 35290763563 recorded proving the new all-features rustdoc documentation gate (D-12); every CI figure matched the local closing measurement exactly, no D-03 disagreement to arbitrate
+- [Phase ?]: D-15 rewrite: cli_isolation guard now asserts Cargo.toml's [features] default array via toml crate instead of build cfg
+- [Phase ?]: D-20 closure table: 36.1-EVIDENCE.md seeded with all 17 lines; line 1 (cli_isolation) completed, 16 pending for plan 36.1-13
+- [Phase ?]: D-16 sweep confirmed RESEARCH.md assumption A2: zero non-cli_isolation failing targets under --all-features --no-fail-fast
 
 ### Pending Todos
 
@@ -1095,9 +1099,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T02:17:19.121Z
-**Stopped at:** Phase 36.1 context gathered
-**Resume file:** .planning/phases/36.1-deferred-items-closure/36.1-CONTEXT.md
+**Last session:** 2026-09-18T03:37:05.723Z
+**Stopped at:** Completed 36.1-01-PLAN.md
+**Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

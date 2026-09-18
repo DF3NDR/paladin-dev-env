@@ -555,12 +555,12 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
   PROJECT.md names `paladin-llm` as the one crate with its own `examples/` directory
   (ROADMAP Phase 36.1 SC2; D-00d, D-00g, D-09, D-10, D-11, D-12, D-13, D-14)
 
-- [ ] **CURR-18**: `tests/cli_isolation_test.rs::test_cli_feature_is_not_default` no longer fails
+- [x] **CURR-18**: `tests/cli_isolation_test.rs::test_cli_feature_is_not_default` no longer fails
   under `cargo test --workspace --all-features` — the guard asserts the manifest's declared default
   feature set rather than the current build's feature configuration, so the three-phase-old carried
   failure stops being re-logged (ROADMAP Phase 36.1 SC3; D-15, D-16)
 
-- [ ] **CURR-19**: `WINDOWS.md` rows 36 and 37 are verified `fixed` against Phase 36's output, row
+- [x] **CURR-19**: `WINDOWS.md` rows 36 and 37 are verified `fixed` against Phase 36's output, row
   38 is `fixed` by this phase's tool-error sanitization, and every open entry from the Phase 31,
   32, 34, 35 and 36 registers has exactly one row with status `fixed` or `waived` plus a reason —
   `gsd-tools windows status` reports `open_count: 0` and the closure table in `36.1-EVIDENCE.md`
@@ -707,8 +707,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CURR-15 | Phase 36 | Complete |
 | CURR-16 | Phase 36.1 | Pending |
 | CURR-17 | Phase 36.1 | Pending |
-| CURR-18 | Phase 36.1 | Pending |
-| CURR-19 | Phase 36.1 | Pending |
+| CURR-18 | Phase 36.1 | Complete |
+| CURR-19 | Phase 36.1 | Complete |
 | CURR-20 | Phase 36.1 | Pending |
 | CURR-21 | Phase 36.1 | Pending |
 

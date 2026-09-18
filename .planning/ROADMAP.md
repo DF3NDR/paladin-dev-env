@@ -1095,7 +1095,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 36.1-01-PLAN.md — Tracer: rewrite the `cli_isolation` guard against the manifest, seed the closure table and the coverage declaration, capture the all-features sweep
+- [x] 36.1-01-PLAN.md — Tracer: rewrite the `cli_isolation` guard against the manifest, seed the closure table and the coverage declaration, capture the all-features sweep
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

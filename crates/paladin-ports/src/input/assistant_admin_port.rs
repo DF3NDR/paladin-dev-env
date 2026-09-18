@@ -120,6 +120,168 @@ pub enum AssistantAdminError {
 ///
 /// Implementations must be `Send + Sync`: assistants are published, read and resolved
 /// concurrently across HTTP handlers and the run-submission path.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use std::sync::Mutex;
+///
+/// use async_trait::async_trait;
+/// use paladin_core::platform::container::assistant::{
+///     Assistant, AssistantDefinition, AssistantId, AssistantKind, AssistantSource,
+///     AssistantVersion,
+/// };
+/// use paladin_ports::input::assistant_admin_port::{
+///     AssistantAdminError, AssistantAdminPort, PublishAssistant,
+/// };
+/// use paladin_ports::output::assistant_repository_port::{AssistantPage, AssistantVersionPage};
+///
+/// struct InMemoryAdmin {
+///     assistants: Mutex<HashMap<String, Assistant>>,
+///     versions: Mutex<HashMap<(String, u32), AssistantVersion>>,
+/// }
+///
+/// #[async_trait]
+/// impl AssistantAdminPort for InMemoryAdmin {
+///     async fn create(
+///         &self,
+///         assistant_id: &AssistantId,
+///         publish: PublishAssistant,
+///     ) -> Result<AssistantVersion, AssistantAdminError> {
+///         let mut assistants = self.assistants.lock().unwrap();
+///         if assistants.contains_key(assistant_id.as_str()) {
+///             return Err(AssistantAdminError::AlreadyExists {
+///                 assistant_id: assistant_id.clone(),
+///             });
+///         }
+///         let mut version = AssistantVersion::new(assistant_id.clone(), 1, publish.definition);
+///         if let Some(created_by) = publish.created_by {
+///             version = version.with_created_by(created_by);
+///         }
+///         if let Some(note) = publish.note {
+///             version = version.with_note(note);
+///         }
+///         assistants.insert(
+///             assistant_id.as_str().to_string(),
+///             Assistant::new(assistant_id.clone(), 1, AssistantSource::Stored),
+///         );
+///         self.versions
+///             .lock()
+///             .unwrap()
+///             .insert((assistant_id.as_str().to_string(), 1), version.clone());
+///         Ok(version)
+///     }
+///
+///     async fn publish_version(
+///         &self,
+///         assistant_id: &AssistantId,
+///         publish: PublishAssistant,
+///     ) -> Result<AssistantVersion, AssistantAdminError> {
+///         let mut assistants = self.assistants.lock().unwrap();
+///         let assistant =
+///             assistants
+///                 .get_mut(assistant_id.as_str())
+///                 .ok_or_else(|| AssistantAdminError::NotFound {
+///                     assistant_id: assistant_id.clone(),
+///                 })?;
+///         let next = assistant.latest + 1;
+///         assistant.latest = next;
+///         let version = AssistantVersion::new(assistant_id.clone(), next, publish.definition);
+///         self.versions
+///             .lock()
+///             .unwrap()
+///             .insert((assistant_id.as_str().to_string(), next), version.clone());
+///         Ok(version)
+///     }
+///
+///     async fn get(
+///         &self,
+///         assistant_id: &AssistantId,
+///     ) -> Result<Option<Assistant>, AssistantAdminError> {
+///         Ok(self
+///             .assistants
+///             .lock()
+///             .unwrap()
+///             .get(assistant_id.as_str())
+///             .cloned())
+///     }
+///
+///     async fn get_version(
+///         &self,
+///         assistant_id: &AssistantId,
+///         version: u32,
+///     ) -> Result<Option<AssistantVersion>, AssistantAdminError> {
+///         Ok(self
+///             .versions
+///             .lock()
+///             .unwrap()
+///             .get(&(assistant_id.as_str().to_string(), version))
+///             .cloned())
+///     }
+///
+///     async fn list(
+///         &self,
+///         _limit: u32,
+///         _cursor: Option<AssistantId>,
+///         _include_deleted: bool,
+///     ) -> Result<AssistantPage, AssistantAdminError> {
+///         Ok(AssistantPage::default())
+///     }
+///
+///     async fn list_versions(
+///         &self,
+///         _assistant_id: &AssistantId,
+///         _limit: u32,
+///         _cursor: Option<u32>,
+///     ) -> Result<AssistantVersionPage, AssistantAdminError> {
+///         Ok(AssistantVersionPage::default())
+///     }
+///
+///     async fn delete(&self, assistant_id: &AssistantId) -> Result<(), AssistantAdminError> {
+///         self.assistants
+///             .lock()
+///             .unwrap()
+///             .remove(assistant_id.as_str())
+///             .map(|_| ())
+///             .ok_or_else(|| AssistantAdminError::NotFound {
+///                 assistant_id: assistant_id.clone(),
+///             })
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let admin = InMemoryAdmin {
+///         assistants: Mutex::new(HashMap::new()),
+///         versions: Mutex::new(HashMap::new()),
+///     };
+///     let assistant_id = AssistantId::new("triage-agent").unwrap();
+///     let definition = AssistantDefinition {
+///         kind: AssistantKind::Agent,
+///         body: serde_json::json!({ "system_prompt": "You triage tickets." }),
+///     };
+///
+///     let created = admin
+///         .create(
+///             &assistant_id,
+///             PublishAssistant {
+///                 definition,
+///                 created_by: Some("am0rfu5".to_string()),
+///                 note: None,
+///             },
+///         )
+///         .await
+///         .unwrap();
+///
+///     let fetched = admin.get(&assistant_id).await.unwrap();
+///     assert_eq!(
+///         fetched.map(|a| a.latest),
+///         Some(created.version),
+///         "the record just created round-trips back out through get"
+///     );
+/// }
+/// ```
 #[async_trait]
 pub trait AssistantAdminPort: Send + Sync {
     /// Validate `publish.definition`, then create a brand-new assistant with its first

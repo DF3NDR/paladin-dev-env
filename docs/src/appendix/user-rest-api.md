@@ -155,4 +155,3 @@ that seamlessly integrates with your existing paladin framework architecture.
         assert!(user_service.validate_username("user
 ```
 <!-- source excerpt truncated here in the original page; fence closed to keep the page rendering -->
-

@@ -1150,3 +1150,54 @@ or dispatched anything.
   D-00c/D-02 and the main-only tag policy forbid. A fix is a `v0.10.1`/`v0.11.0` matter; carried as
   a finding.
 - **Status: HARD STOP (D-16).** Awaiting the maintainer.
+
+### D-16 read-only diagnosis #2 — `publish-crates` failed at position 4; PARTIAL PUBLISH 3/12 (2026-09-19, ~00:30Z)
+
+Recorded by the orchestrator under D-16. The maintainer re-ran the failed `Create Release` job
+(several attempts, as diagnosis #1 predicted for the line-79 race) until it passed; `publish-crates`
+then ran for the first time, job `105793936274` of run `35404826303`. No agent re-ran, dispatched,
+published or yanked anything. Maintainer's report, verbatim: "Indeed it did take several tries but
+it is now through the Create Release obstacle." / "Unfortunately the `Publish to crates.io` job
+failed."
+
+- **Runbook §1 — what reached crates.io** (sparse index, each crate probed for `"vers":"0.10.0"`,
+  in `scripts/publish-crates.sh` `CRATES` order): 1 `paladin-ai-core` PUBLISHED yanked=false ·
+  2 `paladin-ports` PUBLISHED yanked=false · 3 `paladin-herald` PUBLISHED yanked=false ·
+  4 `paladin-battalion` absent · 5 `paladin-llm` absent · 6 `paladin-memory` absent ·
+  7 `paladin-web` absent · 8 `paladin-notifications` absent · 9 `paladin-content` absent ·
+  10 `paladin-storage` absent · 11 `paladin-eval` absent (placeholder `0.0.1` only) ·
+  12 `paladin-ai` absent. **Three versions are permanently on the registry; nine are not.**
+  The job's own summary table agrees: battalion `failed`, the eight after it `skipped`.
+- **Runbook §2 — failing output, verbatim:**
+  `error: failed to prepare local package for uploading` / `Caused by:` /
+  `failed to select a version for the requirement `paladin-llm = "^0.10.0"`` /
+  `candidate versions found which didn't match: 0.9.0, 0.8.1-rc.5, 0.8.1-rc.4, ...` /
+  `location searched: crates.io index` /
+  `required by package `paladin-battalion v0.10.0 (...)`` /
+  `##[error]paladin-battalion: cargo publish failed.`
+- **Cause (traced).** `crates/paladin-battalion/Cargo.toml` `[dev-dependencies]` carries
+  `paladin-llm = { version = "0.10.0", path = "../paladin-llm" }` and
+  `paladin-storage = { version = "0.10.0", path = "../paladin-storage" }`. A dev-dependency that
+  names a `version` must resolve from the registry when the crate is packaged, but the `CRATES`
+  order publishes `paladin-battalion` at position 4, before `paladin-llm` (5) and
+  `paladin-storage` (10). There is NO true cycle — `paladin-llm` and `paladin-storage` each depend
+  only on `paladin-ai-core` and `paladin-ports` — so this is an ordering defect, not a graph
+  defect. The edges are new in this milestone (`793bc3c4` 2026-09-03 Phase 23, `12d909c9`
+  2026-09-08 Phase 28); at `v0.9.0` battalion had no workspace dev-dependencies, which is why the
+  order was valid then. **Deterministic: a re-run fails identically.**
+- **Why gate row 6 was green (Local sweep row 29) and still did not catch it.** `make
+  publish-dry-run` runs `cargo publish --workspace --dry-run`, which resolves sibling crates from a
+  local overlay, so inter-crate order is irrelevant to it. The real carrier is per-crate
+  `cargo publish` in `CRATES` order against the live index (`scripts/publish-crates.sh` documents
+  that native `--workspace` publish is deliberately not adopted). The gate and the carrier do not
+  exercise the same resolution path; row 29 is true as recorded and structurally blind to this
+  class. Carried finding for the next release-tooling phase: assert, per `CRATES` position, that
+  every versioned workspace dependency INCLUDING dev-dependencies appears earlier in the array.
+- **Runbook match.** §3 "Completing forward" by re-run cannot work: the manifests and the `CRATES`
+  array are read from the tag ref `1d4a9724`, which cannot move. §4 "When completing forward is not
+  enough" is the applicable section. The three published versions are not defective and need no
+  yank on their own account (§5 is the maintainer's in any case).
+- **`paladin-eval` / D-17:** position 11 was never reached; the Trusted Publisher link remains
+  unexercised and "linked (reported by maintainer)".
+- **Status: HARD STOP (D-16). SC3 is met (tag on the merge commit); SC4 is NOT met and cannot be
+  met by this tag's pipeline as it stands.** Awaiting the maintainer.
